@@ -1,0 +1,3 @@
+target/
+*.rohkai.json
+.codex/session-last-touch.txt

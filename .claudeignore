@@ -1,0 +1,3 @@
+target/
+*.rohkai.json
+*.forge.json
