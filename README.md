@@ -1,5 +1,5 @@
 <h1>
-  RohKai <img src="./assets/rohkai-mark.svg" height="34" alt="ρϗ">
+  <img src="./assets/rohkai-mark.svg" height="34" alt="ρϗ">RohKai
 </h1>
 
 <img width="1282" height="832" alt="image" src="https://github.com/user-attachments/assets/653506ba-573c-4666-aaf9-9064dd853cd5" />
