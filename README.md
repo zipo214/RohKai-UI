@@ -1,5 +1,7 @@
 # Rohkai ^ρϗ
 
+<img width="1282" height="832" alt="image" src="https://github.com/user-attachments/assets/653506ba-573c-4666-aaf9-9064dd853cd5" />
+
 A pure Rust, native WYSIWYG GUI designer for egui applications.
 No gap between what you design and what gets generated.
 
