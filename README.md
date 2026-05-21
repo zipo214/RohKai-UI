@@ -53,10 +53,39 @@ Draw --> Export --> .rs GUI "app"
 
 Pure Rust. No C FFI. No system toolkit bindings. Everything via Cargo.
 
+## Try It
+
+Build and run locally:
+
+```powershell
+git clone https://github.com/zipo214/RohKai-UI.git
+cd RohKai-UI
+cargo run
+```
+
+Or download the current Windows executable from
+[Releases](https://github.com/zipo214/RohKai-UI/releases).
+
+Build a release executable:
+
+```powershell
+.\scripts\build-release.ps1
+```
+
+The executable will be written to:
+
+```text
+target\release\rohkai.exe
+```
+
+GitHub Actions builds a Windows executable for every push to `main`.
+Open the latest workflow run and download the `rohkai-windows-exe` artifact.
+
+## Status
+
+Active development. Stages 0–5 complete.
 
 ---
-
-> *I totally apologize if I can't read French and butchered the translations and history, citations are below.*
 
 ¹ Galletti, S. (2020). *Épures d'architecture: Geometric Constructions
 for Vault Building in Philibert de L'Orme's Premier tome de

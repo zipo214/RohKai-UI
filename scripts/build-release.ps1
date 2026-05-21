@@ -1,4 +1,8 @@
-# Build an optimised release executable.
-Set-Location "D:\dev\rohkai"
+# Build an optimized release executable from this repository checkout.
+$ProjectRoot = Split-Path -Parent $PSScriptRoot
+Set-Location $ProjectRoot
+
 cargo build --release
-Write-Host "Binary at: D:\dev\rohkai\target\release\rohkai.exe"
+
+$Binary = Join-Path $ProjectRoot "target\release\rohkai.exe"
+Write-Host "Binary at: $Binary"
