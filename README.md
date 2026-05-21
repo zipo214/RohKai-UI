@@ -51,7 +51,7 @@ Draw --> Export --> .rs GUI "app"
 
 ## Built With
 
-Pure Rust. No C FFI. No system toolkit bindings. Everything via Cargo.
+Pure Rust. No C FFI. No system toolkit bindings. All via Cargo.
 
 ## Try It
 
@@ -80,10 +80,6 @@ target\release\rohkai.exe
 
 GitHub Actions builds a Windows executable for every push to `main`.
 Open the latest workflow run and download the `rohkai-windows-exe` artifact.
-
-## Status
-
-Active development. Stages 0–5 complete.
 
 ---
 
