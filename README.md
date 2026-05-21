@@ -22,6 +22,8 @@ Buchanan at the University of Liverpool further documents how medieval
 masons "used a 2D tracing floor to experiment with ideas in plan"
 before projecting vault geometry into three dimensions.²
 
+> *I totally apologize if I cant read French and butchered the translations and history, citations are below.*
+
 Rohkai is the épure for your Rust UI. The canvas and the code are the
 same object in two different states of matter.
 
@@ -52,13 +54,36 @@ craftsmen's marks — appears in every file Rohkai generates:
 
 Pure Rust. No C FFI. No system toolkit bindings. Everything via Cargo.
 
+## Try It
+
+Build and run locally:
+
+```powershell
+git clone https://github.com/zipo214/RohKai-UI.git
+cd RohKai-UI
+cargo run
+```
+
+Build a release executable:
+
+```powershell
+.\scripts\build-release.ps1
+```
+
+The executable will be written to:
+
+```text
+target\release\rohkai.exe
+```
+
+GitHub Actions builds a Windows executable for every push to `main`.
+Open the latest workflow run and download the `rohkai-windows-exe` artifact.
+
 ## Status
 
 Active development. Stages 0–5 complete.
 
 ---
-
-> *I totally apologize if I can't read French and butchered the translations and history, citations are below.*
 
 ¹ Galletti, S. (2020). *Épures d'architecture: Geometric Constructions
 for Vault Building in Philibert de L'Orme's Premier tome de

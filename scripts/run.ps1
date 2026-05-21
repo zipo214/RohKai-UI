@@ -1,3 +1,5 @@
-# Daily driver — build and run RohKai from the dev path.
-Set-Location "D:\dev\rohkai"
+# Build and run RohKai from this repository checkout.
+$ProjectRoot = Split-Path -Parent $PSScriptRoot
+Set-Location $ProjectRoot
+
 cargo run
