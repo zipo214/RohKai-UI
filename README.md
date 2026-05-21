@@ -64,6 +64,9 @@ cd RohKai-UI
 cargo run
 ```
 
+Or download the current Windows executable from
+[Releases](https://github.com/zipo214/RohKai-UI/releases).
+
 Build a release executable:
 
 ```powershell
