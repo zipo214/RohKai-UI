@@ -8,7 +8,7 @@ A pure Rust, native WYSIWYG GUI designer for egui applications.
 No gap between what you design and what gets generated.
 ## The Name
 
-*RohKai* derived from *Rocaille* — a French Baroque ornamental style
+*RohKai* is from *Rocaille* — a French Baroque ornamental style
 defined by elaborate shell-and-stone window surrounds and decorative
 frames. A Rocaille is an opening made meaningful by what surrounds it.
 (I am now well aware of the unintentional Windows allusion here...)
@@ -30,9 +30,7 @@ Rohkai is the épure to your Rust UI. The canvas and the code are the
 same object just two different reflections.
 
 The mark *^ρϗ* — rho and koppa (I guess?),Greek letters used as a
-"makers mark" — appears in every file Rohkai generates:
-
-    // ^ρϗ Rohkai — generated interface
+"makers mark"
 
 ## What It Does
 Draw --> Export --> .rs GUI "app"
