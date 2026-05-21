@@ -6,31 +6,6 @@
 
 A pure Rust, native WYSIWYG GUI designer for egui applications.  
 No gap between what you design and what gets generated.
-## The Name
-
-*RohKai* is from *Rocaille* — a French Baroque ornamental style
-defined by elaborate shell-and-stone window surrounds and decorative
-frames. A Rocaille is an opening made meaningful by what surrounds it.
-(I am now well aware of the unintentional Windows allusion here...)
-
-Deeper inspiration comes from the old cathedral craftsman
-*épure* — the 1:1-scale geometric drawing traced on the lodge floor
-from which every vault, arch, and stone was cut. As architectural
-historian Sara Galletti describes, épures were "traced on site" by the
-*appareilleur* and "referred to throughout the execution process" —
-they were not plans *of* the building, they *were* the building before
-it existed in stone.¹
-
-Research into the Lady Chapel vaults at Ely Cathedral by Webb and
-Buchanan at the University of Liverpool further documents how medieval
-masons "used a 2D tracing floor to experiment with ideas in plan"
-before projecting vault geometry into three dimensions.²
-
-Rohkai is the épure to your Rust UI. The canvas and the code are the
-same object just two different reflections.
-
-The mark *^ρϗ* — rho and koppa (I guess?),Greek letters used as a
-"makers mark"
 
 ## What It Does
 Draw --> Export --> .rs GUI "app"
@@ -81,6 +56,31 @@ target\release\rohkai.exe
 
 GitHub Actions builds a Windows executable for every push to `main`.
 Open the latest workflow run and download the `rohkai-windows-exe` artifact.
+
+## The Name
+
+*RohKai* is from *Rocaille* — a French Baroque ornamental style
+defined by elaborate shell-and-stone window surrounds and decorative
+frames. A Rocaille is an opening made meaningful by what surrounds it.
+(I am now well aware of the unintentional Windows allusion here...)
+
+Deeper inspiration comes from the old cathedral craftsman
+*épure* — the 1:1-scale geometric drawing traced on the lodge floor
+from which every vault, arch, and stone was cut. As architectural
+historian Sara Galletti describes, épures were "traced on site" by the
+*appareilleur* and "referred to throughout the execution process" —
+they were not plans *of* the building, they *were* the building before
+it existed in stone.¹
+
+Research into the Lady Chapel vaults at Ely Cathedral by Webb and
+Buchanan at the University of Liverpool further documents how medieval
+masons "used a 2D tracing floor to experiment with ideas in plan"
+before projecting vault geometry into three dimensions.²
+
+Rohkai is the épure to your Rust UI. The canvas and the code are the
+same object just two different reflections.
+The mark *^ρϗ* — rho and koppa (I guess?), Greek letters used as a
+"makers mark"
 
 ---
 
