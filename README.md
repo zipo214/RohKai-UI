@@ -5,11 +5,12 @@ No gap between what you design and what gets generated.
 
 ## The Name
 
-*Rohkai* derives from *Rocaille* — the French Baroque ornamental style
+*RohKai* derived from *Rocaille* — a French Baroque ornamental style
 defined by elaborate shell-and-stone window surrounds and decorative
 frames. A Rocaille is an opening made meaningful by what surrounds it.
+(I am now well aware of the unintentional Windows allusion here...)
 
-The deeper inspiration comes from the medieval cathedral craftsman's
+Deeper inspiration comes from the old cathedral craftsman
 *épure* — the 1:1-scale geometric drawing traced on the lodge floor
 from which every vault, arch, and stone was cut. As architectural
 historian Sara Galletti describes, épures were "traced on site" by the
@@ -22,18 +23,16 @@ Buchanan at the University of Liverpool further documents how medieval
 masons "used a 2D tracing floor to experiment with ideas in plan"
 before projecting vault geometry into three dimensions.²
 
-> *I totally apologize if I cant read French and butchered the translations and history, citations are below.*
+Rohkai is the épure to your Rust UI. The canvas and the code are the
+same object just two different reflections.
 
-Rohkai is the épure for your Rust UI. The canvas and the code are the
-same object in two different states of matter.
-
-The mark *^ρϗ* — rho and koppa, archaic Greek letters used as
-craftsmen's marks — appears in every file Rohkai generates:
+The mark *^ρϗ* — rho and koppa (I guess?),Greek letters used as a
+"makers mark" — appears in every file Rohkai generates:
 
     // ^ρϗ Rohkai — generated interface
 
 ## What It Does
-
+Draw --> Export --> .rs GUI "app"
 - Drag widgets onto a canvas
 - See correct, position-aware egui Rust code generate live
 - Export a complete, compilable Rust project
