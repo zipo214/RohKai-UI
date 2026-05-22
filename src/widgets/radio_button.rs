@@ -13,9 +13,17 @@ pub fn default_instance() -> WidgetInstance {
         },
         props: WidgetProps {
             label: String::from("Option A"),
-            min: 0.0,
-            max: 100.0,
+            ..Default::default()
         },
         state_binding: Some(String::from("radio_value")),
+        children: Vec::new(),
+        import_metadata: None,
+        tooltip: None,
+        enabled: None,
+        fg_color: None,
+        corner_radius: None,
+        label_binding: None,
+        custom_props: Vec::new(),
+        event_handler: None,
     }
 }

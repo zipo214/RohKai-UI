@@ -1,4 +1,5 @@
 pub mod button;
+pub mod checkbox;
 pub mod combo_box;
 pub mod frame;
 pub mod label;
@@ -15,13 +16,7 @@ pub fn default_for(kind: &WidgetKind) -> WidgetInstance {
         WidgetKind::Label => label::default_instance(),
         WidgetKind::TextInput => text_input::default_instance(),
         WidgetKind::Slider => slider::default_instance(),
-        WidgetKind::Checkbox => {
-            let mut w = button::default_instance();
-            w.kind = WidgetKind::Checkbox;
-            w.props.label = String::from("Enable");
-            w.state_binding = Some(String::from("is_enabled"));
-            w
-        }
+        WidgetKind::Checkbox => checkbox::default_instance(),
         WidgetKind::Frame => frame::default_instance(),
         WidgetKind::ComboBox => combo_box::default_instance(),
         WidgetKind::RadioButton => radio_button::default_instance(),
@@ -29,6 +24,7 @@ pub fn default_for(kind: &WidgetKind) -> WidgetInstance {
     }
 }
 
+#[allow(dead_code)] // widget-addition protocol: step 3 of /new-widget — add variant here
 pub const ALL_KINDS: &[WidgetKind] = &[
     WidgetKind::Button,
     WidgetKind::Label,

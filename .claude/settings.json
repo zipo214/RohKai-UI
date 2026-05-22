@@ -1,12 +1,22 @@
 {
   "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -ExecutionPolicy Bypass -File D:\\dev\\rohkai\\scripts\\snapshot-context.ps1"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Write|Edit",
         "hooks": [
           {
             "type": "command",
-            "command": "if [ \"$(pwd)\" != \"/d/dev/rohkai\" ] && [ \"$(pwd)\" != \"D:\\\\dev\\\\rohkai\" ]; then echo \"WARNING: CWD is $(pwd), not D:\\dev\\rohkai\"; fi"
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File D:\\dev\\rohkai\\scripts\\preflight-context.ps1"
           }
         ]
       }
@@ -17,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cargo clippy --quiet 2>&1 | head -20"
+            "command": "powershell -NoProfile -Command \"Set-Location D:\\dev\\rohkai; cargo clippy --quiet 2>&1 | Select-Object -First 20\""
           }
         ]
       }

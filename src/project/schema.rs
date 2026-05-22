@@ -48,6 +48,13 @@ pub struct WidgetProps {
     pub label: String,
     pub min: f32,
     pub max: f32,
+    /// Preview default for Slider: thumb position + exported Default value.
+    #[serde(default = "half_f32")]
+    pub default_value: f32,
+}
+
+fn half_f32() -> f32 {
+    0.5
 }
 
 impl Default for WidgetProps {
@@ -56,6 +63,7 @@ impl Default for WidgetProps {
             label: String::from("Widget"),
             min: 0.0,
             max: 100.0,
+            default_value: 0.5,
         }
     }
 }
@@ -79,6 +87,49 @@ impl Default for Rect {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub enum CustomPropType {
+    #[default]
+    String,
+    F32,
+    Bool,
+    I32,
+}
+
+impl CustomPropType {
+    pub fn rust_type(&self) -> &'static str {
+        match self {
+            CustomPropType::String => "String",
+            CustomPropType::F32 => "f32",
+            CustomPropType::Bool => "bool",
+            CustomPropType::I32 => "i32",
+        }
+    }
+    pub fn default_expr(&self) -> &'static str {
+        match self {
+            CustomPropType::String => "String::new()",
+            CustomPropType::F32 => "0.0",
+            CustomPropType::Bool => "false",
+            CustomPropType::I32 => "0",
+        }
+    }
+    pub fn label(&self) -> &'static str {
+        match self {
+            CustomPropType::String => "String",
+            CustomPropType::F32 => "f32",
+            CustomPropType::Bool => "bool",
+            CustomPropType::I32 => "i32",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomProp {
+    pub name: String,
+    #[serde(default)]
+    pub ty: CustomPropType,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WidgetInstance {
     pub id: Uuid,
@@ -86,4 +137,41 @@ pub struct WidgetInstance {
     pub rect: Rect,
     pub props: WidgetProps,
     pub state_binding: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_metadata: Option<SvgImportMetadata>,
+    // Stage 5.5 — Properties Depth
+    /// Hover text — generates .on_hover_text("…") in codegen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tooltip: Option<String>,
+    /// None = always enabled; Some(false) = disabled (ui.set_enabled(false)).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// Foreground/text color override [R, G, B].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fg_color: Option<[u8; 3]>,
+    /// Corner rounding radius. 0.0 = default egui rounding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub corner_radius: Option<f32>,
+    /// When set, label text is sourced from this AppState field (Bound mode).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_binding: Option<String>,
+    /// Additional per-widget AppState fields added via "+ Add property".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_props: Vec<CustomProp>,
+    // Stage 5.5 — Event Wiring
+    /// Handler function name for on_click (Button) or on_change (others).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_handler: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SvgImportMetadata {
+    pub element_name: String,
+    pub original_id: Option<String>,
+    pub original_class: Option<String>,
+    pub source_order: usize,
+    pub transform_summary: String,
+    pub warning_flags: Vec<String>,
 }

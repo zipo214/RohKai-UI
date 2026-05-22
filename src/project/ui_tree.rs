@@ -1,4 +1,4 @@
-use crate::project::schema::{AppProps, WidgetInstance};
+use crate::project::schema::{AppProps, Rect, WidgetInstance, WidgetKind, WidgetProps};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use uuid::Uuid;
@@ -49,7 +49,94 @@ impl UiTree {
     }
 
     pub fn remove(&mut self, id: Uuid) {
+        let children: Vec<Uuid> = self
+            .widgets
+            .iter()
+            .find(|w| w.id == id)
+            .map(|w| w.children.clone())
+            .unwrap_or_default();
+        // Remove this id from any parent's children list
+        for w in &mut self.widgets {
+            w.children.retain(|&cid| cid != id);
+        }
         self.widgets.retain(|w| w.id != id);
+        // Cascade: delete children of a removed Frame
+        for child_id in children {
+            self.remove(child_id);
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn parent_of(&self, id: Uuid) -> Option<Uuid> {
+        self.widgets
+            .iter()
+            .find(|w| w.children.contains(&id))
+            .map(|w| w.id)
+    }
+
+    /// Group selected widget IDs into a new Frame. Returns the new Frame's id.
+    pub fn group(&mut self, selected: &[Uuid]) -> Option<Uuid> {
+        if selected.len() < 2 {
+            return None;
+        }
+        let mut min_x = f32::MAX;
+        let mut min_y = f32::MAX;
+        let mut max_x = f32::MIN;
+        let mut max_y = f32::MIN;
+        for &id in selected {
+            if let Some(w) = self.widgets.iter().find(|w| w.id == id) {
+                min_x = min_x.min(w.rect.x);
+                min_y = min_y.min(w.rect.y);
+                max_x = max_x.max(w.rect.x + w.rect.w);
+                max_y = max_y.max(w.rect.y + w.rect.h);
+            }
+        }
+        if min_x == f32::MAX {
+            return None;
+        }
+        const PAD: f32 = 8.0;
+        let frame_id = Uuid::new_v4();
+        let frame = WidgetInstance {
+            id: frame_id,
+            kind: WidgetKind::Frame,
+            rect: Rect {
+                x: (min_x - PAD).max(0.0),
+                y: (min_y - PAD).max(0.0),
+                w: (max_x - min_x) + PAD * 2.0,
+                h: (max_y - min_y) + PAD * 2.0,
+            },
+            props: WidgetProps {
+                label: String::from("Group"),
+                ..Default::default()
+            },
+            state_binding: None,
+            children: selected.to_vec(),
+            import_metadata: None,
+            tooltip: None,
+            enabled: None,
+            fg_color: None,
+            corner_radius: None,
+            label_binding: None,
+            custom_props: Vec::new(),
+            event_handler: None,
+        };
+        let earliest = selected
+            .iter()
+            .filter_map(|&id| self.widgets.iter().position(|w| w.id == id))
+            .min()
+            .unwrap_or(self.widgets.len());
+        self.widgets.insert(earliest, frame);
+        Some(frame_id)
+    }
+
+    /// Ungroup a Frame: remove the Frame, return child IDs (children remain top-level).
+    pub fn ungroup(&mut self, frame_id: Uuid) -> Vec<Uuid> {
+        if let Some(idx) = self.widgets.iter().position(|w| w.id == frame_id) {
+            let children = self.widgets[idx].children.clone();
+            self.widgets.remove(idx);
+            return children;
+        }
+        Vec::new()
     }
 
     pub fn get_mut(&mut self, id: Uuid) -> Option<&mut WidgetInstance> {
@@ -69,6 +156,12 @@ impl UiTree {
             Self::repair_widget(widget);
             Self::repair_binding(widget, &mut seen_bindings);
         }
+
+        // Remove stale child references (child UUIDs that no longer exist)
+        let all_ids: HashSet<Uuid> = self.widgets.iter().map(|w| w.id).collect();
+        for widget in &mut self.widgets {
+            widget.children.retain(|id| all_ids.contains(id));
+        }
     }
 
     fn repair_widget(widget: &mut WidgetInstance) {
@@ -80,6 +173,14 @@ impl UiTree {
         if widget.props.min > widget.props.max {
             std::mem::swap(&mut widget.props.min, &mut widget.props.max);
         }
+
+        if !widget.props.default_value.is_finite() {
+            widget.props.default_value = 0.5;
+        }
+        widget.props.default_value = widget
+            .props
+            .default_value
+            .clamp(widget.props.min, widget.props.max);
     }
 
     fn repair_binding(widget: &mut WidgetInstance, seen_bindings: &mut HashSet<String>) {
@@ -112,13 +213,6 @@ impl UiTree {
     /// Move widget to last position in the vec — drawn last = visually on top.
     pub fn bring_to_front(&mut self, id: Uuid) {
         if let Some(idx) = self.widgets.iter().position(|w| w.id == id) {
-            #[cfg(debug_assertions)]
-            eprintln!(
-                "bring_to_front: idx {} → {} (len {})",
-                idx,
-                self.widgets.len() - 1,
-                self.widgets.len()
-            );
             let w = self.widgets.remove(idx);
             self.widgets.push(w);
             debug_assert_eq!(
@@ -132,8 +226,6 @@ impl UiTree {
     /// Move widget to index 0 — drawn first = visually behind everything.
     pub fn send_to_back(&mut self, id: Uuid) {
         if let Some(idx) = self.widgets.iter().position(|w| w.id == id) {
-            #[cfg(debug_assertions)]
-            eprintln!("send_to_back: idx {} → 0 (len {})", idx, self.widgets.len());
             let w = self.widgets.remove(idx);
             self.widgets.insert(0, w);
             debug_assert_eq!(
@@ -148,8 +240,6 @@ impl UiTree {
     pub fn bring_forward(&mut self, id: Uuid) {
         if let Some(idx) = self.widgets.iter().position(|w| w.id == id) {
             if idx + 1 < self.widgets.len() {
-                #[cfg(debug_assertions)]
-                eprintln!("bring_forward: idx {} ↔ {}", idx, idx + 1);
                 self.widgets.swap(idx, idx + 1);
                 debug_assert_eq!(self.widgets[idx + 1].id, id, "bring_forward: swap failed");
             }
@@ -160,8 +250,6 @@ impl UiTree {
     pub fn send_back(&mut self, id: Uuid) {
         if let Some(idx) = self.widgets.iter().position(|w| w.id == id) {
             if idx > 0 {
-                #[cfg(debug_assertions)]
-                eprintln!("send_back: idx {} ↔ {}", idx, idx - 1);
                 self.widgets.swap(idx, idx - 1);
                 debug_assert_eq!(self.widgets[idx - 1].id, id, "send_back: swap failed");
             }

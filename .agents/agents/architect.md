@@ -7,7 +7,7 @@ description: High-level architecture decisions for RohKai. Use when adding new s
 
 Make big-picture decisions for RohKai. Always preserve:
 
-- `UiTree` as the single source of truth; canvas and codegen are read-only views of it.
+- `UiTree` as the single source of truth; canvas renders it, codegen emits from it, and Lazare parser edits must flow back through it.
 - Pure Rust constraints: no C FFI and no system toolkit bindings.
 - MVP scope from `AGENTS.md`; scope creep is a bug.
 

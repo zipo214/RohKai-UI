@@ -1,4 +1,4 @@
-# RohKai - Pure Rust WYSIWYG egui UI Designer
+# RohKai — Pure Rust WYSIWYG egui UI Designer
 
 ## Project Location
 All work lives at: D:\dev\rohkai
@@ -8,11 +8,11 @@ If CWD is not D:\dev\rohkai, cd there before doing anything.
 
 ## What This Is
 A native Rust desktop app (built with egui) that lets users visually design
-egui UIs with zero gap between canvas and code. Drag a widget -> code appears.
+egui UIs with zero gap between canvas and code. Drag a widget → code appears.
 No separate signal-wiring step. Canvas and code panel are live views of one
 source of truth: the `UiTree`.
 
-The name RohKai evokes Rocaille - the ornamental scroll-and-shell motif of
+The name RohKai evokes Rocaille — the ornamental scroll-and-shell motif of
 French Rococo. The designer should feel precise and elegant.
 
 ## The Core Principle
@@ -31,22 +31,30 @@ Never write code that mutates canvas state and code state separately.
 ## Module Map
 ```
 src/
-  main.rs          - entry point, eframe bootstrap
-  app.rs           - RohKaiApp struct, implements eframe::App
-  canvas/          - drag/drop canvas (renders UiTree)
-  widgets/         - palette widget definitions + defaults
-  codegen/         - walks UiTree, emits Rust strings
-  project/         - UiTree data model + serde schema
-  panels/          - egui panel UIs (palette, properties, code)
+  main.rs          — entry point, eframe bootstrap, icon rasteriser
+  app.rs           — RohKaiApp struct, implements eframe::App, all panel wiring
+  canvas/          — drag/drop canvas (renders UiTree), pan/zoom, smart guides
+  widgets/         — one file per WidgetKind: default instance + palette defaults
+  codegen/         — egui_emitter, state_emitter, export, parser (Lazare), rust utils
+  project/         — schema types, UiTree, io (save/load/serialize)
+  panels/          — palette, properties, code_preview, templates
+  settings.rs      — UserSettings: load/save to APPDATA/RohKai/settings.json
+  svg_import.rs    — SVG → WidgetInstance parser (zero new dependencies)
 ```
 
-## Current MVP Scope (do not scope-creep)
-- [ ] Canvas: drag widgets from palette, place, select, move, resize
-- [ ] Widgets: Button, Label, TextInput, Slider, Checkbox
-- [ ] Properties panel: label, size, position, state binding
-- [ ] Code panel: live egui Rust output, read-only, monospace
-- [ ] State panel: auto-generated AppState struct fields
-- [ ] Save/load `.rohkai.json` project files
+## Current Stage (see docs/ROADMAP.md for full history)
+Stages 1–6 complete. Active scope is Stage 7 (widget descriptor format / .rkwd files).
+
+Core features implemented:
+- Canvas: drag, drop, select, multi-select, resize, rubber-band, z-order, snap, smart guides
+- Widgets: Button, Label, TextInput, Slider, Checkbox, Frame, ComboBox, RadioButton, ProgressBar
+- Properties panel: label, binding, geometry, alignment, group/ungroup
+- Code panel: live egui Rust output — **editable** (Lazare bidirectional sync, Stage 6)
+- AppState panel: auto-generated struct fields
+- Save/load `.rohkai.json` (versioned envelope, legacy bare UiTree supported)
+- Export: complete compilable Rust project
+- Templates: `.rktp` files, SVG import, drag-to-canvas
+- Preferences: UI scale, font size, snap step (persisted)
 
 ## What NOT to build yet
 - Multi-window support
@@ -56,8 +64,8 @@ src/
 - Any codegen target other than egui
 
 ## Rust Patterns We Use
-- `RohKaiApp` struct holds all designer state - no globals
-- egui immediate mode throughout - no retained widget objects
+- `RohKaiApp` struct holds all designer state — no globals
+- egui immediate mode throughout — no retained widget objects
 - serde + serde_json for project serialization
 - No async (unnecessary for this app)
 
@@ -69,7 +77,16 @@ src/
     cargo clippy -- -D warnings
 
 ## Session Rules
-- Every session ends with `cargo run` confirming a clean launch unless the user asks for a read-only pass.
-- Zero warnings is required before any implementation session is considered done.
+- Before planning or coding, run or manually follow the repo preflight:
+  `powershell -NoProfile -ExecutionPolicy Bypass -File D:\dev\rohkai\scripts\preflight-context.ps1`
+- Preflight means reading `AGENTS.md`, `CLAUDE.md`, `docs/ROADMAP.md`, the latest
+  `docs/DEVLOG.md` entry, `git status --short --branch`, and any relevant
+  `.agents/skills/*/SKILL.md` files before edits.
+- Record meaningful sessions in `docs/DEVLOG.md`: time, docs reviewed, changes,
+  verification, risks, and follow-ups.
+- `docs/ROADMAP.md` is strategic stage planning. `docs/DEVLOG.md` is chronological.
+  `docs/ARCHITECTURE.md` is structural truth, not a timeline.
+- Every session ends with `cargo run` confirming a clean launch.
+- Zero warnings is required before any session is considered done.
 - Always work in D:\dev\rohkai. Never write to any other path.
 - If CWD is not D:\dev\rohkai, cd there before doing anything.

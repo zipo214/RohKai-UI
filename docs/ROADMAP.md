@@ -70,7 +70,40 @@
 - [x] Saving a template appears instantly in the panel in the same session
 - [x] Click template to instantiate at canvas centre; drag onto canvas to place at cursor
 - [x] Templates stored in a /templates folder next to the binary, not baked in
-- [ ] SVG import as template placeholder — deferred (requires SVG parser)
+- [x] SVG import as template placeholder — zero-dependency parser maps SVG shapes/text to RohKai template widgets and preserves the source `.svg`
+
+## Stage 5.5 — Properties Depth + Event Wiring ✅
+
+### Properties Panel Expansion
+- [x] Tooltip field — generates `.on_hover_text("...")` on the widget
+- [x] Enabled toggle — checkbox, generates `ui.set_enabled(false)` when unchecked
+- [x] Foreground color picker — R/G/B DragValues with color swatch preview
+- [x] Corner radius — DragValue (0–32 px), stored per widget
+- [x] Binding mode toggle — Static | Bound per widget
+      Static: label is a string literal in generated code
+      Bound: label pulls from an AppState `String` field
+- [x] Custom property — "+ Add" collapsible form, name + type (String/f32/bool/i32),
+      adds field to AppState in both live preview and export
+
+### Event Wiring — The Accessible Lazare Layer
+- [x] "On Click" / "On Change" text field in properties panel
+      per widget kind (Click for Button, Change for TextInput/Slider/Checkbox/ComboBox/RadioButton)
+- [x] Typing a handler name wires click/change in live codegen and generates
+      a stub method on `ExportedApp` in export
+- [x] Double-clicking the event name field triggers Tracé —
+      inserts handler stub into code panel if absent, signals scroll
+- [x] Handler stub inserted when not yet present in code buffer
+- [x] Accessible Lazare entry point — field for simple users, code for power users
+
+### Palette Organization
+- [x] Collapsible category sections in palette
+      Categories: Basic (Button, Label, TextInput),
+      Input (Slider, Checkbox, RadioButton, ComboBox),
+      Layout (Frame/Group),
+      Display (ProgressBar)
+- [x] Category headers are clickable to collapse/expand
+- [x] Last expanded state persists during session (egui Memory)
+- [x] Widget accent color shown as small dot next to palette item
 
 ## Patch — v0.1 Stability & Polish
 
@@ -99,11 +132,55 @@
 - [x] Palette buttons: hover shows accent color matching canvas widget kind colors
 - [x] Slider canvas rendering: track line + thumb indicator instead of plain box
 
-## Stage 6 — Bidirectional Sync
-- [ ] Code panel becomes editable
-- [ ] Edits parsed back into UiTree using a minimal Rust expression parser
-- [ ] Canvas updates live when code changes
-- [ ] Conflicts (invalid syntax) shown as inline error, canvas unchanged
+### Group 4 — SVG Template Import ✅
+- [x] File → Import SVG as Template…
+- [x] Raw Rust parser: no new dependencies
+- [x] Supported import placeholders: `rect`, `circle`, `ellipse`, `line`, `polyline`, `polygon`, `path`, `image`, `use`, `text`
+- [x] Handles attributes, inline styles, units, `viewBox`, groups, nested transforms, hidden/defs containers, and path command bounds
+- [x] Saves both generated `.rktp` and original `.svg` beside it for validation/source preservation
+- [x] Validation workflow: `scripts/validate-svg-import.ps1`
+
+## Stage 6 — Bidirectional Sync ✅
+
+### Smart Guides (before Lazare parser) ✅
+- [x] Inferential snapping — dashed red guide lines appear when a widget
+      edge or center aligns with another widget's edge or center
+- [x] Equidistant spacing indicators — show spacing marks when
+      three or more widgets are evenly spaced
+- [x] Guide lines persist while dragging, disappear on release
+- [x] Works with multi-select drag
+- [x] Snap to guide lines within 4px threshold
+- [x] Guide lines are dashed, rgba(255,80,80,180), span widget extents ±40px only
+- [x] Max one horizontal + one vertical guide at once (strongest alignment only)
+- [x] Smart guides also fire during resize — snaps moving edge to other widget edges/centers
+- [x] Key-object alignment — Shift held during align operations aligns to last selected widget;
+      key object stays fixed, all others align to it
+
+### Lazare — Bidirectional Sync ✅
+- [x] Code panel TextEdit always editable — no mode switching, no Edit button
+- [x] Edits parsed back into UiTree via src/codegen/parser.rs
+- [x] Canvas updates live when code changes (parse success → apply immediately)
+- [x] Conflicts (invalid syntax) shown as "error" with red border, canvas unchanged
+- [x] Code panel header indicator: "live" teal / "pending" amber / "error" red
+- [x] Editor stays open during typing — never resets on parse attempt
+- [x] Partial apply: filter to widgets with non-zero geometry; no count constraint
+- [x] Canvas changes (drag/nudge) always reset editor to "live" mode
+
+### Patch — Layout & UX ✅
+- [x] Group/Ungroup buttons (⊞/⊟) in Properties panel alongside alignment icons;
+      enabled when selection qualifies (2+ for group, Frame selected for ungroup)
+- [x] Palette click placement accounts for zoom and pan — new widget appears at
+      center of visible canvas area (formula: visible_center = (viewport_center - pan) / zoom)
+- [x] File → Preferences… window backed by user-level settings, not `.rohkai.json`
+- [x] Global UI scale applies on OK/Apply so the Preferences window does not resize while dragging
+- [x] Code/AppState font size, canvas label/tag scale, and default snap step controls
+
+## Housekeeping (pre-Stage 7)
+
+- [x] Roadmap/devlog split: roadmap stays strategic, `docs/DEVLOG.md` records chronological session notes
+- [x] Shared preflight workflow for Codex and Claude before planning or code edits
+- [x] Settings fallback uses `temp_dir()` — falls back to binary-adjacent `<exe_dir>/user-settings/settings.json` instead (not cleaned by OS)
+- [x] Save failure applies settings for current session but error message doesn't say so — clarify to "Applied this session only — save failed: …"
 
 ## Stage 7 — Framework Import / Ply Support
 - [ ] Widget descriptor format (.rkwd — RohKai Widget Definition)
@@ -111,3 +188,152 @@
 - [ ] Import a .rkwd file → widget appears in palette
 - [ ] Ply widget definitions as first shipped example
 - [ ] Community .rkwd files can be dropped into a /widgets folder
+
+## Future Considerations
+
+### Rulers & Measurement
+- [ ] Horizontal ruler along top of canvas
+- [ ] Vertical ruler along left of canvas
+- [ ] Rulers show units in pixels, update with zoom
+- [ ] Click ruler to create a persistent guide line
+- [ ] Guide lines are draggable, deletable (Delete key when selected)
+- [ ] Toggle rulers with Ctrl+R
+
+### Document Presets & Real Window Sizing
+- [ ] Document preset picker: common screen sizes
+      (1920x1080, 2560x1440, 1366x768, 1280x720)
+- [ ] Mobile presets (375x812 iPhone, 390x844 etc)
+- [ ] Custom size with lock aspect ratio toggle
+- [ ] Canvas represents actual app window —
+      shows title bar chrome, minimize/maximize/close buttons
+      as a visual bezel around the canvas area
+- [ ] Window appearance settings: title, icon,
+      resizable toggle, min/max size constraints
+- [ ] All window settings stored in AppProps and used in export
+
+### Application Appearance & Theming
+- [ ] Theme panel: dark/light mode toggle
+- [ ] Accent color picker for the generated app
+- [ ] Font size base setting
+- [ ] Widget rounding (global corner radius)
+- [ ] Spacing/padding scale
+- [ ] Theme exported as startup code in generated app:
+      ctx.set_visuals(egui::Visuals { ... })
+- [ ] Save themes as .rktheme files
+- [ ] Apply a theme to the Rohkai designer itself
+
+### Lazarus Features — Remaining
+- [ ] Design-time non-visual components — timers,
+      data sources, app lifecycle represented as
+      clickable icons on a component tray below canvas
+- [ ] Full event list per widget — not just OnClick/OnChange
+      but all applicable egui events for that widget kind
+- [ ] Object Inspector true bidirectionality —
+      editing any property field updates canvas immediately
+      with no lag or focus loss
+
+### Technical & Computational Widgets
+- [ ] Math/formula widget — displays computed value
+      from an expression bound to AppState
+- [ ] Timer/interval component — fires event on schedule,
+      non-visual, lives in component tray
+- [ ] Data table widget — tabular display, bound to Vec<T>
+- [ ] File picker widget — browse filesystem, returns path
+- [ ] Tree view widget — hierarchical data display
+- [ ] Chart widget — 2D line/bar chart bound to Vec<f32>
+- [ ] HTTP request component — non-visual, configure
+      URL/method/headers, bind response to state
+- [ ] State machine component — define states and
+      transitions visually, generates match-based logic
+
+### Rust-Centric Visual Features
+- [ ] Ownership visualization — canvas overlay showing
+      which widgets own which AppState fields
+- [ ] Async task wiring — visually connect a widget event
+      to an async fn, generates tokio::spawn or similar
+- [ ] Channel connections — draw mpsc::channel connections
+      between components visually
+- [ ] Error propagation — visual Result/Option flow
+      from widget events through state
+- [ ] Iterator pipeline builder — chain .map/.filter/.collect
+      operations visually, generates correct iterator code
+- [ ] Trait binding — assign a trait implementation to a
+      widget's behavior visually
+- [ ] Macro palette — common Rust macros (vec!, format!,
+      println!) as droppable canvas components that wire
+      into event handlers
+
+### WASM Export & Web Target
+- [ ] WASM export panel in File menu
+- [ ] Configure: output path, bundler (trunk/wasm-pack),
+      generate index.html toggle
+- [ ] Generates cargo build --target wasm32-unknown-unknown
+      compatible project
+- [ ] Web-specific widget considerations (no file dialogs etc)
+- [ ] Preview in browser button — runs trunk serve
+
+### Database Integration Panel
+- [ ] DB connection configurator — SQLite/PostgreSQL/MySQL
+- [ ] Uses sqlx or rusqlite crate (user choice)
+- [ ] Visual query builder — select table, columns, filter
+- [ ] Bind widget to query result field
+- [ ] Generated code uses correct Rust DB crate with
+      async/sync query calls
+- [ ] Schema viewer — see tables and fields visually
+- [ ] Generates AppState with db connection pool field
+
+### Project Tree & File Browser
+- [ ] Project tree panel — shows all files in the
+      exported project structure
+- [ ] Click a file to view/edit its generated content
+- [ ] Add non-generated files to project (assets, configs)
+- [ ] Assets folder management — images, fonts, data files
+      referenced in generated code by path
+
+## Future - Viable Widget Palette
+
+Planning inspired by mature desktop GUI designers. These are roadmap targets, not current scope.
+
+### Layouts
+- [ ] Vertical Layout
+- [ ] Horizontal Layout
+- [ ] Grid Layout
+- [ ] Form Layout
+
+### Spacers
+- [ ] Horizontal Spacer
+- [ ] Vertical Spacer
+
+### Buttons
+- [ ] Push Button
+- [ ] Tool Button
+- [ ] Radio Button
+- [ ] Check Box
+- [ ] Command Link Button
+- [ ] Dialog Button Box
+
+### Containers
+- [ ] Group Box
+- [ ] Scroll Area
+- [ ] Tab Widget
+- [ ] Stacked Widget
+- [ ] Tool Box
+- [ ] Frame
+
+### Inputs
+- [ ] Combo Box
+- [ ] Font Combo Box
+- [ ] Line Edit
+- [ ] Text Edit
+- [ ] Numeric / spinner controls
+
+### Item Widgets and Views
+- [ ] List Widget / List View
+- [ ] Tree Widget / Tree View
+- [ ] Table Widget / Table View
+
+### Later / High Risk
+- [ ] Model-based item views
+- [ ] Dock Widget
+- [ ] MDI Area
+- [ ] QAxWidget-style platform integrations (likely not compatible with RohKai's pure Rust / no C FFI rule)

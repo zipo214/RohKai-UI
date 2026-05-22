@@ -1,8 +1,9 @@
 use crate::project::schema::{Rect, WidgetInstance, WidgetKind, WidgetProps};
+use uuid::Uuid;
 
 pub fn default_instance() -> WidgetInstance {
     WidgetInstance {
-        id: uuid::Uuid::new_v4(),
+        id: Uuid::new_v4(),
         kind: WidgetKind::Slider,
         rect: Rect {
             x: 20.0,
@@ -14,7 +15,17 @@ pub fn default_instance() -> WidgetInstance {
             label: String::from("Value"),
             min: 0.0,
             max: 100.0,
+            default_value: 50.0,
         },
         state_binding: Some(String::from("slider_value")),
+        children: Vec::new(),
+        import_metadata: None,
+        tooltip: None,
+        enabled: None,
+        fg_color: None,
+        corner_radius: None,
+        label_binding: None,
+        custom_props: Vec::new(),
+        event_handler: None,
     }
 }

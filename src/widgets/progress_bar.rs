@@ -16,7 +16,17 @@ pub fn default_instance() -> WidgetInstance {
             label: String::from("Progress"),
             min: 0.0,
             max: 1.0,
+            default_value: 0.5,
         },
         state_binding: Some(String::from("progress")),
+        children: Vec::new(),
+        import_metadata: None,
+        tooltip: None,
+        enabled: None,
+        fg_color: None,
+        corner_radius: None,
+        label_binding: None,
+        custom_props: Vec::new(),
+        event_handler: None,
     }
 }

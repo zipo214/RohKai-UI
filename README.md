@@ -1,35 +1,11 @@
-# Rohkai ^ρϗ
+<h1>
+  <img src="./assets/rohkai-mark.svg" height="34" alt="ρϗ">RohKai
+</h1>
 
-A pure Rust, native WYSIWYG GUI designer for egui applications.
+<img width="1795" height="1099" alt="image" src="https://github.com/user-attachments/assets/bf561102-aa4d-47e2-a830-e629848bea76" />
+
+A pure Rust, native WYSIWYG GUI designer for egui applications.  
 No gap between what you design and what gets generated.
-
-## The Name
-
-*RohKai* derived from *Rocaille* — a French Baroque ornamental style
-defined by elaborate shell-and-stone window surrounds and decorative
-frames. A Rocaille is an opening made meaningful by what surrounds it.
-(I am now well aware of the unintentional Windows allusion here...)
-
-Deeper inspiration comes from the old cathedral craftsman
-*épure* — the 1:1-scale geometric drawing traced on the lodge floor
-from which every vault, arch, and stone was cut. As architectural
-historian Sara Galletti describes, épures were "traced on site" by the
-*appareilleur* and "referred to throughout the execution process" —
-they were not plans *of* the building, they *were* the building before
-it existed in stone.¹
-
-Research into the Lady Chapel vaults at Ely Cathedral by Webb and
-Buchanan at the University of Liverpool further documents how medieval
-masons "used a 2D tracing floor to experiment with ideas in plan"
-before projecting vault geometry into three dimensions.²
-
-Rohkai is the épure to your Rust UI. The canvas and the code are the
-same object just two different reflections.
-
-The mark *^ρϗ* — rho and koppa (I guess?),Greek letters used as a
-"makers mark" — appears in every file Rohkai generates:
-
-    // ^ρϗ Rohkai — generated interface
 
 ## What It Does
 Draw --> Export --> .rs GUI "app"
@@ -51,7 +27,7 @@ Draw --> Export --> .rs GUI "app"
 
 ## Built With
 
-Pure Rust. No C FFI. No system toolkit bindings. Everything via Cargo.
+Pure Rust. No C FFI. No system toolkit bindings. All via Cargo.
 
 ## Try It
 
@@ -81,9 +57,30 @@ target\release\rohkai.exe
 GitHub Actions builds a Windows executable for every push to `main`.
 Open the latest workflow run and download the `rohkai-windows-exe` artifact.
 
-## Status
+## The Name
 
-Active development. Stages 0–5 complete.
+*RohKai* is from *Rocaille* — a French Baroque ornamental style
+defined by elaborate shell-and-stone window surrounds and decorative
+frames. A Rocaille is an opening made meaningful by what surrounds it.
+(I am now well aware of the unintentional Windows allusion here...)
+
+Deeper inspiration comes from the old cathedral craftsman
+*épure* — the 1:1-scale geometric drawing traced on the lodge floor
+from which every vault, arch, and stone was cut. As architectural
+historian Sara Galletti describes, épures were "traced on site" by the
+*appareilleur* and "referred to throughout the execution process" —
+they were not plans *of* the building, they *were* the building before
+it existed in stone.¹
+
+Research into the Lady Chapel vaults at Ely Cathedral by Webb and
+Buchanan at the University of Liverpool further documents how medieval
+masons "used a 2D tracing floor to experiment with ideas in plan"
+before projecting vault geometry into three dimensions.²
+
+Rohkai is the épure to your Rust UI. The canvas and the code are the
+same object just two different reflections.
+The mark *^ρϗ* — rho and koppa (I guess?), Greek letters used as a
+"makers mark"
 
 ---
 

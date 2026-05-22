@@ -5,6 +5,8 @@ mod canvas;
 mod codegen;
 mod panels;
 mod project;
+mod settings;
+mod svg_import;
 mod widgets;
 
 use ab_glyph::{Font as _, FontRef, PxScale, ScaleFont as _};
