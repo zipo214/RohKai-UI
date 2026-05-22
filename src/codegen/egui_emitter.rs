@@ -184,17 +184,42 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
             WidgetKind::ComboBox => {
                 let line = match binding {
                     Some(b) => {
-                        let base = format!(
-                            "egui::ComboBox::from_label({label_lit}).selected_text(self.{b}.as_str()).width({:.1}).show_ui(ui, |_ui| {{}})",
+                        let options = combo_option_values(w);
+                        let selected_expr =
+                            combo_selected_text_expr(&format!("self.{b}"), &options);
+                        let mut base = format!(
+                            "let combo_resp = egui::ComboBox::from_label({label_lit})\n            .selected_text({selected_expr})\n            .width({:.1})\n            .show_ui(ui, |ui| {{\n",
                             w.rect.w
                         );
-                        let with_tip = append_tip(base, tip.as_deref());
-                        let with_handler = if let Some(ref h) = w.event_handler {
-                            format!("if {with_tip}.response.changed() {{\n            Self::{h}(&mut self.state);\n        }}")
-                        } else {
-                            format!("{with_tip}.response;")
-                        };
-                        format!("        {with_handler}")
+                        for option in options {
+                            let option_lit = string_literal(&option);
+                            base.push_str(&format!(
+                                "                ui.selectable_value(&mut self.{b}, {option_lit}.to_owned(), {option_lit});\n"
+                            ));
+                        }
+                        base.push_str("            });\n");
+                        let uses_response = tip.is_some() || w.event_handler.is_some();
+                        if uses_response {
+                            base.push_str("        let combo_response = combo_resp.response;\n");
+                        }
+                        if w.event_handler.is_some() {
+                            base.push_str(
+                                "        let combo_changed = combo_response.changed();\n",
+                            );
+                        }
+                        if let Some(tip) = tip.as_deref() {
+                            base.push_str(&format!(
+                                "        combo_response.on_hover_text({tip});\n"
+                            ));
+                        }
+                        if let Some(ref h) = w.event_handler {
+                            base.push_str(&format!(
+                                "        if combo_changed {{\n            Self::{h}(&mut self.state);\n        }}"
+                            ));
+                        } else if !uses_response {
+                            base.push_str("        let _ = combo_resp;");
+                        }
+                        format!("        {base}")
                     }
                     None => format!("        // ComboBox {label_lit}: set a valid Binding"),
                 };
@@ -240,6 +265,30 @@ fn append_tip(expr: String, tip: Option<&str>) -> String {
         Some(t) => format!("{expr}.on_hover_text({t})"),
         None => expr,
     }
+}
+
+fn combo_option_values(widget: &WidgetInstance) -> Vec<String> {
+    let options: Vec<String> = widget
+        .props
+        .options
+        .iter()
+        .filter_map(|option| {
+            let trimmed = option.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_owned())
+        })
+        .collect();
+
+    if options.is_empty() {
+        vec![widget.props.label.clone()]
+    } else {
+        options
+    }
+}
+
+fn combo_selected_text_expr(state_expr: &str, options: &[String]) -> String {
+    let fallback = options.first().map(String::as_str).unwrap_or("Option A");
+    let fallback_lit = string_literal(fallback);
+    format!("if {state_expr}.is_empty() {{ {fallback_lit} }} else {{ {state_expr}.as_str() }}")
 }
 
 /// Emit a single child widget using ui.put() with relative position inside its parent Frame.

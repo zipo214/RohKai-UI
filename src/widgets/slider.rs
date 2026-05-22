@@ -16,6 +16,7 @@ pub fn default_instance() -> WidgetInstance {
             min: 0.0,
             max: 100.0,
             default_value: 50.0,
+            ..Default::default()
         },
         state_binding: Some(String::from("slider_value")),
         children: Vec::new(),

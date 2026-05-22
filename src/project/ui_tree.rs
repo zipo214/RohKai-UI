@@ -1,4 +1,6 @@
-use crate::project::schema::{AppProps, Rect, WidgetInstance, WidgetKind, WidgetProps};
+use crate::project::schema::{
+    default_combo_options, AppProps, Rect, WidgetInstance, WidgetKind, WidgetProps,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use uuid::Uuid;
@@ -181,6 +183,10 @@ impl UiTree {
             .props
             .default_value
             .clamp(widget.props.min, widget.props.max);
+
+        if widget.kind == WidgetKind::ComboBox && widget.props.options.is_empty() {
+            widget.props.options = default_combo_options();
+        }
     }
 
     fn repair_binding(widget: &mut WidgetInstance, seen_bindings: &mut HashSet<String>) {

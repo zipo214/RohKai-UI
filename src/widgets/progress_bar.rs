@@ -17,6 +17,7 @@ pub fn default_instance() -> WidgetInstance {
             min: 0.0,
             max: 1.0,
             default_value: 0.5,
+            ..Default::default()
         },
         state_binding: Some(String::from("progress")),
         children: Vec::new(),

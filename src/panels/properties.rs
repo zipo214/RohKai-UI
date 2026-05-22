@@ -78,6 +78,39 @@ fn show_content_inner(
             });
         }
 
+        if kind == WidgetKind::ComboBox {
+            ui.label(egui::RichText::new("Options").small().weak());
+            let mut to_remove: Option<usize> = None;
+            for (index, option) in w.props.options.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    let option_width = (ui.available_width() - 28.0).clamp(80.0, 180.0);
+                    ui.add(
+                        egui::TextEdit::singleline(option)
+                            .hint_text(format!("Option {}", index + 1))
+                            .desired_width(option_width),
+                    );
+                    if ui
+                        .small_button("x")
+                        .on_hover_text("Remove option")
+                        .clicked()
+                    {
+                        to_remove = Some(index);
+                    }
+                });
+            }
+            if let Some(index) = to_remove {
+                w.props.options.remove(index);
+            }
+            if ui.small_button("+ Add option").clicked() {
+                w.props
+                    .options
+                    .push(format!("Option {}", w.props.options.len() + 1));
+            }
+            if w.props.options.is_empty() {
+                w.props.options.push("Option A".to_owned());
+            }
+        }
+
         // State binding field: everything except Button, Frame
         let show_binding = !matches!(kind, WidgetKind::Button | WidgetKind::Frame);
         if show_binding {
@@ -237,25 +270,30 @@ fn show_content_inner(
         // Fg color — all kinds
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Color").small().weak());
-            if let Some(ref mut color) = w.fg_color {
-                let mut c32 = egui::Color32::from_rgb(color[0], color[1], color[2]);
-                egui::color_picker::color_edit_button_srgba(
-                    ui,
-                    &mut c32,
-                    egui::color_picker::Alpha::Opaque,
-                );
-                color[0] = c32.r();
-                color[1] = c32.g();
-                color[2] = c32.b();
-                if ui.small_button("✕").on_hover_text("Remove color").clicked() {
-                    w.fg_color = None;
-                }
-            } else if ui
-                .small_button("+ set")
-                .on_hover_text("Override text/fg color")
-                .clicked()
+            let mut c32 = w
+                .fg_color
+                .map(|color| egui::Color32::from_rgb(color[0], color[1], color[2]))
+                .unwrap_or(egui::Color32::WHITE);
+            let before = c32;
+            let response = egui::color_picker::color_edit_button_srgba(
+                ui,
+                &mut c32,
+                egui::color_picker::Alpha::Opaque,
+            );
+            if response.changed() || c32 != before {
+                w.fg_color = if c32 == egui::Color32::WHITE {
+                    None
+                } else {
+                    Some([c32.r(), c32.g(), c32.b()])
+                };
+            }
+            if w.fg_color.is_some()
+                && ui
+                    .small_button("x")
+                    .on_hover_text("Reset to default white")
+                    .clicked()
             {
-                w.fg_color = Some([200, 200, 200]);
+                w.fg_color = None;
             }
         });
 
@@ -426,7 +464,7 @@ fn show_event_handler(
                 .hint_text(placeholder_hint)
                 .desired_width(f32::INFINITY),
         )
-        .on_hover_text("Type handler fn name — double-click to jump/insert (Tracé)");
+        .on_hover_text("Ctrl+double-click widget to jump to handler");
 
     if resp.changed() {
         let trimmed = handler.trim().to_owned();
@@ -435,14 +473,6 @@ fn show_event_handler(
         } else {
             Some(trimmed)
         };
-    }
-
-    if resp.double_clicked() {
-        if let Some(ref name) = w.event_handler {
-            if !name.is_empty() {
-                *action = PropertiesAction::ScrollToHandler(name.clone());
-            }
-        }
     }
 }
 

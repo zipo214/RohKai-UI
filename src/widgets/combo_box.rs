@@ -1,4 +1,6 @@
-use crate::project::schema::{Rect, WidgetInstance, WidgetKind, WidgetProps};
+use crate::project::schema::{
+    default_combo_options, Rect, WidgetInstance, WidgetKind, WidgetProps,
+};
 use uuid::Uuid;
 
 pub fn default_instance() -> WidgetInstance {
@@ -13,6 +15,7 @@ pub fn default_instance() -> WidgetInstance {
         },
         props: WidgetProps {
             label: String::from("Select…"),
+            options: default_combo_options(),
             ..Default::default()
         },
         state_binding: Some(String::from("combo_value")),

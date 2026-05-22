@@ -241,10 +241,42 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 format!("                ui.group(|ui| {{ ui.label({label}); }});\n")
             }
             WidgetKind::ComboBox => match binding {
-                Some(b) => format!(
-                    "                egui::ComboBox::from_label({label}).selected_text(self.state.{b}.as_str()).width({:.1}).show_ui(ui, |_ui| {{}});\n",
-                    w.rect.w
-                ),
+                Some(b) => {
+                    let options = combo_option_values(w);
+                    let selected_expr =
+                        combo_selected_text_expr(&format!("self.state.{b}"), &options);
+                    let mut code = format!(
+                        "                let combo_resp = egui::ComboBox::from_label({label})\n                    .selected_text({selected_expr})\n                    .width({:.1})\n                    .show_ui(ui, |ui| {{\n",
+                        w.rect.w
+                    );
+                    for option in options {
+                        let option_lit = string_literal(&option);
+                        code.push_str(&format!(
+                            "                        ui.selectable_value(&mut self.state.{b}, {option_lit}.to_owned(), {option_lit});\n"
+                        ));
+                    }
+                    code.push_str("                    });\n");
+                    let uses_response = tip.is_some() || w.event_handler.is_some();
+                    if uses_response {
+                        code.push_str("                let combo_response = combo_resp.response;\n");
+                    }
+                    if w.event_handler.is_some() {
+                        code.push_str("                let combo_changed = combo_response.changed();\n");
+                    }
+                    if let Some(tip) = tip.as_deref() {
+                        code.push_str(&format!(
+                            "                combo_response.on_hover_text({tip});\n"
+                        ));
+                    }
+                    if let Some(ref h) = w.event_handler {
+                        code.push_str(&format!(
+                            "                if combo_changed {{\n                    self.{h}();\n                }}\n"
+                        ));
+                    } else if !uses_response {
+                        code.push_str("                let _ = combo_resp;\n");
+                    }
+                    code
+                }
                 None => format!("                // ComboBox {label}: set a valid Binding\n"),
             },
             WidgetKind::RadioButton => match binding {
@@ -289,11 +321,44 @@ fn export_tip(expr: String, tip: Option<&str>) -> String {
 }
 
 fn default_expr_for_widget(w: &crate::project::schema::WidgetInstance) -> String {
-    if w.kind == WidgetKind::Slider {
-        format!("{:.3}", w.props.default_value)
-    } else {
-        kind_table::state_info(&w.kind)
+    match w.kind {
+        WidgetKind::Slider => format!("{:.3}", w.props.default_value),
+        WidgetKind::ComboBox => {
+            string_literal(
+                w.props
+                    .options
+                    .iter()
+                    .find(|option| !option.trim().is_empty())
+                    .map(|option| option.trim())
+                    .unwrap_or("Option A"),
+            ) + ".to_owned()"
+        }
+        _ => kind_table::state_info(&w.kind)
             .map(|info| info.default_expr.to_owned())
-            .unwrap_or_else(|| "()".to_owned())
+            .unwrap_or_else(|| "()".to_owned()),
     }
+}
+
+fn combo_option_values(widget: &crate::project::schema::WidgetInstance) -> Vec<String> {
+    let options: Vec<String> = widget
+        .props
+        .options
+        .iter()
+        .filter_map(|option| {
+            let trimmed = option.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_owned())
+        })
+        .collect();
+
+    if options.is_empty() {
+        vec![widget.props.label.clone()]
+    } else {
+        options
+    }
+}
+
+fn combo_selected_text_expr(state_expr: &str, options: &[String]) -> String {
+    let fallback = options.first().map(String::as_str).unwrap_or("Option A");
+    let fallback_lit = string_literal(fallback);
+    format!("if {state_expr}.is_empty() {{ {fallback_lit} }} else {{ {state_expr}.as_str() }}")
 }

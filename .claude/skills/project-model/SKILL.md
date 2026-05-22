@@ -46,9 +46,11 @@ label:         String
 min:           f32
 max:           f32
 default_value: f32
+options:       Vec<String>
 ```
 
 `default_value` is meaningful for sliders and is clamped during repair.
+`options` is meaningful for ComboBox, defaults to `["Option A", "Option B", "Option C"]`, and is repaired to a non-empty default for ComboBox widgets.
 
 ## WidgetKind
 

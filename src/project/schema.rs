@@ -51,10 +51,28 @@ pub struct WidgetProps {
     /// Preview default for Slider: thumb position + exported Default value.
     #[serde(default = "half_f32")]
     pub default_value: f32,
+    /// ComboBox display options. Meaningful for ComboBox, defaulted for old projects.
+    #[serde(
+        default = "default_combo_options",
+        skip_serializing_if = "is_default_combo_options"
+    )]
+    pub options: Vec<String>,
 }
 
 fn half_f32() -> f32 {
     0.5
+}
+
+pub fn default_combo_options() -> Vec<String> {
+    vec![
+        "Option A".to_owned(),
+        "Option B".to_owned(),
+        "Option C".to_owned(),
+    ]
+}
+
+fn is_default_combo_options(options: &[String]) -> bool {
+    options == default_combo_options().as_slice()
 }
 
 impl Default for WidgetProps {
@@ -64,6 +82,7 @@ impl Default for WidgetProps {
             min: 0.0,
             max: 100.0,
             default_value: 0.5,
+            options: default_combo_options(),
         }
     }
 }

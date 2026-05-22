@@ -436,6 +436,13 @@ fn draw_widget(
 
         // ComboBox: field box + ▾ arrow
         WidgetKind::ComboBox => {
+            let selected_text = widget
+                .props
+                .options
+                .first()
+                .filter(|option| !option.trim().is_empty())
+                .map(String::as_str)
+                .unwrap_or(&widget.props.label);
             painter.rect_filled(rect, rounding, egui::Color32::from_gray(30));
             painter.rect_stroke(
                 rect,
@@ -445,7 +452,7 @@ fn draw_widget(
             painter.text(
                 egui::pos2(rect.min.x + 6.0, rect.center().y),
                 egui::Align2::LEFT_CENTER,
-                &widget.props.label,
+                selected_text,
                 egui::FontId::proportional(label_size),
                 fg.unwrap_or(egui::Color32::from_gray(200)),
             );
@@ -981,19 +988,20 @@ pub fn handle(
                     .rev()
                     .find(|w| crect(w, origin, zoom).contains(pos));
                 if let Some(w) = hit {
-                    // Widgets that support meaningful inline label editing
-                    let supports_inline = matches!(
-                        w.kind,
-                        WidgetKind::Button
-                            | WidgetKind::Label
-                            | WidgetKind::Checkbox
-                            | WidgetKind::RadioButton
-                    );
-                    if supports_inline {
-                        state.inline_edit = Some((w.id, w.props.label.clone()));
-                    } else {
-                        // Slider, ProgressBar, etc. → Lazare code panel navigation
+                    if ctrl_held {
                         state.double_clicked_widget = Some(w.id);
+                    } else {
+                        // Widgets that support meaningful inline label editing
+                        let supports_inline = matches!(
+                            w.kind,
+                            WidgetKind::Button
+                                | WidgetKind::Label
+                                | WidgetKind::Checkbox
+                                | WidgetKind::RadioButton
+                        );
+                        if supports_inline {
+                            state.inline_edit = Some((w.id, w.props.label.clone()));
+                        }
                     }
                 }
             }

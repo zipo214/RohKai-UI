@@ -1,4 +1,7 @@
-use crate::codegen::{kind_table, rust::field_binding};
+use crate::codegen::{
+    kind_table,
+    rust::{field_binding, string_literal},
+};
 use crate::project::schema::{WidgetInstance, WidgetKind};
 use crate::project::ui_tree::UiTree;
 use std::collections::HashSet;
@@ -83,11 +86,20 @@ pub fn emit(tree: &UiTree) -> String {
 }
 
 fn default_expr_for_widget(w: &WidgetInstance) -> String {
-    if w.kind == WidgetKind::Slider {
-        format!("{:.3}", w.props.default_value)
-    } else {
-        kind_table::state_info(&w.kind)
+    match w.kind {
+        WidgetKind::Slider => format!("{:.3}", w.props.default_value),
+        WidgetKind::ComboBox => {
+            string_literal(
+                w.props
+                    .options
+                    .iter()
+                    .find(|option| !option.trim().is_empty())
+                    .map(|option| option.trim())
+                    .unwrap_or("Option A"),
+            ) + ".to_owned()"
+        }
+        _ => kind_table::state_info(&w.kind)
             .map(|info| info.default_expr.to_owned())
-            .unwrap_or_else(|| "()".to_owned())
+            .unwrap_or_else(|| "()".to_owned()),
     }
 }

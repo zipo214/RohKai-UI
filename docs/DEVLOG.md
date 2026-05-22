@@ -155,3 +155,41 @@ Chronological session record. The roadmap stays strategic; this file records wha
 - RohKai still imports SVGs as editable placeholders, not a full SVG renderer.
 - Original `.svg` files remain the source of truth beside generated `.rktp` templates.
 - Existing dirty working tree included prior Claude/Codex work; this session intentionally did not revert unrelated changes.
+
+## 2026-05-22 16:40 - Stage 5.5 ComboBox and TracÃ© Follow-Up
+
+### Docs Reviewed Before Coding
+- `scripts/preflight-context.ps1` output
+- `AGENTS.md`, `CLAUDE.md`
+- `docs/ROADMAP.md`, `docs/DEVLOG.md`
+- Relevant skill: `project-model`
+- `src/panels/properties.rs`, `src/canvas/interaction.rs`
+- `src/codegen/egui_emitter.rs`, `src/codegen/export.rs`, `src/codegen/state_emitter.rs`
+- `src/project/schema.rs`, `src/project/ui_tree.rs`, `src/widgets/combo_box.rs`
+- `git status --short --branch`
+
+### Changes Made
+- Removed the foreground color `+ set` gate. The color swatch now appears inline at all times, defaulting to white.
+- Added `WidgetProps.options: Vec<String>` for ComboBox widgets with default options `Option A`, `Option B`, `Option C`.
+- Added ComboBox option editing in Properties with add/remove controls.
+- Repaired empty ComboBox option lists through `UiTree::validate_and_repair()`.
+- Updated canvas ComboBox preview to show the first configured option as the selected label.
+- Updated live codegen, AppState emission, and export codegen so ComboBoxes emit selectable options and default state to the first option.
+- Changed canvas TracÃ© navigation to Ctrl+double-click; regular double-click remains reserved for inline label editing.
+- Updated the handler field hint to `Ctrl+double-click widget to jump to handler`.
+- Capped ComboBox option editor width so the left panel does not expand over the canvas.
+- Deleted stale `implement-svg-importer-hardening` heartbeat automation because the importer hardening pass is complete.
+- Updated Codex and Claude `project-model` skills to document ComboBox options.
+
+### Verification
+- `cargo test` passed before edits: 13/13.
+- `cargo fmt --check` passed.
+- `cargo check` passed.
+- `cargo test` passed: 13/13.
+- `cargo clippy -- -D warnings` passed.
+- `cargo run` smoke launched successfully and was stopped after 8 seconds.
+
+### Notes For Claude And Codex
+- Do not reintroduce a color `+ set` gate; the swatch is intentionally always visible.
+- TracÃ© canvas navigation is Ctrl+double-click. Plain double-click is now for inline label editing.
+- ComboBox option text fields must stay width-capped; uncapped fields can force the left panel over the canvas.
