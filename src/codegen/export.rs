@@ -172,13 +172,23 @@ fn gen_app_rs(tree: &UiTree) -> String {
         let tip = w.tooltip.as_deref().map(string_literal);
         let line = match &w.kind {
             WidgetKind::Button => {
+                // CITIZEN: font_size and fg_color (rich_text_expr) not applied to exported Button label.
                 let rounding_chain = w
                     .corner_radius
                     .filter(|&r| r > 0.0)
                     .map(|r| format!(".rounding(egui::Rounding::same({r:.1}))"))
                     .unwrap_or_default();
+                let fill_chain = w
+                    .bg_color
+                    .map(|c| {
+                        format!(
+                            ".fill(egui::Color32::from_rgb({}, {}, {}))",
+                            c[0], c[1], c[2]
+                        )
+                    })
+                    .unwrap_or_default();
                 let base = format!(
-                    "ui.add_sized([{:.1}, {:.1}], egui::Button::new({label_expr}){rounding_chain})",
+                    "ui.add_sized([{:.1}, {:.1}], egui::Button::new({label_expr}){rounding_chain}{fill_chain})",
                     w.rect.w, w.rect.h
                 );
                 let with_tip = export_tip(base, tip.as_deref());
@@ -190,18 +200,26 @@ fn gen_app_rs(tree: &UiTree) -> String {
                     format!("                if {with_tip}.clicked() {{}}\n")
                 }
             }
-            WidgetKind::Label => match binding {
-                Some(b) => format!("                {}.on_hover_text(\"\");\n",
-                    export_tip(format!("ui.label(&self.state.{b})"), tip.as_deref())),
-                None => format!("                {};\n",
-                    export_tip(format!("ui.label({label_expr})"), tip.as_deref())),
-            },
+            WidgetKind::Label => {
+                let expr = match binding {
+                    Some(b) => format!("ui.label(&self.state.{b})"),
+                    None => format!("ui.label({label_expr})"),
+                };
+                format!("                {};\n", export_tip(expr, tip.as_deref()))
+            }
             WidgetKind::TextInput => match binding {
                 Some(b) => {
-                    let base = format!(
-                        "ui.add_sized([{:.1}, {:.1}], egui::TextEdit::singleline(&mut self.state.{b}))",
-                        w.rect.w, w.rect.h
-                    );
+                    let mut te = format!("egui::TextEdit::singleline(&mut self.state.{b})");
+                    if !w.props.placeholder.is_empty() {
+                        te.push_str(&format!(
+                            ".hint_text({})",
+                            string_literal(&w.props.placeholder)
+                        ));
+                    }
+                    if w.props.password_mode {
+                        te.push_str(".password(true)");
+                    }
+                    let base = format!("ui.add_sized([{:.1}, {:.1}], {te})", w.rect.w, w.rect.h);
                     let with_tip = export_tip(base, tip.as_deref());
                     if let Some(h) = resolve_export_handler_change(w) {
                         format!("                if {with_tip}.changed() {{\n                    self.{h}();\n                }}\n")
@@ -213,10 +231,21 @@ fn gen_app_rs(tree: &UiTree) -> String {
             },
             WidgetKind::Slider => match binding {
                 Some(b) => {
-                    let base = format!(
-                        "ui.add_sized([{:.1}, {:.1}], egui::Slider::new(&mut self.state.{b}, {:.1}..={:.1}).text({label}))",
-                        w.rect.w, w.rect.h, w.props.min, w.props.max
+                    let mut slider = format!(
+                        "egui::Slider::new(&mut self.state.{b}, {:.1}..={:.1}).text({label})",
+                        w.props.min, w.props.max
                     );
+                    if let Some(step) = w.props.step {
+                        slider.push_str(&format!(".step_by({step} as f64)"));
+                    }
+                    if !w.props.show_value {
+                        slider.push_str(".show_value(false)");
+                    }
+                    if w.props.orientation == crate::project::schema::Orientation::Vertical {
+                        slider.push_str(".vertical()");
+                    }
+                    let base =
+                        format!("ui.add_sized([{:.1}, {:.1}], {slider})", w.rect.w, w.rect.h);
                     let with_tip = export_tip(base, tip.as_deref());
                     if let Some(h) = resolve_export_handler_change(w) {
                         format!("                if {with_tip}.changed() {{\n                    self.{h}();\n                }}\n")
@@ -242,6 +271,8 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 None => format!("                // Checkbox {label}: set a valid Binding\n"),
             },
             WidgetKind::Frame => {
+                // CITIZEN: no children rendered and no Frame styling (inner_margin, stroke, fill).
+                // Full fix requires iterating w.children and placing each with ui.put() or nested Areas.
                 format!("                ui.group(|ui| {{ ui.label({label}); }});\n")
             }
             WidgetKind::ComboBox => match binding {
@@ -263,10 +294,14 @@ fn gen_app_rs(tree: &UiTree) -> String {
                     let combo_handler = resolve_export_handler_change(w);
                     let uses_response = tip.is_some() || combo_handler.is_some();
                     if uses_response {
-                        code.push_str("                let combo_response = combo_resp.response;\n");
+                        code.push_str(
+                            "                let combo_response = combo_resp.response;\n",
+                        );
                     }
                     if combo_handler.is_some() {
-                        code.push_str("                let combo_changed = combo_response.changed();\n");
+                        code.push_str(
+                            "                let combo_changed = combo_response.changed();\n",
+                        );
                     }
                     if let Some(tip) = tip.as_deref() {
                         code.push_str(&format!(
@@ -291,17 +326,33 @@ fn gen_app_rs(tree: &UiTree) -> String {
                     } else {
                         string_literal(&w.props.radio_value)
                     };
-                    format!(
-                        "                ui.radio_value(&mut self.state.{b}, {value_lit}.to_owned(), {label});\n"
-                    )
+                    let base = format!(
+                        "ui.radio_value(&mut self.state.{b}, {value_lit}.to_owned(), {label})"
+                    );
+                    let with_tip = export_tip(base, tip.as_deref());
+                    if let Some(h) = resolve_export_handler_change(w) {
+                        format!(
+                            "                if {with_tip}.clicked() {{\n                    self.{h}();\n                }}\n"
+                        )
+                    } else {
+                        format!("                {with_tip};\n")
+                    }
                 }
                 None => format!("                // RadioButton {label}: set a valid Binding\n"),
             },
             WidgetKind::ProgressBar => match binding {
-                Some(b) => format!(
-                    "                ui.add_sized([{:.1}, {:.1}], egui::ProgressBar::new(self.state.{b}).text({label}));\n",
-                    w.rect.w, w.rect.h
-                ),
+                Some(b) => {
+                    let mut pb = format!("egui::ProgressBar::new(self.state.{b})");
+                    if w.props.show_percentage {
+                        pb.push_str(".show_percentage()");
+                    }
+                    if w.props.animated {
+                        pb.push_str(".animate(true)");
+                    }
+                    let sized = format!("ui.add_sized([{:.1}, {:.1}], {pb})", w.rect.w, w.rect.h);
+                    let with_tip = export_tip(sized, tip.as_deref());
+                    format!("                {with_tip};\n")
+                }
                 None => format!("                // ProgressBar {label}: set a valid Binding\n"),
             },
         };
@@ -373,4 +424,18 @@ fn combo_selected_text_expr(state_expr: &str, options: &[String]) -> String {
     let fallback = options.first().map(String::as_str).unwrap_or("Option A");
     let fallback_lit = string_literal(fallback);
     format!("if {state_expr}.is_empty() {{ {fallback_lit} }} else {{ {state_expr}.as_str() }}")
+}
+
+fn resolve_export_handler_click(w: &crate::project::schema::WidgetInstance) -> Option<&str> {
+    if !w.on_click.is_empty() {
+        return Some(w.on_click.as_str());
+    }
+    w.event_handler.as_deref().filter(|s| !s.is_empty())
+}
+
+fn resolve_export_handler_change(w: &crate::project::schema::WidgetInstance) -> Option<&str> {
+    if !w.on_change.is_empty() {
+        return Some(w.on_change.as_str());
+    }
+    w.event_handler.as_deref().filter(|s| !s.is_empty())
 }

@@ -405,19 +405,14 @@ fn draw_widget(
 
         // ProgressBar: filled left portion (60 % preview)
         WidgetKind::ProgressBar => {
-            painter.rect_filled(
-                rect,
-                rounding,
-                bg.unwrap_or_else(|| kind_fill(accent)),
-            );
+            painter.rect_filled(rect, rounding, bg.unwrap_or_else(|| kind_fill(accent)));
             painter.rect_stroke(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
             );
             let fill_w = rect.width() * 0.6;
-            let fill_rect =
-                egui::Rect::from_min_size(rect.min, egui::vec2(fill_w, rect.height()));
+            let fill_rect = egui::Rect::from_min_size(rect.min, egui::vec2(fill_w, rect.height()));
             painter.rect_filled(fill_rect, rounding, accent.linear_multiply(0.55));
             // Overlay: % or animated indicator
             let overlay = if widget.props.show_percentage {
@@ -597,11 +592,7 @@ fn draw_widget(
 
         // TextInput: dark field with placeholder-style text
         WidgetKind::TextInput => {
-            painter.rect_filled(
-                rect,
-                rounding,
-                bg.unwrap_or(egui::Color32::from_gray(30)),
-            );
+            painter.rect_filled(rect, rounding, bg.unwrap_or(egui::Color32::from_gray(30)));
             painter.rect_stroke(
                 rect,
                 rounding,

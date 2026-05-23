@@ -94,10 +94,7 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                         "\n            .rounding(egui::Rounding::same({r:.1}))"
                     ));
                 }
-                lines.push((
-                    Some(w.id),
-                    format!("        {frame_expr}.show(ui, |ui| {{"),
-                ));
+                lines.push((Some(w.id), format!("        {frame_expr}.show(ui, |ui| {{")));
                 lines.push((
                     Some(w.id),
                     format!(
@@ -155,8 +152,7 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
             WidgetKind::TextInput => {
                 let line = match binding {
                     Some(b) => {
-                        let mut te =
-                            format!("egui::TextEdit::singleline(&mut self.{b})");
+                        let mut te = format!("egui::TextEdit::singleline(&mut self.{b})");
                         if !w.props.placeholder.is_empty() {
                             te.push_str(&format!(
                                 ".hint_text({})",
@@ -166,10 +162,8 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                         if w.props.password_mode {
                             te.push_str(".password(true)");
                         }
-                        let sized = format!(
-                            "ui.add_sized([{:.1}, {:.1}], {te})",
-                            w.rect.w, w.rect.h
-                        );
+                        let sized =
+                            format!("ui.add_sized([{:.1}, {:.1}], {te})", w.rect.w, w.rect.h);
                         let with_tip = append_tip(sized, tip.as_deref());
                         let with_handler = if let Some(h) = resolve_handler_change(w) {
                             format!("if {with_tip}.changed() {{\n            Self::{h}(&mut self.state);\n        }}")
@@ -198,10 +192,8 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                         if w.props.orientation == Orientation::Vertical {
                             slider.push_str(".vertical()");
                         }
-                        let sized = format!(
-                            "ui.add_sized([{:.1}, {:.1}], {slider})",
-                            w.rect.w, w.rect.h
-                        );
+                        let sized =
+                            format!("ui.add_sized([{:.1}, {:.1}], {slider})", w.rect.w, w.rect.h);
                         let with_tip = append_tip(sized, tip.as_deref());
                         let with_handler = if let Some(h) = resolve_handler_change(w) {
                             format!("if {with_tip}.changed() {{\n            Self::{h}(&mut self.state);\n        }}")
@@ -253,9 +245,7 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                         let handler = resolve_handler_change(w);
                         let uses_response = tip.is_some() || handler.is_some();
                         if uses_response {
-                            base.push_str(
-                                "        let combo_response = combo_resp.response;\n",
-                            );
+                            base.push_str("        let combo_response = combo_resp.response;\n");
                         }
                         if handler.is_some() {
                             base.push_str(
@@ -314,10 +304,8 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                         if w.props.animated {
                             pb.push_str(".animate(true)");
                         }
-                        let sized = format!(
-                            "ui.add_sized([{:.1}, {:.1}], {pb})",
-                            w.rect.w, w.rect.h
-                        );
+                        let sized =
+                            format!("ui.add_sized([{:.1}, {:.1}], {pb})", w.rect.w, w.rect.h);
                         let with_tip = append_tip(sized, tip.as_deref());
                         format!("        {with_tip};")
                     }

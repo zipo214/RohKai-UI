@@ -173,8 +173,11 @@ fn show_label(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
 
 fn show_text_input(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
     field_text(ui, "Placeholder", &mut w.props.placeholder);
-    ui.checkbox(&mut w.props.password_mode, egui::RichText::new("Password").small())
-        .on_hover_text("Mask input with •");
+    ui.checkbox(
+        &mut w.props.password_mode,
+        egui::RichText::new("Password").small(),
+    )
+    .on_hover_text("Mask input with •");
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Max len").small().weak());
         let mut len_str = w
@@ -228,11 +231,7 @@ fn show_slider(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) 
         });
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Step").small().weak());
-        let mut step_str = w
-            .props
-            .step
-            .map(|s| s.to_string())
-            .unwrap_or_default();
+        let mut step_str = w.props.step.map(|s| s.to_string()).unwrap_or_default();
         if ui
             .add(
                 egui::TextEdit::singleline(&mut step_str)
@@ -244,8 +243,11 @@ fn show_slider(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) 
             w.props.step = step_str.trim().parse::<f32>().ok().filter(|&s| s > 0.0);
         }
     });
-    ui.checkbox(&mut w.props.show_value, egui::RichText::new("Show value").small())
-        .on_hover_text("Display current value alongside slider");
+    ui.checkbox(
+        &mut w.props.show_value,
+        egui::RichText::new("Show value").small(),
+    )
+    .on_hover_text("Display current value alongside slider");
     show_orientation(ui, w);
     show_geometry(ui, w);
     ui.separator();
@@ -272,9 +274,7 @@ fn show_radio_button(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut 
     field_text(ui, "Label", &mut w.props.label);
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Value").small().weak());
-        ui.add(
-            egui::TextEdit::singleline(&mut w.props.radio_value).hint_text("option_a"),
-        );
+        ui.add(egui::TextEdit::singleline(&mut w.props.radio_value).hint_text("option_a"));
     });
     // Group binding → also synced to state_binding for codegen
     ui.horizontal(|ui| {
@@ -365,8 +365,11 @@ fn show_progress_bar(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut 
         egui::RichText::new("Show %").small(),
     )
     .on_hover_text("Overlay percentage text on bar");
-    ui.checkbox(&mut w.props.animated, egui::RichText::new("Animated").small())
-        .on_hover_text("Animate the progress bar fill");
+    ui.checkbox(
+        &mut w.props.animated,
+        egui::RichText::new("Animated").small(),
+    )
+    .on_hover_text("Animate the progress bar fill");
     show_geometry(ui, w);
     ui.separator();
     show_fg_color(ui, w);
@@ -957,18 +960,12 @@ fn icon_center_h(p: &egui::Painter, r: egui::Rect) {
         egui::Stroke::new(1.5, GUIDE),
     );
     p.rect_filled(
-        egui::Rect::from_min_size(
-            egui::pos2(cx - 7.5, r.min.y + 2.0),
-            egui::vec2(15.0, 5.5),
-        ),
+        egui::Rect::from_min_size(egui::pos2(cx - 7.5, r.min.y + 2.0), egui::vec2(15.0, 5.5)),
         0.0,
         BLOCK,
     );
     p.rect_filled(
-        egui::Rect::from_min_size(
-            egui::pos2(cx - 4.5, r.min.y + 13.0),
-            egui::vec2(9.0, 5.5),
-        ),
+        egui::Rect::from_min_size(egui::pos2(cx - 4.5, r.min.y + 13.0), egui::vec2(9.0, 5.5)),
         0.0,
         BLOCK,
     );
@@ -987,10 +984,7 @@ fn icon_align_right(p: &egui::Painter, r: egui::Rect) {
         BLOCK,
     );
     p.rect_filled(
-        egui::Rect::from_min_size(
-            egui::pos2(x_narrow, r.min.y + 13.0),
-            egui::vec2(9.0, 5.5),
-        ),
+        egui::Rect::from_min_size(egui::pos2(x_narrow, r.min.y + 13.0), egui::vec2(9.0, 5.5)),
         0.0,
         BLOCK,
     );
@@ -1021,18 +1015,12 @@ fn icon_center_v(p: &egui::Painter, r: egui::Rect) {
         egui::Stroke::new(1.5, GUIDE),
     );
     p.rect_filled(
-        egui::Rect::from_min_size(
-            egui::pos2(r.min.x + 2.0, cy - 6.0),
-            egui::vec2(7.0, 12.0),
-        ),
+        egui::Rect::from_min_size(egui::pos2(r.min.x + 2.0, cy - 6.0), egui::vec2(7.0, 12.0)),
         0.0,
         BLOCK,
     );
     p.rect_filled(
-        egui::Rect::from_min_size(
-            egui::pos2(r.min.x + 13.0, cy - 3.5),
-            egui::vec2(7.0, 7.0),
-        ),
+        egui::Rect::from_min_size(egui::pos2(r.min.x + 13.0, cy - 3.5), egui::vec2(7.0, 7.0)),
         0.0,
         BLOCK,
     );
@@ -1051,10 +1039,7 @@ fn icon_align_bottom(p: &egui::Painter, r: egui::Rect) {
         BLOCK,
     );
     p.rect_filled(
-        egui::Rect::from_min_size(
-            egui::pos2(r.min.x + 13.0, y_short),
-            egui::vec2(7.0, 7.0),
-        ),
+        egui::Rect::from_min_size(egui::pos2(r.min.x + 13.0, y_short), egui::vec2(7.0, 7.0)),
         0.0,
         BLOCK,
     );
@@ -1099,7 +1084,11 @@ fn show_alignment(ui: &mut egui::Ui, tree: &mut UiTree, selected: &[Uuid], shift
     let bb_cy = (ref_min_y + ref_max_y) / 2.0;
     let mut action: Option<AlignAction> = None;
 
-    let label_text = if shift_held { "Align (key obj)" } else { "Align" };
+    let label_text = if shift_held {
+        "Align (key obj)"
+    } else {
+        "Align"
+    };
     ui.label(egui::RichText::new(label_text).color(egui::Color32::from_gray(140)));
     ui.horizontal(|ui| {
         if align_button(ui, "Align Left", icon_align_left) {
@@ -1125,7 +1114,11 @@ fn show_alignment(ui: &mut egui::Ui, tree: &mut UiTree, selected: &[Uuid], shift
     });
 
     if let Some(a) = action {
-        let key_id = if shift_held { selected.last().copied() } else { None };
+        let key_id = if shift_held {
+            selected.last().copied()
+        } else {
+            None
+        };
         let ids: Vec<Uuid> = selected.to_vec();
         for id in ids {
             if Some(id) == key_id {
