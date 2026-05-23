@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="180" height="80">
+  <defs>
+    <symbol id="chip"><rect width="40" height="22" rx="3" fill="#333"/><text x="6" y="15" font-family="Noto Sans" font-size="10">IO</text></symbol>
+  </defs>
+  <use href="#chip" x="12" y="20"/>
+  <use href="#chip" x="72" y="20"/>
+</svg>

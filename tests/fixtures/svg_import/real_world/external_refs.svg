@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90">
+  <rect id="fallback" width="40" height="30" fill="#444"/>
+  <image id="remoteImage" href="https://example.com/image.png" x="50" y="0" width="40" height="30"/>
+  <use id="remoteUse" href="https://example.com/sprite.svg#icon" x="100" y="0"/>
+</svg>

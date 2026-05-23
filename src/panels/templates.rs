@@ -16,7 +16,44 @@ pub fn templates_dir() -> Option<PathBuf> {
 pub fn save_template(name: &str, widgets: &[WidgetInstance]) -> Result<PathBuf, String> {
     let dir = templates_dir().ok_or_else(|| "Cannot locate binary directory".to_owned())?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
+    save_template_in_dir(&dir, name, widgets)
+}
+
+pub fn save_imported_svg_template(
+    name: &str,
+    widgets: &[WidgetInstance],
+    svg_source: &str,
+) -> Result<PathBuf, String> {
+    let dir = templates_dir().ok_or_else(|| "Cannot locate binary directory".to_owned())?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
+    save_imported_svg_template_in_dir(&dir, name, widgets, svg_source)
+}
+
+fn save_imported_svg_template_in_dir(
+    dir: &Path,
+    name: &str,
+    widgets: &[WidgetInstance],
+    svg_source: &str,
+) -> Result<PathBuf, String> {
+    let template_path = save_template_in_dir(dir, name, widgets)?;
+    let svg_path = dir.join(format!("{}.svg", safe_template_name(name)));
+    std::fs::write(svg_path, svg_source).map_err(|e| format!("preserve svg: {e}"))?;
+    Ok(template_path)
+}
+
+fn save_template_in_dir(
+    dir: &Path,
+    name: &str,
+    widgets: &[WidgetInstance],
+) -> Result<PathBuf, String> {
     let json = serde_json::to_string_pretty(widgets).map_err(|e| format!("serialize: {e}"))?;
+    let safe = safe_template_name(name);
+    let path = dir.join(format!("{safe}.rktp"));
+    std::fs::write(&path, &json).map_err(|e| format!("write: {e}"))?;
+    Ok(path)
+}
+
+fn safe_template_name(name: &str) -> String {
     let safe: String = name
         .chars()
         .map(|c| {
@@ -27,9 +64,11 @@ pub fn save_template(name: &str, widgets: &[WidgetInstance]) -> Result<PathBuf, 
             }
         })
         .collect();
-    let path = dir.join(format!("{safe}.rktp"));
-    std::fs::write(&path, &json).map_err(|e| format!("write: {e}"))?;
-    Ok(path)
+    if safe.trim_matches('_').is_empty() {
+        "template".to_owned()
+    } else {
+        safe
+    }
 }
 
 pub fn list_templates() -> Vec<(String, PathBuf)> {
@@ -59,6 +98,41 @@ pub fn list_templates() -> Vec<(String, PathBuf)> {
 pub fn load_template(path: &Path) -> Result<Vec<WidgetInstance>, String> {
     let json = std::fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
     serde_json::from_str(&json).map_err(|e| format!("parse: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::schema::{Rect, WidgetKind, WidgetProps};
+
+    #[test]
+    fn imported_svg_preserves_original_source_next_to_template() {
+        let dir = std::env::temp_dir().join(format!("rohkai_svg_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let widgets = vec![WidgetInstance {
+            id: uuid::Uuid::new_v4(),
+            kind: WidgetKind::Frame,
+            rect: Rect {
+                x: 1.0,
+                y: 2.0,
+                w: 30.0,
+                h: 40.0,
+            },
+            props: WidgetProps::default(),
+            state_binding: None,
+            ..Default::default()
+        }];
+        let svg = "<svg><rect width=\"10\" height=\"10\"/></svg>";
+        let template_path =
+            save_imported_svg_template_in_dir(&dir, "some icon", &widgets, svg).unwrap();
+
+        assert!(template_path.ends_with("some_icon.rktp"));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("some_icon.svg")).unwrap(),
+            svg
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -125,8 +199,7 @@ pub fn show(ui: &mut egui::Ui, template_message: &mut Option<(bool, String)>) ->
                                 *template_message = Some((false, format!("Load failed: {e}")));
                             }
                         }
-                    } else if resp.dragged() {
-                        // Drag — load once and begin drag (only set on first drag frame)
+                    } else if resp.drag_started() {
                         match load_template(path) {
                             Ok(instances) => {
                                 action = TemplateAction::BeginDrag(instances);
@@ -140,13 +213,23 @@ pub fn show(ui: &mut egui::Ui, template_message: &mut Option<(bool, String)>) ->
             });
     }
 
+    let mut clear_message = false;
     if let Some((ok, msg)) = template_message {
         let color = if *ok {
             egui::Color32::from_rgb(52, 211, 153)
         } else {
             egui::Color32::RED
         };
-        ui.label(egui::RichText::new(msg.as_str()).small().color(color));
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(msg.as_str()).small().color(color));
+            clear_message = ui
+                .small_button("x")
+                .on_hover_text("Dismiss template message")
+                .clicked();
+        });
+    }
+    if clear_message {
+        *template_message = None;
     }
 
     action

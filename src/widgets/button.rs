@@ -1,8 +1,9 @@
 use crate::project::schema::{Rect, WidgetInstance, WidgetKind, WidgetProps};
+use uuid::Uuid;
 
 pub fn default_instance() -> WidgetInstance {
     WidgetInstance {
-        id: uuid::Uuid::new_v4(),
+        id: Uuid::new_v4(),
         kind: WidgetKind::Button,
         rect: Rect {
             x: 20.0,
@@ -15,5 +16,6 @@ pub fn default_instance() -> WidgetInstance {
             ..Default::default()
         },
         state_binding: None,
+        ..Default::default()
     }
 }

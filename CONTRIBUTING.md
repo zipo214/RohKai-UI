@@ -50,7 +50,8 @@ src/
   codegen/         — walks UiTree, emits Rust strings (nothing else touches syntax)
   project/         — schema types, UiTree, io (save/load/serialize)
   panels/          — egui panels: palette, properties, code preview, templates
-  svg_import/      — SVG → WidgetInstance parser (zero new dependencies)
+  svg_import.rs    — SVG → WidgetInstance parser (zero new dependencies)
+  settings.rs      — UserSettings load/save (APPDATA/RohKai/settings.json)
 ```
 
 Codegen lives in `src/codegen/` only. Nothing outside that module should construct Rust syntax strings.
@@ -67,7 +68,7 @@ Use the `/new-widget` Claude Code slash command — it scaffolds the 7 steps aut
 4. Add accent color in `kind_accent()` in `src/canvas/interaction.rs`
 5. Add kind tag in `kind_tag()`
 6. Add canvas drawing arm in `draw_widget()`
-7. Add codegen arm in `src/codegen/egui_emitter.rs` and `src/codegen/state_emitter.rs`
+7. Add codegen arm in `src/codegen/egui_emitter.rs`, `src/codegen/state_emitter.rs`, and `src/codegen/export.rs`
 
 Each step has a single correct place. There is no magic wiring.
 

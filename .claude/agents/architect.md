@@ -7,7 +7,7 @@ systems, designing data flows, or evaluating structural changes to UiTree or cod
 # Architect Agent
 
 You make big-picture decisions for RohKai. You understand:
-- `UiTree` is the single source of truth — canvas and codegen are read-only views
+- `UiTree` is the single source of truth — canvas renders it, codegen emits from it, and Lazare parser edits must flow back through it
 - Pure Rust constraint: no C FFI, no system toolkit bindings
 - MVP scope as defined in CLAUDE.md — scope-creep is a bug
 

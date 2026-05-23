@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="180" height="120">
+  <defs>
+    <linearGradient id="sky"><stop offset="0" stop-color="#88ccff"/><stop offset="1" stop-color="#223344"/></linearGradient>
+    <radialGradient id="glow"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#f0c"/></radialGradient>
+    <pattern id="grid" width="8" height="8" patternUnits="userSpaceOnUse"><path d="M8 0H0V8" stroke="#777"/></pattern>
+  </defs>
+  <rect id="background" width="160" height="42" fill="url(#sky)"/>
+  <circle id="orb" cx="45" cy="82" r="25" fill="url(#glow)"/>
+  <rect id="patterned" x="88" y="58" width="64" height="42" fill="url(#grid)"/>
+</svg>

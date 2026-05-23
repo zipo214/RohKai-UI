@@ -13,9 +13,11 @@ pub fn default_instance() -> WidgetInstance {
         },
         props: WidgetProps {
             label: String::from("Option A"),
-            min: 0.0,
-            max: 100.0,
+            radio_value: String::from("option_a"),
+            group_binding: String::from("selected_option"),
+            ..Default::default()
         },
-        state_binding: Some(String::from("radio_value")),
+        state_binding: Some(String::from("selected_option")),
+        ..Default::default()
     }
 }

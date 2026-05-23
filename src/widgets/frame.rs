@@ -13,9 +13,9 @@ pub fn default_instance() -> WidgetInstance {
         },
         props: WidgetProps {
             label: String::from("Group"),
-            min: 0.0,
-            max: 100.0,
+            ..Default::default()
         },
         state_binding: None,
+        ..Default::default()
     }
 }

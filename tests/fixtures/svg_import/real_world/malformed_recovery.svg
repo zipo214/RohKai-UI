@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="220" height="90">
+  <rect id="dup" width="0" height="20"/>
+  <rect id="dup" x="25" width="30" height="20" transform="scale(10000000)"/>
+  <text x="8" y="60" font-family="Noto Sans">Unknown &bogus; entity</text>
+</svg>

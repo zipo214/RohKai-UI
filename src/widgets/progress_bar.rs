@@ -11,12 +11,14 @@ pub fn default_instance() -> WidgetInstance {
             w: 200.0,
             h: 20.0,
         },
-        // min/max define the data range; progress binding is in [min, max]
         props: WidgetProps {
             label: String::from("Progress"),
             min: 0.0,
             max: 1.0,
+            default_value: 0.5,
+            ..Default::default()
         },
         state_binding: Some(String::from("progress")),
+        ..Default::default()
     }
 }

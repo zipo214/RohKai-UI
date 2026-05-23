@@ -1,40 +1,92 @@
 ---
 name: project-model
-description: Use when reading or writing UiTree, WidgetInstance, or project schema
-types. This is the source-of-truth data model — all agents must speak this language.
+description: Use when reading or writing UiTree, WidgetInstance, settings, or project schema types. This is the source-of-truth data model; all agents must speak this language before mutating canvas/codegen state.
 ---
 
 # Project Data Model
 
-## UiTree  (`src/project/ui_tree.rs`)
-The root. Holds `Vec<WidgetInstance>` plus canvas dimensions.
+## Rule
 
-## WidgetInstance  (`src/project/schema.rs`)
-```
-id:            Uuid
-kind:          WidgetKind        // Button | Label | TextInput | Slider | Checkbox
-rect:          Rect              // x, y, w, h on the canvas (f32)
-props:         WidgetProps       // label: String, min: f32, max: f32
-state_binding: Option<String>   // name of the AppState field this widget binds to
+`UiTree` is the single project source of truth. The canvas renders it, the code panel emits from it, the parser writes back into it, and project save/load serializes it. User preferences live separately in `UserSettings` and must not dirty `.rohkai.json` files.
+
+## UiTree (`src/project/ui_tree.rs`)
+
+The project root:
+
+```rust
+widgets: Vec<WidgetInstance>
+app_props: AppProps
 ```
 
-## WidgetKind → generated Rust
+Use `UiTree::add`, `remove`, `get_mut`, `group`, `ungroup`, and `validate_and_repair` instead of scattering mutation rules in panels.
+
+## WidgetInstance (`src/project/schema.rs`)
+
+```rust
+id:              Uuid
+kind:            WidgetKind
+rect:            Rect
+props:           WidgetProps
+state_binding:   Option<String>
+children:        Vec<WidgetInstance>
+import_metadata: Option<ImportMetadata>
+tooltip:         Option<String>
+enabled:         Option<bool>
+fg_color:        Option<[u8; 3]>
+corner_radius:   Option<f32>
+label_binding:   Option<String>
+custom_props:    Vec<CustomProp>
+event_handler:   Option<String>
 ```
-Button    → if ui.button("{label}").clicked() { }
-Label     → ui.label(&self.{binding});
-TextInput → ui.text_edit_singleline(&mut self.{binding});
-Slider    → ui.add(egui::Slider::new(&mut self.{binding}, {min}..={max}).text("{label}"));
-Checkbox  → ui.checkbox(&mut self.{binding}, "{label}");
+
+## WidgetProps
+
+```rust
+label:         String
+min:           f32
+max:           f32
+default_value: f32
+options:       Vec<String>
 ```
+
+`default_value` is meaningful for sliders and is clamped during repair.
+`options` is meaningful for ComboBox, defaults to `["Option A", "Option B", "Option C"]`, and is repaired to a non-empty default for ComboBox widgets.
+
+## WidgetKind
+
+Current built-ins:
+
+```text
+Button
+Label
+TextInput
+Slider
+Checkbox
+Frame
+ComboBox
+RadioButton
+ProgressBar
+```
+
+Adding a new kind requires schema, widget default constructor, palette coverage, canvas rendering, parser/codegen/export/state behavior, and tests or validation notes.
 
 ## AppState field types
-```
-Button    → (no state field)
-Label     → String
-TextInput → String
-Slider    → f32
-Checkbox  → bool
+
+Use `src/codegen/kind_table.rs` as the first stop. Current defaults:
+
+```text
+Button       -> no state unless custom/event handler
+Label        -> String when bound
+TextInput    -> String
+Slider       -> f32
+Checkbox     -> bool
+Frame        -> no state
+ComboBox     -> String
+RadioButton  -> bool
+ProgressBar  -> f32
+Custom props -> declared type
 ```
 
 ## Serialization
-UiTree serializes to `.rohkai.json`. All types must have `#[derive(Serialize, Deserialize)]`.
+
+Project files are `.rohkai.json` and use the versioned `ProjectFile` envelope. Legacy bare `UiTree` files still load. Dirty checks, save, and open must all use `src/project/io.rs` serialization paths.
