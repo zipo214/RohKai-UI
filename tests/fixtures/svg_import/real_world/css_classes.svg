@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="180" height="90">
+  <style>
+    .card { fill:#223344; stroke:#55ccaa; opacity:0.8 }
+    .copy { fill:#ffffff; font-size:14px }
+  </style>
+  <g transform="translate(12,10)">
+    <rect id="card" class="card" width="120" height="44"/>
+    <text id="copy" class="copy" x="8" y="28" font-family="Noto Sans">Styled card</text>
+  </g>
+</svg>

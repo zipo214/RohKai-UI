@@ -13,17 +13,11 @@ pub fn default_instance() -> WidgetInstance {
         },
         props: WidgetProps {
             label: String::from("Option A"),
+            radio_value: String::from("option_a"),
+            group_binding: String::from("selected_option"),
             ..Default::default()
         },
-        state_binding: Some(String::from("radio_value")),
-        children: Vec::new(),
-        import_metadata: None,
-        tooltip: None,
-        enabled: None,
-        fg_color: None,
-        corner_radius: None,
-        label_binding: None,
-        custom_props: Vec::new(),
-        event_handler: None,
+        state_binding: Some(String::from("selected_option")),
+        ..Default::default()
     }
 }

@@ -26,6 +26,12 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+Write-Host "Running real-world SVG fixture suite..."
+cargo test real_world_fixture_suite_imports_deterministically
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 Write-Host "Checking clippy..."
 cargo clippy -- -D warnings
 if ($LASTEXITCODE -ne 0) {

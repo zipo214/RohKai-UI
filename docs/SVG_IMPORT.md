@@ -16,6 +16,10 @@ The parser is pure Rust and adds no crates.
 The report includes imported/skipped counts, warnings, unsupported features, and
 an approximate fidelity level: `High`, `Medium`, or `Low`.
 
+Fidelity is intentionally conservative. SVGs with masks, clips, filters,
+paint-server references, many unsupported features, or text-heavy placeholder
+imports are downgraded so RohKai does not imply pixel-perfect reproduction.
+
 ## Supported Placeholder Elements
 
 - `rect`
@@ -44,6 +48,10 @@ an approximate fidelity level: `High`, `Medium`, or `Low`.
   - inline `style=""`
   - simple `.class { key: value; }` rules from `<style>`
   - inherited visibility/display/opacity/font basics
+- Solid paint approximation for simple `fill`, `stroke`, named colors,
+  `#rgb`, `#rrggbb`, and `rgb(...)`.
+- Opacity is approximated into solid RGB placeholder colors because RohKai
+  widgets currently store RGB, not alpha.
 - Text flattening for simple `tspan` content.
 - Path bounds for `M`, `L`, `H`, `V`, `C`, `S`, `Q`, `T`, `A`, and `Z`.
 - Relative and absolute path commands.
@@ -76,8 +84,10 @@ RohKai rejects or ignores unsafe SVG features:
 - Non-XML processing instructions are ignored with a warning.
 - `script` is not executed.
 - External network/file references are rejected for `use`, `image`, and related refs.
-- `filter`, animation, `foreignObject`, `textPath`, masks, clips, gradients, and
-  patterns are reported as unsupported or approximated.
+- `filter`, animation, `foreignObject`, `textPath`, masks, clips, gradients,
+  patterns, paint-server references, and complex CSS selectors are reported as
+  unsupported or approximated with structured diagnostics.
+- Clip/mask/filter attributes are diagnosed separately from their definitions.
 
 ## Image Policy
 
@@ -97,6 +107,21 @@ Bezier curves are sampled deterministically for bounds. Elliptical arcs use SVG
 endpoint-to-center conversion and deterministic sampling with a documented
 `0.5px` tolerance, capped at 128 samples per arc.
 
+## Text Policy
+
+Current behavior keeps text editable:
+
+- Simple `<text>` becomes a RohKai `Label`.
+- Simple `<tspan>` content is flattened into the label text.
+- Positioned, adjusted, or styled `tspan` content is imported approximately with
+  warnings.
+- Text-heavy SVGs are not reported as high fidelity, even when imported
+  successfully.
+
+Future text work is planned in `docs/TEXT_IMPORT_PLAN.md`. The intended path is
+robust `tspan` parsing and editable multi-label groups before any optional
+vector-outline or owned shaping engine work.
+
 ## Validation
 
 Run:
@@ -111,7 +136,14 @@ That runs:
 - SVG importer tests
 - SVG source-preservation tests
 - deterministic output tests
+- real-world-style fixture tests from `tests/fixtures/svg_import/real_world/`
 - `cargo clippy -- -D warnings`
+
+The fixture suite uses small checked-in SVGs that cover common real-world
+import buckets: basic geometry, class styles, `tspan` flattening, paint servers,
+clips/masks/filters, local `symbol`/`use`, external references, malformed
+recovery, and embedded image placeholders. The tests assert deterministic
+placeholder IDs and deterministic diagnostics as well as minimum import results.
 
 Full project verification is still:
 
@@ -134,3 +166,5 @@ cargo clippy -- -D warnings
 - Text shaping and font metrics
 - Masks and clips
 - Gradient/pattern conversion
+- Full `tspan` positioning and per-span styling
+- Text-on-path layout

@@ -361,7 +361,11 @@ fn draw_widget(
         egui::Color32::from_gray(85)
     };
     let stroke_width = if flags.is_selected { 2.0 } else { 1.0 };
-    let label_size = (12.0 * zoom * text_settings.label_scale).clamp(8.0, 24.0);
+    // font_size override; falls back to zoom-scaled default.
+    let label_size = widget
+        .font_size
+        .map(|s| (s * zoom * text_settings.label_scale).clamp(8.0, 32.0))
+        .unwrap_or_else(|| (12.0 * zoom * text_settings.label_scale).clamp(8.0, 24.0));
     let tag_size = (9.0 * zoom * text_settings.tag_scale).clamp(7.0, 18.0);
     // Per-widget corner radius (corner_radius field overrides per-kind defaults).
     let rounding = widget.corner_radius.unwrap_or(3.0);
@@ -369,12 +373,18 @@ fn draw_widget(
     let fg = widget
         .fg_color
         .map(|c| egui::Color32::from_rgb(c[0], c[1], c[2]));
+    // bg_color overrides the widget background fill.
+    let bg = widget
+        .bg_color
+        .map(|c| egui::Color32::from_rgb(c[0], c[1], c[2]));
 
     match &widget.kind {
-        // Frame: dashed outline, label at top-left, no fill
+        // Frame: dashed outline, label at top-left, optional fill
         WidgetKind::Frame => {
             let fill_alpha = if flags.is_child { 30u8 } else { 15u8 };
-            let fill = egui::Color32::from_rgba_unmultiplied(200, 200, 200, fill_alpha);
+            let fill = bg.unwrap_or_else(|| {
+                egui::Color32::from_rgba_unmultiplied(200, 200, 200, fill_alpha)
+            });
             let (frame_sw, frame_sc) = if flags.is_selected {
                 (2.0, accent)
             } else if flags.has_selected_child {
@@ -395,22 +405,37 @@ fn draw_widget(
 
         // ProgressBar: filled left portion (60 % preview)
         WidgetKind::ProgressBar => {
-            painter.rect_filled(rect, rounding, kind_fill(accent));
+            painter.rect_filled(
+                rect,
+                rounding,
+                bg.unwrap_or_else(|| kind_fill(accent)),
+            );
             painter.rect_stroke(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
             );
             let fill_w = rect.width() * 0.6;
-            let fill_rect = egui::Rect::from_min_size(rect.min, egui::vec2(fill_w, rect.height()));
+            let fill_rect =
+                egui::Rect::from_min_size(rect.min, egui::vec2(fill_w, rect.height()));
             painter.rect_filled(fill_rect, rounding, accent.linear_multiply(0.55));
-            painter.text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                &widget.props.label,
-                egui::FontId::proportional(label_size),
-                fg.unwrap_or(egui::Color32::WHITE),
-            );
+            // Overlay: % or animated indicator
+            let overlay = if widget.props.show_percentage {
+                "60%".to_owned()
+            } else if widget.props.animated {
+                "~".to_owned()
+            } else {
+                String::new()
+            };
+            if !overlay.is_empty() {
+                painter.text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    &overlay,
+                    egui::FontId::proportional(label_size),
+                    fg.unwrap_or(egui::Color32::WHITE),
+                );
+            }
         }
 
         // RadioButton: circle indicator + label (no background)
@@ -432,6 +457,16 @@ fn draw_widget(
                 egui::FontId::proportional(label_size),
                 fg.unwrap_or(egui::Color32::WHITE),
             );
+            // radio_value tag (bottom-right corner, teal)
+            if !widget.props.radio_value.is_empty() {
+                painter.text(
+                    rect.right_bottom() + egui::vec2(-3.0, -2.0),
+                    egui::Align2::RIGHT_BOTTOM,
+                    &widget.props.radio_value,
+                    egui::FontId::proportional(tag_size),
+                    egui::Color32::from_rgb(52, 211, 153),
+                );
+            }
         }
 
         // ComboBox: field box + ▾ arrow
@@ -522,7 +557,7 @@ fn draw_widget(
 
         // Button: rounded surface like egui button
         WidgetKind::Button => {
-            painter.rect_filled(rect, rounding, egui::Color32::from_gray(58));
+            painter.rect_filled(rect, rounding, bg.unwrap_or(egui::Color32::from_gray(58)));
             painter.rect_stroke(
                 rect,
                 rounding,
@@ -562,18 +597,28 @@ fn draw_widget(
 
         // TextInput: dark field with placeholder-style text
         WidgetKind::TextInput => {
-            painter.rect_filled(rect, rounding, egui::Color32::from_gray(30));
+            painter.rect_filled(
+                rect,
+                rounding,
+                bg.unwrap_or(egui::Color32::from_gray(30)),
+            );
             painter.rect_stroke(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
             );
+            // Show placeholder if set, otherwise fall back to label
+            let hint = if widget.props.placeholder.is_empty() {
+                widget.props.label.as_str()
+            } else {
+                widget.props.placeholder.as_str()
+            };
             painter.text(
                 rect.left_center() + egui::vec2(6.0, 0.0),
                 egui::Align2::LEFT_CENTER,
-                &widget.props.label,
+                hint,
                 egui::FontId::proportional(label_size),
-                fg.unwrap_or(egui::Color32::from_gray(170)),
+                fg.unwrap_or(egui::Color32::from_gray(120)),
             );
         }
 

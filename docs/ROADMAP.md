@@ -189,6 +189,15 @@
 - [ ] Ply widget definitions as first shipped example
 - [ ] Community .rkwd files can be dropped into a /widgets folder
 
+## Stage 7.x - SVG Import Maturity
+- [ ] Robust `tspan` parser with span provenance and diagnostics
+- [ ] Editable multi-label grouped import for positioned spans
+- [ ] Optional vector-outline snapshot mode for visual comparison
+- [ ] RohKai-owned text layout/shaping engine only if editable text still needs it
+- [ ] More granular fidelity scoring for text-heavy, clipped, masked, filtered,
+      gradient, and pattern-heavy SVGs
+- [ ] Dedicated importer report UI showing skipped features and approximation notes
+
 ## Future Considerations
 
 ### Rulers & Measurement

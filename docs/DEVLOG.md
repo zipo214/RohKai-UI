@@ -193,3 +193,123 @@ Chronological session record. The roadmap stays strategic; this file records wha
 - Do not reintroduce a color `+ set` gate; the swatch is intentionally always visible.
 - TracÃ© canvas navigation is Ctrl+double-click. Plain double-click is now for inline label editing.
 - ComboBox option text fields must stay width-capped; uncapped fields can force the left panel over the canvas.
+
+## 2026-05-22 23:08 - SVG Import Hardening Follow-Up + Text Planning
+
+### Docs Reviewed Before Coding
+- `scripts/preflight-context.ps1` output
+- `AGENTS.md`, `CLAUDE.md`
+- `docs/ROADMAP.md`, `docs/DEVLOG.md`
+- Relevant skill: `project-model`
+- `docs/SVG_IMPORT.md`, `scripts/validate-svg-import.ps1`
+- `src/svg_import.rs`, `src/project/schema.rs`
+- `git status --short --branch`
+
+### Changes Made
+- Tightened SVG fidelity scoring so text-heavy, clipped, masked, filtered, gradient/pattern, and paint-server-heavy imports are not reported as high fidelity.
+- Improved unsupported diagnostics wording to explain that RohKai preserves the source SVG and imports editable placeholders for supported visible geometry.
+- Split unsupported diagnostics for `linearGradient`, `radialGradient`, `pattern`, `clipPath`, mask/filter/clip attributes, and paint-server references.
+- Added hidden-definition diagnostics so unsupported gradient/pattern/mask/clip/filter definitions inside `defs` are still reported.
+- Added duplicate-id warnings while preserving deterministic first-id lookup behavior.
+- Added extreme/non-finite transform warnings and safe fallback.
+- Added empty-geometry recovery for zero-size rect/circle/ellipse imports.
+- Added simple solid-paint approximation for `fill`, `stroke`, named colors, `#rgb`, `#rrggbb`, `rgb(...)`, and opacity into RGB placeholder fields.
+- Kept text editable and only planned the future text renderer; added `docs/TEXT_IMPORT_PLAN.md`.
+- Updated `docs/SVG_IMPORT.md` and `docs/ROADMAP.md` with the current text policy and future SVG text maturity lane.
+- Added SVG importer tests for malformed input, unknown entities, duplicate ids, paint/clip/mask/filter diagnostics, opacity approximation, text-heavy fidelity downgrade, empty geometry, extreme transforms, and deterministic output.
+- Formatted the active dirty schema/widget audit files that were already present before this pass so repo formatting checks could pass.
+
+### Verification
+- `cargo fmt --check` passed.
+- `cargo check` passed.
+- `cargo test` passed: 18/18.
+- `cargo clippy -- -D warnings` passed.
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\validate-svg-import.ps1` passed.
+- `cargo run` smoke launched successfully and was stopped after 8 seconds.
+
+### Notes For Claude And Codex
+- This pass did not add crates and did not build a full text renderer.
+- Text remains editable placeholders; robust `tspan` and text layout work is documented in `docs/TEXT_IMPORT_PLAN.md`.
+- Pre-existing dirty schema/widget audit changes were preserved and formatted, not reverted.
+
+## 2026-05-22 23:45 - SVG Import Fixture Readiness Harness
+
+### Docs Reviewed Before Coding
+- Prior SVG hardening preflight context remained active for this continuation.
+- `docs/SVG_IMPORT.md`
+- `docs/DEVLOG.md`
+- `scripts/validate-svg-import.ps1`
+- `src/svg_import.rs`
+- `git status --short`
+
+### Changes Made
+- Added checked-in SVG fixture cases under `tests/fixtures/svg_import/real_world/`.
+- Covered basic geometry, simple class styles, `tspan` flattening, paint servers, clip/mask/filter diagnostics, local `symbol`/`use`, external references, malformed recovery, and embedded image placeholders.
+- Added `real_world_fixture_suite_imports_deterministically` to assert minimum import counts, expected fidelity, expected warnings/unsupported diagnostics, deterministic UUIDs, and deterministic diagnostics.
+- Updated `scripts/validate-svg-import.ps1` so the real-world fixture suite runs in the normal SVG validation workflow.
+- Updated `docs/SVG_IMPORT.md` to document the fixture suite.
+
+### Verification
+- `cargo test real_world_fixture_suite_imports_deterministically` passed after calibrating fixture expectations to current importer behavior.
+- `cargo fmt --check` passed.
+- `cargo check` passed.
+- `cargo test` passed: 19/19.
+- `cargo clippy -- -D warnings` passed.
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\validate-svg-import.ps1` passed.
+- `cargo run` smoke launched successfully and was stopped after 8 seconds.
+
+### Notes For Claude And Codex
+- Fixtures are intentionally hand-authored and small to avoid licensing issues while still exercising real-world SVG patterns.
+- This is a readiness harness, not a browser-rendering oracle. It validates RohKai's placeholder importer contract and diagnostics stability.
+
+## 2026-05-22 - Schema Audit + Properties Panel Completeness Pass
+
+### Docs Reviewed Before Coding
+- `CLAUDE.md`, `docs/ROADMAP.md`, `docs/DEVLOG.md`
+- `src/project/schema.rs` (full read before any edit)
+- `src/panels/properties.rs`, `src/codegen/egui_emitter.rs`
+- `src/canvas/interaction.rs`
+
+### Changes Made
+
+**Part 1 — schema.rs (already completed before summary)**
+- Added `TextAlign { Left, Center, Right }` and `Orientation { Horizontal, Vertical }` enums.
+- Added 13 new `WidgetProps` fields: `step`, `show_value` (default true), `orientation`, `placeholder`, `password_mode`, `max_length`, `radio_value`, `group_binding`, `show_percentage`, `animated`, `inner_margin` (default 8.0), `stroke_color`, `stroke_width` (default 1.0).
+- Added 5 new `WidgetInstance` fields: `bg_color`, `font_size`, `text_align`, `on_click: String`, `on_change: String`.
+- Added `Default` impl for `WidgetInstance` (id = Uuid::nil()) — makes all ~14 construction sites future-proof.
+- All new fields use `#[serde(default)]` + `skip_serializing_if` for backward compat.
+
+**Part 2 — properties.rs (complete rewrite)**
+- Dispatches by `w.kind.clone()` to per-kind functions: `show_button`, `show_label`, `show_text_input`, `show_slider`, `show_checkbox`, `show_radio_button`, `show_combo_box`, `show_progress_bar`, `show_frame`.
+- Each kind shows exactly its relevant fields (label, binding, color, geometry, etc.).
+- New fields exposed: placeholder, password_mode, max_length, step, show_value, orientation, radio_value, group_binding (syncs to state_binding), show_percentage, animated, inner_margin, stroke_color, stroke_width, bg_color, font_size, text_align.
+- `show_event_handler`: migrates legacy `event_handler` → `on_click`/`on_change` on first display; uses new Tracé chip for non-empty handlers.
+- All alignment tools and group/ungroup controls preserved.
+
+**Part 3 — egui_emitter.rs (all widget arms updated)**
+- Added `resolve_handler_click` / `resolve_handler_change` helpers (use `on_click`/`on_change`, fall back to legacy `event_handler`).
+- Added `rich_text_expr` helper: builds `egui::RichText::new(label).size(pt).color(col)` when font_size or fg_color is set.
+- Button: `.fill(bg_color)`, RichText label, `on_click` handler.
+- TextInput: `.hint_text(placeholder)`, `.password(true)`, `on_change` handler.
+- Slider: `.step_by(step as f64)`, `.show_value(false)`, `.vertical()`, `on_change` handler.
+- RadioButton: uses `props.radio_value` as the alternative value arg.
+- ProgressBar: `.show_percentage()`, `.animate(true)`, removed bogus `.text(label)`.
+- Frame: uses `egui::Frame::none()` with `inner_margin`, `stroke`, `fill(bg_color)`, `rounding`.
+- All remaining arms use `resolve_handler_change` instead of raw `event_handler`.
+
+**Part 4 — interaction.rs draw_widget (canvas visual updates)**
+- `label_size` now respects `widget.font_size` (falls back to zoom-scaled default).
+- `bg` computed from `widget.bg_color`; applied to Button, TextInput, Frame, ProgressBar fills.
+- TextInput: shows `props.placeholder` (gray text) instead of props.label.
+- RadioButton: renders `props.radio_value` as small teal tag in bottom-right corner.
+- ProgressBar: shows "60%" overlay if `show_percentage`, "~" if `animated`, no overlay otherwise.
+
+### Verification
+- `cargo check` passed.
+- `cargo clippy -- -D warnings`: zero warnings.
+- `cargo test`: 19/19 passed.
+
+### Notes
+- `TextEdit::char_limit` not emitted yet (API not verified for egui 0.29; field stored, codegen pending).
+- Text alignment (`text_align`) stored and shown in properties; canvas and codegen emit not added (requires `ui.with_layout` wrapper, deferred).
+- `export.rs` not updated this session — shares the same handler logic pattern as `egui_emitter.rs`; update deferred to next pass.

@@ -133,9 +133,13 @@ fn gen_app_rs(tree: &UiTree) -> String {
     let mut handler_names: Vec<String> = Vec::new();
     let mut seen_handlers: HashSet<String> = HashSet::new();
     for w in &tree.widgets {
-        if let Some(ref h) = w.event_handler {
-            if !h.is_empty() && seen_handlers.insert(h.clone()) {
-                handler_names.push(h.clone());
+        let handler = match &w.kind {
+            WidgetKind::Button => resolve_export_handler_click(w),
+            _ => resolve_export_handler_change(w),
+        };
+        if let Some(h) = handler {
+            if seen_handlers.insert(h.to_owned()) {
+                handler_names.push(h.to_owned());
             }
         }
     }
@@ -178,7 +182,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                     w.rect.w, w.rect.h
                 );
                 let with_tip = export_tip(base, tip.as_deref());
-                if let Some(ref h) = w.event_handler {
+                if let Some(h) = resolve_export_handler_click(w) {
                     format!(
                         "                if {with_tip}.clicked() {{\n                    self.{h}();\n                }}\n"
                     )
@@ -199,7 +203,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                         w.rect.w, w.rect.h
                     );
                     let with_tip = export_tip(base, tip.as_deref());
-                    if let Some(ref h) = w.event_handler {
+                    if let Some(h) = resolve_export_handler_change(w) {
                         format!("                if {with_tip}.changed() {{\n                    self.{h}();\n                }}\n")
                     } else {
                         format!("                {with_tip};\n")
@@ -214,7 +218,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                         w.rect.w, w.rect.h, w.props.min, w.props.max
                     );
                     let with_tip = export_tip(base, tip.as_deref());
-                    if let Some(ref h) = w.event_handler {
+                    if let Some(h) = resolve_export_handler_change(w) {
                         format!("                if {with_tip}.changed() {{\n                    self.{h}();\n                }}\n")
                     } else {
                         format!("                {with_tip};\n")
@@ -229,7 +233,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                         w.rect.w, w.rect.h
                     );
                     let with_tip = export_tip(base, tip.as_deref());
-                    if let Some(ref h) = w.event_handler {
+                    if let Some(h) = resolve_export_handler_change(w) {
                         format!("                if {with_tip}.changed() {{\n                    self.{h}();\n                }}\n")
                     } else {
                         format!("                {with_tip};\n")
@@ -256,11 +260,12 @@ fn gen_app_rs(tree: &UiTree) -> String {
                         ));
                     }
                     code.push_str("                    });\n");
-                    let uses_response = tip.is_some() || w.event_handler.is_some();
+                    let combo_handler = resolve_export_handler_change(w);
+                    let uses_response = tip.is_some() || combo_handler.is_some();
                     if uses_response {
                         code.push_str("                let combo_response = combo_resp.response;\n");
                     }
-                    if w.event_handler.is_some() {
+                    if combo_handler.is_some() {
                         code.push_str("                let combo_changed = combo_response.changed();\n");
                     }
                     if let Some(tip) = tip.as_deref() {
@@ -268,7 +273,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                             "                combo_response.on_hover_text({tip});\n"
                         ));
                     }
-                    if let Some(ref h) = w.event_handler {
+                    if let Some(h) = combo_handler {
                         code.push_str(&format!(
                             "                if combo_changed {{\n                    self.{h}();\n                }}\n"
                         ));
@@ -280,9 +285,16 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 None => format!("                // ComboBox {label}: set a valid Binding\n"),
             },
             WidgetKind::RadioButton => match binding {
-                Some(b) => format!(
-                    "                ui.radio_value(&mut self.state.{b}, {label}.to_owned(), {label});\n"
-                ),
+                Some(b) => {
+                    let value_lit = if w.props.radio_value.is_empty() {
+                        label.clone()
+                    } else {
+                        string_literal(&w.props.radio_value)
+                    };
+                    format!(
+                        "                ui.radio_value(&mut self.state.{b}, {value_lit}.to_owned(), {label});\n"
+                    )
+                }
                 None => format!("                // RadioButton {label}: set a valid Binding\n"),
             },
             WidgetKind::ProgressBar => match binding {

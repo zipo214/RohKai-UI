@@ -19,14 +19,6 @@ pub fn default_instance() -> WidgetInstance {
             ..Default::default()
         },
         state_binding: Some(String::from("combo_value")),
-        children: Vec::new(),
-        import_metadata: None,
-        tooltip: None,
-        enabled: None,
-        fg_color: None,
-        corner_radius: None,
-        label_binding: None,
-        custom_props: Vec::new(),
-        event_handler: None,
+        ..Default::default()
     }
 }

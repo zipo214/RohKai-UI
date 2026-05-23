@@ -113,14 +113,7 @@ impl UiTree {
             },
             state_binding: None,
             children: selected.to_vec(),
-            import_metadata: None,
-            tooltip: None,
-            enabled: None,
-            fg_color: None,
-            corner_radius: None,
-            label_binding: None,
-            custom_props: Vec::new(),
-            event_handler: None,
+            ..Default::default()
         };
         let earliest = selected
             .iter()

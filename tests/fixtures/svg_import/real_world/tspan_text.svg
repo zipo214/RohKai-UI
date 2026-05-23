@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="260" height="120">
+  <text id="headline" x="20" y="40" font-family="Noto Sans" font-size="18">
+    RohKai
+    <tspan dx="8" dy="18" fill="#55ccaa">editable</tspan>
+    <tspan x="20" y="92" font-size="12">tspan approximation</tspan>
+  </text>
+</svg>

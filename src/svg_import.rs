@@ -72,15 +72,41 @@ impl SvgImportReport {
         }
     }
 
-    fn finalize(&mut self) {
+    fn finalize(&mut self, text_element_count: usize, text_character_count: usize) {
         self.warning_count = self.warnings.len();
         self.unsupported_feature_count = self.unsupported_features.len();
+        let has_layout_loss = self.unsupported_features.iter().any(|u| {
+            matches!(
+                u.feature.as_str(),
+                "clipPath"
+                    | "clip-path attribute"
+                    | "mask"
+                    | "mask attribute"
+                    | "filter"
+                    | "filter attribute"
+                    | "textPath"
+                    | "foreignObject"
+            )
+        });
+        let has_paint_loss = self.unsupported_features.iter().any(|u| {
+            matches!(
+                u.feature.as_str(),
+                "linearGradient" | "radialGradient" | "pattern" | "paint server reference"
+            )
+        });
+        let text_heavy = text_element_count >= 3 || text_character_count >= 80;
         self.fidelity = if self.imported_element_count == 0
             || self.skipped_element_count > self.imported_element_count
             || self.unsupported_feature_count > 5
+            || (has_layout_loss && self.skipped_element_count > 0)
         {
             SvgFidelity::Low
-        } else if self.warning_count > 0 || self.unsupported_feature_count > 0 {
+        } else if self.warning_count > 0
+            || self.unsupported_feature_count > 0
+            || has_layout_loss
+            || has_paint_loss
+            || text_heavy
+        {
             SvgFidelity::Medium
         } else {
             SvgFidelity::High
@@ -225,7 +251,18 @@ pub fn import_svg_template(
     let mut id_index = HashMap::new();
     for node in &nodes {
         if let Some(id) = attr(&node.tag, "id").filter(|id| !id.is_empty()) {
-            id_index.entry(id.to_owned()).or_insert(node.index);
+            if id_index.contains_key(id) {
+                ctx.warn(
+                    "id.duplicate",
+                    format!(
+                        "duplicate id '{id}' ignored for reference lookup; first occurrence wins"
+                    ),
+                    Some(node),
+                    SvgWarningSeverity::Warning,
+                );
+            } else {
+                id_index.insert(id.to_owned(), node.index);
+            }
         }
     }
 
@@ -254,7 +291,8 @@ pub fn import_svg_template(
 
     normalize_widgets(&mut widgets);
     ctx.report.imported_element_count = widgets.len();
-    ctx.report.finalize();
+    ctx.report
+        .finalize(ctx.text_element_count, ctx.text_character_count);
     Ok(SvgImportOutput {
         widgets,
         report: ctx.report,
@@ -265,6 +303,8 @@ struct ImportContext {
     limits: SvgImportLimits,
     report: SvgImportReport,
     tag_count: usize,
+    text_element_count: usize,
+    text_character_count: usize,
 }
 
 impl ImportContext {
@@ -273,6 +313,8 @@ impl ImportContext {
             limits,
             report: SvgImportReport::new(),
             tag_count: 0,
+            text_element_count: 0,
+            text_character_count: 0,
         }
     }
 
@@ -304,7 +346,9 @@ impl ImportContext {
             });
         self.warn(
             "unsupported.feature",
-            format!("unsupported SVG feature ignored: {feature}"),
+            format!(
+                "unsupported SVG feature ignored: {feature}; RohKai preserved the source SVG and imported editable placeholders for supported visible geometry"
+            ),
             node,
             SvgWarningSeverity::Warning,
         );
@@ -409,6 +453,22 @@ impl Matrix {
             self.a * x + self.c * y + self.e,
             self.b * x + self.d * y + self.f,
         )
+    }
+
+    fn is_finite(self) -> bool {
+        self.a.is_finite()
+            && self.b.is_finite()
+            && self.c.is_finite()
+            && self.d.is_finite()
+            && self.e.is_finite()
+            && self.f.is_finite()
+    }
+
+    fn is_extreme(self) -> bool {
+        const EXTREME: f64 = 1_000_000.0;
+        [self.a, self.b, self.c, self.d, self.e, self.f]
+            .into_iter()
+            .any(|value| value.abs() > EXTREME)
     }
 
     fn summary(self) -> String {
@@ -831,7 +891,7 @@ fn resolve_style(
 
     for paint in [&style.fill, &style.stroke].into_iter().flatten() {
         if paint.trim().starts_with("url(") {
-            ctx.unsupported("gradient or pattern paint", Some(node));
+            ctx.unsupported("paint server reference", Some(node));
         }
     }
 
@@ -878,9 +938,27 @@ fn import_node(
     diagnose_unsupported(node, ctx);
 
     let mut state = parent_state;
-    state.transform = state
+    let next_transform = state
         .transform
         .multiply(parse_transform(attr(&node.tag, "transform").unwrap_or("")));
+    if !next_transform.is_finite() {
+        ctx.warn(
+            "transform.invalid",
+            "non-finite transform ignored for this node",
+            Some(node),
+            SvgWarningSeverity::Warning,
+        );
+    } else {
+        if next_transform.is_extreme() {
+            ctx.warn(
+                "transform.extreme",
+                "extreme transform approximated; placeholder bounds may be imprecise",
+                Some(node),
+                SvgWarningSeverity::Warning,
+            );
+        }
+        state.transform = next_transform;
+    }
 
     if node.tag.name == "svg" {
         update_viewport(node, &mut state);
@@ -896,6 +974,7 @@ fn import_node(
         || style.opacity == Some(0.0);
 
     if hidden {
+        diagnose_descendants(node, nodes, ctx);
         if is_supported_visual(&node.tag.name) {
             ctx.skip();
         }
@@ -914,7 +993,7 @@ fn import_node(
             }
         }
         name if is_supported_shape(name) => {
-            if let Some(widget) = shape_widget(node, state, ctx)? {
+            if let Some(widget) = shape_widget(node, state, &style, ctx)? {
                 widgets.push(widget);
             } else {
                 ctx.skip();
@@ -952,16 +1031,28 @@ fn diagnose_unsupported(node: &Node, ctx: &mut ImportContext) {
         }
         "mask" => ctx.unsupported("mask", Some(node)),
         "clippath" => ctx.unsupported("clipPath", Some(node)),
-        "lineargradient" | "radialgradient" | "pattern" => {
-            ctx.unsupported("gradient or pattern definition", Some(node))
-        }
+        "lineargradient" => ctx.unsupported("linearGradient", Some(node)),
+        "radialgradient" => ctx.unsupported("radialGradient", Some(node)),
+        "pattern" => ctx.unsupported("pattern", Some(node)),
         _ => {}
     }
 
-    for key in ["filter", "mask", "clip-path"] {
+    for (key, feature) in [
+        ("filter", "filter attribute"),
+        ("mask", "mask attribute"),
+        ("clip-path", "clip-path attribute"),
+    ] {
         if attr(&node.tag, key).is_some() {
-            ctx.unsupported(key, Some(node));
+            ctx.unsupported(feature, Some(node));
         }
+    }
+}
+
+fn diagnose_descendants(node: &Node, nodes: &[Node], ctx: &mut ImportContext) {
+    for &child_id in &node.children {
+        let child = &nodes[child_id];
+        diagnose_unsupported(child, ctx);
+        diagnose_descendants(child, nodes, ctx);
     }
 }
 
@@ -1106,6 +1197,7 @@ fn is_hidden_container(name: &str) -> bool {
 fn shape_widget(
     node: &Node,
     state: ParseState,
+    style: &Style,
     ctx: &mut ImportContext,
 ) -> Result<Option<WidgetInstance>, SvgImportError> {
     let mut warning_flags = Vec::new();
@@ -1143,6 +1235,20 @@ fn shape_widget(
         label.push(' ');
         label.push_str(id.trim());
     }
+    let fill_color = style_color(
+        style.fill.as_deref(),
+        style.opacity,
+        node,
+        ctx,
+        &mut warning_flags,
+    );
+    let stroke_color = style_color(
+        style.stroke.as_deref(),
+        style.opacity,
+        node,
+        ctx,
+        &mut warning_flags,
+    );
 
     Ok(Some(WidgetInstance {
         id: deterministic_uuid(node, &rect),
@@ -1153,15 +1259,10 @@ fn shape_widget(
             ..Default::default()
         },
         state_binding: None,
-        children: Vec::new(),
         import_metadata: Some(metadata_for(node, state, warning_flags)),
-        tooltip: None,
-        enabled: None,
-        fg_color: None,
-        corner_radius: None,
-        label_binding: None,
-        custom_props: Vec::new(),
-        event_handler: None,
+        fg_color: stroke_color.or(fill_color),
+        bg_color: fill_color,
+        ..Default::default()
     }))
 }
 
@@ -1251,6 +1352,8 @@ fn text_widget(
     if label.is_empty() {
         return None;
     }
+    ctx.text_element_count += 1;
+    ctx.text_character_count += label.chars().count();
 
     let mut x = attr(&node.tag, "x")
         .and_then(|v| parse_length(v, state.viewport_w))
@@ -1299,6 +1402,13 @@ fn text_widget(
     }
     let bounds = Bounds::new(x, y, width, height)?.transform(state.transform);
     let rect = bounds.rect();
+    let fill_color = style_color(
+        style.fill.as_deref(),
+        style.opacity,
+        node,
+        ctx,
+        &mut warning_flags,
+    );
 
     Some(WidgetInstance {
         id: deterministic_uuid(node, &rect),
@@ -1309,15 +1419,9 @@ fn text_widget(
             ..Default::default()
         },
         state_binding: None,
-        children: Vec::new(),
         import_metadata: Some(metadata_for(node, state, warning_flags)),
-        tooltip: None,
-        enabled: None,
-        fg_color: None,
-        corner_radius: None,
-        label_binding: None,
-        custom_props: Vec::new(),
-        event_handler: None,
+        fg_color: fill_color,
+        ..Default::default()
     })
 }
 
@@ -1328,12 +1432,23 @@ fn flatten_text(node_id: usize, nodes: &[Node], ctx: &mut ImportContext) -> Stri
         let child = &nodes[child_id];
         match child.tag.name.as_str() {
             "tspan" => {
-                if attr(&child.tag, "x").is_some() || attr(&child.tag, "y").is_some() {
+                if ["x", "y", "dx", "dy", "rotate", "textlength", "lengthadjust"]
+                    .into_iter()
+                    .any(|key| attr(&child.tag, key).is_some())
+                {
                     ctx.warn(
                         "text.complex_tspan",
-                        "positioned tspan flattened approximately",
+                        "positioned or adjusted tspan flattened into editable placeholder text; source SVG preserved for exact layout",
                         Some(child),
                         SvgWarningSeverity::Warning,
+                    );
+                }
+                if attr(&child.tag, "style").is_some() || attr(&child.tag, "class").is_some() {
+                    ctx.warn(
+                        "text.tspan_style",
+                        "tspan style was flattened into one editable text placeholder",
+                        Some(child),
+                        SvgWarningSeverity::Info,
                     );
                 }
                 text.push(' ');
@@ -1368,6 +1483,9 @@ fn rect_bounds(node: &Node, state: ParseState) -> Option<Bounds> {
         .unwrap_or(0.0);
     let w = attr(&node.tag, "width").and_then(|v| parse_length(v, state.viewport_w))?;
     let h = attr(&node.tag, "height").and_then(|v| parse_length(v, state.viewport_h))?;
+    if w <= 0.0 || h <= 0.0 {
+        return None;
+    }
     Bounds::new(x, y, w, h).map(|b| b.transform(state.transform))
 }
 
@@ -1379,6 +1497,9 @@ fn circle_bounds(node: &Node, state: ParseState) -> Option<Bounds> {
         .and_then(|v| parse_length(v, state.viewport_h))
         .unwrap_or(0.0);
     let r = attr(&node.tag, "r").and_then(|v| parse_length(v, state.viewport_w))?;
+    if r <= 0.0 {
+        return None;
+    }
     Bounds::new(cx - r, cy - r, r * 2.0, r * 2.0).map(|b| b.transform(state.transform))
 }
 
@@ -1391,6 +1512,9 @@ fn ellipse_bounds(node: &Node, state: ParseState) -> Option<Bounds> {
         .unwrap_or(0.0);
     let rx = attr(&node.tag, "rx").and_then(|v| parse_length(v, state.viewport_w))?;
     let ry = attr(&node.tag, "ry").and_then(|v| parse_length(v, state.viewport_h))?;
+    if rx <= 0.0 || ry <= 0.0 {
+        return None;
+    }
     Bounds::new(cx - rx, cy - ry, rx * 2.0, ry * 2.0).map(|b| b.transform(state.transform))
 }
 
@@ -1977,6 +2101,89 @@ fn decode_entities(value: &str, ctx: &mut ImportContext, node: Option<&Node>) ->
     out
 }
 
+fn style_color(
+    paint: Option<&str>,
+    opacity: Option<f64>,
+    node: &Node,
+    ctx: &mut ImportContext,
+    warning_flags: &mut Vec<String>,
+) -> Option<[u8; 3]> {
+    let color = parse_color(paint?)?;
+    let Some(opacity) = opacity else {
+        return Some(color);
+    };
+    if (opacity - 1.0).abs() < f64::EPSILON {
+        return Some(color);
+    }
+    ctx.warn(
+        "style.opacity_approx",
+        "opacity approximated into a solid RGB placeholder color; source SVG preserved for exact alpha",
+        Some(node),
+        SvgWarningSeverity::Info,
+    );
+    warning_flags.push("opacity-approx".to_owned());
+    let factor = opacity.clamp(0.0, 1.0);
+    Some([
+        (color[0] as f64 * factor).round().clamp(0.0, 255.0) as u8,
+        (color[1] as f64 * factor).round().clamp(0.0, 255.0) as u8,
+        (color[2] as f64 * factor).round().clamp(0.0, 255.0) as u8,
+    ])
+}
+
+fn parse_color(value: &str) -> Option<[u8; 3]> {
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("none")
+        || value.eq_ignore_ascii_case("currentcolor")
+        || value.starts_with("url(")
+    {
+        return None;
+    }
+    if let Some(hex) = value.strip_prefix('#') {
+        return match hex.len() {
+            3 => {
+                let r = u8::from_str_radix(&hex[0..1].repeat(2), 16).ok()?;
+                let g = u8::from_str_radix(&hex[1..2].repeat(2), 16).ok()?;
+                let b = u8::from_str_radix(&hex[2..3].repeat(2), 16).ok()?;
+                Some([r, g, b])
+            }
+            6 => {
+                let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+                let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+                let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+                Some([r, g, b])
+            }
+            _ => None,
+        };
+    }
+    let lower = value.to_ascii_lowercase();
+    if let Some(body) = lower
+        .strip_prefix("rgb(")
+        .and_then(|body| body.strip_suffix(')'))
+    {
+        let nums = parse_numbers(body)?;
+        if nums.len() >= 3 {
+            return Some([
+                nums[0].round().clamp(0.0, 255.0) as u8,
+                nums[1].round().clamp(0.0, 255.0) as u8,
+                nums[2].round().clamp(0.0, 255.0) as u8,
+            ]);
+        }
+    }
+    match lower.as_str() {
+        "black" => Some([0, 0, 0]),
+        "white" => Some([255, 255, 255]),
+        "red" => Some([255, 0, 0]),
+        "green" => Some([0, 128, 0]),
+        "blue" => Some([0, 0, 255]),
+        "yellow" => Some([255, 255, 0]),
+        "cyan" | "aqua" => Some([0, 255, 255]),
+        "magenta" | "fuchsia" => Some([255, 0, 255]),
+        "gray" | "grey" => Some([128, 128, 128]),
+        "transparent" => Some([0, 0, 0]),
+        _ => None,
+    }
+}
+
 fn collapse_ws(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -2155,5 +2362,284 @@ mod tests {
                 .source_order,
             3
         );
+    }
+
+    #[test]
+    fn reports_malformed_text_entities_and_duplicate_ids() {
+        let err = import_svg_template("<svg><rect width=\"10\"", SvgImportOptions::default())
+            .unwrap_err();
+        assert_eq!(err.code, "xml.unterminated_tag");
+
+        let svg = r#"
+            <svg>
+                <rect id="dup" width="10" height="10"/>
+                <rect id="dup" x="20" width="10" height="10"/>
+                <text x="0" y="30" font-family="Noto">A &bogus; B</text>
+            </svg>
+        "#;
+        let output = import_svg_template(svg, SvgImportOptions::default()).unwrap();
+        assert_eq!(output.widgets.len(), 3);
+        assert!(output
+            .report
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "id.duplicate"));
+        assert!(output
+            .report
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "xml.unknown_entity"));
+    }
+
+    #[test]
+    fn diagnoses_paint_servers_clips_masks_and_filters() {
+        let svg = r##"
+            <svg>
+                <defs>
+                    <linearGradient id="g"/>
+                    <pattern id="p"/>
+                    <clipPath id="c"><rect width="5" height="5"/></clipPath>
+                    <mask id="m"><rect width="5" height="5"/></mask>
+                    <filter id="f"/>
+                </defs>
+                <rect width="20" height="20" fill="url(#g)" clip-path="url(#c)" mask="url(#m)" filter="url(#f)"/>
+            </svg>
+        "##;
+        let output = import_svg_template(svg, SvgImportOptions::default()).unwrap();
+        assert_eq!(output.widgets.len(), 1);
+        for feature in [
+            "linearGradient",
+            "pattern",
+            "clipPath",
+            "mask",
+            "filter",
+            "paint server reference",
+            "clip-path attribute",
+            "mask attribute",
+            "filter attribute",
+        ] {
+            assert!(
+                output
+                    .report
+                    .unsupported_features
+                    .iter()
+                    .any(|unsupported| unsupported.feature == feature),
+                "missing unsupported feature diagnostic: {feature}"
+            );
+        }
+        assert_eq!(output.report.fidelity, SvgFidelity::Low);
+    }
+
+    #[test]
+    fn approximates_solid_paint_and_opacity_in_metadata() {
+        let svg = r##"
+            <svg>
+                <rect id="painted" width="10" height="10" fill="#f00" stroke="rgb(0, 255, 0)" opacity="0.5"/>
+            </svg>
+        "##;
+        let output = import_svg_template(svg, SvgImportOptions::default()).unwrap();
+        let widget = &output.widgets[0];
+        assert_eq!(widget.bg_color, Some([128, 0, 0]));
+        assert_eq!(widget.fg_color, Some([0, 128, 0]));
+        assert!(widget
+            .import_metadata
+            .as_ref()
+            .unwrap()
+            .warning_flags
+            .contains(&"opacity-approx".to_owned()));
+    }
+
+    #[test]
+    fn downgrades_text_heavy_svg_even_with_declared_fonts() {
+        let svg = r#"
+            <svg>
+                <text x="0" y="20" font-family="Noto">One</text>
+                <text x="0" y="40" font-family="Noto">Two</text>
+                <text x="0" y="60" font-family="Noto">Three</text>
+            </svg>
+        "#;
+        let output = import_svg_template(svg, SvgImportOptions::default()).unwrap();
+        assert_eq!(output.widgets.len(), 3);
+        assert_eq!(output.report.fidelity, SvgFidelity::Medium);
+    }
+
+    #[test]
+    fn recovers_from_empty_geometry_and_extreme_transform_deterministically() {
+        let svg = r#"
+            <svg>
+                <rect id="empty" width="0" height="10"/>
+                <rect id="huge" width="10" height="10" transform="scale(10000000)"/>
+                <rect id="ok" x="20" width="10" height="10"/>
+            </svg>
+        "#;
+        let first = import_svg_template(svg, SvgImportOptions::default()).unwrap();
+        let second = import_svg_template(svg, SvgImportOptions::default()).unwrap();
+        assert_eq!(first.widgets.len(), 2);
+        assert_eq!(first.widgets[0].id, second.widgets[0].id);
+        assert!(first
+            .report
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "geometry.missing_bounds"));
+        assert!(first
+            .report
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "transform.extreme"));
+    }
+
+    struct FixtureCase {
+        name: &'static str,
+        svg: &'static str,
+        min_widgets: usize,
+        fidelity: SvgFidelity,
+        unsupported: &'static [&'static str],
+        warnings: &'static [&'static str],
+    }
+
+    #[test]
+    fn real_world_fixture_suite_imports_deterministically() {
+        let cases = [
+            FixtureCase {
+                name: "basic_shapes",
+                svg: include_str!("../tests/fixtures/svg_import/real_world/basic_shapes.svg"),
+                min_widgets: 6,
+                fidelity: SvgFidelity::High,
+                unsupported: &[],
+                warnings: &[],
+            },
+            FixtureCase {
+                name: "css_classes",
+                svg: include_str!("../tests/fixtures/svg_import/real_world/css_classes.svg"),
+                min_widgets: 2,
+                fidelity: SvgFidelity::Medium,
+                unsupported: &[],
+                warnings: &["style.opacity_approx"],
+            },
+            FixtureCase {
+                name: "tspan_text",
+                svg: include_str!("../tests/fixtures/svg_import/real_world/tspan_text.svg"),
+                min_widgets: 1,
+                fidelity: SvgFidelity::Medium,
+                unsupported: &[],
+                warnings: &["text.complex_tspan"],
+            },
+            FixtureCase {
+                name: "paint_servers",
+                svg: include_str!("../tests/fixtures/svg_import/real_world/paint_servers.svg"),
+                min_widgets: 3,
+                fidelity: SvgFidelity::Low,
+                unsupported: &[
+                    "linearGradient",
+                    "radialGradient",
+                    "pattern",
+                    "paint server reference",
+                ],
+                warnings: &[],
+            },
+            FixtureCase {
+                name: "clip_mask_filter",
+                svg: include_str!("../tests/fixtures/svg_import/real_world/clip_mask_filter.svg"),
+                min_widgets: 2,
+                fidelity: SvgFidelity::Low,
+                unsupported: &["clipPath", "mask", "filter", "clip-path attribute"],
+                warnings: &[],
+            },
+            FixtureCase {
+                name: "symbol_use",
+                svg: include_str!("../tests/fixtures/svg_import/real_world/symbol_use.svg"),
+                min_widgets: 4,
+                fidelity: SvgFidelity::High,
+                unsupported: &[],
+                warnings: &[],
+            },
+            FixtureCase {
+                name: "external_refs",
+                svg: include_str!("../tests/fixtures/svg_import/real_world/external_refs.svg"),
+                min_widgets: 1,
+                fidelity: SvgFidelity::Low,
+                unsupported: &["external image reference", "external use reference"],
+                warnings: &[],
+            },
+            FixtureCase {
+                name: "malformed_recovery",
+                svg: include_str!("../tests/fixtures/svg_import/real_world/malformed_recovery.svg"),
+                min_widgets: 2,
+                fidelity: SvgFidelity::Medium,
+                unsupported: &[],
+                warnings: &[
+                    "id.duplicate",
+                    "geometry.missing_bounds",
+                    "xml.unknown_entity",
+                ],
+            },
+            FixtureCase {
+                name: "embedded_image",
+                svg: include_str!("../tests/fixtures/svg_import/real_world/embedded_image.svg"),
+                min_widgets: 1,
+                fidelity: SvgFidelity::High,
+                unsupported: &[],
+                warnings: &[],
+            },
+        ];
+
+        for case in cases {
+            let first = import_svg_template(case.svg, SvgImportOptions::default())
+                .unwrap_or_else(|err| panic!("fixture {} failed: {err}", case.name));
+            let second = import_svg_template(case.svg, SvgImportOptions::default())
+                .unwrap_or_else(|err| panic!("fixture {} failed on repeat: {err}", case.name));
+
+            assert!(
+                first.widgets.len() >= case.min_widgets,
+                "fixture {} imported {} widgets; expected at least {}",
+                case.name,
+                first.widgets.len(),
+                case.min_widgets
+            );
+            assert_eq!(first.report.fidelity, case.fidelity, "{}", case.name);
+            assert_eq!(
+                first
+                    .widgets
+                    .iter()
+                    .map(|widget| widget.id)
+                    .collect::<Vec<_>>(),
+                second
+                    .widgets
+                    .iter()
+                    .map(|widget| widget.id)
+                    .collect::<Vec<_>>(),
+                "fixture {} did not produce deterministic widget IDs",
+                case.name
+            );
+            assert_eq!(
+                first.report.diagnostics_digest(),
+                second.report.diagnostics_digest(),
+                "fixture {} did not produce deterministic diagnostics",
+                case.name
+            );
+
+            for feature in case.unsupported {
+                assert!(
+                    first
+                        .report
+                        .unsupported_features
+                        .iter()
+                        .any(|unsupported| unsupported.feature == *feature),
+                    "fixture {} missing unsupported feature {feature}",
+                    case.name
+                );
+            }
+            for code in case.warnings {
+                assert!(
+                    first
+                        .report
+                        .warnings
+                        .iter()
+                        .any(|warning| warning.code == *code),
+                    "fixture {} missing warning {code}",
+                    case.name
+                );
+            }
+        }
     }
 }
