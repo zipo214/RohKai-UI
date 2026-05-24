@@ -42,6 +42,8 @@ pub struct SessionState {
     pub scroll_to_handler: Option<String>,
     /// Last known screen rect of the canvas panel — used for visible-centre placement.
     pub last_canvas_rect: egui::Rect,
+    /// SVG source viewer: widget id whose source is currently displayed, if any.
+    pub svg_viewer_id: Option<Uuid>,
 }
 
 impl Default for SessionState {
@@ -54,6 +56,7 @@ impl Default for SessionState {
             scroll_to_code: false,
             scroll_to_handler: None,
             last_canvas_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
+            svg_viewer_id: None,
         }
     }
 }
@@ -715,6 +718,59 @@ impl RohKaiApp {
         self.prefs.open = open;
     }
 
+    fn show_svg_source_window(&mut self, ctx: &egui::Context) {
+        let Some(id) = self.session.svg_viewer_id else {
+            return;
+        };
+        let svg = self
+            .project
+            .ui_tree
+            .widgets
+            .iter()
+            .find(|w| w.id == id)
+            .and_then(|w| w.svg_source.as_deref())
+            .unwrap_or("")
+            .to_owned();
+
+        let mut open = true;
+        let byte_count = svg.len();
+        egui::Window::new(format!("SVG Source — {byte_count} bytes"))
+            .id(egui::Id::new("svg_source_viewer"))
+            .open(&mut open)
+            .resizable(true)
+            .default_size([600.0, 400.0])
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("Read-only. Copy text to use elsewhere.")
+                            .small()
+                            .weak(),
+                    );
+                    if ui.small_button("Copy all").clicked() {
+                        ui.output_mut(|o| o.copied_text = svg.clone());
+                    }
+                });
+                ui.separator();
+                egui::ScrollArea::both()
+                    .id_salt("svg_src_scroll")
+                    .auto_shrink([false; 2])
+                    .show(ui, |ui| {
+                        // Read-only: pass a temporary clone so the source is never mutated.
+                        let mut display = svg.clone();
+                        ui.add(
+                            egui::TextEdit::multiline(&mut display)
+                                .font(egui::FontId::monospace(11.0))
+                                .desired_width(f32::INFINITY)
+                                .interactive(false),
+                        );
+                    });
+            });
+
+        if !open {
+            self.session.svg_viewer_id = None;
+        }
+    }
+
     fn show_pending_command_dialog(&mut self, ctx: &egui::Context) {
         let Some(command) = self.pending_command else {
             return;
@@ -1153,8 +1209,14 @@ impl eframe::App for RohKaiApp {
                 .inner;
 
         // Tracé — properties panel requested scroll-to-handler
-        if let crate::panels::properties::PropertiesAction::ScrollToHandler(name) = props_action {
-            self.session.scroll_to_handler = Some(name);
+        match props_action {
+            crate::panels::properties::PropertiesAction::ScrollToHandler(name) => {
+                self.session.scroll_to_handler = Some(name);
+            }
+            crate::panels::properties::PropertiesAction::ShowSvgSource(id) => {
+                self.session.svg_viewer_id = Some(id);
+            }
+            crate::panels::properties::PropertiesAction::None => {}
         }
 
         // Palette click → place at viewport center (accounting for zoom/pan)
@@ -1248,5 +1310,6 @@ impl eframe::App for RohKaiApp {
 
         self.show_pending_command_dialog(ctx);
         self.show_preferences_window(ctx);
+        self.show_svg_source_window(ctx);
     }
 }

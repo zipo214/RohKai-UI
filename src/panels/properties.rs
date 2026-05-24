@@ -13,6 +13,8 @@ pub enum PropertiesAction {
     None,
     /// Tracé — scroll the code panel to (and insert if absent) this handler.
     ScrollToHandler(String),
+    /// Open the SVG source viewer popup for this widget.
+    ShowSvgSource(uuid::Uuid),
 }
 
 const TEAL: egui::Color32 = egui::Color32::from_rgb(52, 211, 153);
@@ -87,7 +89,11 @@ fn show_content_inner(
             WidgetKind::ComboBox => show_combo_box(ui, w, &mut do_delete),
             WidgetKind::ProgressBar => show_progress_bar(ui, w, &mut do_delete),
             WidgetKind::Frame => show_frame(ui, w, &mut do_delete),
-            WidgetKind::Image => show_image(ui, w, &mut do_delete),
+            WidgetKind::Image => {
+                if show_image(ui, w, &mut do_delete) {
+                    props_action = PropertiesAction::ShowSvgSource(id);
+                }
+            }
             WidgetKind::Custom(ref desc_id) => {
                 let desc =
                     crate::codegen::widget_descriptor::find_by_id(descriptors, desc_id).cloned();
@@ -753,18 +759,29 @@ fn show_custom_props(ui: &mut egui::Ui, w: &mut WidgetInstance) {
     ui.data_mut(|d| d.insert_temp(add_key, form));
 }
 
-fn show_image(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
+/// Returns `true` if the user clicked "View SVG Source".
+fn show_image(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) -> bool {
     ui.label(
         egui::RichText::new("SVG Image - source-backed canvas preview")
             .small()
             .weak(),
     );
+    let mut view_clicked = false;
     if w.svg_source.is_some() {
-        ui.label(
-            egui::RichText::new("SVG source loaded")
-                .small()
-                .color(egui::Color32::from_rgb(52, 211, 153)),
-        );
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("SVG source loaded")
+                    .small()
+                    .color(egui::Color32::from_rgb(52, 211, 153)),
+            );
+            if ui
+                .small_button("View source")
+                .on_hover_text("Open read-only SVG source viewer")
+                .clicked()
+            {
+                view_clicked = true;
+            }
+        });
     } else {
         ui.label(
             egui::RichText::new("No SVG source")
@@ -773,6 +790,7 @@ fn show_image(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
         );
     }
     show_delete_button(ui, do_delete);
+    view_clicked
 }
 
 fn show_delete_button(ui: &mut egui::Ui, do_delete: &mut bool) {
