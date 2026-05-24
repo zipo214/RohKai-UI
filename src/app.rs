@@ -352,6 +352,12 @@ impl RohKaiApp {
         }
     }
 
+    fn cmd_reload_descriptors(&mut self) {
+        let (widgets, errors) = crate::codegen::widget_descriptor::load_from_widgets_dir();
+        self.descriptors.widgets = widgets;
+        self.descriptors.errors = errors;
+    }
+
     /// Translate and optionally scale `widgets` so their bounding-box center lands at the
     /// currently visible canvas centre, shrinking proportionally if larger than 80 % of the
     /// visible area. Mutates rect in-place; does **not** assign new IDs.
@@ -842,6 +848,14 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.cmd_import_svg_template();
+                        ui.close_menu();
+                    }
+                    if ui
+                        .button("Reload Widget Descriptors")
+                        .on_hover_text("Rescan widgets/ folder for .rkwd files — no restart needed")
+                        .clicked()
+                    {
+                        self.cmd_reload_descriptors();
                         ui.close_menu();
                     }
                     ui.separator();
