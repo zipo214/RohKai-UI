@@ -87,25 +87,14 @@ pub fn default_for_descriptor(descriptor: &WidgetDescriptor) -> WidgetInstance {
                 ]
             })
             .collect(),
+        // Deps are validated at descriptor-load time; format_cargo_dep is
+        // called here again to produce the canonical TOML line.  Any dep that
+        // failed validation was already rejected by load_from_widgets_dir, so
+        // the unwrap_or fallback is a safety net only.
         descriptor_cargo_deps: descriptor
             .cargo_deps
             .iter()
-            .map(|dep| {
-                if dep.features.is_empty() {
-                    format!("{} = \"{}\"", dep.name, dep.version)
-                } else {
-                    let feats = dep
-                        .features
-                        .iter()
-                        .map(|f| format!("\"{f}\""))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    format!(
-                        "{} = {{ version = \"{}\", features = [{feats}] }}",
-                        dep.name, dep.version
-                    )
-                }
-            })
+            .filter_map(|dep| crate::codegen::widget_descriptor::format_cargo_dep(dep).ok())
             .collect(),
         ..Default::default()
     }
