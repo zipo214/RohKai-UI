@@ -1,5 +1,6 @@
 pub mod egui_emitter;
 pub mod export;
+pub mod field_collector;
 pub mod kind_table;
 pub mod parser;
 pub mod rust;
