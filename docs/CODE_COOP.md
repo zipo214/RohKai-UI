@@ -65,3 +65,14 @@ both. The current SVG rasterizer work is real but incomplete, especially export
 parity and full SVG feature support, so do not overclaim it. The worktree is
 already dirty from earlier SVG/Stage 7 changes; avoid broad formatting or
 unrelated rewrites unless the user asks.
+
+## 2026-05-24 - Claude
+
+Completed the full 5-patch Rust-ness Remediation Plan. All patches verified
+(47 tests, zero clippy warnings, clean fmt) and pushed to PR #3 on dev branch.
+Key structural changes: `RohKaiApp` is now decomposed into sub-structs
+(`project`, `session`, `messages`, `prefs`, `code`, `descriptors`); all field
+accesses in `app.rs` updated. The SVG rasterizer has a typed `Result` API with
+`rasterize_or_fallback` as the canvas path. `field_collector` is the single
+source of truth for AppState field collection. Next session: `export.rs` handler
+parity, or Stage 7 descriptor UX (descriptor hot-reload, palette custom section).

@@ -865,3 +865,43 @@ Both Image mode (single widget) and Components mode (multi-widget group) go thro
 - `TextEdit::char_limit` not emitted yet (API not verified for egui 0.29; field stored, codegen pending).
 - Text alignment (`text_align`) stored and shown in properties; canvas and codegen emit not added (requires `ui.with_layout` wrapper, deferred).
 - `export.rs` not updated this session — shares the same handler logic pattern as `egui_emitter.rs`; update deferred to next pass.
+
+## 2026-05-24 — 5-Patch Rust-ness Remediation
+
+### Context / docs reviewed
+- AGENTS.md, CLAUDE.md, docs/ROADMAP.md, docs/CODE_INDEX.md, docs/CODE_COOP.md
+- Continued from a compacted session; all 5 patches executed in sequence
+
+### Changes
+
+**Patch 1 — Encoding cleanup (carried forward from prior session)**
+- `src/codegen/export.rs`: replaced double-encoded em dash with ASCII hyphen
+- `scripts/check-text-encoding.ps1`: new — scans tracked files for six mojibake patterns; called by preflight
+
+**Patch 2 — Descriptor validation and codegen rails**
+- `src/codegen/widget_descriptor.rs`: added `validate_descriptor()`, `format_cargo_dep()`, `validate_cargo_dep()`, `is_descriptor_id()`, `is_field_key()`, `validate_state_default()`, `extract_template_tokens()`; `load_one()` now calls `validate_descriptor` after parse; 10 new unit tests
+- `src/widgets/mod.rs`: `default_for_descriptor` uses `format_cargo_dep` instead of inline formatting
+
+**Patch 3 — Shared AppState field collector**
+- `src/codegen/field_collector.rs`: new — `AppStateField`, `CollectedFields`, `collect()`, `default_expr_for_widget()`; type-collision detection with warnings; 6 unit tests
+- `src/codegen/state_emitter.rs`: replaced duplicate walk loop with `field_collector::collect`
+- `src/codegen/export.rs`: replaced duplicate `BoundField` struct and walk loop with `field_collector::collect`; removed duplicate `default_expr_for_widget`
+- `src/codegen/mod.rs`: added `pub mod field_collector`
+
+**Patch 4 — SVG rasterizer typed Result API**
+- `src/canvas/svg_rasterizer.rs`: added `SvgRasterError` enum with `Display`; `rasterize()` now returns `Result<ColorImage, SvgRasterError>`; added `rasterize_or_fallback()` convenience wrapper; 3 existing tests updated
+- `src/canvas/interaction.rs`: call site updated to use `rasterize_or_fallback`
+
+**Patch 5 — RohKaiApp state decomposition**
+- `src/app.rs`: extracted six sub-structs: `ProjectState`, `SessionState`, `MessageState`, `PreferencesState`, `CodePanelState`, `DescriptorState`; all field accesses updated; no logic changes
+
+### Verification
+- `cargo fmt --check`: clean
+- `cargo test`: 47/47 passed
+- `cargo clippy -- -D warnings`: zero warnings
+- `scripts/check-text-encoding.ps1`: OK (no mojibake)
+
+### Notes
+- PR #3 on `dev` branch updated with all 5 patches (commits 3302e8c through e35b94a)
+- Patch 3 collector detects type collisions across widgets (same binding name, different Rust types); warnings appear as comments in generated AppState
+- SVG `rasterize()` is now testable as a pure Result function; `rasterize_or_fallback` is the canvas path
