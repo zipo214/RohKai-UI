@@ -254,6 +254,20 @@ fn parse_widget_line(
         parse_add_sized(widget, line, line_no, report);
     } else if line.starts_with("egui::Frame::group(") {
         widget.kind = Some(WidgetKind::Frame);
+    } else {
+        // Fallback for custom widget template lines.  Kind is intentionally
+        // not set so apply_parsed cannot overwrite a Custom kind.  Each field
+        // is extracted at most once: the guard prevents later lines in the same
+        // block (e.g. a handler call `self.on_click()`) from clobbering the
+        // value captured from the constructor line.
+        if widget.label.is_none() {
+            widget.label = extract_string_literal(line);
+        }
+        if widget.binding.is_none() {
+            if let Some(b) = extract_binding_name(line) {
+                widget.binding = Some(Some(b));
+            }
+        }
     }
 }
 
@@ -545,6 +559,70 @@ mod tests {
         let report = parse_egui_output(&code);
         assert!(report.has_errors());
         assert!(report.summary().contains("dimensions"));
+    }
+
+    #[test]
+    fn custom_widget_label_and_binding_extracted_from_template_line() {
+        // A Custom widget whose template expansion contains a string literal
+        // and a &mut self.field reference.  Parser must extract both without
+        // inferring a built-in kind (so apply_parsed cannot overwrite Custom).
+        let id = Uuid::new_v4();
+        let code = format!(
+            concat!(
+                "egui::Area::new(egui::Id::new(\"widget_{id}\"))\n",
+                "    .fixed_pos(egui::pos2(10.0, 20.0))\n",
+                "    .show(ctx, |ui| {{\n",
+                "        ui.set_min_size(egui::vec2(120.0, 36.0));\n",
+                "        MyWidget::new(\"Hello World\", &mut self.counter);\n",
+                "    }});\n"
+            ),
+            id = id
+        );
+        let report = parse_egui_output(&code);
+        assert!(!report.has_errors(), "{:?}", report.diagnostics);
+        let pw = report.widgets.iter().find(|w| w.id == id);
+        assert!(pw.is_some(), "widget not found in parse output");
+        let pw = pw.unwrap();
+        assert_eq!(pw.kind, None, "Custom kind must not be inferred");
+        assert_eq!(pw.label.as_deref(), Some("Hello World"));
+        assert_eq!(
+            pw.binding
+                .as_ref()
+                .and_then(|b| b.as_ref())
+                .map(|s| s.as_str()),
+            Some("counter")
+        );
+    }
+
+    #[test]
+    fn custom_widget_first_line_wins_over_later_handler_call() {
+        // Handler call (`self.on_click()`) appears after the constructor line.
+        // The binding extracted from the constructor must not be overwritten.
+        let id = Uuid::new_v4();
+        let code = format!(
+            concat!(
+                "egui::Area::new(egui::Id::new(\"widget_{id}\"))\n",
+                "    .fixed_pos(egui::pos2(0.0, 0.0))\n",
+                "    .show(ctx, |ui| {{\n",
+                "        ui.set_min_size(egui::vec2(100.0, 30.0));\n",
+                "        let resp = MyWidget::new(\"Btn\", &mut self.flag);\n",
+                "        if resp.clicked() {{ self.on_pressed(); }}\n",
+                "    }});\n"
+            ),
+            id = id
+        );
+        let report = parse_egui_output(&code);
+        assert!(!report.has_errors(), "{:?}", report.diagnostics);
+        let pw = report.widgets.iter().find(|w| w.id == id).unwrap();
+        assert_eq!(pw.label.as_deref(), Some("Btn"));
+        assert_eq!(
+            pw.binding
+                .as_ref()
+                .and_then(|b| b.as_ref())
+                .map(|s| s.as_str()),
+            Some("flag"),
+            "binding must come from constructor, not handler call"
+        );
     }
 
     #[test]

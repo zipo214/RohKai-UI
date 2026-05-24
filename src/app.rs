@@ -358,6 +358,80 @@ impl RohKaiApp {
         self.descriptors.errors = errors;
     }
 
+    fn cmd_import_widget_definition(&mut self) {
+        let Some(src_path) = rfd::FileDialog::new()
+            .set_title("Import Widget Definition")
+            .add_filter("RohKai Widget Descriptor", &["rkwd"])
+            .pick_file()
+        else {
+            return;
+        };
+
+        // Read and validate before copying.
+        let raw = match std::fs::read_to_string(&src_path) {
+            Ok(s) => s,
+            Err(e) => {
+                self.messages.template_message = Some((false, format!("Could not read file: {e}")));
+                return;
+            }
+        };
+        let descriptor: crate::codegen::widget_descriptor::WidgetDescriptor =
+            match serde_json::from_str(&raw) {
+                Ok(d) => d,
+                Err(e) => {
+                    self.messages.template_message =
+                        Some((false, format!("Invalid .rkwd JSON: {e}")));
+                    return;
+                }
+            };
+        if descriptor.schema_version != 1 {
+            self.messages.template_message = Some((
+                false,
+                format!(
+                    "Unsupported schema_version {} (expected 1)",
+                    descriptor.schema_version
+                ),
+            ));
+            return;
+        }
+
+        // Determine destination: <binary_dir>/widgets/<filename>.rkwd
+        let dest_dir = match std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("widgets")))
+        {
+            Some(d) => d,
+            None => {
+                self.messages.template_message =
+                    Some((false, "Could not determine binary path".to_owned()));
+                return;
+            }
+        };
+        if let Err(e) = std::fs::create_dir_all(&dest_dir) {
+            self.messages.template_message =
+                Some((false, format!("Could not create widgets/ dir: {e}")));
+            return;
+        }
+        let file_name = src_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| format!("{}.rkwd", descriptor.id.replace('.', "-")));
+        let dest_path = dest_dir.join(&file_name);
+        if let Err(e) = std::fs::copy(&src_path, &dest_path) {
+            self.messages.template_message = Some((false, format!("Copy failed: {e}")));
+            return;
+        }
+
+        // Reload so the new descriptor is immediately available.
+        let (widgets, errors) = crate::codegen::widget_descriptor::load_from_widgets_dir();
+        self.descriptors.widgets = widgets;
+        self.descriptors.errors = errors;
+        self.messages.template_message = Some((
+            true,
+            format!("Imported \"{}\" successfully", descriptor.name),
+        ));
+    }
+
     /// Translate and optionally scale `widgets` so their bounding-box center lands at the
     /// currently visible canvas centre, shrinking proportionally if larger than 80 % of the
     /// visible area. Mutates rect in-place; does **not** assign new IDs.
@@ -848,6 +922,14 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.cmd_import_svg_template();
+                        ui.close_menu();
+                    }
+                    if ui
+                        .button("Import Widget Definition…")
+                        .on_hover_text("Copy a .rkwd file into widgets/ and reload")
+                        .clicked()
+                    {
+                        self.cmd_import_widget_definition();
                         ui.close_menu();
                     }
                     if ui
