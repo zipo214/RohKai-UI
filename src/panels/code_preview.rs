@@ -68,9 +68,7 @@ pub fn show(ctx: &egui::Context, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
     if let Some(handler_name) = scroll_to_handler.take() {
         let needle = format!("fn {handler_name}(");
         if !code_buffer.contains(&needle) {
-            let stub = format!(
-                "\nfn {handler_name}(state: &mut AppState) {{\n    // TODO: implement\n}}\n"
-            );
+            let stub = format!("\nfn {handler_name}(&mut self) {{\n    // TODO: implement\n}}\n");
             code_buffer.push_str(&stub);
             *code_status = CodeStatus::Live;
         }

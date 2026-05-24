@@ -132,7 +132,7 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                 let with_tip = append_tip(base, tip.as_deref());
                 let line = if let Some(h) = resolve_handler_click(w) {
                     format!(
-                        "        if {with_tip}.clicked() {{\n            Self::{h}(&mut self.state);\n        }}"
+                        "        if {with_tip}.clicked() {{\n            self.{h}();\n        }}"
                     )
                 } else {
                     format!("        if {with_tip}.clicked() {{}}")
@@ -166,7 +166,9 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                             format!("ui.add_sized([{:.1}, {:.1}], {te})", w.rect.w, w.rect.h);
                         let with_tip = append_tip(sized, tip.as_deref());
                         let with_handler = if let Some(h) = resolve_handler_change(w) {
-                            format!("if {with_tip}.changed() {{\n            Self::{h}(&mut self.state);\n        }}")
+                            format!(
+                                "if {with_tip}.changed() {{\n            self.{h}();\n        }}"
+                            )
                         } else {
                             format!("{with_tip};")
                         };
@@ -196,7 +198,9 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                             format!("ui.add_sized([{:.1}, {:.1}], {slider})", w.rect.w, w.rect.h);
                         let with_tip = append_tip(sized, tip.as_deref());
                         let with_handler = if let Some(h) = resolve_handler_change(w) {
-                            format!("if {with_tip}.changed() {{\n            Self::{h}(&mut self.state);\n        }}")
+                            format!(
+                                "if {with_tip}.changed() {{\n            self.{h}();\n        }}"
+                            )
                         } else {
                             format!("{with_tip};")
                         };
@@ -215,7 +219,9 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                         );
                         let with_tip = append_tip(base, tip.as_deref());
                         let with_handler = if let Some(h) = resolve_handler_change(w) {
-                            format!("if {with_tip}.changed() {{\n            Self::{h}(&mut self.state);\n        }}")
+                            format!(
+                                "if {with_tip}.changed() {{\n            self.{h}();\n        }}"
+                            )
                         } else {
                             format!("{with_tip};")
                         };
@@ -259,7 +265,7 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                         }
                         if let Some(h) = handler {
                             base.push_str(&format!(
-                                "        if combo_changed {{\n            Self::{h}(&mut self.state);\n        }}"
+                                "        if combo_changed {{\n            self.{h}();\n        }}"
                             ));
                         } else if !uses_response {
                             base.push_str("        let _ = combo_resp;");
@@ -284,7 +290,9 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                         );
                         let with_tip = append_tip(base, tip.as_deref());
                         let line = if let Some(h) = resolve_handler_change(w) {
-                            format!("if {with_tip}.clicked() {{\n            Self::{h}(&mut self.state);\n        }}")
+                            format!(
+                                "if {with_tip}.clicked() {{\n            self.{h}();\n        }}"
+                            )
                         } else {
                             format!("{with_tip};")
                         };
