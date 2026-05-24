@@ -737,8 +737,7 @@ fn draw_widget(
                         *cached_tw != tw
                             || *cached_th != th
                             || (zoom_stable
-                                && (current_scale - cached_scale).abs()
-                                    / current_scale.max(0.001)
+                                && (current_scale - cached_scale).abs() / current_scale.max(0.001)
                                     > 0.20)
                     })
                     .unwrap_or(true);

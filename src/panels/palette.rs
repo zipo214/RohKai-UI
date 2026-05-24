@@ -173,7 +173,10 @@ fn descriptor_palette_button(
         text_col,
     );
 
-    let resp = resp.on_hover_text(format!("{} · Click to add · Drag onto canvas", descriptor.id));
+    let resp = resp.on_hover_text(format!(
+        "{} · Click to add · Drag onto canvas",
+        descriptor.id
+    ));
 
     let mut click_add = None;
     let mut drag_add = None;

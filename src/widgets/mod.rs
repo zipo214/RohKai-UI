@@ -79,7 +79,13 @@ pub fn default_for_descriptor(descriptor: &WidgetDescriptor) -> WidgetInstance {
         descriptor_state_fields: descriptor
             .state_fields
             .iter()
-            .map(|sf| [sf.key.clone(), sf.rust_type.clone(), sf.default_expr.clone()])
+            .map(|sf| {
+                [
+                    sf.key.clone(),
+                    sf.rust_type.clone(),
+                    sf.default_expr.clone(),
+                ]
+            })
             .collect(),
         descriptor_cargo_deps: descriptor
             .cargo_deps

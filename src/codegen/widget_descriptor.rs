@@ -136,9 +136,7 @@ pub fn load_from_widgets_dir() -> (Vec<WidgetDescriptor>, Vec<String>) {
     {
         Some(d) => d,
         None => {
-            errors.push(
-                "Could not determine binary path for .rkwd descriptor loader".to_owned(),
-            );
+            errors.push("Could not determine binary path for .rkwd descriptor loader".to_owned());
             return (descriptors, errors);
         }
     };
@@ -229,7 +227,10 @@ pub fn apply_template(
 // ---------------------------------------------------------------------------
 
 /// Find a descriptor by id in a loaded slice.
-pub fn find_by_id<'a>(descriptors: &'a [WidgetDescriptor], id: &str) -> Option<&'a WidgetDescriptor> {
+pub fn find_by_id<'a>(
+    descriptors: &'a [WidgetDescriptor],
+    id: &str,
+) -> Option<&'a WidgetDescriptor> {
     descriptors.iter().find(|d| d.id == id)
 }
 

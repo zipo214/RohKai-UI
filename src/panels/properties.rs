@@ -34,7 +34,9 @@ pub fn show_content(
         .id_salt("properties_scroll")
         .max_height(max_height)
         .auto_shrink([false, false])
-        .show(ui, |ui| show_content_inner(ui, tree, selected, shift_held, descriptors))
+        .show(ui, |ui| {
+            show_content_inner(ui, tree, selected, shift_held, descriptors)
+        })
         .inner
 }
 
@@ -87,8 +89,8 @@ fn show_content_inner(
             WidgetKind::Frame => show_frame(ui, w, &mut do_delete),
             WidgetKind::Image => show_image(ui, w, &mut do_delete),
             WidgetKind::Custom(ref desc_id) => {
-                let desc = crate::codegen::widget_descriptor::find_by_id(descriptors, desc_id)
-                    .cloned();
+                let desc =
+                    crate::codegen::widget_descriptor::find_by_id(descriptors, desc_id).cloned();
                 show_custom(ui, w, &mut do_delete, desc.as_ref());
             }
         }
@@ -1256,7 +1258,11 @@ fn show_custom(
         ui.separator();
     } else if !w.descriptor_props.is_empty() {
         // No descriptor found — show raw key→value table
-        ui.label(egui::RichText::new("Properties (descriptor missing)").small().weak());
+        ui.label(
+            egui::RichText::new("Properties (descriptor missing)")
+                .small()
+                .weak(),
+        );
         let keys: Vec<String> = w.descriptor_props.keys().cloned().collect();
         for key in keys {
             ui.horizontal(|ui| {

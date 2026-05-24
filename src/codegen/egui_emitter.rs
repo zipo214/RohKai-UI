@@ -563,7 +563,10 @@ mod tests {
         // Live preview emits a compact size note, NOT the full raw SVG string.
         // Export (export.rs) still embeds the full source via include_str / raw literal.
         assert!(generated.contains("[SVG:"), "expected compact size note");
-        assert!(!generated.contains("<svg/>"), "raw SVG must not appear in live preview");
+        assert!(
+            !generated.contains("<svg/>"),
+            "raw SVG must not appear in live preview"
+        );
         assert!(generated.contains("120.0"));
         assert!(generated.contains("80.0"));
         assert!(!generated.contains("egui::Frame::none()"));
