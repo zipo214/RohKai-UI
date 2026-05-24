@@ -7,6 +7,25 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-05-24 — Claude Stage 7.x Complete
+
+On `dev`, finished all three Stage 7.x items: (1) handler calling-convention
+unification (`egui_emitter.rs` + `code_preview.rs`); (2) descriptor hot-reload
+and Import Widget Definition dialog (`app.rs`); (3) Lazare Custom round-trip
+(`parser.rs` fallback extracts label/binding from template-expanded lines,
+guarded so constructor line wins over handler calls). 53/53 tests, zero warnings,
+`cargo fmt` clean. Remaining known gap: `descriptor_props` (`{{prop.KEY}}`
+substitutions) don't feed back into Lazare sync — deferred.
+
+## 2026-05-24 — Codex SVG Renderer R0
+
+On `dev`, I am implementing the first SVG renderer roadmap slice: structured
+render output/reporting, renderer diagnostics, and tests that prove current
+behavior is deterministic and honest. I will preserve the stable `rasterize()`
+and `rasterize_or_fallback()` wrappers and avoid touching Claude's recent
+handler/hot-reload source work. The key hazard is overclaiming: this pass should
+make renderer limits visible, not pretend gradients/text/clips are done.
+
 ## 2026-05-24 — Claude Track B + Track A
 
 On `dev`, completed handler calling-convention unification (Track B): live

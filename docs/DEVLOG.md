@@ -2,6 +2,76 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-05-24 — Stage 7.x: Lazare Custom Round-trip + Import Widget Definition
+
+### Docs Reviewed
+- `CLAUDE.md`, `docs/CODE_COOP.md` (latest note)
+- `src/codegen/parser.rs`, `src/codegen/egui_emitter.rs`, `src/codegen/widget_descriptor.rs`
+- `src/app.rs`, `widgets/ply-button.rkwd`
+
+### Changes Made
+
+**Lazare Custom round-trip** (`08867fd` — `parser.rs`)
+- Added fallback `else` branch at end of `parse_widget_line`: extracts first
+  string literal as `label` and first `&mut self.field` as `binding` from any
+  line that does not match a built-in egui pattern.
+- Guards prevent later lines (handler calls) from overwriting the values
+  captured from the constructor line.
+- Kind is intentionally left None so `apply_parsed` cannot overwrite
+  `WidgetKind::Custom`.
+- Two new tests: `custom_widget_label_and_binding_extracted_from_template_line`
+  and `custom_widget_first_line_wins_over_later_handler_call`.
+
+**Import Widget Definition dialog** (`08867fd` — `app.rs`)
+- `cmd_import_widget_definition`: opens rfd file dialog (`.rkwd` filter),
+  validates JSON + schema_version 1, copies to `<binary_dir>/widgets/`,
+  auto-reloads descriptors, shows success/error via `template_message`.
+- File menu: "Import Widget Definition…" item wired above "Reload Widget
+  Descriptors".
+
+### Verification
+- 53/53 tests, zero clippy warnings, `cargo fmt --check` clean.
+
+### Risks / Follow-ups
+- Import copies the file verbatim; no overwrite-conflict dialog (silently
+  replaces). Could add a confirmation prompt in a future polish pass.
+- Custom widget `descriptor_props` editing from the properties panel still
+  doesn't feed back into Lazare code sync ({{prop.KEY}} substitutions).
+
+## 2026-05-24 — SVG Renderer R0 Reporting
+
+### Docs Reviewed Before Coding
+- `scripts/preflight-context.ps1`
+- `.agents/skills/svg-zero-dep/SKILL.md`
+- `docs/CODE_COOP.md`
+- `docs/SVG_IMPORT.md`, `docs/SVG_RENDERER_ROADMAP.md`, `docs/ROADMAP.md`
+
+### Changes Made
+- Added `SvgRenderOutput` and `SvgRenderReport` to the zero-dependency
+  rasterizer while preserving `rasterize()` and `rasterize_or_fallback()`.
+- Added renderer diagnostics for rendered/skipped counts, unsupported feature
+  buckets, raster-size clamping, and conservative fidelity scoring.
+- Added tests for report counts, unsupported gradients/clips/filters, byte-level
+  deterministic output, and raster-size clamp warnings.
+- Wired SVG rasterizer tests into `scripts/validate-svg-import.ps1`.
+- Updated SVG docs and roadmap to record the completed R0 slice and remaining
+  scene/IR/golden-harness work.
+
+### Verification
+- `cargo fmt --check` passed.
+- `cargo check` passed.
+- `cargo test` passed: 51/51.
+- `cargo clippy -- -D warnings` passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1` passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-dependency-policy.ps1` passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\validate-svg-import.ps1` passed.
+- `cargo run` launched cleanly and was stopped after an 8-second smoke test.
+
+### Risks / Follow-ups
+- Renderer diagnostics are still source-scan based; the next step is a proper
+  `SvgScene` IR so diagnostics attach to resolved nodes.
+- Existing unrelated worktree changes were preserved.
+
 ## 2026-05-24 — Track B + Track A: Handler Parity & Descriptor Hot-Reload
 
 ### Docs Reviewed Before Coding
