@@ -195,15 +195,15 @@
 - [x] Descriptor load errors shown in ribbon — non-fatal, app runs without them
 
 ## Stage 7.x - Widget Descriptor Maturity
-- [ ] File → Import Widget Definition… dialog (load a single `.rkwd` without restart)
-- [ ] Hot-reload: rescan `/widgets` folder without restart (file-watcher or menu action)
-- [ ] Lazare round-trip for Custom widgets: geometry already works; label/binding
+- [x] File → Import Widget Definition… dialog (load a single `.rkwd` without restart)
+- [x] Hot-reload: rescan `/widgets` folder without restart (file-watcher or menu action)
+- [x] Lazare round-trip for Custom widgets: geometry already works; label/binding
       round-trip requires parser to understand descriptor template structure
 - [ ] In-app `.rkwd` editor: create / edit descriptors from within RohKai
 - [ ] `.rkwb` bundle format — zip of multiple `.rkwd` + preview SVGs + assets
 
 ## Stage 7.x - SVG Source Viewing (from code panel contraction)
-- [ ] Read-only SVG source viewer panel or popup for Image widgets
+- [x] Read-only SVG source viewer panel or popup for Image widgets
       (SVG is intentionally contracted in the live code panel — this gives a
       way to inspect/copy the raw SVG without polluting the code buffer)
 - [ ] Optional "expand SVG inline" toggle per Image widget for power users
@@ -216,6 +216,13 @@
 - [ ] More granular fidelity scoring for text-heavy, clipped, masked, filtered,
       gradient, and pattern-heavy SVGs
 - [ ] Dedicated importer report UI showing skipped features and approximation notes
+- [x] SVG renderer roadmap/truth inventory comparing RohKai to mature engines
+- [x] `SvgRenderOutput` / `SvgRenderReport` API with rendered/skipped counts,
+      unsupported-feature diagnostics, raster-size warnings, and fidelity
+      scoring
+- [ ] SVG renderer scene/display-list IR split
+- [ ] Golden renderer fixture harness for supported raster output
+- [ ] Shared SVG microsyntax module for importer/rasterizer parity
 
 ## Future Considerations
 

@@ -7,6 +7,16 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-05-24 — Claude SVG Source Viewer
+
+On `dev`, added SVG source viewer popup (`76b770e`): properties panel for Image
+widgets now shows a "View source" button when svg_source is loaded; clicking
+opens a read-only egui::Window with the full SVG text, byte count, and "Copy all"
+button. `SessionState.svg_viewer_id` tracks open state; `PropertiesAction::ShowSvgSource`
+routes the event. 53/53 tests, zero warnings, fmt clean. 7.x SVG Source Viewing
+item ✅. Remaining 7.x open: in-app .rkwd editor, .rkwb bundle, SVG import
+maturity (Codex domain).
+
 ## 2026-05-24 — Claude Stage 7.x Complete
 
 On `dev`, finished all three Stage 7.x items: (1) handler calling-convention
