@@ -23,25 +23,54 @@ const MAX_RASTER_PIXELS: usize = 16_777_216;
 // Public entry point
 // ---------------------------------------------------------------------------
 
+/// Reasons a rasterization attempt can fail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SvgRasterError {
+    /// SVG source exceeded size limits or contained forbidden content.
+    ForbiddenContent,
+    /// The SVG XML could not be parsed into a renderable document.
+    ParseFailed,
+}
+
+impl std::fmt::Display for SvgRasterError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ForbiddenContent => {
+                write!(f, "SVG contains forbidden content or exceeds size limits")
+            }
+            Self::ParseFailed => write!(f, "SVG could not be parsed"),
+        }
+    }
+}
+
 /// Rasterize an SVG string to a pixel buffer of the given dimensions.
-pub fn rasterize(svg_text: &str, width: u32, height: u32) -> ColorImage {
+///
+/// Returns `Err` if the SVG fails security checks or cannot be parsed.
+/// On success the returned `ColorImage` is straight RGBA.
+pub fn rasterize(svg_text: &str, width: u32, height: u32) -> Result<ColorImage, SvgRasterError> {
     let (w, h) = raster_size(width, height);
     let mut buf = vec![0u8; w * h * 4]; // transparent black
 
     if !svg_text_allowed(svg_text) {
-        return fallback_image(w, h);
+        return Err(SvgRasterError::ForbiddenContent);
     }
 
-    let doc = match SvgDoc::parse(svg_text) {
-        Some(d) => d,
-        None => return fallback_image(w, h),
-    };
+    let doc = SvgDoc::parse(svg_text).ok_or(SvgRasterError::ParseFailed)?;
 
     let vb_xform = viewbox_to_pixel_transform(&doc, w, h);
     let default_style = Style::default();
     render_nodes(&doc.nodes, &vb_xform, &default_style, &mut buf, w, h);
 
-    ColorImage::from_rgba_unmultiplied([w, h], &buf)
+    Ok(ColorImage::from_rgba_unmultiplied([w, h], &buf))
+}
+
+/// Rasterize an SVG string, returning a grey fallback image on any error.
+///
+/// Callers that just need pixels and don't need to distinguish failure
+/// reasons should prefer this over calling `rasterize` directly.
+pub fn rasterize_or_fallback(svg_text: &str, width: u32, height: u32) -> ColorImage {
+    let (w, h) = raster_size(width, height);
+    rasterize(svg_text, width, height).unwrap_or_else(|_| fallback_image(w, h))
 }
 
 fn raster_size(width: u32, height: u32) -> (usize, usize) {
@@ -1930,9 +1959,10 @@ mod tests {
     fn rejects_doctype_before_rendering() {
         let svg = r##"<!DOCTYPE svg [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>
 <svg viewBox="0 0 10 10"><rect width="10" height="10" fill="#ff0000"/></svg>"##;
-        let image = rasterize(svg, 10, 10);
-
-        assert_ne!(pixel(&image, 5, 5), [255, 0, 0, 255]);
+        assert_eq!(
+            rasterize(svg, 10, 10).unwrap_err(),
+            SvgRasterError::ForbiddenContent
+        );
     }
 
     #[test]
@@ -1941,7 +1971,7 @@ mod tests {
 <defs><rect width="10" height="10" fill="#ff0000"/></defs>
 <mask id="m"><rect width="10" height="10" fill="#00ff00"/></mask>
 </svg>"##;
-        let image = rasterize(svg, 10, 10);
+        let image = rasterize(svg, 10, 10).unwrap();
 
         assert_eq!(pixel(&image, 5, 5), [0, 0, 0, 0]);
     }
@@ -1952,7 +1982,7 @@ mod tests {
 <rect width="10" height="10" fill="#ff0000" display="none"/>
 <rect x="10" width="10" height="10" fill="url(#g)"/>
 </svg>"##;
-        let image = rasterize(svg, 20, 10);
+        let image = rasterize(svg, 20, 10).unwrap();
 
         assert_eq!(pixel(&image, 5, 5), [0, 0, 0, 0]);
         assert_eq!(pixel(&image, 15, 5), [0, 0, 0, 0]);

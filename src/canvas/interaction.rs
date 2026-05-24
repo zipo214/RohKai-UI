@@ -743,8 +743,11 @@ fn draw_widget(
                     .unwrap_or(true);
 
                 if needs_raster {
-                    let image =
-                        crate::canvas::svg_rasterizer::rasterize(svg_text, tw.max(1), th.max(1));
+                    let image = crate::canvas::svg_rasterizer::rasterize_or_fallback(
+                        svg_text,
+                        tw.max(1),
+                        th.max(1),
+                    );
                     let tex = ctx.load_texture(
                         format!("svg_{}", widget.id),
                         image,
