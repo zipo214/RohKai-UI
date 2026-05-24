@@ -7,6 +7,15 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-05-24 — Codex PowerShell 7 UTF-8 Standardization
+
+Working on `dev`, I installed PowerShell 7 and am updating repo scripts and
+agent guidance to prefer `pwsh` with explicit UTF-8 handling. The immediate
+hazard is recurring mojibake from legacy Windows PowerShell 5.1 text paths, so
+this pass adds a text encoding guard and fixes the known corrupted lines. Next
+agents should use `pwsh -NoProfile -ExecutionPolicy Bypass -File ...` for repo
+scripts and avoid shell text writers unless `-Encoding utf8` is explicit.
+
 ## 2026-05-23 — Claude Stage 7 Gap Fixes + SVG Code Contraction
 
 Three confirmed gaps from the Stage 7 implementation are now fixed: (1)

@@ -150,13 +150,14 @@ vector-outline or owned shaping engine work.
 Run:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\validate-svg-import.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\validate-svg-import.ps1
 ```
 
 That runs:
 
 - `cargo fmt --check`
 - SVG dependency policy checks
+- text encoding policy checks
 - SVG importer tests
 - SVG source-preservation tests
 - deterministic output tests

@@ -85,7 +85,7 @@ Core features implemented:
 
 ## Session Rules
 - Before planning or coding, run or manually follow the repo preflight:
-  `powershell -NoProfile -ExecutionPolicy Bypass -File D:\dev\rohkai\scripts\preflight-context.ps1`
+  `pwsh -NoProfile -ExecutionPolicy Bypass -File D:\dev\rohkai\scripts\preflight-context.ps1`
 - Preflight means reading `AGENTS.md`, `CLAUDE.md`, `docs/ROADMAP.md`, the latest
   `docs/DEVLOG.md` entry, `docs/CODE_INDEX.md`, the latest `docs/CODE_COOP.md`
   note, `git status --short --branch`, and any relevant `.claude/skills/*/SKILL.md`
@@ -101,6 +101,10 @@ Core features implemented:
   `docs/ARCHITECTURE.md` is structural truth, not a timeline.
 - Every session ends with `cargo run` confirming a clean launch.
 - Zero warnings is required before any session is considered done.
+- Prefer `pwsh`/PowerShell 7 for repo scripts. Do not use Windows PowerShell 5.1
+  text-writing commands for repo files.
+- Do not use `Set-Content`, `Add-Content`, or `Out-File` without explicit
+  `-Encoding utf8`. Prefer `apply_patch` for source edits.
 - Always work in D:\dev\rohkai. Never write to any other path.
 - If CWD is not D:\dev\rohkai, cd there before doing anything.
 - If you suspect context loss, run /restore before doing anything else.

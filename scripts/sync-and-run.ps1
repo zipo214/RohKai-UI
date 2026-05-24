@@ -6,6 +6,11 @@ param(
     [switch]$AllowOverwrite
 )
 
+$Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = $Utf8NoBom
+[Console]::InputEncoding = $Utf8NoBom
+[Console]::OutputEncoding = $Utf8NoBom
+
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $ExcludeFile = Join-Path $PSScriptRoot "xcopy-exclude.txt"
 

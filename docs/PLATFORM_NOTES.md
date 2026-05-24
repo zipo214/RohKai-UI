@@ -11,12 +11,16 @@ cargo clippy -- -D warnings
 
 ## Windows
 
-The current agent automation scripts are PowerShell-first and were written for
-the active Windows workspace at `D:\dev\rohkai`.
+The current agent automation scripts are PowerShell-first, prefer PowerShell 7
+(`pwsh`), and were written for the active Windows workspace at `D:\dev\rohkai`.
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\preflight-context.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\preflight-context.ps1
 ```
+
+PowerShell 7 is required for the safest Unicode path. Windows PowerShell 5.1 is
+fallback-only because its legacy console and file encodings can corrupt
+UTF-8-only text when agents write repo files.
 
 ## macOS And Linux
 
@@ -27,7 +31,7 @@ agent preflight/validation path.
 Options today:
 
 - Use Cargo directly for app development.
-- Install PowerShell Core (`pwsh`) and adapt script invocation paths.
+- Install PowerShell 7 (`pwsh`) and run the same script commands used on Windows.
 - Read the markdown guidance manually: `AGENTS.md`, `CLAUDE.md`,
   `docs/ROADMAP.md`, `docs/DEVLOG.md`, `docs/CODE_INDEX.md`,
   `docs/CODE_COOP.md`, and relevant skills.

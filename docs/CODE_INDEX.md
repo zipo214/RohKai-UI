@@ -71,6 +71,8 @@ being comfortable.
 
 - `scripts/preflight-context.ps1` - agent preflight summary.
 - `scripts/check-dependency-policy.ps1` - blocks forbidden SVG dependency crates.
+- `scripts/check-text-encoding.ps1` - blocks mojibake/replacement-character text
+  from entering tracked repo files.
 - `scripts/validate-svg-import.ps1` - SVG importer validation suite.
 - `scripts/snapshot-context.ps1` / `scripts/restore-context.ps1` - Claude
   context snapshot helpers.

@@ -2,6 +2,82 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-05-24 — Mojibake Investigation + SVG Zoom Performance
+
+### Docs Reviewed Before Coding
+- `docs/CODE_COOP.md`, `docs/DEVLOG.md`, `docs/ROADMAP.md`
+- `src/canvas/interaction.rs`, `src/canvas/svg_rasterizer.rs`
+- `docs/mojibake-remediation-plan-2026-05-24.md`
+
+### Changes Made
+
+**Mojibake investigation:**
+- Byte-level scan of all tracked text files confirmed valid UTF-8 throughout.
+- No live mojibake bytes found; prior plan's findings were a false positive from
+  `rg --encoding latin1` re-interpreting correct UTF-8 multibyte sequences.
+- `scripts/check-text-encoding.ps1` added: scans six common double-encoding
+  patterns using `[char]` codes (pure-ASCII source); called by preflight.
+- `docs/mojibake-remediation-plan-2026-05-24.md` updated with investigation result.
+
+**SVG zoom performance (three bugs fixed):**
+- Fixed zoom² rasterization: `tw`/`th` were `rect.width() * zoom * ppp` but
+  `rect` is already screen-space (`widget.rect.w * zoom`); corrected to
+  `rect.width() * ppp`. At 273% zoom this reduced buffer from ~3800px to ~1400px.
+- Added `zoom_stable` flag: rasterization skipped during active scroll gestures;
+  GPU serves stale texture at zoom scale; re-rasterizes once on first quiet frame.
+- Raised eviction threshold 5% → 20%: was firing every scroll notch (1.1x factor
+  produces 9.1% drift, always exceeded 5%); now ~2 notches per rasterize.
+- Cache key extended to `(TextureHandle, f32, u32, u32)`: widget resize at
+  constant zoom now triggers immediate re-raster (was silently keeping wrong size).
+- `flatten_cubic`: added depth limit (≥32) and point count cap (≥50k) to prevent
+  stack overflow and excessive memory on pathological SVG path inputs.
+
+### Verification
+- `cargo fmt --check` clean.
+- `cargo test` 30/30.
+- `cargo clippy -- -D warnings` clean.
+- `pwsh scripts\check-text-encoding.ps1` clean.
+
+### Risks / Follow-ups
+- Resize + simultaneous zoom: both conditions trigger rasterize; acceptable since
+  concurrent resize-while-scroll is rare.
+- `svg_text_allowed` still allocates a full lowercase copy per rasterize call
+  (noted in code review, deferred).
+
+## 2026-05-24 — PowerShell 7 UTF-8 Standardization
+
+### Docs Reviewed Before Coding
+- `scripts/preflight-context.ps1`
+- `AGENTS.md`, `CLAUDE.md`
+- `docs/ROADMAP.md`, `docs/CODE_INDEX.md`
+- `docs/CODE_COOP.md`, `docs/DEVLOG.md`
+- Relevant script files under `scripts/`
+- `.agents/commands/preflight.md`, `.claude/commands/preflight.md`
+- `docs/PLATFORM_NOTES.md`, `docs/SVG_IMPORT.md`
+
+### Changes Made
+- Installed PowerShell 7 through `winget`.
+- Added explicit UTF-8 bootstrap lines to repo PowerShell scripts.
+- Switched agent/preflight guidance from `powershell` to `pwsh`.
+- Added `scripts/check-text-encoding.ps1` to block mojibake markers and
+  replacement characters in tracked text files.
+- Wired text encoding checks into preflight and SVG validation.
+- Fixed known corrupted DEVLOG and export comment text.
+- Added `docs/mojibake-remediation-plan-2026-05-24.md`.
+
+### Verification
+- `pwsh -NoProfile -Command '$PSVersionTable.PSVersion'` verified PowerShell 7.6.2.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\preflight-context.ps1` passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1` passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\validate-svg-import.ps1` passed.
+- Manual mojibake marker search returned no repo-authored text matches.
+- `.claude/settings.json` parsed as valid JSON.
+- `cargo fmt --check` passed.
+- `cargo check` passed.
+- `cargo test` passed: 30/30.
+- `cargo clippy -- -D warnings` passed.
+- `cargo run` compiled and launched; stopped after a 15-second smoke test.
+
 ## 2026-05-23 — Stage 7 Gap Fixes + SVG Code Contraction
 
 ### Docs Reviewed Before Changes
@@ -632,7 +708,7 @@ Both Image mode (single widget) and Components mode (multi-widget group) go thro
 - Original `.svg` files remain the source of truth beside generated `.rktp` templates.
 - Existing dirty working tree included prior Claude/Codex work; this session intentionally did not revert unrelated changes.
 
-## 2026-05-22 16:40 - Stage 5.5 ComboBox and TracÃ© Follow-Up
+## 2026-05-22 16:40 - Stage 5.5 ComboBox and Tracé Follow-Up
 
 ### Docs Reviewed Before Coding
 - `scripts/preflight-context.ps1` output
@@ -651,7 +727,7 @@ Both Image mode (single widget) and Components mode (multi-widget group) go thro
 - Repaired empty ComboBox option lists through `UiTree::validate_and_repair()`.
 - Updated canvas ComboBox preview to show the first configured option as the selected label.
 - Updated live codegen, AppState emission, and export codegen so ComboBoxes emit selectable options and default state to the first option.
-- Changed canvas TracÃ© navigation to Ctrl+double-click; regular double-click remains reserved for inline label editing.
+- Changed canvas Tracé navigation to Ctrl+double-click; regular double-click remains reserved for inline label editing.
 - Updated the handler field hint to `Ctrl+double-click widget to jump to handler`.
 - Capped ComboBox option editor width so the left panel does not expand over the canvas.
 - Deleted stale `implement-svg-importer-hardening` heartbeat automation because the importer hardening pass is complete.
@@ -667,7 +743,7 @@ Both Image mode (single widget) and Components mode (multi-widget group) go thro
 
 ### Notes For Claude And Codex
 - Do not reintroduce a color `+ set` gate; the swatch is intentionally always visible.
-- TracÃ© canvas navigation is Ctrl+double-click. Plain double-click is now for inline label editing.
+- Tracé canvas navigation is Ctrl+double-click. Plain double-click is now for inline label editing.
 - ComboBox option text fields must stay width-capped; uncapped fields can force the left panel over the canvas.
 
 ## 2026-05-22 23:08 - SVG Import Hardening Follow-Up + Text Planning

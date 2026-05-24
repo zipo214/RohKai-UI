@@ -1,8 +1,13 @@
 # Validate RohKai's dependency policy for SVG import work.
+$Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = $Utf8NoBom
+[Console]::InputEncoding = $Utf8NoBom
+[Console]::OutputEncoding = $Utf8NoBom
+
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $ProjectRoot
 
-$cargoToml = Get-Content -Raw -Path "Cargo.toml"
+$cargoToml = Get-Content -Raw -Encoding utf8 -Path "Cargo.toml"
 $blockedDirectDeps = @("resvg", "usvg", "tiny-skia")
 
 foreach ($dep in $blockedDirectDeps) {

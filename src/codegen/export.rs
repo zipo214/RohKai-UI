@@ -660,7 +660,7 @@ fn export_child_line(
             None => format!("                        // ProgressBar {child_label}: set a valid Binding\n"),
         },
         WidgetKind::Frame => format!(
-            "                        // Nested Frame {child_label} â€” not recursive in export\n"
+            "                        // Nested Frame {child_label} - not recursive in export\n"
         ),
         WidgetKind::Image => image_export_child_line(child, rect_expr),
         WidgetKind::Custom(_) => {

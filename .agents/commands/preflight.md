@@ -3,7 +3,7 @@
 Run this before planning or editing RohKai code.
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File D:\dev\rohkai\scripts\preflight-context.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File D:\dev\rohkai\scripts\preflight-context.ps1
 ```
 
 Then read, in order:
@@ -26,3 +26,8 @@ of the agent execution context unless the user explicitly asks for contribution
 policy work.
 
 Only plan or edit after the preflight context is current.
+
+Encoding rule: prefer `pwsh`/PowerShell 7 for repo scripts. Do not use Windows
+PowerShell 5.1 text-writing commands for repo files. Do not use `Set-Content`,
+`Add-Content`, or `Out-File` without explicit `-Encoding utf8`; prefer
+`apply_patch` for source edits.

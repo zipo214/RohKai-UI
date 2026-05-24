@@ -1,6 +1,23 @@
 # Validate the zero-dependency SVG import pipeline.
+$Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = $Utf8NoBom
+[Console]::InputEncoding = $Utf8NoBom
+[Console]::OutputEncoding = $Utf8NoBom
+
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $ProjectRoot
+
+function Get-PwshCommand {
+    $pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
+    if ($pwsh) {
+        return $pwsh.Source
+    }
+    $legacy = Get-Command powershell -ErrorAction SilentlyContinue
+    if ($legacy) {
+        return $legacy.Source
+    }
+    return $null
+}
 
 Write-Host "Checking formatting..."
 cargo fmt --check
@@ -9,7 +26,18 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "Checking SVG dependency policy..."
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-dependency-policy.ps1
+$runner = Get-PwshCommand
+if (-not $runner) {
+    Write-Error "Neither pwsh nor powershell is available for script validation."
+    exit 1
+}
+& $runner -NoProfile -ExecutionPolicy Bypass -File scripts\check-dependency-policy.ps1
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
+Write-Host "Checking text encoding policy..."
+& $runner -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }

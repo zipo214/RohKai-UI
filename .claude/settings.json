@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -ExecutionPolicy Bypass -File D:\\dev\\rohkai\\scripts\\snapshot-context.ps1"
+            "command": "pwsh -ExecutionPolicy Bypass -File D:\\dev\\rohkai\\scripts\\snapshot-context.ps1"
           }
         ]
       }
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File D:\\dev\\rohkai\\scripts\\preflight-context.ps1"
+            "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File D:\\dev\\rohkai\\scripts\\preflight-context.ps1"
           }
         ]
       }
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "powershell -NoProfile -Command \"Set-Location D:\\dev\\rohkai; cargo clippy --quiet 2>&1 | Select-Object -First 20\""
+            "command": "pwsh -NoProfile -Command \"Set-Location D:\\dev\\rohkai; cargo clippy --quiet 2>&1 | Select-Object -First 20\""
           }
         ]
       }
