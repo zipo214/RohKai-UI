@@ -2,6 +2,75 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-05-24 — Track B + Track A: Handler Parity & Descriptor Hot-Reload
+
+### Docs Reviewed Before Coding
+- `CLAUDE.md`, `docs/CODE_COOP.md` (latest note)
+- `src/codegen/egui_emitter.rs`, `src/codegen/export.rs`, `src/panels/code_preview.rs`
+- `src/codegen/widget_descriptor.rs`, `src/app.rs`
+
+### Changes Made
+
+**Track B — Handler calling-convention unification** (`b2fe0af`)
+- `egui_emitter.rs`: all 6 handler call sites changed from `Self::{h}(&mut self.state);`
+  to `self.{h}();`, matching what `export.rs` already emitted.
+- `code_preview.rs`: Tracé stub signature changed from `fn h(state: &mut AppState)`
+  to `fn h(&mut self)` — stubs now compile unmodified in an exported project.
+- `export.rs` required no changes (was already correct).
+
+**Track A — Descriptor hot-reload** (`87e2e11`)
+- New `cmd_reload_descriptors()` on `RohKaiApp`: calls `load_from_widgets_dir()`,
+  replaces `self.descriptors.widgets` and `self.descriptors.errors` in-place.
+- File menu: "Reload Widget Descriptors" item wired to that command.
+- Drop/edit a `.rkwd` file in `widgets/`, click the menu item — palette updates
+  without an app restart.
+
+### Verification
+- 47/47 tests, zero clippy warnings, `cargo fmt --check` clean both commits.
+
+### Risks / Follow-ups
+- Hot-reload replaces the full descriptor list; existing canvas instances that
+  reference a Custom widget whose descriptor was deleted keep their snapshot
+  but lose palette access — acceptable for now.
+- Track A still has two remaining items: Import Widget Definition dialog, and
+  Lazare round-trip for Custom widgets (label/binding with descriptor template
+  awareness).
+
+## 2026-05-24 — Low-Token Docs Consolidation
+
+### Docs Reviewed Before Coding
+- `scripts/preflight-context.ps1`
+- `AGENTS.md`, `CLAUDE.md`
+- `.agents/commands/preflight.md`, `.claude/commands/preflight.md`
+- `docs/CODE_INDEX.md`, `docs/CODE_COOP.md`, `docs/PLATFORM_NOTES.md`
+- `docs/mojibake-remediation-plan-2026-05-24.md`
+
+### Changes Made
+- Consolidated preflight guidance so the script is procedural truth while
+  `AGENTS.md` and `CLAUDE.md` remain policy truth.
+- Changed preflight to omit the latest DEVLOG entry by default. Use
+  `-IncludeDevlog` for history/regression work.
+- Reduced both `/preflight` command docs to thin wrappers instead of duplicate
+  checklists.
+- Updated `docs/CODE_INDEX.md` for the app state split and shared
+  `field_collector`.
+- Folded mojibake prevention into `docs/PLATFORM_NOTES.md` and removed the
+  standalone remediation plan doc.
+- Added a newest-first Code CoOp note for this consolidation pass.
+
+### Verification
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\preflight-context.ps1` passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\preflight-context.ps1 -IncludeDevlog` passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1` passed.
+- `cargo fmt --check` passed.
+- `cargo check` passed.
+
+### Risks / Follow-ups
+- Older DEVLOG entries still mention the removed standalone mojibake plan as
+  historical context.
+- `docs/ARCHITECTURE.md` may still need a future structural refresh, but it is
+  no longer part of default preflight.
+
 ## 2026-05-24 — Mojibake Investigation + SVG Zoom Performance
 
 ### Docs Reviewed Before Coding

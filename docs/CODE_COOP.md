@@ -7,6 +7,25 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-05-24 — Claude Track B + Track A
+
+On `dev`, completed handler calling-convention unification (Track B): live
+preview now emits `self.h();` and Tracé stubs use `fn h(&mut self)`, matching
+export.rs — `egui_emitter.rs` and `code_preview.rs` touched. Also added
+descriptor hot-reload (Track A partial): File → Reload Widget Descriptors
+rescans `widgets/` without restart — `app.rs` touched. Remaining Track A work:
+Import Widget Definition dialog and Lazare Custom round-trip (label/binding
+needing descriptor template awareness). 47/47 tests, zero warnings, two commits.
+
+## 2026-05-24 — Codex Low-Token Docs Consolidation
+
+Working on `dev`, I am consolidating agent prep so future sessions do not burn
+context by reading every guidance document by default. The procedural source is
+`scripts/preflight-context.ps1`; AGENTS/CLAUDE hold policy; Code CoOp is the
+normal short handoff; DEVLOG becomes history-on-demand. I am not changing app
+behavior in this pass. Watch for stale older entries that are historically
+useful but no longer part of default preflight.
+
 ## 2026-05-24 — Codex PowerShell 7 UTF-8 Standardization
 
 Working on `dev`, I installed PowerShell 7 and am updating repo scripts and
