@@ -20,6 +20,22 @@ Fidelity is intentionally conservative. SVGs with masks, clips, filters,
 paint-server references, many unsupported features, or text-heavy placeholder
 imports are downgraded so RohKai does not imply pixel-perfect reproduction.
 
+## Import Modes
+
+`SvgImportOptions::default()` uses component mode: supported SVG geometry and
+text become editable RohKai widgets.
+
+Image mode creates one `WidgetKind::Image` with the original SVG source stored
+on the widget. This is still zero-new-dependency: the canvas preview and export
+path use RohKai's own in-repo software rasterizer for the supported visual
+subset. It is not full browser/SVG rasterization, and it does not add renderer
+crates.
+
+The generated standalone app embeds the same RohKai-owned rasterizer module when
+Image widgets are present. This removes the older gray-frame placeholder export
+path; exported Image widgets now load the preserved SVG source into egui
+textures at runtime.
+
 ## Supported Placeholder Elements
 
 - `rect`
@@ -52,6 +68,9 @@ imports are downgraded so RohKai does not imply pixel-perfect reproduction.
   `#rgb`, `#rrggbb`, and `rgb(...)`.
 - Opacity is approximated into solid RGB placeholder colors because RohKai
   widgets currently store RGB, not alpha.
+- Image-mode rasterization supports solid fills/strokes, inherited
+  display/visibility, viewBox mapping, transforms, basic shapes, and path
+  flattening for the current supported subset.
 - Text flattening for simple `tspan` content.
 - Path bounds for `M`, `L`, `H`, `V`, `C`, `S`, `Q`, `T`, `A`, and `Z`.
 - Relative and absolute path commands.
@@ -84,6 +103,10 @@ RohKai rejects or ignores unsafe SVG features:
 - Non-XML processing instructions are ignored with a warning.
 - `script` is not executed.
 - External network/file references are rejected for `use`, `image`, and related refs.
+- Image-mode rasterization also refuses unsafe raw `svg_source` containing
+  `DOCTYPE`, custom entities, scripts, non-XML processing instructions, external
+  `http(s)`/`file` hrefs, excessive tag count, excessive path commands, or
+  excessive raster dimensions.
 - `filter`, animation, `foreignObject`, `textPath`, masks, clips, gradients,
   patterns, paint-server references, and complex CSS selectors are reported as
   unsupported or approximated with structured diagnostics.
@@ -133,6 +156,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\validate-svg-import.
 That runs:
 
 - `cargo fmt --check`
+- SVG dependency policy checks
 - SVG importer tests
 - SVG source-preservation tests
 - deterministic output tests
@@ -166,5 +190,6 @@ cargo clippy -- -D warnings
 - Text shaping and font metrics
 - Masks and clips
 - Gradient/pattern conversion
+- Full Image export parity for unsupported SVG features
 - Full `tspan` positioning and per-span styling
 - Text-on-path layout

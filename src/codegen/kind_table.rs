@@ -27,5 +27,7 @@ pub fn state_info(kind: &WidgetKind) -> Option<KindInfo> {
             rust_type: "bool",
             default_expr: "false",
         }),
+        WidgetKind::Image => None,
+        WidgetKind::Custom(_) => None,
     }
 }

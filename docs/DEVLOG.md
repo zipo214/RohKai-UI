@@ -2,6 +2,482 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-05-23 — Stage 7 Gap Fixes + SVG Code Contraction
+
+### Docs Reviewed Before Changes
+- `AGENTS.md`, `CLAUDE.md`, `docs/ROADMAP.md`, `docs/CODE_INDEX.md`
+- `docs/CODE_COOP.md`, `docs/DEVLOG.md`
+
+### Changes Made
+
+**Gap 1 fixed — `state_emitter` + `export` now emit descriptor `state_fields`:**
+- `WidgetInstance` gains `descriptor_state_fields: Vec<[String; 3]>` (each
+  entry `[key, rust_type, default_expr]`, `serde(default)` + skip-if-empty).
+- `default_for_descriptor` snapshots them from the descriptor at creation time.
+- `StateField.ty` changed from `&'static str` → `String` (supports runtime types).
+- `state_emitter::emit` and `export::gen_app_rs` both iterate
+  `descriptor_state_fields` after `custom_props`.
+- `BoundField.ty` in `export.rs` similarly changed to `String`.
+
+**Gap 2 fixed — `apply_parsed` Custom kind guard:**
+- `parser::apply_parsed` now refuses to overwrite `WidgetKind::Custom(_)` with
+  a parser-inferred built-in kind, preventing descriptor templates that happen
+  to contain egui patterns from corrupting the widget kind.
+- Geometry (x/y/w/h) still round-trips correctly for Custom widgets through
+  the standard `.fixed_pos` / `set_min_size` parse paths.
+
+**Gap 3 corrected — previous DEVLOG wrong:**
+- Earlier note claimed "descriptor_props changes don't drive live codegen".
+  This was incorrect. Changes via `tree.get_mut()` are reflected by the next
+  `emit_indexed` call; `generated != *last_generated` fires normally.
+
+**SVG code contraction:**
+- `image_preview_line` and `image_child_preview_line` in `egui_emitter.rs` now
+  emit a compact size note (`"[SVG: N bytes]"`) instead of the full raw SVG
+  string literal. Complex SVGs no longer fill the live code buffer with
+  thousands of lines.
+- The code panel stays valid Rust (`CodeStatus::Live`); canvas renders from
+  `widget.svg_source` unchanged; export (`export.rs`) still embeds the full
+  source via `raw_string_literal`.
+- Dead `raw_string_literal` copy removed from `egui_emitter.rs` (export.rs
+  has its own).
+- Test `image_widget_emits_svg_preview_call` updated: now asserts compact form
+  and explicitly asserts the raw SVG content does NOT appear in live preview.
+
+### Verification
+- `cargo test` — 30/30
+- `cargo clippy -- -D warnings` — zero warnings
+
+## 2026-05-23 — Stage 7: Widget Descriptor Format (.rkwd)
+
+### Docs Reviewed Before Changes
+- `AGENTS.md`, `CLAUDE.md`, `docs/ROADMAP.md`, `docs/CODE_INDEX.md`
+- `docs/CODE_COOP.md` (latest Codex notes)
+- `docs/DEVLOG.md` (previous entries)
+- `git status --short --branch`
+
+### Changes Made
+
+**New files:**
+- `src/codegen/widget_descriptor.rs` — `WidgetDescriptor` struct and sub-types,
+  `load_from_widgets_dir()` scanner, `apply_template()` token engine,
+  `find_by_id()` / `default_props()` helpers. 4 new tests.
+- `widgets/ply-button.rkwd` — Ply Button example descriptor demonstrating
+  String, Enum, Bool property types; cargo dep injection; live + export templates.
+
+**Schema changes (`src/project/schema.rs`):**
+- `WidgetKind::Custom(String)` variant — carries the descriptor `id`.
+- `WidgetInstance` gains 6 new `serde(default)` fields: `descriptor_name`,
+  `descriptor_accent`, `descriptor_live_tpl`, `descriptor_export_tpl`,
+  `descriptor_props: HashMap<String,String>`, `descriptor_cargo_deps: Vec<String>`.
+  All skip-serializing when empty/None — zero impact on existing project files.
+
+**Codegen (`src/codegen/`):**
+- `kind_table.rs`: `Custom(_) => None` arm.
+- `egui_emitter.rs`: `Custom` arm uses `descriptor_live_tpl` snapshot + `apply_template`.
+- `export.rs`: `Custom` arm uses `descriptor_export_tpl`; `gen_cargo_toml` accepts
+  extra dep lines collected from `descriptor_cargo_deps` of all Custom widgets.
+- `mod.rs`: exposes `widget_descriptor` module.
+
+**Canvas (`src/canvas/interaction.rs`):**
+- `kind_accent`, `kind_tag`: `Custom` fallback arms.
+- `draw_widget`: `Custom` arm renders accent label box using per-instance
+  `descriptor_accent` and `descriptor_name`.
+
+**Widgets (`src/widgets/mod.rs`):**
+- `default_for`: `Custom(id)` fallback arm.
+- `default_for_descriptor(descriptor)`: builds a full `WidgetInstance` from
+  a loaded descriptor with all snapshot fields populated.
+
+**Palette (`src/panels/palette.rs`):**
+- `show_content` gains `descriptors: &[WidgetDescriptor]` param.
+- Custom descriptor categories rendered after built-in categories; each
+  descriptor gets its own accent-colored palette button.
+
+**Properties (`src/panels/properties.rs`):**
+- `show_content` gains `descriptors: &[WidgetDescriptor]` param.
+- `Custom` arm: looks up descriptor, renders typed property fields
+  (String/F32/I32/Bool/Enum). Falls back to raw key→value table if descriptor
+  is missing.
+
+**App (`src/app.rs`):**
+- `widget_descriptors: Vec<WidgetDescriptor>` + `descriptor_errors: Vec<String>`.
+- `load_from_widgets_dir()` called at startup.
+- Descriptor errors surfaced in ribbon as `⚠ N widget descriptor error(s)`.
+- `palette::show_content` and `properties::show_content` plumbed with descriptors.
+
+### Verification
+- `cargo build` — clean
+- `cargo test` — 30/30 (4 new descriptor tests)
+- `cargo clippy -- -D warnings` — zero warnings
+- `cargo run` — clean launch confirmed
+
+### Known Remaining Limitations
+- No in-app `.rkwd` import dialog or hot-reload yet (see Roadmap Stage 7.x).
+- Lazare parser cannot round-trip Custom widget template edits back to canvas
+  (geometry round-trips correctly; kind/label changes inside the template do not).
+
+## 2026-05-23 - SVG/Image Export Parity And Rasterizer Guardrails
+
+### Docs Reviewed Before Changes
+- `scripts/preflight-context.ps1`
+- `docs/CODE_INDEX.md`
+- `docs/CODE_COOP.md`
+- `docs/SVG_IMPORT.md`
+- `.agents/skills/svg-zero-dep/SKILL.md`
+- `git status --short`
+
+### Changes Made
+- Added a Code CoOp note for the SVG/Image parity push.
+- Live codegen now emits `self.show_svg_image...` preview calls for Image
+  widgets instead of an inert gray `egui::Frame` placeholder.
+- Export now embeds RohKai's zero-dependency SVG rasterizer module when Image
+  widgets are present, stores egui texture handles in the generated app, and
+  renders preserved `svg_source` at runtime.
+- Added raw-string escaping for embedded SVG source in live/export codegen.
+- Added rasterizer guardrails:
+  - SVG byte cap
+  - tag count cap
+  - path token cap
+  - raster dimension/pixel cap
+  - unsafe `DOCTYPE` / entity / script / external href rejection
+  - non-XML processing instruction rejection
+  - `display:none` and hidden/collapsed visibility handling
+  - paint-server URLs no longer render as black fallback fills
+- Added rasterizer tests for unsafe input rejection, hidden/paint-server behavior,
+  and invisible `defs` / `mask` content.
+- Updated SVG docs, code index, and RCA notes to match the new output forms and
+  remaining limitations.
+
+### Verification
+- Feature set 1 base check:
+  - `cargo fmt --check`: passed after formatting.
+  - `cargo check`: passed.
+  - `cargo test`: 23/23 passed.
+  - `cargo clippy -- -D warnings`: passed.
+- Feature set 2 base check:
+  - `cargo fmt --check`: passed.
+  - `cargo check`: passed.
+  - `cargo test`: 26/26 passed.
+  - `cargo clippy -- -D warnings`: passed.
+
+### Notes
+- This removes the known hollow Image codegen/export placeholder path.
+- The rasterizer is still a supported subset, not full `resvg` / `usvg` /
+  `tiny-skia` equivalence. Text rendering, gradients/patterns, masks/clips, and
+  filters remain future work.
+
+## 2026-05-23 - Baseline Stabilization
+
+### Docs Reviewed Before Changes
+- `scripts/preflight-context.ps1`
+- latest `docs/DEVLOG.md` entry
+- latest `docs/CODE_COOP.md` note
+- `git status --short`
+
+### Changes Made
+- Added a Code CoOp baseline-stabilization handoff note.
+- Ran `cargo fmt` to normalize existing Rust formatting drift from the SVG
+  rasterizer/codegen work.
+- No behavior changes were made intentionally during this pass.
+
+### Verification
+- `cargo fmt --check`: passed.
+- `cargo check`: passed.
+- `cargo test`: 23/23 passed.
+- `cargo clippy -- -D warnings`: passed.
+- `scripts\validate-svg-import.ps1`: passed.
+- `cargo run` smoke: app launched and was stopped after 8 seconds.
+- No lingering `rohkai`, `cargo`, or `rustc` process remained after the smoke test.
+
+### Notes
+- Tests still assert that `WidgetKind::Image` live/export codegen emits a frame
+  placeholder. That is now a known, verified baseline limitation rather than an
+  accidental surprise.
+
+## 2026-05-23 - Code CoOp And Cross-Platform Coordination
+
+### Docs Reviewed Before Changes
+- `scripts/preflight-context.ps1`
+- `AGENTS.md`, `CLAUDE.md`
+- `.agents/commands/preflight.md`, `.claude/commands/preflight.md`
+- `.gitignore`, `.claudeignore`
+- latest `docs/DEVLOG.md` entry
+
+### Changes Made
+- Expanded `.gitignore` for local build/editor/runtime noise while keeping repo
+  guidance, fixtures, templates, and source trackable.
+- Added `docs/CODE_INDEX.md` as a lightweight human code map.
+- Added `docs/CODE_COOP.md` as the short agent-to-agent handoff diary.
+- Added `docs/PLATFORM_NOTES.md` to explain Windows PowerShell scripts versus
+  cross-platform Cargo workflows.
+- Updated Codex and Claude preflight commands to read `CODE_INDEX` and latest
+  `CODE_COOP` note.
+- Updated `AGENTS.md`, `CLAUDE.md`, and `scripts/preflight-context.ps1` so
+  meaningful planning/coding sessions begin with a short Code CoOp note.
+
+### Verification
+- `scripts/preflight-context.ps1`: reports latest Code CoOp note and synced guidance.
+- `git status --ignored --short`: only `target/` and local Codex touch file are ignored.
+- `docs/context-snapshot.json` is now ignored for future local snapshot churn, but
+  it is currently tracked and should be untracked in a dedicated cleanup commit if
+  the team wants Git to stop recording changes to it.
+
+## 2026-05-23 - Guidance Guardrail Audit
+
+### Docs Reviewed Before Changes
+- `AGENTS.md`, `CLAUDE.md`
+- `.agents/commands/preflight.md`, `.claude/commands/preflight.md`
+- `.agents/skills/project-model/SKILL.md`, `.claude/skills/project-model/SKILL.md`
+- `.agents/skills/codegen-rules/SKILL.md`, `.claude/skills/codegen-rules/SKILL.md`
+- `.agents/skills/canvas-patterns/SKILL.md`, `.claude/skills/canvas-patterns/SKILL.md`
+- `scripts/preflight-context.ps1`, `scripts/check-dependency-policy.ps1`, `scripts/sync-and-run.ps1`
+- `docs/RCA-2026-05-23-svg-renderer-dependencies.md`
+
+### Findings
+- `CONTRIBUTING.md` exists but was not part of preflight. Added explicit "do not add it" guidance to keep it out of agent prep unless requested.
+- `scripts/preflight-context.ps1` read the last `##` heading, which was stale when newest entries were at the top. Fixed it to read the top/latest entry.
+- `scripts/sync-and-run.ps1` could overwrite this checkout from another working copy; its exclude file only skipped `target\`.
+- `scripts/check-dependency-policy.ps1` incorrectly flagged egui texture/cache names instead of only forbidden SVG dependency crates.
+- Claude/Codex skill guidance had drift around `Image`, SVG output form, and no-hollow-codegen rules.
+- The current zero-dependency rasterizer is substantial, but not equivalent to `resvg` / `usvg` / `tiny-skia`; text and several SVG feature classes remain incomplete, and Image export/live codegen still use placeholders.
+
+### Changes Made
+- Hardened `scripts/sync-and-run.ps1` behind `-AllowOverwrite`.
+- Added `.git`, `.agents`, `.claude`, `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, and `docs\DEVLOG.md` to `scripts/xcopy-exclude.txt`.
+- Added `svg-zero-dep` skills for both Codex and Claude.
+- Updated project-model, canvas, and codegen skills on both sides with zero-dependency and no-hollow-output rules.
+- Updated preflight guidance drift checks to normalize line endings and include `svg-zero-dep`.
+- Updated dependency policy check to block only the forbidden SVG crates in active source/Cargo files.
+- Added an RCA follow-up noting the current renderer gaps and full remedy direction.
+
+### Verification
+- `scripts\check-dependency-policy.ps1`: passed.
+- `scripts\preflight-context.ps1`: now reads the newest devlog entry and reports synced skills.
+- `cargo fmt --check`: currently fails on existing rasterizer/codegen formatting from the prior SVG rasterizer pass; not fixed in this guidance-only pass.
+
+## 2026-05-23 - SVG Zero-Dependency Rasterizer (Replaces Placeholder System)
+
+### Docs Reviewed Before Coding
+- `CLAUDE.md`, `AGENTS.md`
+- `docs/DEVLOG.md` (all prior entries)
+- `src/canvas/interaction.rs` (SvgPreviewCache, draw_widget Image arm)
+- `src/codegen/egui_emitter.rs`, `src/codegen/export.rs` (Image codegen arms)
+- `src/app.rs` (svg_preview_cache field)
+- `Cargo.toml`
+
+### Problem
+Codex removed resvg/usvg/tiny-skia and replaced the rasterization pipeline with an inferior "source-backed preview" that drew colored bounding-box rectangles instead of actual SVG content. Codegen emitted a `(SVG source-backed preview)` text label. User requirement: no inferior quality, no hollow stubs, no avoidance.
+
+### Changes Made
+
+**`src/canvas/svg_rasterizer.rs` (new — ~900 lines, zero new Cargo deps)**
+- Pure-Rust software SVG rasterizer.
+- Parses SVG XML: `<rect>`, `<circle>`, `<ellipse>`, `<line>`, `<polyline>`, `<polygon>`, `<path>`, `<g>` (groups with transforms and style inheritance).
+- Color parsing: `#rrggbb`, `#rgb`, `rgb(r,g,b)`, 30 CSS named colors.
+- Style cascade: inline `style=""` + presentation attributes, inherited through `<g>`.
+- Path commands: M/L/H/V/C/S/Q/T/A/Z + lowercase relatives; cubic/quadratic bezier flattening (De Casteljau); arc-to-lines (endpoint parameterization); smooth bezier reflected control points.
+- Transforms: `translate`, `scale`, `rotate`, `matrix`, chained (e.g. `translate(-152,192) scale(0.7) translate(-32,-32)`).
+- ViewBox → pixel mapping (aspect-ratio preserve, `xMidYMid meet`).
+- Rendering: even-odd scanline polygon fill; stroke expansion to quad per segment; Porter-Duff src-over alpha compositing.
+- Output: `egui::ColorImage` (straight RGBA).
+
+**`src/canvas/interaction.rs`**
+- Removed `SvgPreviewCache`, `SvgPreviewEntry`, `preview_entry_for`, `svg_source_hash`, `widget_bounds`, `DefaultHasher` import.
+- Added `SvgTextureCache = HashMap<Uuid, (TextureHandle, f32)>` type alias + `svg_texture_cache_retain_live` helper.
+- `draw_widget` Image arm: computes target dims (`widget.rect × zoom × ppp`), checks cache, calls `svg_rasterizer::rasterize()` on miss or scale change >5%, loads `TextureHandle`, draws via `painter.image()`.
+- `handle()` parameter renamed from `svg_preview_cache` to `svg_texture_cache`.
+
+**`src/app.rs`**
+- Field renamed: `svg_preview_cache: SvgPreviewCache` → `svg_texture_cache: SvgTextureCache`.
+- Prune call updated to `svg_texture_cache_retain_live`.
+
+**`src/codegen/egui_emitter.rs`**
+- Image arm: `source_backed_image_preview_line` → `image_frame_placeholder_line` (clean gray Frame, no "(SVG source-backed preview)" text).
+- Child Image arm: same rename + clean output.
+- Test updated: asserts correct dimensions in generated code.
+
+**`src/codegen/export.rs`**
+- Same rename pattern as emitter. Test updated.
+
+### Verification
+- `cargo clippy -- -D warnings`: zero warnings.
+- `cargo test`: 23/23 passed.
+- `cargo build`: clean.
+
+### Notes
+- Text elements (`<text>`) are skipped in the rasterizer (decorative in design-tool context).
+- Gradients, filters, masks, `<use>`: shape renders with fill/stroke color only.
+- Canvas shows pixel-accurate SVG shapes with correct colors and transforms.
+- Superseded by `2026-05-23 - SVG/Image Export Parity And Rasterizer Guardrails`:
+  exported Image widgets now embed the RohKai rasterizer and render preserved
+  SVG source instead of keeping a sized Frame placeholder.
+
+## 2026-05-23 - SVG Dependency Breach Fix + RCA
+
+### Docs Reviewed Before Coding
+- `scripts/preflight-context.ps1`
+- `AGENTS.md`, `CLAUDE.md`
+- `docs/ROADMAP.md`, `docs/DEVLOG.md`
+- Relevant skill: `project-model`
+- `src/app.rs`, `src/canvas/interaction.rs`, `src/svg_import.rs`
+- `src/codegen/egui_emitter.rs`, `src/codegen/export.rs`
+- `src/project/schema.rs`, `src/panels/properties.rs`
+- `Cargo.toml`, `Cargo.lock`, `git status --short --branch`
+
+### Changes Made
+- Removed the local direct SVG renderer dependency additions from the active worktree.
+- Replaced dependency-backed SVG rasterization with RohKai-native source-backed preview behavior:
+  - Image mode stores the raw SVG on `WidgetInstance.svg_source`.
+  - Canvas preview reuses the hardened zero-dependency SVG importer, fits imported placeholder geometry inside the Image widget, and paints it natively.
+  - No external SVG renderer crate is used.
+- Renamed user-facing Image mode text to `source-backed preview node`.
+- Updated schema/properties comments to describe source-backed preview instead of rasterization.
+- Replaced comment-only Image live codegen/export paths with visible egui preview frames.
+- Added Image-mode tests for preserved source, dimensions, deterministic ID, and viewBox sizing.
+- Added live codegen/export tests verifying Image widgets produce visible source-backed preview output and do not emit rasterized comment placeholders.
+- Added `scripts/check-dependency-policy.ps1`.
+- Wired dependency policy checking into `scripts/validate-svg-import.ps1`.
+- Added RCA note: `docs/RCA-2026-05-23-svg-renderer-dependencies.md`.
+
+### RCA Summary
+- The bypass happened because the prior implementation treated "pure Rust, no C deps" as acceptable, but the active requirement was stricter: no new SVG importer crates and no new transitive dependency chain.
+- Existing verification only checked compilation/tests/clippy, not dependency policy.
+- The feature also had hollow edges: codegen/export emitted comments instead of real visible output.
+- Prevention is now automated through `scripts/check-dependency-policy.ps1` and documented in the RCA.
+
+### Output Form Verification
+- Image import mode output form is verified as one `WidgetKind::Image` with source preserved, correct dimensions, deterministic ID, and `High` fidelity.
+- Canvas output form is source-backed preview geometry painted by RohKai's own importer/painter path.
+- Code panel/export output form is a visible egui preview frame, not a comment.
+
+### Verification
+- `cargo test image_` passed: 5/5.
+- `cargo fmt --check` passed.
+- `cargo check` passed.
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-dependency-policy.ps1` passed.
+- `cargo test` passed: 23/23.
+- `cargo clippy -- -D warnings` passed.
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\validate-svg-import.ps1` passed.
+- `cargo metadata --format-version 1 --no-deps` showed no direct `resvg`, `usvg`, or `tiny-skia`.
+- `cargo tree` showed no active `resvg` or `usvg` dependency. `tiny-skia` remains an existing eframe/winit target-specific transitive through `sctk-adwaita`, not an SVG importer dependency.
+- `cargo run` smoke launched successfully and was stopped after 8 seconds.
+
+## 2026-05-23 - SVG Import Places at Visible Canvas Centre
+
+### Docs Reviewed Before Coding
+- `CLAUDE.md`
+- `docs/DEVLOG.md` (previous entry)
+- `src/app.rs` (do_svg_import, palette placement, AddAtCenter, CentralPanel)
+- `src/canvas/interaction.rs` (origin/pan/zoom coordinate model)
+- `src/project/schema.rs` (Rect field types)
+
+### Changes Made
+
+**`RohKaiApp::last_canvas_rect`** — new field (default 800×600). Captured from `ui.max_rect()` at the start of the CentralPanel closure each frame, giving the exact screen rect of the canvas panel.
+
+**`place_at_visible_center`** — new helper method. Given a mutable slice of `WidgetInstance`:
+1. Computes visible canvas centre: `cv_cx = -pan.x / zoom + win_w / 2.0` (mirrors palette-click formula).
+2. Computes visible canvas dimensions: `vis_w = last_canvas_rect.width() / zoom`.
+3. Computes bounding box of the imported group.
+4. Scales the whole group down proportionally if it exceeds 80 % of the visible area.
+5. Translates all widget rects so the group centre lands at `(cv_cx, cv_cy)`.
+
+**`do_svg_import` restructured**:
+- Parse SVG → bail on error before touching disk or canvas.
+- Save `.rktp` template (best-effort, non-fatal).
+- Clone widgets, call `place_at_visible_center`, assign fresh UUIDs, add to `ui_tree` — immediate canvas placement on every SVG import.
+- Status message reports import stats; appends "(template save failed)" if disk write failed.
+
+Both Image mode (single widget) and Components mode (multi-widget group) go through the same placement helper.
+
+### Verification
+- `cargo clippy -- -D warnings`: zero warnings.
+- `cargo test`: 19/19 passed.
+- `cargo build`: clean.
+
+## 2026-05-23 - SVG Image Rasterization Quality Fixes
+
+### Docs Reviewed Before Coding
+- `CLAUDE.md`
+- `docs/DEVLOG.md` (previous entry)
+- `src/canvas/interaction.rs` (rasterizer + Image draw arm)
+- `src/app.rs` (texture cache field)
+
+### Changes Made
+
+**Fix 1 — Premultiplied alpha**
+- tiny-skia stores pixels as premultiplied RGBA; egui's `ColorImage::from_rgba_unmultiplied` expects straight alpha.
+- Replaced `pixmap.data()` with demultiplied conversion: `pixmap.pixels().iter().flat_map(|p| { let c = p.demultiply(); [c.red(), c.green(), c.blue(), c.alpha()] })`.
+
+**Fix 2 — Physical pixel resolution**
+- Was rasterizing at `rect.width() as u32` (logical canvas pixels at current zoom).
+- Now rasterizes at `widget.rect.w * zoom * pixels_per_point` — true device pixel count for the widget at current zoom.
+
+**Fix 3 — Texture cache invalidation on zoom change**
+- Changed cache type from `HashMap<Uuid, TextureHandle>` to `HashMap<Uuid, (TextureHandle, f32)>` where f32 is the effective scale (`zoom * ppp`) at rasterization time.
+- On Image draw: if cached scale differs from current by > 0.05, evict entry; `entry().or_insert_with()` then rasterizes fresh at new size.
+
+### Verification
+- `cargo clippy -- -D warnings`: zero warnings.
+- `cargo test`: 19/19 passed.
+- `cargo run`: clean launch, exit 0.
+
+## 2026-05-23 - SVG Dual-Mode Import (Image + Components)
+
+### Docs Reviewed Before Coding
+- `CLAUDE.md`, `AGENTS.md`
+- `docs/ROADMAP.md`, `docs/DEVLOG.md` (latest entries)
+- `src/svg_import.rs`, `src/app.rs`, `src/canvas/interaction.rs`
+- `src/project/schema.rs`, `src/codegen/egui_emitter.rs`, `src/codegen/export.rs`
+- `git status --short --branch`
+
+### Changes Made
+
+**Root cause fixed: Frame fill color ignored**
+- Frame rendering arm was using hardcoded gray fill even when `bg_color` was set.
+- Changed to extract actual `r/g/b` from `bg` then apply `fill_alpha`, so SVG-imported frames render their actual SVG fill colors.
+- Also: unselected stroke now uses `fg_color` when set, falling back to gray.
+
+**SVG label spam suppressed (Components mode)**
+- Auto-generated labels like "svg path", "svg rect", "svg circle" are now hidden on canvas.
+- Detection: `import_metadata.is_some() && label.starts_with("svg ")`.
+- Label still stored in the widget for property panel / programmatic access.
+
+**New `WidgetKind::Image` (single rasterized node)**
+- Added `Image` variant to `WidgetKind` enum.
+- Added `svg_source: Option<String>` to `WidgetInstance` (serde-skipped when None).
+- Canvas renders Image widgets by rasterizing SVG via `resvg` + `tiny-skia` on first draw.
+- Texture cached in `RohKaiApp::svg_texture_cache: HashMap<Uuid, TextureHandle>`.
+- Cache pruned each frame for deleted widgets.
+
+**Import mode dialog**
+- `cmd_import_svg_template` now sets `pending_svg_import` instead of importing immediately.
+- `show_svg_import_modal` renders an `egui::Window` modal each frame when pending.
+- User chooses: "Image — single rasterized node" or "Components — editable frame per shape".
+
+**Dependencies added**
+- `resvg = "0.44"`, `usvg = "0.44"`, `tiny-skia = "0.11"` — all pure Rust, no C deps.
+
+**All match sites updated for `WidgetKind::Image`**
+- `canvas/interaction.rs`: `kind_accent`, `kind_tag`, `draw_widget`, child overlay, kind-tag exclusion.
+- `codegen/egui_emitter.rs`: main emit match, child-line match.
+- `codegen/export.rs`: main widget match, `export_child_line`.
+- `codegen/kind_table.rs`: `state_info` (returns `None` — Image carries no state).
+- `panels/properties.rs`: `show_image` panel (shows SVG source status + delete button).
+- `widgets/mod.rs`: `default_for` (200×200 placeholder, no svg_source).
+
+### Verification
+- `cargo clippy -- -D warnings`: zero warnings.
+- `cargo test`: 19/19 passed.
+- `cargo check`: clean.
+
+### Notes For Claude And Codex
+- Image widgets rasterize at first draw size and cache by widget ID. Resizing the widget does NOT re-rasterize (cached at original size). Delete and re-import to change resolution.
+- Image mode stores raw SVG text in `WidgetInstance.svg_source` — serialized in `.rohkai.json` and `.rktp` files. Large SVGs will produce large project files.
+- `SvgImportMode::Components` is the default — existing import callers using `SvgImportOptions::default()` are unaffected.
+- The three pre-existing `#[dead_code]` items in `svg_import.rs` (diagnostics fields, `diagnostics_digest`) were suppressed this session — they are part of the diagnostic API surface and should not be removed.
+
 ## 2026-05-21 23:21 - QoL + Documentation/Hook Discipline
 
 ### Docs Reviewed Before Coding

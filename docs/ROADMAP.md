@@ -182,12 +182,31 @@
 - [x] Settings fallback uses `temp_dir()` — falls back to binary-adjacent `<exe_dir>/user-settings/settings.json` instead (not cleaned by OS)
 - [x] Save failure applies settings for current session but error message doesn't say so — clarify to "Applied this session only — save failed: …"
 
-## Stage 7 — Framework Import / Ply Support
-- [ ] Widget descriptor format (.rkwd — RohKai Widget Definition)
-- [ ] Descriptor defines: name, properties, codegen template string
-- [ ] Import a .rkwd file → widget appears in palette
-- [ ] Ply widget definitions as first shipped example
-- [ ] Community .rkwd files can be dropped into a /widgets folder
+## Stage 7 — Framework Import / Ply Support ✅
+- [x] Widget descriptor format (.rkwd — RohKai Widget Definition)
+- [x] Descriptor defines: name, category, accent, properties (String/F32/I32/Bool/Enum),
+      codegen templates (live + export), cargo_deps, events
+- [x] Drop `.rkwd` in `<binary_dir>/widgets/` → widget appears in palette at startup
+- [x] `WidgetKind::Custom(String)` in schema — serializes to existing project files safely
+- [x] Properties panel renders typed fields from descriptor; falls back to raw
+      key→value table if descriptor file is missing
+- [x] Export injects descriptor `cargo_deps` into generated `Cargo.toml`
+- [x] Ply Button (`widgets/ply-button.rkwd`) as first shipped example
+- [x] Descriptor load errors shown in ribbon — non-fatal, app runs without them
+
+## Stage 7.x - Widget Descriptor Maturity
+- [ ] File → Import Widget Definition… dialog (load a single `.rkwd` without restart)
+- [ ] Hot-reload: rescan `/widgets` folder without restart (file-watcher or menu action)
+- [ ] Lazare round-trip for Custom widgets: geometry already works; label/binding
+      round-trip requires parser to understand descriptor template structure
+- [ ] In-app `.rkwd` editor: create / edit descriptors from within RohKai
+- [ ] `.rkwb` bundle format — zip of multiple `.rkwd` + preview SVGs + assets
+
+## Stage 7.x - SVG Source Viewing (from code panel contraction)
+- [ ] Read-only SVG source viewer panel or popup for Image widgets
+      (SVG is intentionally contracted in the live code panel — this gives a
+      way to inspect/copy the raw SVG without polluting the code buffer)
+- [ ] Optional "expand SVG inline" toggle per Image widget for power users
 
 ## Stage 7.x - SVG Import Maturity
 - [ ] Robust `tspan` parser with span provenance and diagnostics

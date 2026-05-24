@@ -8,6 +8,12 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+Write-Host "Checking SVG dependency policy..."
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check-dependency-policy.ps1
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 Write-Host "Running SVG parser tests..."
 cargo test svg_import
 if ($LASTEXITCODE -ne 0) {

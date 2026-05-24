@@ -1,7 +1,27 @@
 use crate::project::schema::{Rect as SchemaRect, WidgetInstance, WidgetKind};
 use crate::project::ui_tree::UiTree;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
+
+// ---------------------------------------------------------------------------
+// SVG texture cache for Image widgets.
+//
+// Key: widget UUID.  Value: (TextureHandle, scale_at_rasterization, tw, th).
+// Scale = zoom × pixels_per_point.  tw/th = physical pixel dimensions used
+// for the rasterization.
+//
+// Re-rasterize immediately when tw/th change (widget resized).
+// Re-rasterize on scale drift > 20 % only when zoom is stable (no scroll
+// input this frame) — during active zoom the stale texture is rendered at
+// GPU scale; one clean re-rasterize fires on the first quiet frame after
+// the gesture ends.
+// ---------------------------------------------------------------------------
+
+pub type SvgTextureCache = HashMap<Uuid, (egui::TextureHandle, f32, u32, u32)>;
+
+pub fn svg_texture_cache_retain_live(cache: &mut SvgTextureCache, live_ids: &HashSet<Uuid>) {
+    cache.retain(|id, _| live_ids.contains(id));
+}
 
 const HANDLE_HALF: f32 = 4.0;
 const MIN_SIZE: f32 = 20.0;
@@ -215,6 +235,8 @@ pub fn kind_accent(kind: &WidgetKind) -> egui::Color32 {
         WidgetKind::ComboBox => egui::Color32::from_rgb(251, 191, 36),
         WidgetKind::RadioButton => egui::Color32::from_rgb(251, 113, 133),
         WidgetKind::ProgressBar => egui::Color32::from_rgb(34, 211, 238),
+        WidgetKind::Image => egui::Color32::from_rgb(248, 113, 113),
+        WidgetKind::Custom(_) => egui::Color32::from_rgb(150, 150, 220),
     }
 }
 
@@ -229,6 +251,8 @@ fn kind_tag(kind: &WidgetKind) -> &'static str {
         WidgetKind::ComboBox => "cmb",
         WidgetKind::RadioButton => "rad",
         WidgetKind::ProgressBar => "prg",
+        WidgetKind::Image => "img",
+        WidgetKind::Custom(_) => "cst",
     }
 }
 
@@ -346,15 +370,25 @@ struct WidgetDrawFlags {
     has_selected_child: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_widget(
     painter: &egui::Painter,
     widget: &crate::project::schema::WidgetInstance,
     rect: egui::Rect,
     flags: WidgetDrawFlags,
     zoom: f32,
+    zoom_stable: bool,
     text_settings: CanvasTextSettings,
+    svg_texture_cache: &mut SvgTextureCache,
 ) {
-    let accent = kind_accent(&widget.kind);
+    let accent = if let WidgetKind::Custom(_) = &widget.kind {
+        widget
+            .descriptor_accent
+            .map(|[r, g, b]| egui::Color32::from_rgb(r, g, b))
+            .unwrap_or_else(|| kind_accent(&widget.kind))
+    } else {
+        kind_accent(&widget.kind)
+    };
     let stroke_color = if flags.is_selected {
         accent
     } else {
@@ -382,25 +416,32 @@ fn draw_widget(
         // Frame: dashed outline, label at top-left, optional fill
         WidgetKind::Frame => {
             let fill_alpha = if flags.is_child { 30u8 } else { 15u8 };
-            let fill = bg.unwrap_or_else(|| {
-                egui::Color32::from_rgba_unmultiplied(200, 200, 200, fill_alpha)
-            });
+            let fill = match bg {
+                Some(c) => egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), fill_alpha),
+                None => egui::Color32::from_rgba_unmultiplied(200, 200, 200, fill_alpha),
+            };
             let (frame_sw, frame_sc) = if flags.is_selected {
                 (2.0, accent)
             } else if flags.has_selected_child {
                 (1.5, accent.linear_multiply(0.45))
             } else {
-                (stroke_width, egui::Color32::from_gray(85))
+                let sc = fg.unwrap_or_else(|| egui::Color32::from_gray(85));
+                (stroke_width, sc)
             };
             painter.rect_filled(rect, rounding, fill);
             draw_dotted_rect(painter, rect, egui::Stroke::new(frame_sw, frame_sc));
-            painter.text(
-                rect.left_top() + egui::vec2(4.0, 2.0),
-                egui::Align2::LEFT_TOP,
-                &widget.props.label,
-                egui::FontId::proportional(label_size),
-                fg.unwrap_or_else(|| accent.linear_multiply(0.9)),
-            );
+            // Suppress auto-generated "svg path/rect/circle/…" labels from SVG component import.
+            let is_svg_auto =
+                widget.import_metadata.is_some() && widget.props.label.starts_with("svg ");
+            if !is_svg_auto {
+                painter.text(
+                    rect.left_top() + egui::vec2(4.0, 2.0),
+                    egui::Align2::LEFT_TOP,
+                    &widget.props.label,
+                    egui::FontId::proportional(label_size),
+                    fg.unwrap_or_else(|| accent.linear_multiply(0.9)),
+                );
+            }
         }
 
         // ProgressBar: filled left portion (60 % preview)
@@ -642,6 +683,94 @@ fn draw_widget(
                 fg.unwrap_or(egui::Color32::WHITE),
             );
         }
+
+        // Custom: accent box with descriptor name or label.
+        WidgetKind::Custom(_) => {
+            let custom_accent = widget
+                .descriptor_accent
+                .map(|[r, g, b]| egui::Color32::from_rgb(r, g, b))
+                .unwrap_or(accent);
+            let fill = kind_fill(custom_accent);
+            painter.rect_filled(rect, rounding, bg.unwrap_or(fill));
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(stroke_width, stroke_color),
+            );
+            let display = widget
+                .descriptor_name
+                .as_deref()
+                .unwrap_or(&widget.props.label);
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                display,
+                egui::FontId::proportional(label_size),
+                fg.unwrap_or(egui::Color32::WHITE),
+            );
+            if flags.is_selected {
+                painter.rect_stroke(rect, rounding, egui::Stroke::new(2.0, custom_accent));
+            }
+        }
+
+        // Image: rasterize SVG source to a pixel texture, cache by widget ID + scale.
+        WidgetKind::Image => {
+            if let Some(ref svg_text) = widget.svg_source {
+                let ctx = painter.ctx();
+                let ppp = ctx.pixels_per_point();
+                // `rect` is already in screen-space (widget logical size × zoom).
+                // Multiply by ppp only to get physical pixels — do NOT multiply
+                // by zoom again; that would produce zoom² scaling and rasterize
+                // needlessly large textures at high zoom levels.
+                let current_scale = zoom * ppp; // kept for 20 % drift eviction
+                let tw = (rect.width() * ppp).round() as u32;
+                let th = (rect.height() * ppp).round() as u32;
+
+                // Re-rasterize when:
+                //   • no cache entry (first display) — always immediate
+                //   • widget was resized (tw/th changed) — always immediate
+                //   • scale drifted > 20 % AND zoom is stable this frame
+                //     (defers rasterization during active scroll gestures)
+                let needs_raster = svg_texture_cache
+                    .get(&widget.id)
+                    .map(|(_, cached_scale, cached_tw, cached_th)| {
+                        *cached_tw != tw
+                            || *cached_th != th
+                            || (zoom_stable
+                                && (current_scale - cached_scale).abs()
+                                    / current_scale.max(0.001)
+                                    > 0.20)
+                    })
+                    .unwrap_or(true);
+
+                if needs_raster {
+                    let image =
+                        crate::canvas::svg_rasterizer::rasterize(svg_text, tw.max(1), th.max(1));
+                    let tex = ctx.load_texture(
+                        format!("svg_{}", widget.id),
+                        image,
+                        egui::TextureOptions::LINEAR,
+                    );
+                    svg_texture_cache.insert(widget.id, (tex, current_scale, tw, th));
+                }
+
+                if let Some((tex, _, _, _)) = svg_texture_cache.get(&widget.id) {
+                    painter.image(
+                        tex.id(),
+                        rect,
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        egui::Color32::WHITE,
+                    );
+                } else {
+                    draw_svg_placeholder(painter, rect, rounding, label_size, "SVG");
+                }
+            } else {
+                draw_svg_placeholder(painter, rect, rounding, label_size, "SVG");
+            }
+            if flags.is_selected {
+                painter.rect_stroke(rect, rounding, egui::Stroke::new(2.0, accent));
+            }
+        }
     }
 
     // Disabled overlay
@@ -654,7 +783,7 @@ fn draw_widget(
     }
 
     // Subtle white overlay for child widgets (shows they belong to a group)
-    if flags.is_child && widget.kind != WidgetKind::Frame {
+    if flags.is_child && widget.kind != WidgetKind::Frame && widget.kind != WidgetKind::Image {
         painter.rect_filled(
             rect,
             rounding,
@@ -662,8 +791,11 @@ fn draw_widget(
         );
     }
 
-    // Kind tag (bottom-right) — not on Frame or Label (their label IS the identifier)
-    if widget.kind != WidgetKind::Frame && widget.kind != WidgetKind::Label {
+    // Kind tag (bottom-right) — not on Frame, Label, or Image
+    if widget.kind != WidgetKind::Frame
+        && widget.kind != WidgetKind::Label
+        && widget.kind != WidgetKind::Image
+    {
         painter.text(
             rect.right_bottom() - egui::vec2(3.0, 2.0),
             egui::Align2::RIGHT_BOTTOM,
@@ -672,6 +804,32 @@ fn draw_widget(
             accent.linear_multiply(0.75),
         );
     }
+}
+
+fn draw_svg_placeholder(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    rounding: f32,
+    label_size: f32,
+    label: &str,
+) {
+    painter.rect_filled(
+        rect,
+        rounding,
+        egui::Color32::from_rgba_unmultiplied(100, 100, 100, 80),
+    );
+    painter.rect_stroke(
+        rect,
+        rounding,
+        egui::Stroke::new(1.0, egui::Color32::from_gray(90)),
+    );
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::proportional(label_size),
+        egui::Color32::from_gray(200),
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -685,6 +843,7 @@ pub fn handle(
     selected: &mut Vec<Uuid>,
     settings: &mut CanvasSettings,
     text_settings: CanvasTextSettings,
+    svg_texture_cache: &mut SvgTextureCache,
 ) {
     // Clear per-frame signals
     state.double_clicked_widget = None;
@@ -754,6 +913,10 @@ pub fn handle(
         }
         settings.zoom = zoom_new;
     }
+
+    // True when no zoom-changing input arrived this frame.  draw_widget uses
+    // this to skip expensive re-rasterization while the user is scrolling.
+    let zoom_stable = scroll_y == 0.0 && !key_0;
 
     let zoom = settings.zoom;
     let canvas_size = canvas_size_unzoomed * zoom;
@@ -829,7 +992,9 @@ pub fn handle(
                 has_selected_child: has_sel_child,
             },
             zoom,
+            zoom_stable,
             text_settings,
+            svg_texture_cache,
         );
 
         // Draw children inside this Frame
@@ -847,7 +1012,9 @@ pub fn handle(
                         has_selected_child: false,
                     },
                     zoom,
+                    zoom_stable,
                     text_settings,
+                    svg_texture_cache,
                 );
             }
         }

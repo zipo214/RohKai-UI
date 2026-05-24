@@ -8,7 +8,7 @@ use std::collections::HashSet;
 
 struct StateField {
     name: String,
-    ty: &'static str,
+    ty: String,
     default_expr: String,
 }
 
@@ -29,7 +29,7 @@ pub fn emit(tree: &UiTree) -> String {
                 };
                 fields.push(StateField {
                     name: binding.to_owned(),
-                    ty: info.rust_type,
+                    ty: info.rust_type.to_owned(),
                     default_expr: default_expr_for_widget(w),
                 });
             }
@@ -43,7 +43,7 @@ pub fn emit(tree: &UiTree) -> String {
                 if seen.insert(b.to_owned()) {
                     fields.push(StateField {
                         name: b.to_owned(),
-                        ty: "String",
+                        ty: "String".to_owned(),
                         default_expr: "String::new()".to_owned(),
                     });
                 }
@@ -56,8 +56,21 @@ pub fn emit(tree: &UiTree) -> String {
                 if seen.insert(b.to_owned()) {
                     fields.push(StateField {
                         name: b.to_owned(),
-                        ty: prop.ty.rust_type(),
+                        ty: prop.ty.rust_type().to_owned(),
                         default_expr: prop.ty.default_expr().to_owned(),
+                    });
+                }
+            }
+        }
+
+        // Descriptor state fields (Custom widgets)
+        for [key, rust_type, default_expr] in &w.descriptor_state_fields {
+            if let Some(b) = field_binding(Some(key.as_str())) {
+                if seen.insert(b.to_owned()) {
+                    fields.push(StateField {
+                        name: b.to_owned(),
+                        ty: rust_type.clone(),
+                        default_expr: default_expr.clone(),
                     });
                 }
             }

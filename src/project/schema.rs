@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -41,6 +42,10 @@ pub enum WidgetKind {
     ComboBox,
     RadioButton,
     ProgressBar,
+    // Stage 7 — SVG image import
+    Image,
+    // Stage 7 — runtime-loaded `.rkwd` widget descriptor
+    Custom(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -317,6 +322,36 @@ pub struct WidgetInstance {
     /// Legacy single handler field — kept for backward-compat with old saves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event_handler: Option<String>,
+    /// Raw SVG source for Image widgets. Canvas preview is drawn by RohKai's
+    /// native zero-dependency SVG placeholder painter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub svg_source: Option<String>,
+
+    // Stage 7 — Custom widget descriptor snapshots (set at creation time)
+    /// Display name from the descriptor (e.g. `"Ply Button"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub descriptor_name: Option<String>,
+    /// Accent colour `[R, G, B]` from the descriptor for canvas rendering.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub descriptor_accent: Option<[u8; 3]>,
+    /// Live-preview codegen template snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub descriptor_live_tpl: Option<String>,
+    /// Export codegen template snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub descriptor_export_tpl: Option<String>,
+    /// Runtime values of descriptor-defined properties (key → value string).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub descriptor_props: HashMap<String, String>,
+    /// Cargo dependency lines to inject into exported `Cargo.toml`
+    /// (e.g. `["ply-ui = \"0.3\""]`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub descriptor_cargo_deps: Vec<String>,
+    /// Descriptor-defined AppState fields.  Each entry is
+    /// `[key, rust_type, default_expr]` — snapshotted from the descriptor at
+    /// widget-creation time so state_emitter works without re-loading descriptors.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub descriptor_state_fields: Vec<[String; 3]>,
 }
 
 impl Default for WidgetInstance {
@@ -341,6 +376,14 @@ impl Default for WidgetInstance {
             on_click: String::new(),
             on_change: String::new(),
             event_handler: None,
+            svg_source: None,
+            descriptor_name: None,
+            descriptor_accent: None,
+            descriptor_live_tpl: None,
+            descriptor_export_tpl: None,
+            descriptor_props: HashMap::new(),
+            descriptor_cargo_deps: Vec::new(),
+            descriptor_state_fields: Vec::new(),
         }
     }
 }

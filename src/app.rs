@@ -13,6 +13,11 @@ enum PendingCommand {
     Open,
 }
 
+struct PendingSvgImport {
+    stem: String,
+    svg_text: String,
+}
+
 pub struct RohKaiApp {
     pub ui_tree: UiTree,
     pub interaction: InteractionState,
@@ -47,6 +52,14 @@ pub struct RohKaiApp {
     base_pixels_per_point: f32,
     dirty_cache: bool,
     dirty_cache_checked_at: f64,
+    pub svg_texture_cache: crate::canvas::interaction::SvgTextureCache,
+    pending_svg_import: Option<PendingSvgImport>,
+    /// Loaded `.rkwd` widget descriptors from `<binary_dir>/widgets/`.
+    pub widget_descriptors: Vec<crate::codegen::widget_descriptor::WidgetDescriptor>,
+    /// Non-fatal load errors from the `/widgets` folder scan.
+    pub descriptor_errors: Vec<String>,
+    /// Last known screen rect of the canvas panel — used to compute visible-center placement.
+    last_canvas_rect: egui::Rect,
 }
 
 impl RohKaiApp {
@@ -61,6 +74,8 @@ impl RohKaiApp {
         let base_pixels_per_point = cc.egui_ctx.pixels_per_point();
         cc.egui_ctx
             .set_pixels_per_point(base_pixels_per_point * user_settings.ui_scale);
+        let (widget_descriptors, descriptor_errors) =
+            crate::codegen::widget_descriptor::load_from_widgets_dir();
         Self {
             ui_tree: UiTree::default(),
             interaction: InteractionState::default(),
@@ -88,6 +103,11 @@ impl RohKaiApp {
             base_pixels_per_point,
             dirty_cache: false,
             dirty_cache_checked_at: 0.0,
+            svg_texture_cache: crate::canvas::interaction::SvgTextureCache::default(),
+            pending_svg_import: None,
+            widget_descriptors,
+            descriptor_errors,
+            last_canvas_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
         }
     }
 
@@ -247,52 +267,180 @@ impl RohKaiApp {
     fn cmd_import_svg_template(&mut self) {
         self.template_message = None;
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Import SVG as template")
+            .set_title("Import SVG")
             .add_filter("SVG", &["svg"])
             .pick_file()
         else {
             return;
         };
-
         let stem = path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("svg_template")
             .to_owned();
-
-        match std::fs::read_to_string(&path)
-            .map_err(|e| format!("read svg: {e}"))
-            .and_then(|svg| {
-                let output = crate::svg_import::import_svg_template(
-                    &svg,
-                    crate::svg_import::SvgImportOptions::default(),
-                )
-                .map_err(|e| e.to_string())?;
-                let count = output.widgets.len();
-                let report = output.report;
-                let _ = report.diagnostics_digest();
-                crate::panels::templates::save_imported_svg_template(&stem, &output.widgets, &svg)
-                    .map(|_| {
-                        (
-                            count,
-                            report.skipped_element_count,
-                            report.unsupported_feature_count,
-                            report.fidelity,
-                        )
-                    })
-            }) {
-            Ok((count, skipped, unsupported, fidelity)) => {
-                self.template_message = Some((
-                    true,
-                    format!(
-                        "Imported SVG \"{stem}\" ({count} placeholders, skipped {skipped}, unsupported {unsupported}, fidelity {fidelity})"
-                    ),
-                ));
+        match std::fs::read_to_string(&path) {
+            Ok(svg_text) => {
+                self.pending_svg_import = Some(PendingSvgImport { stem, svg_text });
             }
             Err(e) => {
-                self.template_message = Some((false, format!("SVG import failed: {e}")));
+                self.template_message = Some((false, format!("SVG read failed: {e}")));
             }
         }
+    }
+
+    /// Translate and optionally scale `widgets` so their bounding-box center lands at the
+    /// currently visible canvas centre, shrinking proportionally if larger than 80 % of the
+    /// visible area. Mutates rect in-place; does **not** assign new IDs.
+    fn place_at_visible_center(&self, widgets: &mut [WidgetInstance]) {
+        if widgets.is_empty() {
+            return;
+        }
+        let zoom = self.canvas_settings.zoom;
+        let pan = self.canvas_settings.pan;
+        let win_w = self.ui_tree.app_props.win_w;
+        let win_h = self.ui_tree.app_props.win_h;
+
+        // Visible canvas centre in canvas coordinates.
+        // Formula mirrors the palette-click placement in the update loop.
+        let cv_cx = -pan.x / zoom + win_w / 2.0;
+        let cv_cy = -pan.y / zoom + win_h / 2.0;
+
+        // Visible canvas dimensions in canvas coordinates.
+        let vis_w = self.last_canvas_rect.width() / zoom;
+        let vis_h = self.last_canvas_rect.height() / zoom;
+
+        // Bounding box of all imported widgets.
+        let min_x = widgets.iter().map(|w| w.rect.x).fold(f32::MAX, f32::min);
+        let min_y = widgets.iter().map(|w| w.rect.y).fold(f32::MAX, f32::min);
+        let max_x = widgets
+            .iter()
+            .map(|w| w.rect.x + w.rect.w)
+            .fold(f32::MIN, f32::max);
+        let max_y = widgets
+            .iter()
+            .map(|w| w.rect.y + w.rect.h)
+            .fold(f32::MIN, f32::max);
+
+        let group_w = (max_x - min_x).max(1.0);
+        let group_h = (max_y - min_y).max(1.0);
+        let group_cx = (min_x + max_x) / 2.0;
+        let group_cy = (min_y + max_y) / 2.0;
+
+        // Scale down proportionally if the group exceeds 80 % of the visible area.
+        let max_w = vis_w * 0.8;
+        let max_h = vis_h * 0.8;
+        let scale = if group_w > max_w || group_h > max_h {
+            (max_w / group_w).min(max_h / group_h)
+        } else {
+            1.0
+        };
+
+        for w in widgets.iter_mut() {
+            let rel_x = w.rect.x - group_cx;
+            let rel_y = w.rect.y - group_cy;
+            w.rect.x = cv_cx + rel_x * scale;
+            w.rect.y = cv_cy + rel_y * scale;
+            w.rect.w *= scale;
+            w.rect.h *= scale;
+        }
+    }
+
+    fn do_svg_import(
+        &mut self,
+        stem: &str,
+        svg_text: &str,
+        mode: crate::svg_import::SvgImportMode,
+    ) {
+        let opts = crate::svg_import::SvgImportOptions {
+            mode,
+            limits: crate::svg_import::SvgImportLimits::default(),
+        };
+
+        // Parse SVG first; bail on error before touching canvas or disk.
+        let output = match crate::svg_import::import_svg_template(svg_text, opts) {
+            Ok(o) => o,
+            Err(e) => {
+                self.template_message = Some((false, format!("SVG import failed: {e}")));
+                return;
+            }
+        };
+
+        let count = output.widgets.len();
+        let skipped = output.report.skipped_element_count;
+        let unsupported = output.report.unsupported_feature_count;
+        let fidelity = output.report.fidelity;
+
+        // Save template for later reuse from the Templates panel.
+        let save_ok =
+            crate::panels::templates::save_imported_svg_template(stem, &output.widgets, svg_text)
+                .is_ok();
+
+        // Place a copy on the canvas immediately, centred in the visible area.
+        let mut to_place = output.widgets.clone();
+        self.place_at_visible_center(&mut to_place);
+        for mut w in to_place {
+            w.id = Uuid::new_v4();
+            self.ui_tree.add(w);
+        }
+
+        let suffix = if save_ok {
+            ""
+        } else {
+            " (template save failed)"
+        };
+        self.template_message = Some((
+            save_ok,
+            format!(
+                "Imported \"{stem}\" ({count} item(s), skipped {skipped}, unsupported {unsupported}, fidelity {fidelity}){suffix}"
+            ),
+        ));
+    }
+
+    fn show_svg_import_modal(&mut self, ctx: &egui::Context) {
+        let Some(ref pending) = self.pending_svg_import else {
+            return;
+        };
+        let stem = pending.stem.clone();
+        let svg_text = pending.svg_text.clone();
+
+        egui::Window::new("Import SVG")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.set_min_width(320.0);
+                ui.label(format!("How should \"{stem}\" be imported?"));
+                ui.add_space(10.0);
+                if ui
+                    .add_sized(
+                        [300.0, 36.0],
+                        egui::Button::new("Image  -  source-backed preview node"),
+                    )
+                    .clicked()
+                {
+                    self.pending_svg_import = None;
+                    self.do_svg_import(&stem, &svg_text, crate::svg_import::SvgImportMode::Image);
+                }
+                ui.add_space(4.0);
+                if ui
+                    .add_sized(
+                        [300.0, 36.0],
+                        egui::Button::new("Components  -  editable frame per shape"),
+                    )
+                    .clicked()
+                {
+                    self.pending_svg_import = None;
+                    self.do_svg_import(
+                        &stem,
+                        &svg_text,
+                        crate::svg_import::SvgImportMode::Components,
+                    );
+                }
+                ui.add_space(8.0);
+                if ui.button("Cancel").clicked() {
+                    self.pending_svg_import = None;
+                }
+            });
     }
 
     fn apply_ui_scale(&self, ctx: &egui::Context) {
@@ -718,6 +866,19 @@ impl eframe::App for RohKaiApp {
                 );
                 ui.label(egui::RichText::new("[G]").small().weak());
 
+                // Show descriptor load errors as a dismissable warning
+                if !self.descriptor_errors.is_empty() {
+                    ui.separator();
+                    let count = self.descriptor_errors.len();
+                    let tip = self.descriptor_errors.join("\n");
+                    ui.label(
+                        egui::RichText::new(format!("⚠ {count} widget descriptor error(s)"))
+                            .color(egui::Color32::YELLOW)
+                            .small(),
+                    )
+                    .on_hover_text(tip);
+                }
+
                 let mut clear_error = false;
                 if let Some(err) = self.last_error.as_deref() {
                     ui.separator();
@@ -794,7 +955,8 @@ impl eframe::App for RohKaiApp {
                         );
                     }
 
-                    let (palette_click, palette_drag) = crate::panels::palette::show_content(ui);
+                    let (palette_click, palette_drag) =
+                        crate::panels::palette::show_content(ui, &self.widget_descriptors);
                     ui.add_space(4.0);
 
                     let shift_held = ui.input(|i| i.modifiers.shift);
@@ -807,6 +969,7 @@ impl eframe::App for RohKaiApp {
                                 &mut self.ui_tree,
                                 &mut self.selected,
                                 shift_held,
+                                &self.widget_descriptors,
                             );
                         });
 
@@ -873,6 +1036,7 @@ impl eframe::App for RohKaiApp {
         // Canvas
         // ---------------------------------------------------------------
         egui::CentralPanel::default().show(ctx, |ui| {
+            self.last_canvas_rect = ui.max_rect();
             crate::canvas::interaction::handle(
                 ui,
                 &mut self.ui_tree,
@@ -883,8 +1047,20 @@ impl eframe::App for RohKaiApp {
                     label_scale: self.user_settings.canvas_label_scale,
                     tag_scale: self.user_settings.canvas_tag_scale,
                 },
+                &mut self.svg_texture_cache,
             );
         });
+
+        // Prune SVG texture cache for widgets removed from canvas.
+        let live_ids: std::collections::HashSet<Uuid> =
+            self.ui_tree.widgets.iter().map(|w| w.id).collect();
+        crate::canvas::interaction::svg_texture_cache_retain_live(
+            &mut self.svg_texture_cache,
+            &live_ids,
+        );
+
+        // SVG import mode modal
+        self.show_svg_import_modal(ctx);
 
         // ---------------------------------------------------------------
         // Post-canvas: read per-frame signals

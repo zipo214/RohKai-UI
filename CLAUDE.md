@@ -23,6 +23,13 @@ Never write code that mutates canvas state and code state separately.
 ## Architecture Rules
 - NO C FFI. NO system toolkit bindings. Pure Rust crates only.
 - All dependencies via Cargo. No cmake, no pkg-config.
+- "Pure Rust crate" does not mean "approved dependency." Do not add new crates
+  unless the user explicitly approves that exact dependency by name.
+- SVG import, SVG image preview, and SVG raster/vector work are zero-new-crate
+  zones: no `resvg`, no `usvg`, no `tiny-skia`, and no substitute renderer
+  dependency chain. Implement required SVG behavior in RohKai source.
+- No hollow feature surfaces: canvas, properties, code panel, export, docs, and
+  tests must all expose a real output form or the feature is not done.
 - Rendering stack: egui + eframe (winit + wgpu under the hood).
 - Codegen lives entirely in `src/codegen/`. Nothing outside that module
   should know about Rust syntax strings.
@@ -80,8 +87,14 @@ Core features implemented:
 - Before planning or coding, run or manually follow the repo preflight:
   `powershell -NoProfile -ExecutionPolicy Bypass -File D:\dev\rohkai\scripts\preflight-context.ps1`
 - Preflight means reading `AGENTS.md`, `CLAUDE.md`, `docs/ROADMAP.md`, the latest
-  `docs/DEVLOG.md` entry, `git status --short --branch`, and any relevant
-  `.claude/skills/*/SKILL.md` files before edits.
+  `docs/DEVLOG.md` entry, `docs/CODE_INDEX.md`, the latest `docs/CODE_COOP.md`
+  note, `git status --short --branch`, and any relevant `.claude/skills/*/SKILL.md`
+  files before edits.
+- At the start of a meaningful planning or coding session, append a 3-4 sentence
+  `docs/CODE_COOP.md` note for the next agent.
+- For SVG/Image work, `svg-zero-dep` is a relevant skill and must be read.
+- Do not add `CONTRIBUTING.md` to preflight/prep unless the user explicitly asks
+  for contribution-policy work.
 - Record meaningful sessions in `docs/DEVLOG.md`: time, docs reviewed, changes,
   verification, risks, and follow-ups.
 - `docs/ROADMAP.md` is strategic stage planning. `docs/DEVLOG.md` is chronological.

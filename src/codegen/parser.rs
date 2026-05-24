@@ -464,7 +464,12 @@ pub fn apply_parsed(tree: &mut UiTree, widgets: &[ParsedWidget]) {
                 w.rect.h = height;
             }
             if let Some(kind) = &pw.kind {
-                w.kind = kind.clone();
+                // Never overwrite a Custom kind with a parser-inferred built-in.
+                // Descriptor templates may contain egui-like patterns that would
+                // otherwise be misidentified as a built-in widget kind.
+                if !matches!(w.kind, WidgetKind::Custom(_)) {
+                    w.kind = kind.clone();
+                }
             }
             if let Some(label) = &pw.label {
                 w.props.label = label.clone();

@@ -1,0 +1,1 @@
+yup and maybe guided pre made samples  ? Oh and what if we also planned integration for sublime, vim neo vim etc so if you would rather view the code in your text editor, we could allow some kind of real time integration pipeline so lazare and trace still work. 

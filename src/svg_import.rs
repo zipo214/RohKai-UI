@@ -6,9 +6,20 @@ use uuid::Uuid;
 const MIN_PLACEHOLDER_SIZE: f64 = 20.0;
 const ARC_TOLERANCE_PX: f64 = 0.5;
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum SvgImportMode {
+    /// Single source-backed node. SVG bytes are stored on the widget and
+    /// previewed by RohKai's native placeholder painter.
+    Image,
+    /// Editable frame-per-shape (existing behaviour).
+    #[default]
+    Components,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SvgImportOptions {
     pub limits: SvgImportLimits,
+    pub mode: SvgImportMode,
 }
 
 #[derive(Debug, Clone)]
@@ -113,6 +124,7 @@ impl SvgImportReport {
         };
     }
 
+    #[allow(dead_code)]
     pub fn diagnostics_digest(&self) -> usize {
         let warning_bits: usize = self
             .warnings
@@ -150,6 +162,7 @@ pub enum SvgWarningSeverity {
     Warning,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct SvgImportWarning {
     pub code: String,
@@ -160,6 +173,7 @@ pub struct SvgImportWarning {
     pub severity: SvgWarningSeverity,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct SvgUnsupportedFeature {
     pub feature: String,
@@ -245,6 +259,10 @@ pub fn import_svg_template(
         ));
     }
 
+    if options.mode == SvgImportMode::Image {
+        return import_svg_as_image(svg);
+    }
+
     let mut ctx = ImportContext::new(options.limits);
     let nodes = scan_svg(svg, &mut ctx)?;
     let styles = collect_style_rules(&nodes, &mut ctx)?;
@@ -297,6 +315,114 @@ pub fn import_svg_template(
         widgets,
         report: ctx.report,
     })
+}
+
+fn import_svg_as_image(svg: &str) -> Result<SvgImportOutput, SvgImportError> {
+    let (w, h) = parse_svg_dimensions(svg);
+    let rect = crate::project::schema::Rect {
+        x: 0.0,
+        y: 0.0,
+        w,
+        h,
+    };
+    let widget = crate::project::schema::WidgetInstance {
+        id: deterministic_source_uuid("svg-image", svg, &rect),
+        kind: crate::project::schema::WidgetKind::Image,
+        rect,
+        props: crate::project::schema::WidgetProps {
+            label: "SVG Image".to_owned(),
+            ..Default::default()
+        },
+        svg_source: Some(svg.to_owned()),
+        ..Default::default()
+    };
+    let mut report = SvgImportReport::new();
+    report.imported_element_count = 1;
+    report.finalize(0, 0);
+    Ok(SvgImportOutput {
+        widgets: vec![widget],
+        report,
+    })
+}
+
+fn deterministic_source_uuid(
+    kind: &str,
+    source: &str,
+    rect: &crate::project::schema::Rect,
+) -> Uuid {
+    let mut hash = 0xcbf29ce484222325u64;
+    fn feed(hash: &mut u64, bytes: &[u8]) {
+        for b in bytes {
+            *hash ^= *b as u64;
+            *hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    feed(&mut hash, kind.as_bytes());
+    feed(&mut hash, source.as_bytes());
+    feed(&mut hash, rect.w.to_bits().to_le_bytes().as_slice());
+    feed(&mut hash, rect.h.to_bits().to_le_bytes().as_slice());
+    let second = hash.rotate_left(23) ^ 0xa0761d6478bd642f;
+    let mut bytes = [0u8; 16];
+    bytes[..8].copy_from_slice(&hash.to_le_bytes());
+    bytes[8..].copy_from_slice(&second.to_le_bytes());
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(bytes)
+}
+
+/// Extract natural width/height from SVG root element. Falls back to 400×300.
+fn parse_svg_dimensions(svg: &str) -> (f32, f32) {
+    // Try viewBox="min-x min-y width height"
+    if let Some(vb) = extract_attr(svg, "viewBox").or_else(|| extract_attr(svg, "viewbox")) {
+        let nums: Vec<f32> = vb
+            .split_whitespace()
+            .chain(vb.split(','))
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        if nums.len() >= 4 {
+            let w = nums[2].max(1.0);
+            let h = nums[3].max(1.0);
+            return (w, h);
+        }
+    }
+    // Try width/height attributes
+    let w = extract_attr(svg, "width")
+        .and_then(|v| {
+            v.trim_end_matches(|c: char| !c.is_ascii_digit())
+                .parse()
+                .ok()
+        })
+        .unwrap_or(400.0_f32)
+        .max(1.0);
+    let h = extract_attr(svg, "height")
+        .and_then(|v| {
+            v.trim_end_matches(|c: char| !c.is_ascii_digit())
+                .parse()
+                .ok()
+        })
+        .unwrap_or(300.0_f32)
+        .max(1.0);
+    (w, h)
+}
+
+/// Naive attribute value extractor for the SVG root tag. Scans for `name="value"` or `name='value'`.
+fn extract_attr<'a>(svg: &'a str, name: &str) -> Option<&'a str> {
+    // Only scan within the first 2 KB (root tag region)
+    let region = &svg[..svg.len().min(2048)];
+    let pattern = format!("{name}=");
+    let start = region.find(pattern.as_str())?;
+    let after_eq = start + pattern.len();
+    let bytes = region.as_bytes();
+    if after_eq >= bytes.len() {
+        return None;
+    }
+    let quote = bytes[after_eq];
+    if quote != b'"' && quote != b'\'' {
+        return None;
+    }
+    let val_start = after_eq + 1;
+    let val_end = region[val_start..].find(quote as char)? + val_start;
+    Some(&region[val_start..val_end])
 }
 
 struct ImportContext {
@@ -2262,7 +2388,14 @@ mod tests {
             ..SvgImportLimits::default()
         };
         let svg = "<svg><g><g><rect width=\"10\" height=\"10\"/></g></g></svg>";
-        let err = import_svg_template(svg, SvgImportOptions { limits }).unwrap_err();
+        let err = import_svg_template(
+            svg,
+            SvgImportOptions {
+                limits,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
         assert_eq!(err.code, "limit.nesting_depth");
 
         let limits = SvgImportLimits {
@@ -2271,7 +2404,10 @@ mod tests {
         };
         let err = import_svg_template(
             "<svg><rect id=\"abcde\" width=\"10\" height=\"10\"/></svg>",
-            SvgImportOptions { limits },
+            SvgImportOptions {
+                limits,
+                ..Default::default()
+            },
         )
         .unwrap_err();
         assert_eq!(err.code, "limit.attribute_value");
@@ -2486,6 +2622,46 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning.code == "transform.extreme"));
+    }
+
+    #[test]
+    fn image_mode_preserves_source_and_dimensions_without_renderer_dependencies() {
+        let svg = r#"<svg width="128" height="64"><rect width="128" height="64"/></svg>"#;
+        let opts = SvgImportOptions {
+            mode: SvgImportMode::Image,
+            ..Default::default()
+        };
+        let first = import_svg_template(svg, opts.clone()).unwrap();
+        let second = import_svg_template(svg, opts).unwrap();
+
+        assert_eq!(first.widgets.len(), 1);
+        assert_eq!(
+            first.widgets[0].kind,
+            crate::project::schema::WidgetKind::Image
+        );
+        assert_eq!(first.widgets[0].rect.w, 128.0);
+        assert_eq!(first.widgets[0].rect.h, 64.0);
+        assert_eq!(first.widgets[0].svg_source.as_deref(), Some(svg));
+        assert_eq!(first.widgets[0].id, second.widgets[0].id);
+        assert_eq!(first.report.imported_element_count, 1);
+        assert_eq!(first.report.fidelity, SvgFidelity::High);
+    }
+
+    #[test]
+    fn image_mode_uses_viewbox_when_width_height_are_absent() {
+        let svg = r#"<svg viewBox="0 0 320 180"><circle cx="50" cy="50" r="20"/></svg>"#;
+        let output = import_svg_template(
+            svg,
+            SvgImportOptions {
+                mode: SvgImportMode::Image,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(output.widgets.len(), 1);
+        assert_eq!(output.widgets[0].rect.w, 320.0);
+        assert_eq!(output.widgets[0].rect.h, 180.0);
     }
 
     struct FixtureCase {
