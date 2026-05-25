@@ -15,6 +15,8 @@ pub enum PropertiesAction {
     ScrollToHandler(String),
     /// Open the SVG source viewer popup for this widget.
     ShowSvgSource(uuid::Uuid),
+    /// Open the descriptor editor for this descriptor id.
+    EditDescriptor(String),
 }
 
 const TEAL: egui::Color32 = egui::Color32::from_rgb(52, 211, 153);
@@ -97,7 +99,10 @@ fn show_content_inner(
             WidgetKind::Custom(ref desc_id) => {
                 let desc =
                     crate::codegen::widget_descriptor::find_by_id(descriptors, desc_id).cloned();
-                show_custom(ui, w, &mut do_delete, desc.as_ref());
+                let desc_id_owned = desc_id.clone();
+                if show_custom(ui, w, &mut do_delete, desc.as_ref()) {
+                    props_action = PropertiesAction::EditDescriptor(desc_id_owned);
+                }
             }
         }
     } // w borrow ends
@@ -1193,24 +1198,36 @@ fn show_alignment(ui: &mut egui::Ui, tree: &mut UiTree, selected: &[Uuid], shift
 // Custom widget (descriptor-backed)
 // ---------------------------------------------------------------------------
 
+/// Returns `true` if the user clicked "Edit Descriptor".
 fn show_custom(
     ui: &mut egui::Ui,
     w: &mut WidgetInstance,
     do_delete: &mut bool,
     descriptor: Option<&WidgetDescriptor>,
-) {
+) -> bool {
     // Label field — always shown
     field_text(ui, "Label", &mut w.props.label);
     show_geometry(ui, w);
     ui.separator();
 
+    let mut edit_clicked = false;
+
     // Descriptor-defined properties
     if let Some(desc) = descriptor {
-        ui.label(
-            egui::RichText::new(format!("Descriptor: {}", desc.id))
-                .small()
-                .weak(),
-        );
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(format!("Descriptor: {}", desc.id))
+                    .small()
+                    .weak(),
+            );
+            if ui
+                .small_button("Edit descriptor")
+                .on_hover_text("Open the .rkwd editor for this widget type")
+                .clicked()
+            {
+                edit_clicked = true;
+            }
+        });
         for prop in &desc.properties {
             let current = w
                 .descriptor_props
@@ -1297,4 +1314,5 @@ fn show_custom(
     show_tooltip(ui, w);
     show_enabled(ui, w);
     show_delete_button(ui, do_delete);
+    edit_clicked
 }

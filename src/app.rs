@@ -104,6 +104,8 @@ impl Default for CodePanelState {
 pub struct DescriptorState {
     pub widgets: Vec<crate::codegen::widget_descriptor::WidgetDescriptor>,
     pub errors: Vec<String>,
+    /// In-app descriptor editor — Some while window is open.
+    pub editor: Option<crate::panels::descriptor_editor::DescriptorEditorState>,
 }
 
 // ---------------------------------------------------------------------------
@@ -159,6 +161,7 @@ impl RohKaiApp {
             descriptors: DescriptorState {
                 widgets: widget_descriptors,
                 errors: descriptor_errors,
+                editor: None,
             },
             svg_texture_cache: crate::canvas::interaction::SvgTextureCache::default(),
             pending_command: None,
@@ -359,6 +362,26 @@ impl RohKaiApp {
         let (widgets, errors) = crate::codegen::widget_descriptor::load_from_widgets_dir();
         self.descriptors.widgets = widgets;
         self.descriptors.errors = errors;
+    }
+
+    fn widgets_dir() -> Option<std::path::PathBuf> {
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("widgets")))
+    }
+
+    fn cmd_new_descriptor(&mut self) {
+        self.descriptors.editor =
+            Some(crate::panels::descriptor_editor::DescriptorEditorState::new_blank());
+    }
+
+    fn cmd_edit_descriptor(&mut self, id: &str) {
+        let state = if let Some(d) = self.descriptors.widgets.iter().find(|d| d.id == id) {
+            crate::panels::descriptor_editor::DescriptorEditorState::from_descriptor(d)
+        } else {
+            crate::panels::descriptor_editor::DescriptorEditorState::new_blank()
+        };
+        self.descriptors.editor = Some(state);
     }
 
     fn cmd_import_widget_definition(&mut self) {
@@ -771,6 +794,33 @@ impl RohKaiApp {
         }
     }
 
+    fn show_descriptor_editor_window(&mut self, ctx: &egui::Context) {
+        let Some(state) = self.descriptors.editor.as_mut() else {
+            return;
+        };
+        let widgets_dir = Self::widgets_dir();
+        let still_open = crate::panels::descriptor_editor::show(ctx, state, widgets_dir.clone());
+        if !still_open {
+            self.descriptors.editor = None;
+            return;
+        }
+        // After a successful save, reload the descriptor list.
+        let saved_ok = self
+            .descriptors
+            .editor
+            .as_ref()
+            .and_then(|s| s.save_msg.as_ref())
+            .map(|(ok, _)| *ok)
+            .unwrap_or(false);
+        if saved_ok {
+            self.cmd_reload_descriptors();
+            // Clear the save message so we don't loop.
+            if let Some(s) = self.descriptors.editor.as_mut() {
+                s.save_msg = None;
+            }
+        }
+    }
+
     fn show_pending_command_dialog(&mut self, ctx: &egui::Context) {
         let Some(command) = self.pending_command else {
             return;
@@ -996,6 +1046,14 @@ impl eframe::App for RohKaiApp {
                         self.cmd_reload_descriptors();
                         ui.close_menu();
                     }
+                    if ui
+                        .button("New Widget Descriptor…")
+                        .on_hover_text("Open the in-app .rkwd editor to create a new widget type")
+                        .clicked()
+                    {
+                        self.cmd_new_descriptor();
+                        ui.close_menu();
+                    }
                     ui.separator();
                     if ui.button("Preferences…").clicked() {
                         self.prefs.draft = self.prefs.user_settings.clone();
@@ -1216,6 +1274,9 @@ impl eframe::App for RohKaiApp {
             crate::panels::properties::PropertiesAction::ShowSvgSource(id) => {
                 self.session.svg_viewer_id = Some(id);
             }
+            crate::panels::properties::PropertiesAction::EditDescriptor(desc_id) => {
+                self.cmd_edit_descriptor(&desc_id);
+            }
             crate::panels::properties::PropertiesAction::None => {}
         }
 
@@ -1311,5 +1372,6 @@ impl eframe::App for RohKaiApp {
         self.show_pending_command_dialog(ctx);
         self.show_preferences_window(ctx);
         self.show_svg_source_window(ctx);
+        self.show_descriptor_editor_window(ctx);
     }
 }
