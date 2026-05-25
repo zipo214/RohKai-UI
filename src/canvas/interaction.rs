@@ -38,6 +38,8 @@ pub struct CanvasSettings {
     pub zoom: f32,
     /// Extra pan offset in screen pixels from the natural centred position.
     pub pan: egui::Vec2,
+    /// Whether the pixel ruler strips are visible (Ctrl+R toggle).
+    pub show_rulers: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -62,6 +64,7 @@ impl Default for CanvasSettings {
             snap_step: 8.0,
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
+            show_rulers: false,
         }
     }
 }

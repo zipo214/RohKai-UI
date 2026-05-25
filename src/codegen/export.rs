@@ -57,6 +57,17 @@ fn gen_main_rs(tree: &UiTree) -> String {
     let title = string_literal(&tree.app_props.title);
     let w = tree.app_props.win_w as u32;
     let h = tree.app_props.win_h as u32;
+    let resizable = tree.app_props.resizable;
+    let min_chain = tree
+        .app_props
+        .min_size
+        .map(|[mw, mh]| format!("\n            .with_min_inner_size([{mw:.0}.0, {mh:.0}.0])"))
+        .unwrap_or_default();
+    let max_chain = tree
+        .app_props
+        .max_size
+        .map(|[mw, mh]| format!("\n            .with_max_inner_size([{mw:.0}.0, {mh:.0}.0])"))
+        .unwrap_or_default();
     format!(
         r#"mod app;
 use app::ExportedApp;
@@ -65,7 +76,8 @@ fn main() -> eframe::Result<()> {{
     let options = eframe::NativeOptions {{
         viewport: egui::ViewportBuilder::default()
             .with_title({title})
-            .with_inner_size([{w}.0, {h}.0]),
+            .with_inner_size([{w}.0, {h}.0])
+            .with_resizable({resizable}){min_chain}{max_chain},
         ..Default::default()
     }};
     eframe::run_native(
@@ -133,7 +145,9 @@ fn gen_app_rs(tree: &UiTree) -> String {
     }
 
     // eframe::App impl
-    s.push_str("impl eframe::App for ExportedApp {\n    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {\n        egui::CentralPanel::default().show(ctx, |_ui| {});\n");
+    s.push_str("impl eframe::App for ExportedApp {\n    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {\n");
+    s.push_str(&gen_theme_setup(&tree.app_props.theme));
+    s.push_str("        egui::CentralPanel::default().show(ctx, |_ui| {});\n");
 
     let child_ids: HashSet<Uuid> = tree
         .widgets
@@ -628,6 +642,55 @@ fn image_export_child_line(
     let svg_source = raw_string_literal(child.svg_source.as_deref().unwrap_or(""));
     format!(
         "                        ui.allocate_ui_at_rect({rect_expr}, |ui| {{\n                            self.show_svg_image(ui, ctx, {key}, {svg_source}, {rect_expr}.size());\n                        }});\n"
+    )
+}
+
+fn gen_theme_setup(theme: &crate::project::schema::ThemeSettings) -> String {
+    let mode = if theme.dark_mode {
+        "egui::Visuals::dark()"
+    } else {
+        "egui::Visuals::light()"
+    };
+    let [r, g, b] = theme.accent_color;
+    let is_default_accent = (r, g, b) == (52, 211, 153);
+    let rounding_code = theme
+        .global_corner_radius
+        .map(|cr| {
+            format!(
+                "        let r = egui::Rounding::same({cr:.1});\n\
+                 visuals.widgets.noninteractive.rounding = r;\n\
+                 visuals.widgets.inactive.rounding = r;\n\
+                 visuals.widgets.hovered.rounding = r;\n\
+                 visuals.widgets.active.rounding = r;\n\
+                 visuals.widgets.open.rounding = r;\n"
+            )
+        })
+        .unwrap_or_default();
+    let font_code = theme
+        .base_font_size
+        .map(|fs| {
+            format!(
+                "        let mut style = (*ctx.style()).clone();\n\
+                 for font_id in style.text_styles.values_mut() {{ font_id.size = {fs:.1}; }}\n\
+                 ctx.set_style(style);\n"
+            )
+        })
+        .unwrap_or_default();
+    // Skip emitting theme code if it's the default dark mode with default accent
+    if theme.dark_mode
+        && is_default_accent
+        && theme.global_corner_radius.is_none()
+        && font_code.is_empty()
+    {
+        return String::new();
+    }
+    format!(
+        "        let mut visuals = {mode};\n\
+         visuals.hyperlink_color = egui::Color32::from_rgb({r}, {g}, {b});\n\
+         visuals.selection.bg_fill = egui::Color32::from_rgba_premultiplied({r}, {g}, {b}, 90);\n\
+         {rounding_code}\
+         ctx.set_visuals(visuals);\n\
+         {font_code}"
     )
 }
 

@@ -3,6 +3,62 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
+// Helpers for serde defaults (accent added here; default_true defined below)
+// ---------------------------------------------------------------------------
+
+fn default_accent() -> [u8; 3] {
+    [52, 211, 153]
+}
+
+// ---------------------------------------------------------------------------
+// Guide lines (persisted with project)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum GuideOrientation {
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GuideRule {
+    pub id: Uuid,
+    pub orientation: GuideOrientation,
+    /// Position in canvas pixels along the perpendicular axis.
+    pub position: f32,
+}
+
+// ---------------------------------------------------------------------------
+// Theme settings (persisted with project, also exportable)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThemeSettings {
+    #[serde(default = "default_true")]
+    pub dark_mode: bool,
+    #[serde(default = "default_accent")]
+    pub accent_color: [u8; 3],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_font_size: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global_corner_radius: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spacing_scale: Option<f32>,
+}
+
+impl Default for ThemeSettings {
+    fn default() -> Self {
+        Self {
+            dark_mode: true,
+            accent_color: [52, 211, 153],
+            base_font_size: None,
+            global_corner_radius: None,
+            spacing_scale: None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // App-level properties (serialized with the project)
 // ---------------------------------------------------------------------------
 
@@ -12,6 +68,21 @@ pub struct AppProps {
     pub win_w: f32,
     pub win_h: f32,
     pub icon_path: Option<String>,
+    /// Whether the exported app window is user-resizable.
+    #[serde(default = "default_true")]
+    pub resizable: bool,
+    /// Minimum window size `[w, h]` for the exported app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_size: Option<[f32; 2]>,
+    /// Maximum window size `[w, h]` for the exported app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_size: Option<[f32; 2]>,
+    /// Designer and exported app theme.
+    #[serde(default)]
+    pub theme: ThemeSettings,
+    /// Persistent canvas guide lines.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guides: Vec<GuideRule>,
 }
 
 impl Default for AppProps {
@@ -21,6 +92,11 @@ impl Default for AppProps {
             win_w: 800.0,
             win_h: 600.0,
             icon_path: None,
+            resizable: true,
+            min_size: None,
+            max_size: None,
+            theme: ThemeSettings::default(),
+            guides: Vec::new(),
         }
     }
 }

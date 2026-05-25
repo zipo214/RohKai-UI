@@ -44,6 +44,12 @@ pub struct SessionState {
     pub last_canvas_rect: egui::Rect,
     /// SVG source viewer: widget id whose source is currently displayed, if any.
     pub svg_viewer_id: Option<Uuid>,
+    /// Guide currently under the pointer (for highlight + drag/delete).
+    pub hovered_guide: Option<Uuid>,
+    /// Guide currently being dragged.
+    pub dragging_guide: Option<Uuid>,
+    /// Whether the theme settings window is open.
+    pub theme_open: bool,
 }
 
 impl Default for SessionState {
@@ -57,6 +63,9 @@ impl Default for SessionState {
             scroll_to_handler: None,
             last_canvas_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
             svg_viewer_id: None,
+            hovered_guide: None,
+            dragging_guide: None,
+            theme_open: false,
         }
     }
 }
@@ -698,6 +707,42 @@ impl RohKaiApp {
         ctx.set_pixels_per_point(self.base_pixels_per_point * self.prefs.user_settings.ui_scale);
     }
 
+    fn apply_theme(&self, ctx: &egui::Context) {
+        let theme = &self.project.ui_tree.app_props.theme;
+        let mut visuals = if theme.dark_mode {
+            egui::Visuals::dark()
+        } else {
+            egui::Visuals::light()
+        };
+        let [r, g, b] = theme.accent_color;
+        let accent = egui::Color32::from_rgb(r, g, b);
+        visuals.hyperlink_color = accent;
+        visuals.selection.bg_fill = egui::Color32::from_rgba_premultiplied(r, g, b, 90);
+        if let Some(rounding) = theme.global_corner_radius {
+            let r = egui::Rounding::same(rounding);
+            visuals.widgets.noninteractive.rounding = r;
+            visuals.widgets.inactive.rounding = r;
+            visuals.widgets.hovered.rounding = r;
+            visuals.widgets.active.rounding = r;
+            visuals.widgets.open.rounding = r;
+        }
+        ctx.set_visuals(visuals);
+        if theme.base_font_size.is_some() || theme.spacing_scale.is_some() {
+            let mut style = (*ctx.style()).clone();
+            if let Some(fs) = theme.base_font_size {
+                for font_id in style.text_styles.values_mut() {
+                    font_id.size = fs;
+                }
+            }
+            if let Some(scale) = theme.spacing_scale {
+                let base = 4.0 * scale;
+                style.spacing.item_spacing = egui::vec2(base * 2.0, base);
+                style.spacing.button_padding = egui::vec2(base * 1.5, base * 0.5);
+            }
+            ctx.set_style(style);
+        }
+    }
+
     fn save_user_settings(&mut self) {
         self.prefs.user_settings.sanitize();
         match crate::settings::save(&self.prefs.settings_path, &self.prefs.user_settings) {
@@ -907,6 +952,185 @@ impl RohKaiApp {
         }
     }
 
+    fn show_theme_window(&mut self, ctx: &egui::Context) {
+        if !self.session.theme_open {
+            return;
+        }
+        let mut open = true;
+        // Collect mutable state before the closure to avoid split-borrow issues.
+        let dark = self.project.ui_tree.app_props.theme.dark_mode;
+        let [r0, g0, b0] = self.project.ui_tree.app_props.theme.accent_color;
+        let swatch = egui::Color32::from_rgb(r0, g0, b0);
+        let has_font0 = self
+            .project
+            .ui_tree
+            .app_props
+            .theme
+            .base_font_size
+            .is_some();
+        let has_rounding0 = self
+            .project
+            .ui_tree
+            .app_props
+            .theme
+            .global_corner_radius
+            .is_some();
+        let has_spacing0 = self.project.ui_tree.app_props.theme.spacing_scale.is_some();
+
+        let mut save_clicked = false;
+        let mut load_clicked = false;
+        let mut reset_clicked = false;
+
+        egui::Window::new("Theme Settings")
+            .id(egui::Id::new("theme_window"))
+            .open(&mut open)
+            .default_size([300.0, 400.0])
+            .resizable(false)
+            .constrain(false)
+            .show(ctx, |ui| {
+                let theme = &mut self.project.ui_tree.app_props.theme;
+
+                ui.label(egui::RichText::new("Mode").small().weak());
+                ui.horizontal(|ui| {
+                    if ui.selectable_label(dark, "Dark").clicked() {
+                        theme.dark_mode = true;
+                    }
+                    if ui.selectable_label(!dark, "Light").clicked() {
+                        theme.dark_mode = false;
+                    }
+                });
+
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("Accent color").small().weak());
+                let [r, g, b] = &mut theme.accent_color;
+                ui.horizontal(|ui| {
+                    ui.painter().rect_filled(
+                        egui::Rect::from_min_size(ui.cursor().min, egui::vec2(20.0, 20.0)),
+                        3.0,
+                        swatch,
+                    );
+                    ui.add_space(24.0);
+                    ui.label(egui::RichText::new("R").small().weak());
+                    ui.add(egui::DragValue::new(r).range(0u8..=255u8).speed(1.0));
+                    ui.label(egui::RichText::new("G").small().weak());
+                    ui.add(egui::DragValue::new(g).range(0u8..=255u8).speed(1.0));
+                    ui.label(egui::RichText::new("B").small().weak());
+                    ui.add(egui::DragValue::new(b).range(0u8..=255u8).speed(1.0));
+                });
+
+                ui.add_space(6.0);
+                ui.separator();
+                ui.label(egui::RichText::new("Typography").small().weak());
+                let mut has_font = has_font0;
+                ui.checkbox(&mut has_font, "Override base font size");
+                if has_font {
+                    let fs = theme.base_font_size.get_or_insert(14.0);
+                    ui.add(
+                        egui::DragValue::new(fs)
+                            .range(8.0..=32.0)
+                            .suffix("pt")
+                            .speed(0.5),
+                    );
+                } else {
+                    theme.base_font_size = None;
+                }
+
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Shape").small().weak());
+                let mut has_rounding = has_rounding0;
+                ui.checkbox(&mut has_rounding, "Override corner radius");
+                if has_rounding {
+                    let cr = theme.global_corner_radius.get_or_insert(4.0);
+                    ui.add(
+                        egui::DragValue::new(cr)
+                            .range(0.0..=32.0)
+                            .suffix("px")
+                            .speed(0.5),
+                    );
+                } else {
+                    theme.global_corner_radius = None;
+                }
+
+                let mut has_spacing = has_spacing0;
+                ui.checkbox(&mut has_spacing, "Override spacing scale");
+                if has_spacing {
+                    let ss = theme.spacing_scale.get_or_insert(1.0);
+                    ui.add(egui::DragValue::new(ss).range(0.5..=3.0).speed(0.05));
+                } else {
+                    theme.spacing_scale = None;
+                }
+
+                ui.add_space(6.0);
+                ui.separator();
+                ui.horizontal(|ui| {
+                    save_clicked = ui.button("Save .rktheme…").clicked();
+                    load_clicked = ui.button("Load .rktheme…").clicked();
+                    reset_clicked = ui.button("Reset defaults").clicked();
+                });
+            });
+        if !open {
+            self.session.theme_open = false;
+        }
+        if save_clicked {
+            self.cmd_save_theme();
+        }
+        if load_clicked {
+            self.cmd_load_theme();
+        }
+        if reset_clicked {
+            self.project.ui_tree.app_props.theme = Default::default();
+        }
+    }
+
+    fn cmd_save_theme(&mut self) {
+        let Some(dest) = rfd::FileDialog::new()
+            .set_title("Save Theme")
+            .set_file_name("theme.rktheme")
+            .add_filter("RohKai Theme", &["rktheme"])
+            .save_file()
+        else {
+            return;
+        };
+        let theme = &self.project.ui_tree.app_props.theme;
+        match serde_json::to_string_pretty(theme) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&dest, json) {
+                    self.messages.template_message = Some((false, format!("Save failed: {e}")));
+                } else {
+                    self.messages.template_message = Some((true, "Theme saved".to_owned()));
+                }
+            }
+            Err(e) => {
+                self.messages.template_message = Some((false, format!("Serialize error: {e}")));
+            }
+        }
+    }
+
+    fn cmd_load_theme(&mut self) {
+        let Some(src) = rfd::FileDialog::new()
+            .set_title("Load Theme")
+            .add_filter("RohKai Theme", &["rktheme"])
+            .pick_file()
+        else {
+            return;
+        };
+        match std::fs::read_to_string(&src) {
+            Ok(raw) => match serde_json::from_str(&raw) {
+                Ok(theme) => {
+                    self.project.ui_tree.app_props.theme = theme;
+                    self.messages.template_message = Some((true, "Theme loaded".to_owned()));
+                }
+                Err(e) => {
+                    self.messages.template_message =
+                        Some((false, format!("Invalid theme file: {e}")));
+                }
+            },
+            Err(e) => {
+                self.messages.template_message = Some((false, format!("Read error: {e}")));
+            }
+        }
+    }
+
     fn show_pending_command_dialog(&mut self, ctx: &egui::Context) {
         let Some(command) = self.pending_command else {
             return;
@@ -964,6 +1188,7 @@ fn setup_fonts(ctx: &egui::Context) {
 
 impl eframe::App for RohKaiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.apply_theme(ctx);
         self.apply_ui_scale(ctx);
         let now = ctx.input(|i| i.time);
         if self.messages.export_message.is_some() {
@@ -990,6 +1215,10 @@ impl eframe::App for RohKaiApp {
         let ctrl_shift_g =
             ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::G));
         let ctrl_g = ctx.input(|i| i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(Key::G));
+        let ctrl_r = ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::R));
+        if ctrl_r {
+            self.session.canvas_settings.show_rulers = !self.session.canvas_settings.show_rulers;
+        }
 
         if ctrl_n {
             self.request_destructive_command(PendingCommand::New);
@@ -1208,6 +1437,29 @@ impl eframe::App for RohKaiApp {
                     }
                 });
 
+                // View menu
+                ui.menu_button("View", |ui| {
+                    let ruler_label = if self.session.canvas_settings.show_rulers {
+                        "Hide Rulers  [Ctrl+R]"
+                    } else {
+                        "Show Rulers  [Ctrl+R]"
+                    };
+                    if ui.button(ruler_label).clicked() {
+                        self.session.canvas_settings.show_rulers =
+                            !self.session.canvas_settings.show_rulers;
+                        ui.close_menu();
+                    }
+                    if ui.button("Clear All Guides").clicked() {
+                        self.project.ui_tree.app_props.guides.clear();
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Theme…").clicked() {
+                        self.session.theme_open = true;
+                        ui.close_menu();
+                    }
+                });
+
                 ui.separator();
 
                 // Inline app title editor
@@ -1273,6 +1525,27 @@ impl eframe::App for RohKaiApp {
                         .speed(1.0)
                         .range(100.0..=4000.0),
                 );
+                // Canvas preset picker
+                ui.menu_button("▾ Preset", |ui| {
+                    const PRESETS: &[(&str, f32, f32)] = &[
+                        ("1920 × 1080 (FHD)", 1920.0, 1080.0),
+                        ("2560 × 1440 (QHD)", 2560.0, 1440.0),
+                        ("1366 × 768 (HD)", 1366.0, 768.0),
+                        ("1280 × 720 (720p)", 1280.0, 720.0),
+                        ("800 × 600 (default)", 800.0, 600.0),
+                        ("375 × 812 (iPhone SE)", 375.0, 812.0),
+                        ("390 × 844 (iPhone 14)", 390.0, 844.0),
+                        ("414 × 896 (iPhone XS Max)", 414.0, 896.0),
+                        ("768 × 1024 (iPad)", 768.0, 1024.0),
+                    ];
+                    for (label, w, h) in PRESETS {
+                        if ui.button(*label).clicked() {
+                            self.project.ui_tree.app_props.win_w = *w;
+                            self.project.ui_tree.app_props.win_h = *h;
+                            ui.close_menu();
+                        }
+                    }
+                });
                 ui.separator();
                 let (snap_text, snap_color) = if self.session.canvas_settings.snap_enabled {
                     ("Grid: ON", egui::Color32::from_rgb(52, 211, 153))
@@ -1468,8 +1741,35 @@ impl eframe::App for RohKaiApp {
         // ---------------------------------------------------------------
         // Canvas
         // ---------------------------------------------------------------
+        let delete_pressed = ctx.input(|i| i.key_pressed(egui::Key::Delete));
+        let has_hovered_guide = self.session.hovered_guide.is_some();
         egui::CentralPanel::default().show(ctx, |ui| {
             self.session.last_canvas_rect = ui.max_rect();
+            let panel_rect = ui.max_rect();
+            let zoom = self.session.canvas_settings.zoom;
+            let pan = self.session.canvas_settings.pan;
+            let canvas_size = [
+                self.project.ui_tree.app_props.win_w,
+                self.project.ui_tree.app_props.win_h,
+            ];
+
+            // Guide interaction runs before canvas (uses raw pointer input).
+            let ruler_ctx = crate::canvas::rulers::RulerCtx {
+                show_rulers: self.session.canvas_settings.show_rulers,
+                zoom,
+                pan,
+                canvas_size,
+                panel_rect,
+            };
+            crate::canvas::rulers::handle_interaction(
+                ui,
+                &mut self.project.ui_tree.app_props.guides,
+                &mut self.session.hovered_guide,
+                &mut self.session.dragging_guide,
+                &ruler_ctx,
+                delete_pressed && has_hovered_guide,
+            );
+
             crate::canvas::interaction::handle(
                 ui,
                 &mut self.project.ui_tree,
@@ -1481,6 +1781,14 @@ impl eframe::App for RohKaiApp {
                     tag_scale: self.prefs.user_settings.canvas_tag_scale,
                 },
                 &mut self.svg_texture_cache,
+            );
+
+            // Rulers and guide lines drawn on top of canvas content.
+            crate::canvas::rulers::draw(
+                ui,
+                &self.project.ui_tree.app_props.guides,
+                self.session.hovered_guide,
+                &ruler_ctx,
             );
         });
 
@@ -1506,9 +1814,9 @@ impl eframe::App for RohKaiApp {
         }
 
         // ---------------------------------------------------------------
-        // Delete key
+        // Delete key — widgets (when no guide was hovered at frame start)
         // ---------------------------------------------------------------
-        if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
+        if delete_pressed && !has_hovered_guide {
             let ids: Vec<Uuid> = self.session.selected.drain(..).collect();
             for id in ids {
                 self.project.ui_tree.remove(id);
@@ -1519,5 +1827,6 @@ impl eframe::App for RohKaiApp {
         self.show_preferences_window(ctx);
         self.show_svg_source_window(ctx);
         self.show_descriptor_editor_window(ctx);
+        self.show_theme_window(ctx);
     }
 }
