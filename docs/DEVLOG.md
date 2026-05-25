@@ -2,6 +2,31 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-05-24 — Descriptor Editor UI Fixes + Widgets Menu
+
+### Docs Reviewed
+- `docs/CODE_COOP.md` (session handoff)
+
+### Changes Made
+
+**`src/panels/descriptor_editor.rs`**
+- Replaced all `desired_width(f32::INFINITY)` TextEdit calls with `desired_width(ui.available_width())` — root cause of window expanding to full RohKai width inside ScrollArea
+- Ran `cargo fmt` to fix one line-length violation in the same file
+
+**`src/app.rs`**
+- Added "Widgets" dropdown to `egui::menu::bar` (after File menu): New Descriptor, Import Definition, Reload Descriptors, and per-descriptor "Edit" entries
+- `show_descriptor_editor_window`: fixed save-message-cleared-same-frame bug — snapshot `was_saved` before calling `descriptor_editor::show()`, only trigger `cmd_reload_descriptors()` on false→true transition; save message now persists until next save overwrites it
+
+### Verification
+- 53/53 tests, zero clippy warnings, `cargo fmt --check` clean
+- Commit: `8b3932d`
+
+### Risks / Follow-ups
+- `.rkwb` bundle format deferred
+- SVG import maturity tracked separately (Codex domain)
+
+---
+
 ## 2026-05-24 — In-app .rkwd Descriptor Editor
 
 ### Docs Reviewed

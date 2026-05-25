@@ -7,6 +7,19 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-05-24 — Claude Descriptor Editor UI Fixes + Widgets Menu
+
+On `dev`, fixed two bugs in the in-app descriptor editor (`8b3932d`): (1)
+`desired_width(f32::INFINITY)` in TextEdit fields caused window to expand to
+full RohKai width — replaced with `desired_width(ui.available_width())`; (2)
+save-message was cleared the same frame it was set due to eager
+`cmd_reload_descriptors()` call — fixed with transition detection (snapshot
+`was_saved` before `show()`, reload only on false→true edge). Also added a
+"Widgets" top-bar dropdown menu (New Descriptor, Import Definition, Reload,
+per-descriptor Edit entries) so descriptors no longer require navigating the
+File menu. 53/53 tests, zero warnings, fmt clean. Remaining 7.x: `.rkwb`
+bundle; SVG import maturity is Codex's track.
+
 ## 2026-05-24 — Claude In-app .rkwd Editor
 
 On `dev`, implemented the in-app descriptor editor (`1104547`): split-pane
