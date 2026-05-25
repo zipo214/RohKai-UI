@@ -284,6 +284,9 @@ fn show_preview(ui: &mut egui::Ui, draft: &WidgetDescriptor, prev_w: f32) {
     ui.heading("Live Preview");
     ui.separator();
 
+    // Build dummy widget first so prop defaults flow into all preview surfaces.
+    let dummy = make_dummy_widget(draft);
+
     // Canvas box preview
     let [r, g, b] = draft.accent_color;
     let accent = egui::Color32::from_rgb(r, g, b);
@@ -292,7 +295,12 @@ fn show_preview(ui: &mut egui::Ui, draft: &WidgetDescriptor, prev_w: f32) {
     let w = draft.default_size[0].clamp(40.0, 300.0);
     let h = draft.default_size[1].clamp(16.0, 120.0);
 
-    let label = expand_canvas_label(&draft.canvas_preview.label_template, &draft.name, "Example");
+    let label = expand_canvas_label(
+        &draft.canvas_preview.label_template,
+        &draft.name,
+        &dummy.props.label,
+        &dummy.descriptor_props,
+    );
 
     ui.label(egui::RichText::new("Canvas").small().weak());
     let (rect, _) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
@@ -310,7 +318,6 @@ fn show_preview(ui: &mut egui::Ui, draft: &WidgetDescriptor, prev_w: f32) {
     ui.add_space(8.0);
 
     // Code template expansions
-    let dummy = make_dummy_widget(draft);
     let live_expanded = crate::codegen::widget_descriptor::apply_template(
         &draft.codegen.live_preview,
         &dummy,
@@ -660,13 +667,23 @@ fn field_row(ui: &mut egui::Ui, label: &str, content: impl FnOnce(&mut egui::Ui)
 // Preview helpers
 // ---------------------------------------------------------------------------
 
-fn expand_canvas_label(template: &str, name: &str, label: &str) -> String {
-    if template.is_empty() {
-        return name.to_owned();
-    }
-    template
-        .replace("{{name}}", name)
-        .replace("{{label}}", label)
+fn expand_canvas_label(
+    template: &str,
+    name: &str,
+    label: &str,
+    props: &std::collections::HashMap<String, String>,
+) -> String {
+    let base = if template.is_empty() {
+        name.to_owned()
+    } else {
+        template
+            .replace("{{name}}", name)
+            .replace("{{label}}", label)
+    };
+    // Substitute {{prop.KEY}} tokens with property defaults, matching apply_template.
+    props
+        .iter()
+        .fold(base, |s, (k, v)| s.replace(&format!("{{{{prop.{k}}}}}"), v))
 }
 
 fn make_dummy_widget(draft: &WidgetDescriptor) -> crate::project::schema::WidgetInstance {
