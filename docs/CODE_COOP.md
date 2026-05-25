@@ -7,6 +7,18 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-05-24 — Claude Stage 8 Close-out: Guide Snap, Lock Ratio, Canvas Bezel
+
+On `dev`, closed the remaining three Stage 8 items: (1) Guide snapping —
+`interaction.rs` drag loop now checks `tree.app_props.guides` after static widget
+alignment; widget edges/center snap to vertical/horizontal guide positions within
+`snap_thr` and highlight the snapped guide span; (2) Lock aspect ratio — `lock_aspect_ratio:
+bool` on `SessionState`, 🔒/🔓 button in status bar, ratio enforced after DragValue
+edits by comparing prev/cur W×H; (3) Canvas bezel — `draw_bezel()` in `rulers.rs`,
+View → Show/Hide Canvas Bezel toggle, `show_bezel: bool` on `AppProps`, draws mock
+22px macOS-style title bar chrome (three traffic-light dots + centered title) above
+canvas rect when enabled. 53/53 tests, zero warnings. Stage 8 fully complete.
+
 ## 2026-05-24 — Claude Stage 8: Rulers, Presets, Theming
 
 On `dev`, implemented all Stage 8 clusters (`3885ed1`): (1) Pixel rulers —

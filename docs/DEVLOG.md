@@ -2,6 +2,42 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-05-24 — Stage 8 Close-out: Guide Snap, Lock Ratio, Canvas Bezel
+
+### Docs Reviewed
+- `docs/CODE_COOP.md` (prior Stage 8 entry for context)
+
+### Changes Made
+
+**`src/project/schema.rs`**
+- `AppProps.show_bezel: bool` — serde-default false, skip_serializing if false
+
+**`src/canvas/rulers.rs`**
+- `draw_bezel(ui, ctx, title)`: draws 22px mock macOS title bar above canvas rect
+  (grey background, three traffic-light circles at left, centered title text)
+- Skips draw if no vertical room (canvas near top panel edge)
+- `BEZEL_H: f32 = 22.0` constant
+
+**`src/canvas/interaction.rs`**
+- Guide snapping added after static widget alignment loop (~line 1582)
+- Iterates `tree.app_props.guides`; checks widget left/center/right vs Vertical guides,
+  top/center/bottom vs Horizontal guides; updates best_x/best_y and adj_x/adj_y
+- Snapped guide populates raw_guide_v/raw_guide_h → highlighted on canvas same as widget snaps
+
+**`src/app.rs`**
+- `SessionState.lock_aspect_ratio: bool` (default false)
+- Status bar: 🔒/🔓 toggle button after H DragValue; prev_w/prev_h snapshotted before
+  panel, ratio enforced after panel returns
+- View menu: "Show/Hide Canvas Bezel" toggle
+- Canvas section: calls `rulers::draw_bezel()` when `app_props.show_bezel`
+
+### Verification
+53/53 tests, zero clippy warnings, zero fmt issues.
+
+### Risks / Follow-ups
+- Bezel only shows when zoom/pan leaves ≥22px space above canvas — no room at 100% zoom
+  with large canvases filling the panel. Intentional: don't obscure canvas content.
+
 ## 2026-05-24 — Stage 8: Rulers + Guides, Document Presets, Theming
 
 ### Docs Reviewed

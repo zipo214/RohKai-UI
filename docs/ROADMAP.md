@@ -233,15 +233,15 @@
 - [x] Click ruler to create a persistent guide line
 - [x] Guide lines are draggable, deletable (Delete key when selected)
 - [x] Toggle rulers with Ctrl+R
-- [ ] Guide snapping: snap widget edges to guide lines
+- [x] Guide snapping: snap widget edges to guide lines
 
 ### Document Presets & Real Window Sizing
 - [x] Document preset picker: common screen sizes
       (1920x1080, 2560x1440, 1366x768, 1280x720)
 - [x] Mobile presets (375x812 iPhone, 390x844 etc)
 - [x] Window resizable toggle, min/max size constraints stored in AppProps and used in export
-- [ ] Custom size with lock aspect ratio toggle
-- [ ] Canvas represents actual app window —
+- [x] Custom size with lock aspect ratio toggle
+- [x] Canvas represents actual app window —
       shows title bar chrome, minimize/maximize/close buttons
       as a visual bezel around the canvas area
 
