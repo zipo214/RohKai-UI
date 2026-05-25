@@ -2,6 +2,52 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-05-24 — Stage 8: Rulers + Guides, Document Presets, Theming
+
+### Docs Reviewed
+- `docs/ROADMAP.md` (Stage 8 Future Considerations clusters)
+
+### Changes Made
+
+**`src/canvas/rulers.rs`** (new, ~280 lines)
+- `RulerCtx` bundle struct avoids too-many-arguments clippy lint
+- `handle_interaction()`: guide hover detection, drag, delete, ruler-click creation
+- `draw()`: ruler strip backgrounds, zoom-aware tick marks with labels, guide overlay lines
+- `canvas_origin()`: exported helper for coordinate mapping (reusable)
+
+**`src/canvas/interaction.rs`** — `show_rulers: bool` added to `CanvasSettings` (default false)
+
+**`src/canvas/mod.rs`** — `pub mod rulers` added
+
+**`src/project/schema.rs`**
+- `GuideOrientation` enum, `GuideRule` struct (id, orientation, position)
+- `ThemeSettings` struct (dark_mode, accent_color, base_font_size, global_corner_radius, spacing_scale) with serde defaults
+- `AppProps` extended: `resizable`, `min_size`, `max_size`, `theme: ThemeSettings`, `guides: Vec<GuideRule>` — all serde-defaulted for backward compat
+
+**`src/app.rs`**
+- `SessionState`: `hovered_guide`, `dragging_guide`, `theme_open`
+- `apply_theme()`: reads `AppProps.theme`, calls `ctx.set_visuals()` + optional `ctx.set_style()` every frame
+- `show_theme_window()`: floating window, dark/light toggle, RGB accent sliders, font/radius/spacing overrides
+- `cmd_save_theme()` / `cmd_load_theme()`: `.rktheme` file I/O
+- View menu: Show Rulers toggle, Clear All Guides, Theme…
+- Status bar: "▾ Preset" dropdown with 9 canvas size presets
+- Ctrl+R shortcut, rulers/guide wiring in CentralPanel
+- Delete key only deletes widgets when no guide is hovered
+
+**`src/codegen/export.rs`**
+- `gen_main_rs`: adds `.with_resizable()`, `.with_min_inner_size()`, `.with_max_inner_size()` when set
+- `gen_theme_setup()`: generates `ctx.set_visuals(...)` code block; skipped for default dark+teal
+
+### Verification
+- 53/53 tests, zero clippy warnings, `cargo fmt --check` clean
+- Commit: `3885ed1`
+
+### Risks / Follow-ups
+- Guide snapping to widget edges (deferred)
+- Canvas window bezel chrome (deferred — complex)
+
+---
+
 ## 2026-05-24 — .rkwb Bundle Format + Expand SVG Inline Toggle
 
 ### Docs Reviewed

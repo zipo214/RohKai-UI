@@ -7,6 +7,20 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-05-24 — Claude Stage 8: Rulers, Presets, Theming
+
+On `dev`, implemented all Stage 8 clusters (`3885ed1`): (1) Pixel rulers —
+`src/canvas/rulers.rs` (new), Ctrl+R toggle via View menu, horizontal +
+vertical ruler strips with zoom-aware ticks, click-to-create guides,
+drag-to-move, Delete-to-remove, `GuideRule` persisted in `AppProps.guides`; (2)
+Document presets — "▾ Preset" dropdown in status bar (9 presets desktop +
+mobile), `AppProps` gains `resizable`/`min_size`/`max_size`, export uses them;
+(3) Theming — `ThemeSettings` in `AppProps` (dark/light, accent RGB, font size,
+corner radius, spacing), View → Theme… floating window, live `apply_theme` each
+frame, `.rktheme` save/load, export injects `ctx.set_visuals(...)` when
+non-default. 53/53 tests, zero warnings. All existing saves load cleanly
+(serde defaults). Remaining Stage 8: guide snapping, canvas bezel.
+
 ## 2026-05-24 — Claude .rkwb Bundle + SVG Inline Toggle
 
 On `dev`, closed remaining Stage 7.x non-SVG-maturity items (`338ee65`):

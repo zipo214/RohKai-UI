@@ -227,35 +227,34 @@
 ## Future Considerations
 
 ### Rulers & Measurement
-- [ ] Horizontal ruler along top of canvas
-- [ ] Vertical ruler along left of canvas
-- [ ] Rulers show units in pixels, update with zoom
-- [ ] Click ruler to create a persistent guide line
-- [ ] Guide lines are draggable, deletable (Delete key when selected)
-- [ ] Toggle rulers with Ctrl+R
+- [x] Horizontal ruler along top of canvas
+- [x] Vertical ruler along left of canvas
+- [x] Rulers show units in pixels, update with zoom
+- [x] Click ruler to create a persistent guide line
+- [x] Guide lines are draggable, deletable (Delete key when selected)
+- [x] Toggle rulers with Ctrl+R
+- [ ] Guide snapping: snap widget edges to guide lines
 
 ### Document Presets & Real Window Sizing
-- [ ] Document preset picker: common screen sizes
+- [x] Document preset picker: common screen sizes
       (1920x1080, 2560x1440, 1366x768, 1280x720)
-- [ ] Mobile presets (375x812 iPhone, 390x844 etc)
+- [x] Mobile presets (375x812 iPhone, 390x844 etc)
+- [x] Window resizable toggle, min/max size constraints stored in AppProps and used in export
 - [ ] Custom size with lock aspect ratio toggle
 - [ ] Canvas represents actual app window —
       shows title bar chrome, minimize/maximize/close buttons
       as a visual bezel around the canvas area
-- [ ] Window appearance settings: title, icon,
-      resizable toggle, min/max size constraints
-- [ ] All window settings stored in AppProps and used in export
 
 ### Application Appearance & Theming
-- [ ] Theme panel: dark/light mode toggle
-- [ ] Accent color picker for the generated app
-- [ ] Font size base setting
-- [ ] Widget rounding (global corner radius)
-- [ ] Spacing/padding scale
-- [ ] Theme exported as startup code in generated app:
+- [x] Theme panel: dark/light mode toggle
+- [x] Accent color picker for the generated app
+- [x] Font size base setting
+- [x] Widget rounding (global corner radius)
+- [x] Spacing/padding scale
+- [x] Theme exported as startup code in generated app:
       ctx.set_visuals(egui::Visuals { ... })
-- [ ] Save themes as .rktheme files
-- [ ] Apply a theme to the Rohkai designer itself
+- [x] Save themes as .rktheme files
+- [x] Apply a theme to the Rohkai designer itself
 
 ### Lazarus Features — Remaining
 - [ ] Design-time non-visual components — timers,
