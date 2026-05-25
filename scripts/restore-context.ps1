@@ -1,4 +1,8 @@
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = $Utf8NoBom
+[Console]::InputEncoding = $Utf8NoBom
+[Console]::OutputEncoding = $Utf8NoBom
+
 $snapshotPath = "D:\dev\rohkai\docs\context-snapshot.json"
 
 if (-not (Test-Path $snapshotPath)) {
@@ -6,7 +10,7 @@ if (-not (Test-Path $snapshotPath)) {
     exit 1
 }
 
-$s = Get-Content $snapshotPath -Raw | ConvertFrom-Json
+$s = Get-Content -Path $snapshotPath -Raw -Encoding utf8 | ConvertFrom-Json
 
 Write-Host ""
 Write-Host "=== RohKai Context Snapshot ==="

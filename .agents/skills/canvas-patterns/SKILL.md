@@ -137,3 +137,20 @@ Applied **after** computing the raw rect in both move and resize paths:
 
 Arrow keys move the selected widget by `1.0 px` (snap off) or `snap_step` (snap on).
 Clamped to `x/y >= 0`. Does not use the drag state machine.
+
+## SVG/Image Rendering
+
+`WidgetKind::Image` uses `WidgetInstance.svg_source` as its source of truth.
+Canvas previews must render the source into a visible image form; do not replace
+the image with a label, colored bounding box, or comment-like placeholder and
+call the canvas behavior complete.
+
+SVG/image preview code must not add `resvg`, `usvg`, `tiny-skia`, or a substitute
+renderer dependency chain. If a feature cannot be faithfully rendered yet,
+surface a diagnostic and keep the original `svg_source` intact.
+
+## Constraints
+
+> **Never accumulate drag deltas frame-to-frame.** Always recompute position from `drag_offset` (move) or `start_rect` + `start_pos` (resize). Accumulating `delta` per frame causes floating-point drift that compounds across long drags.
+
+> **Never mutate canvas state and code-panel state separately.** All widget geometry changes go through `UiTree` — the canvas and code panel are both views of it. Writing to one without the other creates divergence that corrupts save/load and bidirectional sync.

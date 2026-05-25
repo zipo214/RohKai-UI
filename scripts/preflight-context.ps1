@@ -1,10 +1,25 @@
 param()
 
 $ErrorActionPreference = "Continue"
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = $Utf8NoBom
+[Console]::InputEncoding = $Utf8NoBom
+[Console]::OutputEncoding = $Utf8NoBom
 
 $ProjectRoot = "D:\dev\rohkai"
 $Cwd = (Get-Location).ProviderPath
+
+function Get-PwshCommand {
+    $pwsh = Get-Command pwsh -ErrorAction SilentlyContinue
+    if ($pwsh) {
+        return $pwsh.Source
+    }
+    $legacy = Get-Command powershell -ErrorAction SilentlyContinue
+    if ($legacy) {
+        return $legacy.Source
+    }
+    return $null
+}
 
 Write-Host "== RohKai preflight =="
 if ($Cwd -ne $ProjectRoot) {
@@ -27,7 +42,7 @@ Write-Host ""
 Write-Host "== Roadmap Current Stage =="
 $Roadmap = Join-Path $ProjectRoot "docs\ROADMAP.md"
 if (Test-Path $Roadmap) {
-    $stage = Get-Content $Roadmap |
+    $stage = Get-Content -Path $Roadmap -Encoding utf8 |
         Where-Object { $_ -match "^## Stage [0-9]" } |
         Select-Object -Last 1
     if ($stage) {
@@ -43,12 +58,12 @@ Write-Host ""
 Write-Host "== Latest Devlog Entry =="
 $Devlog = Join-Path $ProjectRoot "docs\DEVLOG.md"
 if (Test-Path $Devlog) {
-    $lines = Get-Content $Devlog
+    $lines = Get-Content -Path $Devlog -Encoding utf8
     $heads = for ($i = 0; $i -lt $lines.Count; $i++) {
         if ($lines[$i] -match "^## ") { $i }
     }
     if ($heads.Count -gt 0) {
-        $start = $heads[-1]
+        $start = $heads[0]
         $end = $lines.Count - 1
         for ($i = $start + 1; $i -lt $lines.Count; $i++) {
             if ($lines[$i] -match "^## ") { $end = $i - 1; break }
@@ -62,20 +77,41 @@ if (Test-Path $Devlog) {
 }
 
 Write-Host ""
+Write-Host "== Code CoOp Latest Note =="
+$CodeCoop = Join-Path $ProjectRoot "docs\CODE_COOP.md"
+if (Test-Path $CodeCoop) {
+    $lines = Get-Content -Path $CodeCoop -Encoding utf8
+    $heads = for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match "^## ") { $i }
+    }
+    if ($heads.Count -gt 0) {
+        $start = $heads[0]
+        $end = $lines.Count - 1
+        for ($i = $start + 1; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match "^## ") { $end = $i - 1; break }
+        }
+        $lines[$start..([Math]::Min($end, $start + 12))]
+    } else {
+        Write-Host "No Code CoOp notes yet."
+    }
+} else {
+    Write-Warning "Missing docs\CODE_COOP.md"
+}
+
+Write-Host ""
 Write-Host "== Guidance Drift Check =="
 $pairs = @(
-    @("AGENTS.md", "CLAUDE.md"),
     @(".agents\skills\project-model\SKILL.md", ".claude\skills\project-model\SKILL.md"),
     @(".agents\skills\canvas-patterns\SKILL.md", ".claude\skills\canvas-patterns\SKILL.md"),
     @(".agents\skills\codegen-rules\SKILL.md", ".claude\skills\codegen-rules\SKILL.md"),
-    @(".agents\agents\architect.md", ".claude\agents\architect.md")
+    @(".agents\skills\svg-zero-dep\SKILL.md", ".claude\skills\svg-zero-dep\SKILL.md")
 )
 foreach ($pair in $pairs) {
     $left = Join-Path $ProjectRoot $pair[0]
     $right = Join-Path $ProjectRoot $pair[1]
     if ((Test-Path $left) -and (Test-Path $right)) {
-        $lh = (Get-FileHash $left -Algorithm SHA256).Hash
-        $rh = (Get-FileHash $right -Algorithm SHA256).Hash
+        $lh = ((Get-Content -Raw -Encoding utf8 -Path $left) -replace "`r`n", "`n")
+        $rh = ((Get-Content -Raw -Encoding utf8 -Path $right) -replace "`r`n", "`n")
         if ($lh -eq $rh) {
             Write-Host "OK: $($pair[0]) <-> $($pair[1])"
         } else {
@@ -85,7 +121,44 @@ foreach ($pair in $pairs) {
         Write-Host "MISSING PAIR: $($pair[0]) <-> $($pair[1])"
     }
 }
+Write-Host "INFO: AGENTS.md, CLAUDE.md, and role-specific agent files may differ by tool, but both must be read."
 
 Write-Host ""
-Write-Host "Reminder: read AGENTS.md, CLAUDE.md, docs/ROADMAP.md, latest docs/DEVLOG.md entry, git status, and relevant skills/agents before planning or edits."
+Write-Host "== Text Encoding Policy =="
+$TextEncodingPolicy = Join-Path $ProjectRoot "scripts\check-text-encoding.ps1"
+if (Test-Path $TextEncodingPolicy) {
+    try {
+        $runner = Get-PwshCommand
+        if ($runner) {
+            & $runner -NoProfile -ExecutionPolicy Bypass -File $TextEncodingPolicy
+        } else {
+            Write-Warning "Neither pwsh nor powershell is available for text encoding policy check."
+        }
+    } catch {
+        Write-Warning "Text encoding policy check failed: $_"
+    }
+} else {
+    Write-Warning "Missing scripts\check-text-encoding.ps1"
+}
+
+Write-Host ""
+Write-Host "== SVG Dependency Policy =="
+$DependencyPolicy = Join-Path $ProjectRoot "scripts\check-dependency-policy.ps1"
+if (Test-Path $DependencyPolicy) {
+    try {
+        $runner = Get-PwshCommand
+        if ($runner) {
+            & $runner -NoProfile -ExecutionPolicy Bypass -File $DependencyPolicy
+        } else {
+            Write-Warning "Neither pwsh nor powershell is available for dependency policy check."
+        }
+    } catch {
+        Write-Warning "Dependency policy check failed: $_"
+    }
+} else {
+    Write-Warning "Missing scripts\check-dependency-policy.ps1"
+}
+
+Write-Host ""
+Write-Host "Reminder: read AGENTS.md, CLAUDE.md, docs/ROADMAP.md, docs/CODE_INDEX.md, latest docs/CODE_COOP.md note, latest docs/DEVLOG.md entry, git status, and relevant skills/agents before planning or edits."
 Pop-Location

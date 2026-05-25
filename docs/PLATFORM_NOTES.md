@@ -1,0 +1,41 @@
+# Platform Notes
+
+RohKai itself is a Rust/egui app. The app workflow is cross-platform through
+Cargo:
+
+```text
+cargo run
+cargo test
+cargo clippy -- -D warnings
+```
+
+## Windows
+
+The current agent automation scripts are PowerShell-first, prefer PowerShell 7
+(`pwsh`), and were written for the active Windows workspace at `D:\dev\rohkai`.
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\preflight-context.ps1
+```
+
+PowerShell 7 is required for the safest Unicode path. Windows PowerShell 5.1 is
+fallback-only because its legacy console and file encodings can corrupt
+UTF-8-only text when agents write repo files.
+
+## macOS And Linux
+
+Mac and Linux users can build and run RohKai with Cargo. The `.ps1` scripts are
+not required for normal app development, but they are currently the richest
+agent preflight/validation path.
+
+Options today:
+
+- Use Cargo directly for app development.
+- Install PowerShell 7 (`pwsh`) and run the same script commands used on Windows.
+- Read the markdown guidance manually: `AGENTS.md`, `CLAUDE.md`,
+  `docs/ROADMAP.md`, `docs/DEVLOG.md`, `docs/CODE_INDEX.md`,
+  `docs/CODE_COOP.md`, and relevant skills.
+
+Future cleanup should add one cross-platform command path, preferably a small
+Rust `xtask` or `cargo run --bin rohkai-dev -- ...` helper, so preflight and SVG
+validation do not depend on Windows PowerShell.

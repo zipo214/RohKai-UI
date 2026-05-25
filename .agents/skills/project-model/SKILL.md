@@ -20,6 +20,8 @@ app_props: AppProps
 
 Use `UiTree::add`, `remove`, `get_mut`, `group`, `ungroup`, and `validate_and_repair` instead of scattering mutation rules in panels.
 
+Never push to or splice `UiTree.widgets` directly. Direct `Vec` access bypasses validation, dirty tracking, and repair logic.
+
 ## WidgetInstance (`src/project/schema.rs`)
 
 ```rust
@@ -37,6 +39,7 @@ corner_radius:   Option<f32>
 label_binding:   Option<String>
 custom_props:    Vec<CustomProp>
 event_handler:   Option<String>
+svg_source:      Option<String>
 ```
 
 ## WidgetProps
@@ -66,9 +69,14 @@ Frame
 ComboBox
 RadioButton
 ProgressBar
+Image
 ```
 
 Adding a new kind requires schema, widget default constructor, palette coverage, canvas rendering, parser/codegen/export/state behavior, and tests or validation notes.
+
+`WidgetKind::Image` is backed by `svg_source` and must have a real output form
+everywhere it appears: canvas rendering, properties, live codegen, export,
+tests, docs. Do not replace it with comments or labels and call that complete.
 
 ## AppState field types
 
@@ -85,7 +93,18 @@ ComboBox     -> String
 RadioButton  -> bool
 ProgressBar  -> f32
 Custom props -> declared type
+Image        -> no AppState field
 ```
+
+## Dependency And Output Rules
+
+SVG import, SVG image preview, and SVG renderer work are zero-new-crate zones.
+Do not add `resvg`, `usvg`, `tiny-skia`, a substitute SVG renderer crate, or a
+new dependency chain. "Pure Rust crate" is not permission.
+
+No hollow features: if a widget kind or property is visible in RohKai, it must
+have a real behavior in the canvas, code panel, export, save/load, tests, and
+docs, or it must be explicitly marked unavailable.
 
 ## Serialization
 

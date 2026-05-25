@@ -1,7 +1,8 @@
 ---
 name: egui-patterns
-description: Use when writing any egui UI code, generating egui output, or reviewing
-widget implementations. Contains the only correct egui API patterns to use.
+description: Use when writing or reviewing egui UI code outside src/canvas/. For
+canvas hit-testing, drag state, or resize handles use canvas-patterns instead.
+Contains idiomatic egui API patterns for this project.
 ---
 
 # egui Patterns
@@ -63,8 +64,17 @@ impl eframe::App for MyApp {
 }
 ```
 
-## Entry point (eframe 0.29)
+## Patterns to avoid
+
+> **DO NOT USE — analysis only, not templates.**
+
+- `SidePanel::left("my_panel")` — string literal IDs collide across frames; use a stable `egui::Id` or a constant.
+- Calling `ui.allocate_painter(...)` unconditionally every frame without checking `ui.is_rect_visible(...)` first — allocates painter budget even when off-screen.
+- `ctx.request_repaint()` in a tight loop without a condition — burns CPU; gate on actual state change.
+
+## Entry point
 ```rust
+// API shape for eframe 0.29 — verify Cargo.toml if NativeOptions/viewport errors appear
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 800.0]),

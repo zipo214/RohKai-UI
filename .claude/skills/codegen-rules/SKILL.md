@@ -26,6 +26,16 @@ Use `snake_case` of `widget.state_binding`. If `None`, skip AppState entry.
 - Widget needs a binding but `state_binding` is `None` → emit `/* TODO: set binding */`
 - Unknown WidgetKind variant → compiler error is preferable to a silent skip (use exhaustive match)
 
+## No hollow output
+- A visible `WidgetKind` must not emit a comment-only placeholder, diagnostic
+  label, or inert frame and call that feature complete.
+- Live codegen and export may differ in surrounding app structure, but they
+  must expose the same user-visible behavior for supported widget kinds.
+- If a feature is design-time-only, document it as unavailable in export and
+  add an explicit test for that limitation. Do not silently degrade.
+- `Image` / SVG work must not depend on `resvg`, `usvg`, `tiny-skia`, or any
+  substitute renderer crate unless the user explicitly reverses the policy.
+
 ## Module boundary
 `src/codegen/` is the only place allowed to build Rust syntax strings.
 Panels may call `egui_emitter::emit(&tree)` but must not build strings themselves.

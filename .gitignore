@@ -1,3 +1,26 @@
-target/
+# Rust build output
+/target/
+
+# Local RohKai project scratch files
 *.rohkai.json
+*.forge.json
+
+# Local agent/editor state
 .codex/session-last-touch.txt
+docs/context-snapshot.json
+.vscode/
+.idea/
+
+# Local environment and logs
+.env
+.env.*
+*.log
+*.tmp
+*.bak
+*.orig
+*.rej
+
+# OS noise
+.DS_Store
+Thumbs.db
+Desktop.ini

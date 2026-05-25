@@ -313,6 +313,24 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                 };
                 lines.push((Some(w.id), line));
             }
+            WidgetKind::Image => {
+                lines.push((Some(w.id), image_preview_line(w, 8)));
+            }
+            WidgetKind::Custom(_) => {
+                let line = if let Some(ref tpl) = w.descriptor_live_tpl {
+                    crate::codegen::widget_descriptor::apply_template(
+                        tpl,
+                        w,
+                        w.descriptor_name.as_deref().unwrap_or("Custom"),
+                    )
+                } else {
+                    format!(
+                        "        // Custom widget {:?}: descriptor not loaded",
+                        w.kind
+                    )
+                };
+                lines.push((Some(w.id), line));
+            }
         }
 
         lines.push((Some(w.id), "    });".to_owned()));
@@ -468,6 +486,89 @@ fn emit_child_lines(
             }
             None => format!("            // ProgressBar {label}: set a valid Binding"),
         },
+        WidgetKind::Image => image_child_preview_line(child, &rect_expr),
+        WidgetKind::Custom(_) => {
+            if let Some(ref tpl) = child.descriptor_live_tpl {
+                crate::codegen::widget_descriptor::apply_template(
+                    tpl,
+                    child,
+                    child.descriptor_name.as_deref().unwrap_or("Custom"),
+                )
+            } else {
+                format!("            // Custom child {:?}: descriptor not loaded", child.kind)
+            }
+        }
     };
     lines.push((Some(child.id), line));
+}
+
+fn image_preview_line(widget: &WidgetInstance, indent: usize) -> String {
+    let pad = " ".repeat(indent);
+    let key = string_literal(&format!("svg_{}", widget.id));
+    // Compact placeholder in the live code panel — the full SVG source is
+    // stored on the WidgetInstance and used by canvas rendering and export.
+    // Embedding the raw SVG here would fill the code buffer with thousands of
+    // lines for complex images without giving the user anything actionable.
+    let size_note = widget
+        .svg_source
+        .as_deref()
+        .map(|s| format!("\"[SVG: {} bytes]\"", s.len()))
+        .unwrap_or_else(|| "\"[no SVG source]\"".to_owned());
+    format!(
+        "{pad}self.show_svg_image(ui, {key}, {size_note}, egui::vec2({:.1}, {:.1}));",
+        widget.rect.w, widget.rect.h
+    )
+}
+
+fn image_child_preview_line(child: &WidgetInstance, rect_expr: &str) -> String {
+    let key = string_literal(&format!("svg_{}", child.id));
+    let size_note = child
+        .svg_source
+        .as_deref()
+        .map(|s| format!("\"[SVG: {} bytes]\"", s.len()))
+        .unwrap_or_else(|| "\"[no SVG source]\"".to_owned());
+    format!("            self.show_svg_image_at(ui, {rect_expr}, {key}, {size_note});")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::schema::{Rect, WidgetInstance};
+
+    #[test]
+    fn image_widget_emits_svg_preview_call() {
+        let tree = UiTree {
+            widgets: vec![WidgetInstance {
+                id: Uuid::nil(),
+                kind: WidgetKind::Image,
+                rect: Rect {
+                    x: 10.0,
+                    y: 20.0,
+                    w: 120.0,
+                    h: 80.0,
+                },
+                svg_source: Some("<svg/>".to_owned()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let generated = emit_indexed(&tree)
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(generated.contains("self.show_svg_image"));
+        // Live preview emits a compact size note, NOT the full raw SVG string.
+        // Export (export.rs) still embeds the full source via include_str / raw literal.
+        assert!(generated.contains("[SVG:"), "expected compact size note");
+        assert!(
+            !generated.contains("<svg/>"),
+            "raw SVG must not appear in live preview"
+        );
+        assert!(generated.contains("120.0"));
+        assert!(generated.contains("80.0"));
+        assert!(!generated.contains("egui::Frame::none()"));
+    }
 }

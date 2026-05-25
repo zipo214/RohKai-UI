@@ -3,7 +3,7 @@
 Run this before planning or editing RohKai code.
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File D:\dev\rohkai\scripts\preflight-context.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File D:\dev\rohkai\scripts\preflight-context.ps1
 ```
 
 Then read, in order:
@@ -11,8 +11,23 @@ Then read, in order:
 1. `AGENTS.md`
 2. `CLAUDE.md`
 3. `docs/ROADMAP.md`
-4. Latest entry in `docs/DEVLOG.md`
-5. `git status --short --branch`
-6. Relevant `.agents/skills/*/SKILL.md` or `.claude/skills/*/SKILL.md`
+4. `docs/CODE_INDEX.md`
+5. Latest note in `docs/CODE_COOP.md`
+6. Latest entry in `docs/DEVLOG.md`
+7. `git status --short --branch`
+8. Relevant `.agents/skills/*/SKILL.md` or `.claude/skills/*/SKILL.md`
+
+At the start of a meaningful planning or coding session, append a 3-4 sentence
+entry to `docs/CODE_COOP.md` describing what you are about to do, what context
+matters, and any hazard the next agent should know.
+
+Do not add `CONTRIBUTING.md` to this preflight/prep checklist. It is not part
+of the agent execution context unless the user explicitly asks for contribution
+policy work.
 
 Only plan or edit after the preflight context is current.
+
+Encoding rule: prefer `pwsh`/PowerShell 7 for repo scripts. Do not use Windows
+PowerShell 5.1 text-writing commands for repo files. Do not use `Set-Content`,
+`Add-Content`, or `Out-File` without explicit `-Encoding utf8`; prefer
+`apply_patch` for source edits.

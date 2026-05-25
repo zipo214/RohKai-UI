@@ -1,8 +1,13 @@
+$Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = $Utf8NoBom
+[Console]::InputEncoding = $Utf8NoBom
+[Console]::OutputEncoding = $Utf8NoBom
+
 Set-Location "D:\dev\rohkai"
 $projectRoot = "D:\dev\rohkai"
 $roadmapPath = "$projectRoot\docs\ROADMAP.md"
 $outputPath  = "$projectRoot\docs\context-snapshot.json"
-$checkmark   = [char]0x2705  # ✅ — PS5.1 regex can't match emoji literals reliably
+$checkmark   = [char]0x2705  # Checkmark literal avoided for legacy console safety.
 
 # --- Stage from ROADMAP.md ---
 $lastCompletedStage = ""

@@ -1,3 +1,4 @@
+use crate::codegen::widget_descriptor::{DescriptorPropType, WidgetDescriptor};
 use crate::project::schema::{
     CustomProp, CustomPropType, Orientation, TextAlign, WidgetInstance, WidgetKind,
 };
@@ -26,13 +27,16 @@ pub fn show_content(
     tree: &mut UiTree,
     selected: &mut Vec<Uuid>,
     shift_held: bool,
+    descriptors: &[WidgetDescriptor],
 ) -> PropertiesAction {
     let max_height = ui.available_height().clamp(140.0, 360.0);
     egui::ScrollArea::vertical()
         .id_salt("properties_scroll")
         .max_height(max_height)
         .auto_shrink([false, false])
-        .show(ui, |ui| show_content_inner(ui, tree, selected, shift_held))
+        .show(ui, |ui| {
+            show_content_inner(ui, tree, selected, shift_held, descriptors)
+        })
         .inner
 }
 
@@ -45,6 +49,7 @@ fn show_content_inner(
     tree: &mut UiTree,
     selected: &mut Vec<Uuid>,
     shift_held: bool,
+    descriptors: &[WidgetDescriptor],
 ) -> PropertiesAction {
     if selected.is_empty() {
         ui.weak("No widget selected.");
@@ -82,6 +87,12 @@ fn show_content_inner(
             WidgetKind::ComboBox => show_combo_box(ui, w, &mut do_delete),
             WidgetKind::ProgressBar => show_progress_bar(ui, w, &mut do_delete),
             WidgetKind::Frame => show_frame(ui, w, &mut do_delete),
+            WidgetKind::Image => show_image(ui, w, &mut do_delete),
+            WidgetKind::Custom(ref desc_id) => {
+                let desc =
+                    crate::codegen::widget_descriptor::find_by_id(descriptors, desc_id).cloned();
+                show_custom(ui, w, &mut do_delete, desc.as_ref());
+            }
         }
     } // w borrow ends
 
@@ -742,6 +753,28 @@ fn show_custom_props(ui: &mut egui::Ui, w: &mut WidgetInstance) {
     ui.data_mut(|d| d.insert_temp(add_key, form));
 }
 
+fn show_image(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
+    ui.label(
+        egui::RichText::new("SVG Image - source-backed canvas preview")
+            .small()
+            .weak(),
+    );
+    if w.svg_source.is_some() {
+        ui.label(
+            egui::RichText::new("SVG source loaded")
+                .small()
+                .color(egui::Color32::from_rgb(52, 211, 153)),
+        );
+    } else {
+        ui.label(
+            egui::RichText::new("No SVG source")
+                .small()
+                .color(egui::Color32::from_rgb(248, 113, 113)),
+        );
+    }
+    show_delete_button(ui, do_delete);
+}
+
 fn show_delete_button(ui: &mut egui::Ui, do_delete: &mut bool) {
     ui.separator();
     if ui
@@ -1136,4 +1169,114 @@ fn show_alignment(ui: &mut egui::Ui, tree: &mut UiTree, selected: &[Uuid], shift
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Custom widget (descriptor-backed)
+// ---------------------------------------------------------------------------
+
+fn show_custom(
+    ui: &mut egui::Ui,
+    w: &mut WidgetInstance,
+    do_delete: &mut bool,
+    descriptor: Option<&WidgetDescriptor>,
+) {
+    // Label field — always shown
+    field_text(ui, "Label", &mut w.props.label);
+    show_geometry(ui, w);
+    ui.separator();
+
+    // Descriptor-defined properties
+    if let Some(desc) = descriptor {
+        ui.label(
+            egui::RichText::new(format!("Descriptor: {}", desc.id))
+                .small()
+                .weak(),
+        );
+        for prop in &desc.properties {
+            let current = w
+                .descriptor_props
+                .entry(prop.key.clone())
+                .or_insert_with(|| prop.default.clone())
+                .clone();
+
+            match prop.ty {
+                DescriptorPropType::String => {
+                    let mut val = current;
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(&prop.display).small().weak());
+                        if ui.text_edit_singleline(&mut val).changed() {
+                            w.descriptor_props.insert(prop.key.clone(), val);
+                        }
+                    });
+                }
+                DescriptorPropType::F32 => {
+                    let mut val: f32 = current.parse().unwrap_or(0.0);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(&prop.display).small().weak());
+                        if ui.add(egui::DragValue::new(&mut val).speed(0.1)).changed() {
+                            w.descriptor_props
+                                .insert(prop.key.clone(), format!("{val}"));
+                        }
+                    });
+                }
+                DescriptorPropType::I32 => {
+                    let mut val: i32 = current.parse().unwrap_or(0);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(&prop.display).small().weak());
+                        if ui.add(egui::DragValue::new(&mut val)).changed() {
+                            w.descriptor_props
+                                .insert(prop.key.clone(), format!("{val}"));
+                        }
+                    });
+                }
+                DescriptorPropType::Bool => {
+                    let mut val = current == "true";
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(&prop.display).small().weak());
+                        if ui.checkbox(&mut val, "").changed() {
+                            w.descriptor_props.insert(
+                                prop.key.clone(),
+                                if val { "true" } else { "false" }.to_owned(),
+                            );
+                        }
+                    });
+                }
+                DescriptorPropType::Enum => {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(&prop.display).small().weak());
+                        for option in &prop.options {
+                            let selected = &current == option;
+                            if ui.selectable_label(selected, option).clicked() && !selected {
+                                w.descriptor_props.insert(prop.key.clone(), option.clone());
+                            }
+                        }
+                    });
+                }
+            }
+        }
+        ui.separator();
+    } else if !w.descriptor_props.is_empty() {
+        // No descriptor found — show raw key→value table
+        ui.label(
+            egui::RichText::new("Properties (descriptor missing)")
+                .small()
+                .weak(),
+        );
+        let keys: Vec<String> = w.descriptor_props.keys().cloned().collect();
+        for key in keys {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(&key).small().weak());
+                let mut val = w.descriptor_props.get(&key).cloned().unwrap_or_default();
+                if ui.text_edit_singleline(&mut val).changed() {
+                    w.descriptor_props.insert(key, val);
+                }
+            });
+        }
+        ui.separator();
+    }
+
+    show_tooltip(ui, w);
+    show_enabled(ui, w);
+    show_delete_button(ui, do_delete);
 }

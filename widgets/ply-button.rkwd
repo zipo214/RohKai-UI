@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "id": "ply.button",
+  "name": "Ply Button",
+  "category": "Ply",
+  "default_size": [120.0, 36.0],
+  "accent_color": [100, 180, 255],
+  "properties": [
+    {
+      "key": "label",
+      "type": "String",
+      "default": "Click me",
+      "display": "Label"
+    },
+    {
+      "key": "variant",
+      "type": "Enum",
+      "default": "Primary",
+      "display": "Variant",
+      "options": ["Primary", "Secondary", "Ghost"]
+    },
+    {
+      "key": "disabled",
+      "type": "Bool",
+      "default": "false",
+      "display": "Disabled"
+    }
+  ],
+  "state_fields": [],
+  "codegen": {
+    "live_preview": "        // ply::Button ({{prop.variant}}): {{label}}",
+    "export": "        ply::Button::new({{label}}).variant(ply::Variant::{{prop.variant}}).ui(ui);",
+    "on_click_stub": "    fn {{handler}}(&mut self) {\n        // TODO: handle Ply button click\n    }\n"
+  },
+  "canvas_preview": {
+    "mode": "label_box",
+    "label_template": "{{name}}: {{label}}"
+  },
+  "cargo_deps": [
+    { "name": "ply-ui", "version": "0.3", "features": [] }
+  ],
+  "events": ["on_click"]
+}
