@@ -153,17 +153,21 @@ pub fn handle_interaction(
             && pointer.y >= panel_rect.min.y + RULER_SIZE;
 
         if in_h_ruler {
+            let id = uuid::Uuid::new_v4();
             guides.push(GuideRule {
-                id: uuid::Uuid::new_v4(),
+                id,
                 orientation: GuideOrientation::Horizontal,
                 position: (pointer.y - origin.y) / zoom,
             });
+            *dragging = Some(id);
         } else if in_v_ruler {
+            let id = uuid::Uuid::new_v4();
             guides.push(GuideRule {
-                id: uuid::Uuid::new_v4(),
+                id,
                 orientation: GuideOrientation::Vertical,
                 position: (pointer.x - origin.x) / zoom,
             });
+            *dragging = Some(id);
         }
     }
 }
