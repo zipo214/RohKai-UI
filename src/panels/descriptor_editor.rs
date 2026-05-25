@@ -101,31 +101,39 @@ pub fn show(
         "New Widget Descriptor".to_owned()
     };
 
+    let screen = ctx.screen_rect();
+    let default_pos = egui::pos2(
+        (screen.center().x - 430.0).max(screen.min.x + 20.0),
+        (screen.center().y - 280.0).max(screen.min.y + 20.0),
+    );
+
     egui::Window::new(title)
         .id(egui::Id::new("descriptor_editor"))
         .open(&mut open)
+        .default_pos(default_pos)
         .default_size([860.0, 560.0])
         .min_size([600.0, 400.0])
+        .max_width(screen.width() - 40.0)
         .resizable(true)
         .constrain(false)
         .show(ctx, |ui| {
-            // Split: form left, preview right
+            // Clamp available width so content never forces horizontal expansion.
+            let avail = ui.available_width().min(860.0 - 16.0);
             state.split_ratio = state.split_ratio.clamp(0.3, 0.75);
-            let avail = ui.available_width();
-            let form_w = avail * state.split_ratio - 4.0;
-            let prev_w = avail - form_w - 12.0;
+            let form_w = (avail * state.split_ratio - 4.0).max(200.0);
+            let prev_w = (avail - form_w - 12.0).max(160.0);
 
             ui.horizontal_top(|ui| {
                 ui.vertical(|ui| {
                     ui.set_width(form_w);
-                    show_form(ui, state, widgets_dir);
+                    show_form(ui, state, widgets_dir, form_w);
                 });
 
                 ui.separator();
 
                 ui.vertical(|ui| {
                     ui.set_width(prev_w);
-                    show_preview(ui, &state.draft);
+                    show_preview(ui, &state.draft, prev_w);
                 });
             });
         });
@@ -141,7 +149,9 @@ fn show_form(
     ui: &mut egui::Ui,
     state: &mut DescriptorEditorState,
     widgets_dir: Option<std::path::PathBuf>,
+    form_w: f32,
 ) {
+    let field_w = (form_w - 80.0).max(80.0);
     egui::ScrollArea::vertical()
         .id_salt("desc_form_scroll")
         .show(ui, |ui| {
@@ -150,21 +160,21 @@ fn show_form(
                 ui.add(
                     egui::TextEdit::singleline(&mut state.draft.id)
                         .hint_text("e.g. my.button")
-                        .desired_width(ui.available_width()),
+                        .desired_width(field_w),
                 );
             });
             field_row(ui, "Name", |ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut state.draft.name)
                         .hint_text("Display name")
-                        .desired_width(ui.available_width()),
+                        .desired_width(field_w),
                 );
             });
             field_row(ui, "Category", |ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut state.draft.category)
                         .hint_text("Palette group")
-                        .desired_width(ui.available_width()),
+                        .desired_width(field_w),
                 );
             });
             field_row(ui, "Default size", |ui| {
@@ -213,9 +223,9 @@ fn show_form(
                 .small()
                 .weak(),
             );
-            template_field(ui, "Live preview", &mut state.draft.codegen.live_preview);
-            template_field(ui, "Export", &mut state.draft.codegen.export);
-            template_field(ui, "On-click stub", &mut state.draft.codegen.on_click_stub);
+            template_field(ui, "Live preview", &mut state.draft.codegen.live_preview, form_w);
+            template_field(ui, "Export", &mut state.draft.codegen.export, form_w);
+            template_field(ui, "On-click stub", &mut state.draft.codegen.on_click_stub, form_w);
 
             // ---- Canvas preview ----
             section(ui, "Canvas Preview");
@@ -223,7 +233,7 @@ fn show_form(
                 ui.add(
                     egui::TextEdit::singleline(&mut state.draft.canvas_preview.label_template)
                         .hint_text("{{name}}: {{label}}")
-                        .desired_width(ui.available_width()),
+                        .desired_width(field_w),
                 );
             });
 
@@ -270,7 +280,7 @@ fn show_form(
 // Right pane — live preview
 // ---------------------------------------------------------------------------
 
-fn show_preview(ui: &mut egui::Ui, draft: &WidgetDescriptor) {
+fn show_preview(ui: &mut egui::Ui, draft: &WidgetDescriptor, prev_w: f32) {
     ui.heading("Live Preview");
     ui.separator();
 
@@ -325,7 +335,7 @@ fn show_preview(ui: &mut egui::Ui, draft: &WidgetDescriptor) {
             ui.add(
                 egui::TextEdit::multiline(&mut s)
                     .font(egui::FontId::monospace(10.5))
-                    .desired_width(ui.available_width())
+                    .desired_width(prev_w)
                     .interactive(false),
             );
         });
@@ -344,7 +354,7 @@ fn show_preview(ui: &mut egui::Ui, draft: &WidgetDescriptor) {
             ui.add(
                 egui::TextEdit::multiline(&mut s)
                     .font(egui::FontId::monospace(10.5))
-                    .desired_width(ui.available_width())
+                    .desired_width(prev_w)
                     .interactive(false),
             );
         });
@@ -616,12 +626,12 @@ fn show_cargo_deps(ui: &mut egui::Ui, deps: &mut Vec<CargoDep>, new_name: &mut S
     });
 }
 
-fn template_field(ui: &mut egui::Ui, label: &str, value: &mut String) {
+fn template_field(ui: &mut egui::Ui, label: &str, value: &mut String, max_w: f32) {
     ui.label(egui::RichText::new(label).small().strong());
     ui.add(
         egui::TextEdit::multiline(value)
             .font(egui::FontId::monospace(11.0))
-            .desired_width(ui.available_width())
+            .desired_width(max_w)
             .desired_rows(3),
     );
 }
