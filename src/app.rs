@@ -50,6 +50,8 @@ pub struct SessionState {
     pub dragging_guide: Option<Uuid>,
     /// Whether the theme settings window is open.
     pub theme_open: bool,
+    /// Lock canvas W:H ratio when editing canvas size in the status bar.
+    pub lock_aspect_ratio: bool,
 }
 
 impl Default for SessionState {
@@ -66,6 +68,7 @@ impl Default for SessionState {
             hovered_guide: None,
             dragging_guide: None,
             theme_open: false,
+            lock_aspect_ratio: false,
         }
     }
 }
@@ -1453,6 +1456,16 @@ impl eframe::App for RohKaiApp {
                         self.project.ui_tree.app_props.guides.clear();
                         ui.close_menu();
                     }
+                    let bezel_label = if self.project.ui_tree.app_props.show_bezel {
+                        "Hide Canvas Bezel"
+                    } else {
+                        "Show Canvas Bezel"
+                    };
+                    if ui.button(bezel_label).clicked() {
+                        self.project.ui_tree.app_props.show_bezel =
+                            !self.project.ui_tree.app_props.show_bezel;
+                        ui.close_menu();
+                    }
                     ui.separator();
                     if ui.button("Theme…").clicked() {
                         self.session.theme_open = true;
@@ -1511,6 +1524,8 @@ impl eframe::App for RohKaiApp {
         // ---------------------------------------------------------------
         // Bottom status bar — canvas size + grid snap
         // ---------------------------------------------------------------
+        let prev_canvas_w = self.project.ui_tree.app_props.win_w;
+        let prev_canvas_h = self.project.ui_tree.app_props.win_h;
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("W").small().weak());
@@ -1525,6 +1540,18 @@ impl eframe::App for RohKaiApp {
                         .speed(1.0)
                         .range(100.0..=4000.0),
                 );
+                let lock_icon = if self.session.lock_aspect_ratio {
+                    "🔒"
+                } else {
+                    "🔓"
+                };
+                if ui
+                    .small_button(lock_icon)
+                    .on_hover_text("Lock aspect ratio")
+                    .clicked()
+                {
+                    self.session.lock_aspect_ratio = !self.session.lock_aspect_ratio;
+                }
                 // Canvas preset picker
                 ui.menu_button("▾ Preset", |ui| {
                     const PRESETS: &[(&str, f32, f32)] = &[
@@ -1608,6 +1635,18 @@ impl eframe::App for RohKaiApp {
                 }
             });
         });
+
+        // Enforce aspect ratio after DragValue edits
+        if self.session.lock_aspect_ratio && prev_canvas_w > 0.0 && prev_canvas_h > 0.0 {
+            let cur_w = self.project.ui_tree.app_props.win_w;
+            let cur_h = self.project.ui_tree.app_props.win_h;
+            let ratio = prev_canvas_w / prev_canvas_h;
+            if (cur_w - prev_canvas_w).abs() > 0.001 {
+                self.project.ui_tree.app_props.win_h = (cur_w / ratio).clamp(100.0, 4000.0);
+            } else if (cur_h - prev_canvas_h).abs() > 0.001 {
+                self.project.ui_tree.app_props.win_w = (cur_h * ratio).clamp(100.0, 4000.0);
+            }
+        }
 
         // ---------------------------------------------------------------
         // Right panel: generated code
@@ -1790,6 +1829,15 @@ impl eframe::App for RohKaiApp {
                 self.session.hovered_guide,
                 &ruler_ctx,
             );
+
+            // Canvas bezel — mock OS title bar chrome above the canvas rect.
+            if self.project.ui_tree.app_props.show_bezel {
+                crate::canvas::rulers::draw_bezel(
+                    ui,
+                    &ruler_ctx,
+                    &self.project.ui_tree.app_props.title,
+                );
+            }
         });
 
         // Prune SVG texture cache for widgets removed from canvas.

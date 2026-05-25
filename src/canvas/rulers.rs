@@ -169,6 +169,53 @@ pub fn handle_interaction(
 }
 
 // ---------------------------------------------------------------------------
+// Draw mock OS title-bar bezel above the canvas rect.
+// ---------------------------------------------------------------------------
+
+const BEZEL_H: f32 = 22.0;
+
+pub fn draw_bezel(ui: &mut egui::Ui, ctx: &RulerCtx, title: &str) {
+    let origin = canvas_origin(ctx.canvas_size, ctx.zoom, ctx.pan, ctx.panel_rect);
+    let canvas_w = ctx.canvas_size[0] * ctx.zoom;
+    let ruler_offset = if ctx.show_rulers { RULER_SIZE } else { 0.0 };
+
+    let bezel_top = origin.y - BEZEL_H;
+    let bezel_min_y = ctx.panel_rect.min.y + ruler_offset;
+    if bezel_top < bezel_min_y {
+        return;
+    }
+
+    let bezel_rect = egui::Rect::from_min_max(
+        egui::pos2(origin.x, bezel_top),
+        egui::pos2(origin.x + canvas_w, origin.y),
+    );
+
+    let painter = ui.painter_at(ctx.panel_rect);
+    painter.rect_filled(bezel_rect, egui::Rounding::same(4.0), egui::Color32::from_gray(45));
+
+    // Traffic-light circles
+    let cy = bezel_rect.center().y;
+    let dot_r = 5.0;
+    let dots = [
+        (bezel_rect.min.x + 14.0, egui::Color32::from_rgb(255, 95, 87)),
+        (bezel_rect.min.x + 30.0, egui::Color32::from_rgb(255, 189, 46)),
+        (bezel_rect.min.x + 46.0, egui::Color32::from_rgb(40, 201, 64)),
+    ];
+    for (cx, color) in dots {
+        painter.circle_filled(egui::pos2(cx, cy), dot_r, color);
+    }
+
+    // Centered title
+    painter.text(
+        bezel_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        title,
+        egui::FontId::proportional(11.0),
+        egui::Color32::from_gray(200),
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Draw rulers and guide lines — call AFTER canvas content each frame.
 // ---------------------------------------------------------------------------
 

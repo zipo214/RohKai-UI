@@ -1579,6 +1579,36 @@ pub fn handle(
                     }
                 }
 
+                // Guide snapping — snap widget edges/center to ruler guide lines
+                for (_, nx, ny, nw, nh) in &pos_list {
+                    let dxs = [*nx, nx + nw * 0.5, nx + nw];
+                    let dys = [*ny, ny + nh * 0.5, ny + nh];
+                    for g in &tree.app_props.guides {
+                        match g.orientation {
+                            crate::project::schema::GuideOrientation::Vertical => {
+                                for &dx in &dxs {
+                                    let d = (dx - g.position).abs();
+                                    if d < best_x {
+                                        best_x = d;
+                                        adj_x = g.position - dx;
+                                        raw_guide_v = Some((g.position, *ny, ny + nh));
+                                    }
+                                }
+                            }
+                            crate::project::schema::GuideOrientation::Horizontal => {
+                                for &dy in &dys {
+                                    let d = (dy - g.position).abs();
+                                    if d < best_y {
+                                        best_y = d;
+                                        adj_y = g.position - dy;
+                                        raw_guide_h = Some((g.position, *nx, nx + nw));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 for (_, nx, ny, _, _) in &mut pos_list {
                     *nx = (*nx + adj_x).max(0.0);
                     *ny = (*ny + adj_y).max(0.0);

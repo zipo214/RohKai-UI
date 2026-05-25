@@ -83,6 +83,9 @@ pub struct AppProps {
     /// Persistent canvas guide lines.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub guides: Vec<GuideRule>,
+    /// Show mock OS title-bar bezel above the canvas boundary.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub show_bezel: bool,
 }
 
 impl Default for AppProps {
@@ -97,6 +100,7 @@ impl Default for AppProps {
             max_size: None,
             theme: ThemeSettings::default(),
             guides: Vec::new(),
+            show_bezel: false,
         }
     }
 }
