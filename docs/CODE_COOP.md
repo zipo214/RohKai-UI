@@ -7,6 +7,16 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-05-24 — Claude In-app .rkwd Editor
+
+On `dev`, implemented the in-app descriptor editor (`1104547`): split-pane
+`egui::Window` — left = full descriptor form (all fields, collapsible props,
+add/remove rows), right = live canvas preview + expanded template TextEdits
+updating every frame. Entry: File → New Widget Descriptor… or "Edit descriptor"
+button in Custom widget properties panel. Save writes `.rkwd` to `widgets/` and
+auto-reloads palette. 53/53 tests, zero warnings. Remaining 7.x: `.rkwb` bundle;
+SVG import maturity is Codex's track.
+
 ## 2026-05-24 — Claude SVG Source Viewer
 
 On `dev`, added SVG source viewer popup (`76b770e`): properties panel for Image

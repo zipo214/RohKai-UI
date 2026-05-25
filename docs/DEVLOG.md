@@ -2,6 +2,41 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-05-24 — In-app .rkwd Descriptor Editor
+
+### Docs Reviewed
+- `docs/CODE_COOP.md`, `docs/ROADMAP.md`
+- `src/codegen/widget_descriptor.rs`, `src/app.rs`, `src/panels/properties.rs`
+- `src/canvas/interaction.rs` (canvas preview rendering for Custom widgets)
+
+### Changes Made
+
+**`src/panels/descriptor_editor.rs`** (new, `1104547`)
+- `DescriptorEditorState`: holds draft `WidgetDescriptor`, original stem, save message, scratch buffers for add-row inputs
+- `show()`: floating `egui::Window`, horizontal split — left = form, right = live preview
+- Form: full coverage of all descriptor fields — ID/name/category, accent RGB + swatch, default size, properties (collapsible, type combo, Enum options), state fields, codegen templates (multiline), canvas_preview label_template, events list, cargo deps
+- Live preview: painted canvas box (accent fill, label_template expanded), read-only expanded `live_preview` + `export` templates updating every frame, property defaults table
+- Save: `serde_json::to_string_pretty` → `<binary_dir>/widgets/<id>.rkwd` → triggers auto-reload
+
+**`app.rs`**
+- `DescriptorState.editor: Option<DescriptorEditorState>` added
+- `widgets_dir()` static helper extracted (shared by editor + import cmd)
+- `cmd_new_descriptor()` / `cmd_edit_descriptor(id)` commands
+- `show_descriptor_editor_window()`: renders window, auto-reloads palette on save
+- File menu: "New Widget Descriptor…" item added
+
+**`properties.rs`**
+- `show_custom` gains "Edit descriptor" button (visible when descriptor loaded)
+- `PropertiesAction::EditDescriptor(String)` variant + routing in `app.rs`
+
+### Verification
+- 53/53 tests, zero clippy warnings, `cargo fmt --check` clean.
+
+### Risks / Follow-ups
+- No drag-to-reorder for properties list — deferred.
+- `.rkwb` bundle format still open.
+- Save silently overwrites existing file with same id — no conflict dialog.
+
 ## 2026-05-24 — SVG Source Viewer Popup
 
 ### Docs Reviewed
