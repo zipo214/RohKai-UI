@@ -2,6 +2,41 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-05-24 — .rkwb Bundle Format + Expand SVG Inline Toggle
+
+### Docs Reviewed
+- `docs/ROADMAP.md` (Stage 7.x open items), `docs/CODE_COOP.md`
+
+### Changes Made
+
+**`src/codegen/widget_bundle.rs`** (new)
+- `WidgetBundle { format, schema_version, descriptors }` — JSON envelope for multiple descriptors
+- `from_descriptors`, `to_json`, `from_json` (validates format + version), `extract_to` (writes `<id>.rkwd` files)
+- `BundleError` enum with `Display` impl; no new crate dependency
+
+**`src/codegen/mod.rs`** — added `pub mod widget_bundle`
+
+**`src/app.rs`**
+- `cmd_export_widget_bundle`: rfd save dialog → serialize all loaded descriptors → write `.rkwb`
+- `cmd_import_widget_bundle`: rfd open dialog → parse bundle → `extract_to(widgets_dir)` → reload
+- Widgets menu: "Export Bundle…" + "Import Bundle…" entries added (with separators)
+
+**`src/project/schema.rs`** — `expand_svg_inline: bool` field on `WidgetInstance` (serde default false, skip if false)
+
+**`src/panels/properties.rs`** — checkbox "Expand SVG inline in code panel" in `show_image`, only visible when SVG source is loaded
+
+**`src/codegen/egui_emitter.rs`** — `svg_source_arg` helper; `image_preview_line` + `image_child_preview_line` call it; when `expand_svg_inline` is true, embeds raw string literal with correct hash count
+
+### Verification
+- 53/53 tests, zero clippy warnings, `cargo fmt --check` clean
+- Commit: `338ee65`
+
+### Risks / Follow-ups
+- SVG Import Maturity (tspan parser, importer report UI, etc.) — Codex track, deferred
+- Stage 7.x fully closed (Claude track). Stage 8 next.
+
+---
+
 ## 2026-05-24 — Descriptor Editor UI Fixes + Widgets Menu
 
 ### Docs Reviewed

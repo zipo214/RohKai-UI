@@ -7,6 +7,17 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-05-24 — Claude .rkwb Bundle + SVG Inline Toggle
+
+On `dev`, closed remaining Stage 7.x non-SVG-maturity items (`338ee65`):
+(1) `.rkwb` widget bundle — JSON envelope of multiple `WidgetDescriptor`s,
+no new crate; Widgets menu gains "Export Bundle…" + "Import Bundle…";
+(2) "Expand SVG inline" toggle per Image widget — checkbox in Properties,
+`expand_svg_inline: bool` on schema, `svg_source_arg` helper in emitter
+switches between compact `[SVG: N bytes]` and full raw string literal; export
+path unchanged (already embeds full SVG). 53/53 tests, zero warnings.
+Remaining open 7.x: SVG Import Maturity (Codex track). Next stage is Stage 8.
+
 ## 2026-05-24 — Claude Descriptor Editor UI Fixes + Widgets Menu
 
 On `dev`, fixed two bugs in the in-app descriptor editor (`8b3932d`): (1)
