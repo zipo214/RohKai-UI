@@ -795,29 +795,34 @@ impl RohKaiApp {
     }
 
     fn show_descriptor_editor_window(&mut self, ctx: &egui::Context) {
-        let Some(state) = self.descriptors.editor.as_mut() else {
-            return;
-        };
-        let widgets_dir = Self::widgets_dir();
-        let still_open = crate::panels::descriptor_editor::show(ctx, state, widgets_dir.clone());
-        if !still_open {
-            self.descriptors.editor = None;
-            return;
-        }
-        // After a successful save, reload the descriptor list.
-        let saved_ok = self
+        // Snapshot save_msg state BEFORE show() so we can detect a new save.
+        let was_saved = self
             .descriptors
             .editor
             .as_ref()
             .and_then(|s| s.save_msg.as_ref())
             .map(|(ok, _)| *ok)
             .unwrap_or(false);
-        if saved_ok {
+
+        let Some(state) = self.descriptors.editor.as_mut() else {
+            return;
+        };
+        let widgets_dir = Self::widgets_dir();
+        let still_open = crate::panels::descriptor_editor::show(ctx, state, widgets_dir);
+        if !still_open {
+            self.descriptors.editor = None;
+            return;
+        }
+        // Reload palette only on a fresh successful save (save_msg transitioned to ok).
+        let now_saved = self
+            .descriptors
+            .editor
+            .as_ref()
+            .and_then(|s| s.save_msg.as_ref())
+            .map(|(ok, _)| *ok)
+            .unwrap_or(false);
+        if now_saved && !was_saved {
             self.cmd_reload_descriptors();
-            // Clear the save message so we don't loop.
-            if let Some(s) = self.descriptors.editor.as_mut() {
-                s.save_msg = None;
-            }
         }
     }
 
@@ -1059,6 +1064,49 @@ impl eframe::App for RohKaiApp {
                         self.prefs.draft = self.prefs.user_settings.clone();
                         self.prefs.open = true;
                         ui.close_menu();
+                    }
+                });
+
+                // Widgets menu
+                ui.menu_button("Widgets", |ui| {
+                    if ui
+                        .button("New Descriptor…")
+                        .on_hover_text("Open the in-app .rkwd editor to create a new widget type")
+                        .clicked()
+                    {
+                        self.cmd_new_descriptor();
+                        ui.close_menu();
+                    }
+                    if ui
+                        .button("Import Definition…")
+                        .on_hover_text("Copy a .rkwd file into widgets/ and reload")
+                        .clicked()
+                    {
+                        self.cmd_import_widget_definition();
+                        ui.close_menu();
+                    }
+                    if ui
+                        .button("Reload Descriptors")
+                        .on_hover_text("Rescan widgets/ folder for .rkwd files")
+                        .clicked()
+                    {
+                        self.cmd_reload_descriptors();
+                        ui.close_menu();
+                    }
+                    if !self.descriptors.widgets.is_empty() {
+                        ui.separator();
+                        let ids: Vec<(String, String)> = self
+                            .descriptors
+                            .widgets
+                            .iter()
+                            .map(|d| (d.id.clone(), d.name.clone()))
+                            .collect();
+                        for (id, name) in ids {
+                            if ui.button(format!("Edit \"{name}\"")).clicked() {
+                                self.cmd_edit_descriptor(&id);
+                                ui.close_menu();
+                            }
+                        }
                     }
                 });
 

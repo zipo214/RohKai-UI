@@ -149,21 +149,21 @@ fn show_form(
                 ui.add(
                     egui::TextEdit::singleline(&mut state.draft.id)
                         .hint_text("e.g. my.button")
-                        .desired_width(f32::INFINITY),
+                        .desired_width(ui.available_width()),
                 );
             });
             field_row(ui, "Name", |ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut state.draft.name)
                         .hint_text("Display name")
-                        .desired_width(f32::INFINITY),
+                        .desired_width(ui.available_width()),
                 );
             });
             field_row(ui, "Category", |ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut state.draft.category)
                         .hint_text("Palette group")
-                        .desired_width(f32::INFINITY),
+                        .desired_width(ui.available_width()),
                 );
             });
             field_row(ui, "Default size", |ui| {
@@ -222,7 +222,7 @@ fn show_form(
                 ui.add(
                     egui::TextEdit::singleline(&mut state.draft.canvas_preview.label_template)
                         .hint_text("{{name}}: {{label}}")
-                        .desired_width(f32::INFINITY),
+                        .desired_width(ui.available_width()),
                 );
             });
 
@@ -324,7 +324,7 @@ fn show_preview(ui: &mut egui::Ui, draft: &WidgetDescriptor) {
             ui.add(
                 egui::TextEdit::multiline(&mut s)
                     .font(egui::FontId::monospace(10.5))
-                    .desired_width(f32::INFINITY)
+                    .desired_width(ui.available_width())
                     .interactive(false),
             );
         });
@@ -343,7 +343,7 @@ fn show_preview(ui: &mut egui::Ui, draft: &WidgetDescriptor) {
             ui.add(
                 egui::TextEdit::multiline(&mut s)
                     .font(egui::FontId::monospace(10.5))
-                    .desired_width(f32::INFINITY)
+                    .desired_width(ui.available_width())
                     .interactive(false),
             );
         });
@@ -390,11 +390,15 @@ fn show_props_list(ui: &mut egui::Ui, props: &mut Vec<DescriptorProp>, new_key: 
             .id_salt(format!("prop_{i}"))
             .show(ui, |ui| {
                 field_row(ui, "Key", |ui| {
-                    ui.add(egui::TextEdit::singleline(&mut prop.key).desired_width(f32::INFINITY));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut prop.key)
+                            .desired_width(ui.available_width()),
+                    );
                 });
                 field_row(ui, "Display", |ui| {
                     ui.add(
-                        egui::TextEdit::singleline(&mut prop.display).desired_width(f32::INFINITY),
+                        egui::TextEdit::singleline(&mut prop.display)
+                            .desired_width(ui.available_width()),
                     );
                 });
                 field_row(ui, "Type", |ui| {
@@ -408,7 +412,8 @@ fn show_props_list(ui: &mut egui::Ui, props: &mut Vec<DescriptorProp>, new_key: 
                 });
                 field_row(ui, "Default", |ui| {
                     ui.add(
-                        egui::TextEdit::singleline(&mut prop.default).desired_width(f32::INFINITY),
+                        egui::TextEdit::singleline(&mut prop.default)
+                            .desired_width(ui.available_width()),
                     );
                 });
                 if prop.ty == DescriptorPropType::Enum {
@@ -418,7 +423,7 @@ fn show_props_list(ui: &mut egui::Ui, props: &mut Vec<DescriptorProp>, new_key: 
                             .add(
                                 egui::TextEdit::singleline(&mut opts)
                                     .hint_text("A, B, C")
-                                    .desired_width(f32::INFINITY),
+                                    .desired_width(ui.available_width()),
                             )
                             .changed()
                         {
@@ -615,7 +620,7 @@ fn template_field(ui: &mut egui::Ui, label: &str, value: &mut String) {
     ui.add(
         egui::TextEdit::multiline(value)
             .font(egui::FontId::monospace(11.0))
-            .desired_width(f32::INFINITY)
+            .desired_width(ui.available_width())
             .desired_rows(3),
     );
 }
