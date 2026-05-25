@@ -7,6 +7,18 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-05-24 — Claude Guide Drag Fixes
+
+On `dev`, fixed two ruler-guide bugs: (1) guides created from ruler click were
+not immediately draggable — fixed by setting `*dragging = Some(id)` right after
+`guides.push()` in `rulers::handle_interaction`; (2) dragging a guide also
+fired rubber-band selection — fixed by adding `guide_drag_active: bool` to
+`CanvasSettings`, set each frame from `session.dragging_guide.is_some()`, which
+gates the `just_pressed` block and clears `rubber_band`/`drag` while a guide is
+held. Also fixed descriptor editor window stretching by replacing all
+`desired_width(ui.available_width())` with explicit computed widths + centered
+`default_pos`. 53/53 tests, zero warnings.
+
 ## 2026-05-24 — Claude Stage 8 Close-out: Guide Snap, Lock Ratio, Canvas Bezel
 
 On `dev`, closed the remaining three Stage 8 items: (1) Guide snapping —
