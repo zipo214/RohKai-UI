@@ -107,6 +107,7 @@ pub fn show(
         .default_size([860.0, 560.0])
         .min_size([600.0, 400.0])
         .resizable(true)
+        .constrain(false)
         .show(ctx, |ui| {
             // Split: form left, preview right
             state.split_ratio = state.split_ratio.clamp(0.3, 0.75);
