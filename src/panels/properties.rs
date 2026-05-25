@@ -787,6 +787,8 @@ fn show_image(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) -
                 view_clicked = true;
             }
         });
+        ui.checkbox(&mut w.expand_svg_inline, "Expand SVG inline in code panel")
+            .on_hover_text("Show full SVG source in the live code panel instead of [SVG: N bytes]");
     } else {
         ui.label(
             egui::RichText::new("No SVG source")

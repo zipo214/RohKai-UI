@@ -458,6 +458,87 @@ impl RohKaiApp {
         ));
     }
 
+    fn cmd_export_widget_bundle(&mut self) {
+        if self.descriptors.widgets.is_empty() {
+            self.messages.template_message =
+                Some((false, "No descriptors loaded to bundle.".to_owned()));
+            return;
+        }
+        let Some(dest) = rfd::FileDialog::new()
+            .set_title("Export Widget Bundle")
+            .set_file_name("widgets.rkwb")
+            .add_filter("RohKai Widget Bundle", &["rkwb"])
+            .save_file()
+        else {
+            return;
+        };
+        let bundle = crate::codegen::widget_bundle::WidgetBundle::from_descriptors(
+            &self.descriptors.widgets,
+        );
+        match bundle.to_json() {
+            Ok(json) => match std::fs::write(&dest, json) {
+                Ok(()) => {
+                    let n = bundle.descriptors.len();
+                    self.messages.template_message = Some((
+                        true,
+                        format!("Exported {n} descriptor(s) to {}", dest.display()),
+                    ));
+                }
+                Err(e) => {
+                    self.messages.template_message = Some((false, format!("Write failed: {e}")));
+                }
+            },
+            Err(e) => {
+                self.messages.template_message = Some((false, format!("Serialization error: {e}")));
+            }
+        }
+    }
+
+    fn cmd_import_widget_bundle(&mut self) {
+        let Some(src) = rfd::FileDialog::new()
+            .set_title("Import Widget Bundle")
+            .add_filter("RohKai Widget Bundle", &["rkwb"])
+            .pick_file()
+        else {
+            return;
+        };
+        let raw = match std::fs::read_to_string(&src) {
+            Ok(s) => s,
+            Err(e) => {
+                self.messages.template_message = Some((false, format!("Could not read file: {e}")));
+                return;
+            }
+        };
+        let bundle = match crate::codegen::widget_bundle::WidgetBundle::from_json(&raw) {
+            Ok(b) => b,
+            Err(e) => {
+                self.messages.template_message = Some((false, format!("Invalid bundle: {e}")));
+                return;
+            }
+        };
+        let dest_dir = match Self::widgets_dir() {
+            Some(d) => d,
+            None => {
+                self.messages.template_message =
+                    Some((false, "Could not determine binary path".to_owned()));
+                return;
+            }
+        };
+        match bundle.extract_to(&dest_dir) {
+            Ok(ids) => {
+                let n = ids.len();
+                let (widgets, errors) = crate::codegen::widget_descriptor::load_from_widgets_dir();
+                self.descriptors.widgets = widgets;
+                self.descriptors.errors = errors;
+                self.messages.template_message =
+                    Some((true, format!("Imported {n} descriptor(s) from bundle")));
+            }
+            Err(e) => {
+                self.messages.template_message = Some((false, format!("Extract failed: {e}")));
+            }
+        }
+    }
+
     /// Translate and optionally scale `widgets` so their bounding-box center lands at the
     /// currently visible canvas centre, shrinking proportionally if larger than 80 % of the
     /// visible area. Mutates rect in-place; does **not** assign new IDs.
@@ -1091,6 +1172,23 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.cmd_reload_descriptors();
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui
+                        .button("Export Bundle…")
+                        .on_hover_text("Save all loaded descriptors as a .rkwb bundle")
+                        .clicked()
+                    {
+                        self.cmd_export_widget_bundle();
+                        ui.close_menu();
+                    }
+                    if ui
+                        .button("Import Bundle…")
+                        .on_hover_text("Load all descriptors from a .rkwb bundle")
+                        .clicked()
+                    {
+                        self.cmd_import_widget_bundle();
                         ui.close_menu();
                     }
                     if !self.descriptors.widgets.is_empty() {

@@ -199,7 +199,7 @@
 - [x] Hot-reload: rescan `/widgets` folder without restart (file-watcher or menu action)
 - [x] Lazare round-trip for Custom widgets: geometry already works; label/binding
       round-trip requires parser to understand descriptor template structure
-- [ ] In-app `.rkwd` editor: create / edit descriptors from within RohKai
+- [x] In-app `.rkwd` editor: create / edit descriptors from within RohKai
 - [ ] `.rkwb` bundle format — zip of multiple `.rkwd` + preview SVGs + assets
 
 ## Stage 7.x - SVG Source Viewing (from code panel contraction)

@@ -5,4 +5,5 @@ pub mod kind_table;
 pub mod parser;
 pub mod rust;
 pub mod state_emitter;
+pub mod widget_bundle;
 pub mod widget_descriptor;

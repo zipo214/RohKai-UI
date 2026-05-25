@@ -326,6 +326,10 @@ pub struct WidgetInstance {
     /// native zero-dependency SVG placeholder painter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub svg_source: Option<String>,
+    /// When true, the live code panel embeds the full SVG source inline instead
+    /// of the compact `[SVG: N bytes]` placeholder.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub expand_svg_inline: bool,
 
     // Stage 7 — Custom widget descriptor snapshots (set at creation time)
     /// Display name from the descriptor (e.g. `"Ply Button"`).
@@ -377,6 +381,7 @@ impl Default for WidgetInstance {
             on_change: String::new(),
             event_handler: None,
             svg_source: None,
+            expand_svg_inline: false,
             descriptor_name: None,
             descriptor_accent: None,
             descriptor_live_tpl: None,

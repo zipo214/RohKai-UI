@@ -513,29 +513,32 @@ fn emit_child_lines(
 fn image_preview_line(widget: &WidgetInstance, indent: usize) -> String {
     let pad = " ".repeat(indent);
     let key = string_literal(&format!("svg_{}", widget.id));
-    // Compact placeholder in the live code panel — the full SVG source is
-    // stored on the WidgetInstance and used by canvas rendering and export.
-    // Embedding the raw SVG here would fill the code buffer with thousands of
-    // lines for complex images without giving the user anything actionable.
-    let size_note = widget
-        .svg_source
-        .as_deref()
-        .map(|s| format!("\"[SVG: {} bytes]\"", s.len()))
-        .unwrap_or_else(|| "\"[no SVG source]\"".to_owned());
+    let src_arg = svg_source_arg(widget.svg_source.as_deref(), widget.expand_svg_inline);
     format!(
-        "{pad}self.show_svg_image(ui, {key}, {size_note}, egui::vec2({:.1}, {:.1}));",
+        "{pad}self.show_svg_image(ui, {key}, {src_arg}, egui::vec2({:.1}, {:.1}));",
         widget.rect.w, widget.rect.h
     )
 }
 
+fn svg_source_arg(svg_source: Option<&str>, expand_inline: bool) -> String {
+    match svg_source {
+        Some(src) if expand_inline => {
+            // Find a hash count that produces an unambiguous raw string literal.
+            let hashes = (0usize..)
+                .find(|&n| !src.contains(&format!("\"{})", "#".repeat(n))))
+                .unwrap_or(0);
+            let h = "#".repeat(hashes);
+            format!("r{h}\"{src}\"{h}")
+        }
+        Some(src) => format!("\"[SVG: {} bytes]\"", src.len()),
+        None => "\"[no SVG source]\"".to_owned(),
+    }
+}
+
 fn image_child_preview_line(child: &WidgetInstance, rect_expr: &str) -> String {
     let key = string_literal(&format!("svg_{}", child.id));
-    let size_note = child
-        .svg_source
-        .as_deref()
-        .map(|s| format!("\"[SVG: {} bytes]\"", s.len()))
-        .unwrap_or_else(|| "\"[no SVG source]\"".to_owned());
-    format!("            self.show_svg_image_at(ui, {rect_expr}, {key}, {size_note});")
+    let src_arg = svg_source_arg(child.svg_source.as_deref(), child.expand_svg_inline);
+    format!("            self.show_svg_image_at(ui, {rect_expr}, {key}, {src_arg});")
 }
 
 #[cfg(test)]
