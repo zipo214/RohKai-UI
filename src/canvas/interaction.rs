@@ -40,6 +40,9 @@ pub struct CanvasSettings {
     pub pan: egui::Vec2,
     /// Whether the pixel ruler strips are visible (Ctrl+R toggle).
     pub show_rulers: bool,
+    /// Set each frame by the caller when a ruler guide is being dragged;
+    /// suppresses rubber-band and widget drag so they don't co-fire.
+    pub guide_drag_active: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -65,6 +68,7 @@ impl Default for CanvasSettings {
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
             show_rulers: false,
+            guide_drag_active: false,
         }
     }
 }
@@ -1243,8 +1247,13 @@ pub fn handle(
 
     // -------------------------------------------------------------------
     // Mouse-down — resize / select / rubber-band
+    // Guide drags have exclusive priority: suppress canvas interaction entirely.
     // -------------------------------------------------------------------
-    if just_pressed && state.context_menu.is_none() {
+    if settings.guide_drag_active {
+        state.rubber_band = None;
+        state.drag = None;
+    }
+    if just_pressed && !settings.guide_drag_active && state.context_menu.is_none() {
         if let Some(pos) = pointer {
             if resp.rect.contains(pos) {
                 let mut started_resize = false;

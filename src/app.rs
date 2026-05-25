@@ -1809,6 +1809,8 @@ impl eframe::App for RohKaiApp {
                 delete_pressed && has_hovered_guide,
             );
 
+            self.session.canvas_settings.guide_drag_active =
+                self.session.dragging_guide.is_some();
             crate::canvas::interaction::handle(
                 ui,
                 &mut self.project.ui_tree,
