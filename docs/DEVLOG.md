@@ -2,6 +2,30 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-05-24 — SVG Source Viewer Popup
+
+### Docs Reviewed
+- `docs/CODE_COOP.md`, `docs/ROADMAP.md` (7.x SVG Source Viewing section)
+- `src/panels/properties.rs`, `src/app.rs`
+
+### Changes Made
+
+**SVG source viewer** (`76b770e`)
+- `properties.rs`: `show_image` now returns `bool`; shows "View source" small button
+  beside "SVG source loaded" label. Fires `PropertiesAction::ShowSvgSource(id)`.
+- `app.rs`: `SessionState.svg_viewer_id: Option<Uuid>` added. New
+  `show_svg_source_window` renders `egui::Window` with read-only `TextEdit`,
+  monospace 11pt, byte count in title, "Copy all" clipboard button. X closes.
+- Roadmap: 7.x SVG Source Viewing first item checked ✅.
+- 7.x Descriptor Maturity: Import/Hot-reload/Lazare items checked ✅.
+
+### Verification
+- 53/53 tests, zero clippy warnings, `cargo fmt --check` clean.
+
+### Risks / Follow-ups
+- "Expand SVG inline" toggle (second 7.x item) deferred — low priority.
+- In-app `.rkwd` editor and `.rkwb` bundle still open.
+
 ## 2026-05-24 — Stage 7.x: Lazare Custom Round-trip + Import Widget Definition
 
 ### Docs Reviewed
