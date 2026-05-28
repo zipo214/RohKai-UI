@@ -197,10 +197,32 @@
 ## Stage 7.x - Widget Descriptor Maturity
 - [x] File → Import Widget Definition… dialog (load a single `.rkwd` without restart)
 - [x] Hot-reload: rescan `/widgets` folder without restart (file-watcher or menu action)
+- [x] Guided Descriptor Builder (`src/panels/widget_builder.rs`) — beginner
+      form over `WidgetDescriptor` with name, id auto-derive, type, label
+      default, click handler, and live descriptor preview. This is not the full
+      visual widget maker; it creates simple `.rkwd` descriptors safely. Hides
+      raw templates behind Label/Button/RawTemplate selector. "Advanced
+      Descriptor…" closes builder and opens the full editor with current draft.
 - [x] Lazare round-trip for Custom widgets: geometry already works; label/binding
       round-trip requires parser to understand descriptor template structure
 - [x] In-app `.rkwd` editor: create / edit descriptors from within RohKai
 - [ ] `.rkwb` bundle format — zip of multiple `.rkwd` + preview SVGs + assets
+
+## Stage 7.x - Visual Widget Maker
+- [x] Clarified product taxonomy:
+      Advanced Descriptor Editor, Guided Descriptor Builder, and future Visual
+      Widget Maker are separate layers.
+- [x] Added `docs/VISUAL_WIDGET_MAKER.md` design note.
+- [ ] Add `WidgetMakerDocument` internal model for visual primitive composition.
+- [ ] Add separate Visual Widget Maker window with mini-canvas and inspector.
+- [ ] Primitive vertical slice: rect, text, button-like hit region, z-order,
+      resize/move, and selection.
+- [ ] Expose primitive values as descriptor properties, starting with `label`.
+- [ ] Generate deterministic `WidgetDescriptor` output from the visual document.
+- [ ] Save generated descriptor to `widgets/`, reload palette, and preserve
+      Advanced Descriptor escape hatch.
+- [ ] Later: slots, layout groups, constraints, state variants, event zones,
+      style tokens, and import simple descriptors into maker documents.
 
 ## Stage 7.x - SVG Source Viewing (from code panel contraction)
 - [x] Read-only SVG source viewer panel or popup for Image widgets
@@ -217,14 +239,20 @@
       gradient, and pattern-heavy SVGs
 - [ ] Dedicated importer report UI showing skipped features and approximation notes
 - [x] SVG renderer roadmap/truth inventory comparing RohKai to mature engines
+- [x] Shared `src/svg_core.rs` microsyntax module started for color, numeric
+      list, affine transform, and path token parsing across importer/rasterizer
 - [x] `SvgRenderOutput` / `SvgRenderReport` API with rendered/skipped counts,
       unsupported-feature diagnostics, raster-size warnings, and fidelity
       scoring
+- [x] Renderer diagnostics attached to parsed nodes/attributes for known
+      unsupported elements and attributes
+- [x] Initial internal SVG scene-item flattening boundary with accumulated
+      transforms and resolved inherited style
 - [ ] SVG renderer scene/display-list IR split
 - [ ] Golden renderer fixture harness for supported raster output
-- [ ] Shared SVG microsyntax module for importer/rasterizer parity
+- [x] Shared SVG microsyntax module for importer/rasterizer parity
 
-## Future Considerations
+## Stage 8 Addendum — Rulers, Presets, Theming ✅
 
 ### Rulers & Measurement
 - [x] Horizontal ruler along top of canvas
@@ -254,120 +282,191 @@
 - [x] Theme exported as startup code in generated app:
       ctx.set_visuals(egui::Visuals { ... })
 - [x] Save themes as .rktheme files
-- [x] Apply a theme to the Rohkai designer itself
+- [x] Apply a theme to the RohKai designer itself
 
-### Lazarus Features — Remaining
-- [ ] Design-time non-visual components — timers,
-      data sources, app lifecycle represented as
-      clickable icons on a component tray below canvas
-- [ ] Full event list per widget — not just OnClick/OnChange
-      but all applicable egui events for that widget kind
-- [ ] Object Inspector true bidirectionality —
-      editing any property field updates canvas immediately
-      with no lag or focus loss
+---
 
-### Technical & Computational Widgets
-- [ ] Math/formula widget — displays computed value
-      from an expression bound to AppState
-- [ ] Timer/interval component — fires event on schedule,
-      non-visual, lives in component tray
-- [ ] Data table widget — tabular display, bound to Vec<T>
-- [ ] File picker widget — browse filesystem, returns path
-- [ ] Tree view widget — hierarchical data display
-- [ ] Chart widget — 2D line/bar chart bound to Vec<f32>
-- [ ] HTTP request component — non-visual, configure
-      URL/method/headers, bind response to state
-- [ ] State machine component — define states and
-      transitions visually, generates match-based logic
+## Cline Review 2026-05-26 — Approved / Deferred
 
-### Rust-Centric Visual Features
-- [ ] Ownership visualization — canvas overlay showing
-      which widgets own which AppState fields
-- [ ] Async task wiring — visually connect a widget event
-      to an async fn, generates tokio::spawn or similar
-- [ ] Channel connections — draw mpsc::channel connections
-      between components visually
-- [ ] Error propagation — visual Result/Option flow
-      from widget events through state
-- [ ] Iterator pipeline builder — chain .map/.filter/.collect
-      operations visually, generates correct iterator code
-- [ ] Trait binding — assign a trait implementation to a
-      widget's behavior visually
-- [ ] Macro palette — common Rust macros (vec!, format!,
-      println!) as droppable canvas components that wire
-      into event handlers
+Comparative analysis of RohKai vs mature egui-based tools produced nine
+recommendations. Status recorded here for traceability.
 
-### WASM Export & Web Target
-- [ ] WASM export panel in File menu
-- [ ] Configure: output path, bundler (trunk/wasm-pack),
-      generate index.html toggle
-- [ ] Generates cargo build --target wasm32-unknown-unknown
-      compatible project
-- [ ] Web-specific widget considerations (no file dialogs etc)
-- [ ] Preview in browser button — runs trunk serve
+**Approved (implement at appropriate stage):**
+- Rec 1 — Handler extraction: pull repeated handler-dispatch logic out of
+  `update()` into dedicated command methods (aligns with existing `cmd_*` pattern).
+- Rec 2 — Module-level doc comments: add `//!` crate/module docs to all
+  `src/**/*.rs` files for discoverability.
+- Rec 3 — Codegen memoization: cache emitter output keyed on `UiTree` hash to
+  skip regeneration on unchanged frames. **Caveat:** Lazare requires the live code
+  buffer to stay in sync with canvas state — memoization must not suppress updates
+  that reflect canvas mutations. Implement with care.
+- Rec 5 — Export integration tests: add `#[test]` cases that call `export::emit`
+  and verify the generated project compiles with `cargo check`.
+- Rec 6 — Canvas/UiTree unit tests: add tests for `UiTree::add`, `remove`,
+  `validate_and_repair`, and `canvas_rect` coordinate math.
+- Rec 9 — Command pattern (design only): document the intended `AppCommand` enum
+  shape so future undo/redo (Stage 14) can slot in without a large refactor.
+  Do not implement the stack yet.
 
-### Database Integration Panel
-- [ ] DB connection configurator — SQLite/PostgreSQL/MySQL
-- [ ] Uses sqlx or rusqlite crate (user choice)
-- [ ] Visual query builder — select table, columns, filter
-- [ ] Bind widget to query result field
-- [ ] Generated code uses correct Rust DB crate with
-      async/sync query calls
-- [ ] Schema viewer — see tables and fields visually
-- [ ] Generates AppState with db connection pool field
+**Deferred:**
+- Rec 4 — `thiserror` crate: not approved. Implement error types with manual
+  `Display` impls internally until a specific feature justifies the dependency.
+- Rec 7 — Dirty rectangles / partial repaint: not applicable. egui repaints the
+  full frame on demand; partial repaint is managed by the egui/wgpu integration,
+  not by RohKai application code.
+- Rec 8 — Parallel SVG processing: `rayon = "1"` is now an approved dependency
+  (see Architecture Rules), so parallelism is available. Specific use sites
+  (e.g. batch SVG import, rasterizer tile dispatch) are addressed per-stage.
 
-### Project Tree & File Browser
-- [ ] Project tree panel — shows all files in the
-      exported project structure
-- [ ] Click a file to view/edit its generated content
-- [ ] Add non-generated files to project (assets, configs)
-- [ ] Assets folder management — images, fonts, data files
-      referenced in generated code by path
+---
 
-## Future - Viable Widget Palette
+## Stage 8.5 — Document Outline & Preview Mode
 
-Planning inspired by mature desktop GUI designers. These are roadmap targets, not current scope.
+Bridges Stage 8 polish and Stage 9 depth. Improves designer usability without
+requiring schema changes.
 
-### Layouts
+- [ ] Document outline panel — collapsible sidebar showing all widgets as a
+      labelled tree (id, kind, label excerpt); click to select, drag to reorder
+      z-order; replaces manual Z-order menu for most operations
+- [ ] Preview mode — F5 toggle that hides all designer chrome (palette, properties,
+      code panel, rulers, guides, status bar) and shows the canvas at 1:1 zoom,
+      giving a faithful preview of the exported window layout
+- [ ] Keyboard shortcut reference — ? button or F1 opens an in-app overlay listing
+      all keyboard shortcuts (Ctrl+S, G, Delete, arrow nudge, Ctrl+R, etc.)
+
+---
+
+## Stage 9 — Widget Depth & Lazarus Completeness
+
+### Parallelism Foundation (rayon integration)
+- [x] Add `rayon = "1"` as core dependency — enables app-wide parallel processing
+- [ ] Parallel SVG rasterization — batch rasterize multiple Image widgets using `rayon::par_iter`
+- [ ] Parallel codegen — emit egui code for independent widgets in parallel
+- [ ] Parallel export — write exported project files concurrently
+- [ ] Parallel template loading — load multiple template files concurrently
+- [ ] Performance benchmarks — measure speedup for projects with 50+, 100+, 500+ widgets
+
+### Lazarus Completeness
+- [ ] Full contextual properties per widget kind — schema audit pass: ensure every
+      widget exposes the full set of egui properties applicable to its kind
+      (padding, spacing, text wrap, image scale mode, per-widget colors, etc.)
+- [ ] Design-time non-visual components — timers, data sources, app lifecycle
+      represented as clickable icons on a component tray below canvas
+- [ ] Full event list per widget — not just OnClick/OnChange but all applicable
+      egui events for that widget kind
+- [ ] Object Inspector true bidirectionality — editing any property field updates
+      canvas immediately with no lag or focus loss
+
+### SVG Renderer Progression
+- [ ] SVG renderer scene/display-list IR split
+- [ ] Golden renderer fixture harness for supported raster output
+
+### New Widget Kinds — Layouts & Spacers
 - [ ] Vertical Layout
 - [ ] Horizontal Layout
 - [ ] Grid Layout
 - [ ] Form Layout
-
-### Spacers
 - [ ] Horizontal Spacer
 - [ ] Vertical Spacer
 
-### Buttons
-- [ ] Push Button
+### New Widget Kinds — Containers
+- [ ] Scroll Area
+- [ ] Group Box
+- [ ] Tab Widget
+
+### New Widget Kinds — Input Additions
+- [ ] Font Combo Box
+- [ ] Multi-line Text Edit (distinct from single-line TextInput)
+- [ ] Numeric / spinner controls
+
+---
+
+## Stage 10 — Technical & Computational Widgets
+
+### Computational & Non-Visual Components
+- [ ] Math/formula widget — displays computed value from an expression bound to AppState
+- [ ] Timer/interval component — fires event on schedule, non-visual, lives in component tray
+- [ ] State machine component — define states and transitions visually,
+      generates match-based logic
+- [ ] HTTP request component — non-visual, configure URL/method/headers,
+      bind response to state
+
+### Data Display Widgets
+- [ ] Data table widget — tabular display, bound to Vec<T>
+- [ ] File picker widget — browse filesystem, returns path
+- [ ] Chart widget — 2D line/bar chart bound to Vec<f32>
+
+### New Widget Kinds — Data Views
+- [ ] List Widget / List View — bound to Vec<String>
+- [ ] Tree Widget / Tree View — hierarchical data display
+- [ ] Table Widget / Table View — tabular display (merges with data table widget above)
+
+### New Widget Kinds — Additional Containers & Buttons
+- [ ] Stacked Widget
+- [ ] Tool Box
 - [ ] Tool Button
-- [ ] Radio Button
-- [ ] Check Box
 - [ ] Command Link Button
 - [ ] Dialog Button Box
 
-### Containers
-- [ ] Group Box
-- [ ] Scroll Area
-- [ ] Tab Widget
-- [ ] Stacked Widget
-- [ ] Tool Box
-- [ ] Frame
+---
 
-### Inputs
-- [ ] Combo Box
-- [ ] Font Combo Box
-- [ ] Line Edit
-- [ ] Text Edit
-- [ ] Numeric / spinner controls
+## Stage 11 — Rust-Centric Visual Features
+- [ ] Ownership visualization — canvas overlay showing which widgets own which AppState fields
+- [ ] Async task wiring — visually connect a widget event to an async fn,
+      generates tokio::spawn or similar
+- [ ] Channel connections — draw mpsc::channel connections between components visually
+- [ ] Error propagation — visual Result/Option flow from widget events through state
+- [ ] Iterator pipeline builder — chain .map/.filter/.collect operations visually,
+      generates correct iterator code
+- [ ] Trait binding — assign a trait implementation to a widget's behavior visually
+- [ ] Macro palette — common Rust macros (vec!, format!, println!) as droppable canvas
+      components that wire into event handlers
 
-### Item Widgets and Views
-- [ ] List Widget / List View
-- [ ] Tree Widget / Tree View
-- [ ] Table Widget / Table View
+---
+
+## Stage 12 — Platform Targets
+- [ ] WASM export panel in File menu
+- [ ] Configure: output path, bundler (trunk/wasm-pack), generate index.html toggle
+- [ ] Generates `cargo build --target wasm32-unknown-unknown` compatible project
+- [ ] Web-specific widget considerations (no file dialogs, no native paths)
+- [ ] Preview in browser button — runs trunk serve
+
+---
+
+## Stage 13 — Data & Integration
+- [ ] DB connection configurator — SQLite/PostgreSQL/MySQL
+- [ ] Uses sqlx or rusqlite crate (user approves exact crate at stage start)
+- [ ] Visual query builder — select table, columns, filter
+- [ ] Bind widget to query result field
+- [ ] Generated code uses correct Rust DB crate with async/sync query calls
+- [ ] Schema viewer — see tables and fields visually
+- [ ] Generates AppState with db connection pool field
+
+---
+
+## Stage 14 — Project Infrastructure
+- [ ] Project tree panel — shows all files in the exported project structure
+- [ ] Click a file to view/edit its generated content
+- [ ] Add non-generated files to project (assets, configs)
+- [ ] Assets folder management — images, fonts, data files referenced in generated code by path
+- [ ] Help system — ? button, F1 shortcut, in-app keyboard shortcut reference panel
+- [ ] Interactive sandbox mode — F5 toggle to preview generated app behavior without exporting
+- [ ] Full undo/redo stack — Vec<UiTreeSnapshot>, 50 steps, Ctrl+Z / Ctrl+Y
+- [ ] Widget hierarchy/layers panel — tree view of UiTree, click to select, drag to reorder
+
+---
+
+## Stage 15 — Own Renderer
+- [ ] Replace egui rendering layer with RohKai-owned pure Rust renderer
+- [ ] Widget descriptor format drives renderer widget model directly
+- [ ] Zero transient C dependencies
+- [ ] All previously constrained visual properties become available:
+      per-widget color, corner radius on all types, border widths, drop shadows
 
 ### Later / High Risk
 - [ ] Model-based item views
 - [ ] Dock Widget
 - [ ] MDI Area
-- [ ] QAxWidget-style platform integrations (likely not compatible with RohKai's pure Rust / no C FFI rule)
+- [ ] Multi-window support
+- [ ] QAxWidget-style platform integrations
+      (not compatible with RohKai's pure Rust / no C FFI rule)

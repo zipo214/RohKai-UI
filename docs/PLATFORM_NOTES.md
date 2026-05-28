@@ -22,6 +22,12 @@ PowerShell 7 is required for the safest Unicode path. Windows PowerShell 5.1 is
 fallback-only because its legacy console and file encodings can corrupt
 UTF-8-only text when agents write repo files.
 
+Repo PowerShell scripts set UTF-8 input/output explicitly. Agents and humans
+should still avoid Windows PowerShell 5.1 text-writing commands for repo files.
+If a script must read or write text, use explicit `-Encoding utf8`; for source
+edits, prefer patch-based edits. `scripts/check-text-encoding.ps1` guards
+against common mojibake markers and replacement characters.
+
 ## macOS And Linux
 
 Mac and Linux users can build and run RohKai with Cargo. The `.ps1` scripts are
@@ -32,9 +38,10 @@ Options today:
 
 - Use Cargo directly for app development.
 - Install PowerShell 7 (`pwsh`) and run the same script commands used on Windows.
-- Read the markdown guidance manually: `AGENTS.md`, `CLAUDE.md`,
-  `docs/ROADMAP.md`, `docs/DEVLOG.md`, `docs/CODE_INDEX.md`,
-  `docs/CODE_COOP.md`, and relevant skills.
+- Read the low-token markdown guidance manually: `AGENTS.md` or `CLAUDE.md`,
+  latest `docs/CODE_COOP.md`, and relevant skills. Add `docs/ROADMAP.md`,
+  `docs/CODE_INDEX.md`, `docs/ARCHITECTURE.md`, or `docs/DEVLOG.md` only when
+  the task needs scope, orientation, structure, or history.
 
 Future cleanup should add one cross-platform command path, preferably a small
 Rust `xtask` or `cargo run --bin rohkai-dev -- ...` helper, so preflight and SVG

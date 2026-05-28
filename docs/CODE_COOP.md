@@ -4,8 +4,80 @@ Short agent-to-agent handoff diary. This is not the devlog and not the roadmap.
 Use it for the 3-4 sentence "what I am doing and what the next agent should
 know" note at the start of a meaningful planning or coding session.
 
-Keep entries newest-first. Be plain, specific, and honest about uncertainty.
+KEEP ENTRIES  newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
+
+## 2026-05-25 - Codex Widget Maker Taxonomy Docs
+
+On `dev`, I clarified that `src/panels/widget_builder.rs` is a Guided
+Descriptor Builder, not the true Visual Widget Maker the product still needs.
+The roadmap now treats Advanced Descriptor Editor, Guided Descriptor Builder,
+and future Visual Widget Maker as separate layers, and
+`docs/VISUAL_WIDGET_MAKER.md` sketches the future mini-canvas/primitive
+composition path. This was a docs-only pass; no Rust behavior changed.
+
+## 2026-05-25 - Codex SVG Path Tokenizer Core
+
+On `dev`, I continued the SVG shared-core cleanup by moving SVG path data
+tokenization into `src/svg_core.rs`. The importer now uses the shared lexer for
+placeholder bounds and diagnostics, while the rasterizer uses the same tokens
+and still keeps its own pixel-flattening semantics. One hazard was broader
+unknown-command recognition: rasterizer parsing now explicitly skips unsupported
+command payloads so it cannot stall when shared tokenization emits an unknown
+letter. Verification passed: format check, cargo check, 75/75 tests, clippy,
+SVG validation, and text-encoding guard.
+
+## 2026-05-25 - Codex SVG Transform Core
+
+On `dev`, I continued the SVG reduce/reuse/recycle cleanup by moving affine
+transform math and transform-list parsing into `src/svg_core.rs` as
+`Affine2D`. `src/svg_import.rs` now aliases its old `Matrix` to the shared
+type, and `src/canvas/svg_rasterizer.rs` now aliases its old `Transform` to the
+same shared type with `apply_f32` for pixel geometry. This removes another
+duplicated parser/math surface while preserving importer bounds behavior and
+rasterizer pixels. Verification passed: 69/69 tests, clippy, and
+`scripts/validate-svg-import.ps1`.
+
+## 2026-05-25 - Codex SVG Core Extraction
+
+On `dev`, I started the reduce/reuse/recycle SVG cleanup by adding
+`src/svg_core.rs` for shared zero-dependency SVG microsyntax. The first wired
+slice moves shared color parsing and SVG number-list parsing under one tested
+module, then uses it from both `src/svg_import.rs` and
+`src/canvas/svg_rasterizer.rs`. This removes duplicated color tables/number
+scanners without changing the public import/render API. Verification passed:
+67/67 tests, clippy, and `scripts/validate-svg-import.ps1`.
+
+## 2026-05-25 - Codex SVG Scene Boundary
+
+On `dev`, I added the first internal `SvgScene` boundary in
+`src/canvas/svg_rasterizer.rs`: XML nodes now flatten into scene items with
+accumulated transforms, resolved inherited style, and unsupported-subtree flags
+before raster output. This is not the full display-list/source-span/reference
+IR yet, but it is a real step toward it and it fixes shape-level `transform`
+attributes rendering. Verification passed with 65/65 tests, clippy, and
+`scripts/validate-svg-import.ps1`; I avoided Widget Builder files except for
+rustfmt touching already-dirty files.
+
+## 2026-05-25 — Claude Beginner Widget Builder
+
+On `dev`, added `src/panels/widget_builder.rs` — a guided beginner-friendly
+entry point for creating `.rkwd` descriptors. Split inspector (name, id
+auto-derive, Label/Button/RawTemplate type, label default, click handler) +
+live canvas preview. "Advanced Descriptor…" closes the builder atomically and
+hands the current draft to the full editor via `DescriptorEditorState::from_descriptor`.
+Four `descriptor_editor.rs` helpers promoted to `pub(crate)`. 8 new tests.
+63/63 tests, zero warnings. Entry points: File → Create Custom Widget…, Widgets menu.
+
+## 2026-05-25 - Codex SVG Renderer Diagnostics Tightening
+
+On `dev`, I continued the SVG renderer R0 track by moving unsupported-feature
+diagnostics away from raw source scanning and toward parsed node/attribute
+reporting in `src/canvas/svg_rasterizer.rs`. New tests prove comments no longer
+create fake unsupported diagnostics and unsupported definition children count as
+skipped. I also ran `cargo fmt`, which mechanically formatted recent
+uncommitted guide/bezel files from the current working tree; behavior was not
+changed there.
 
 ## 2026-05-24 — Claude Guide Drag Fixes
 
@@ -185,6 +257,18 @@ both. The current SVG rasterizer work is real but incomplete, especially export
 parity and full SVG feature support, so do not overclaim it. The worktree is
 already dirty from earlier SVG/Stage 7 changes; avoid broad formatting or
 unrelated rewrites unless the user asks.
+
+## 2026-05-26 — Cline Comprehensive Code Review
+
+Performed a full codebase review and produced 9 recommendations across 3 groups
+in `docs/CLINE_REVIEW_AND_RECOMMENDATIONS.md` and group-specific files. Added
+`rayon = "1"` to `Cargo.toml` as core dependency for app-wide parallelism and
+updated `docs/ROADMAP.md` with parallelism foundation tasks for Stage 9. No app
+behavior changed. Verification: `cargo check` passes, zero warnings. Key findings:
+overall 9/10 — excellent architecture (UiTree single source of truth), zero
+clippy warnings, 75 tests passing, strong security practices. Main improvement
+areas: codegen memoization, module-level docs, integration tests, and parallel
+SVG rasterization (now enabled by rayon).
 
 ## 2026-05-24 - Claude
 

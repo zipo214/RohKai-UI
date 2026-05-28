@@ -2,6 +2,264 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-05-26 — Comprehensive Code Review & Rayon Integration
+
+### Docs Reviewed Before Editing
+- `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`
+- `docs/ROADMAP.md`, `docs/ARCHITECTURE.md`, `docs/CODE_INDEX.md`
+- `docs/DEVLOG.md`, `docs/CODE_COOP.md`
+- `docs/SVG_IMPORT.md`, `docs/SVG_RENDERER_ROADMAP.md`
+- `src/project/ui_tree.rs`, `src/app.rs`, `src/main.rs`
+- `Cargo.toml`, `src/codegen/`, `src/canvas/`, `src/panels/`, `src/widgets/`
+- All test files (75 tests total)
+
+### Changes Made
+- Performed comprehensive code review across 7 categories (architecture, code quality,
+  testing, performance, security, documentation, dependencies).
+- Created 4 new recommendation documents with 9 actionable items across 3 groups:
+  - `docs/CLINE_REVIEW_AND_RECOMMENDATIONS.md` — executive summary and overview
+  - `docs/CLINE_RECOMMENDATIONS_GROUP1.md` — code quality & maintainability (3 items)
+  - `docs/CLINE_RECOMMENDATIONS_GROUP2.md` — testing & reliability (3 items)
+  - `docs/CLINE_RECOMMENDATIONS_GROUP3.md` — performance & architecture (3 items)
+- Added `rayon = "1"` to `Cargo.toml` as core dependency for app-wide parallelism.
+- Updated `docs/ROADMAP.md` with parallelism foundation tasks for Stage 9:
+  parallel SVG rasterization, parallel codegen, parallel export, parallel template
+  loading, and performance benchmarks.
+- Updated `docs/CODE_COOP.md` with session handoff note.
+
+### Verification
+- `cargo check` passes with zero warnings after adding rayon.
+- No app behavior changed — docs-only pass plus dependency addition.
+
+### Key Findings
+- Overall score: 9/10 — production-quality Rust code
+- Architecture: 9/10 — strong single-source-of-truth (UiTree) design
+- Code Quality: 9/10 — zero clippy warnings, clean formatting
+- Testing: 8/10 — 75 tests passing, good coverage (no UI integration tests)
+- Performance: 7/10 — good caching, but per-frame codegen and sequential SVG
+  rasterization are concerns for 100+ widget projects
+- Security: 9/10 — excellent SVG security, input validation throughout
+- Documentation: 8/10 — comprehensive docs, module-level docs could improve
+- Dependencies: 10/10 — minimal, well-chosen, mature crates
+
+### Risks / Follow-ups
+- Rayon is now a core dependency; future agents should consider parallel approaches
+  for expensive operations (SVG batch rasterization, codegen, export file writing).
+- 9 recommendations are ready for implementation when prioritized by user.
+- No urgent bugs found; the codebase is in excellent shape.
+
+## 2026-05-25 - Widget Maker Taxonomy Docs
+
+### Docs Reviewed Before Editing
+- `scripts/preflight-context.ps1`
+- latest `docs/CODE_COOP.md`
+- `docs/ROADMAP.md`
+- `docs/CODE_INDEX.md`
+- `src/panels/widget_builder.rs`
+
+### Changes Made
+- Added `docs/VISUAL_WIDGET_MAKER.md`.
+- Renamed the current builder concept in docs to Guided Descriptor Builder.
+- Clarified that the existing builder is a form over `WidgetDescriptor`, not a
+  true WYSIWYG widget construction tool.
+- Added a separate roadmap lane for the future Visual Widget Maker: internal
+  visual document, mini-canvas, primitives, exposed properties, deterministic
+  descriptor generation, and advanced-editor escape hatch.
+- Updated Code CoOp and Code Index with the distinction.
+
+### Verification
+- Docs-only pass. No Rust behavior changed.
+
+### Risks / Follow-ups
+- UI labels still say "Create Custom Widget"; a future UX pass may rename menu
+  labels to reduce confusion, while preserving discoverability.
+
+## 2026-05-25 - SVG Path Tokenizer Core Extraction
+
+### Docs Reviewed Before Coding
+- `scripts/preflight-context.ps1`
+- `.agents/skills/svg-zero-dep/SKILL.md`
+- latest `docs/CODE_COOP.md`
+- `src/svg_core.rs`, `src/svg_import.rs`, `src/canvas/svg_rasterizer.rs`
+- `docs/SVG_IMPORT.md`, `docs/SVG_RENDERER_ROADMAP.md`, `docs/ROADMAP.md`
+
+### Changes Made
+- Added `svg_core::SvgPathToken` and `svg_core::tokenize_path_data()`.
+- Shared path tokenization now handles compact syntax, adjacent decimals,
+  exponent notation, unknown command letters, and malformed fragments without
+  panics.
+- Replaced importer-local path tokens with the shared tokenizer while keeping
+  importer command limits, bounds semantics, malformed recovery, and unsupported
+  command diagnostics.
+- Replaced rasterizer-local path tokenization with the shared tokenizer while
+  keeping rasterizer flattening and fill/stroke behavior.
+- Added a rasterizer unsupported-command skip so broader shared command
+  recognition cannot stall on unknown path commands.
+- Updated SVG docs and coordination docs to reflect the shared path tokenizer.
+
+### Verification
+- `cargo fmt --check` passed.
+- `cargo check` passed.
+- `cargo test svg_core -- --nocapture` passed: 7/7.
+- `cargo test svg_import -- --nocapture` passed: 17/17.
+- `cargo test svg_rasterizer -- --nocapture` passed: 13/13.
+- `cargo test` passed: 75/75.
+- `cargo clippy -- -D warnings` passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\validate-svg-import.ps1`
+  passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1`
+  passed.
+
+### Risks / Follow-ups
+- Remaining duplicated SVG microsyntax candidate is length parsing. Keep it as a
+  separate pass because length percentages depend on viewport/property context.
+- Golden-image tests should still watch for tiny f64-to-f32 raster rounding
+  changes as renderer coverage grows.
+
+## 2026-05-25 - SVG Transform Core Extraction
+
+### Docs Reviewed Before Coding
+- `scripts/preflight-context.ps1`
+- `.agents/skills/svg-zero-dep/SKILL.md`
+- latest `docs/CODE_COOP.md`
+- `src/svg_core.rs`, `src/svg_import.rs`, `src/canvas/svg_rasterizer.rs`
+- `docs/SVG_IMPORT.md`, `docs/SVG_RENDERER_ROADMAP.md`, `docs/ROADMAP.md`
+
+### Changes Made
+- Added `svg_core::Affine2D` as the shared SVG affine transform type.
+- Moved matrix multiplication, translate/scale/rotate/skew construction,
+  rotate-about-point handling, finite/extreme checks, summaries, and
+  transform-list parsing into `svg_core`.
+- Replaced importer-local `Matrix` implementation with an alias to
+  `svg_core::Affine2D`.
+- Replaced rasterizer-local `Transform` implementation with an alias to
+  `svg_core::Affine2D` plus the shared `apply_f32` adapter for raster geometry.
+- Added `svg_core` tests for transform-list parsing and rotate-about-point.
+
+### Verification
+- `cargo fmt --check` passed.
+- `cargo test svg_core -- --nocapture` passed: 4/4.
+- `cargo test svg_import -- --nocapture` passed: 16/16.
+- `cargo test svg_rasterizer -- --nocapture` passed: 11/11.
+- `cargo check` passed.
+- `cargo test` passed: 69/69.
+- `cargo clippy -- -D warnings` passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\validate-svg-import.ps1` passed.
+
+### Risks / Follow-ups
+- Length parsing and path tokenization are still duplicated enough to deserve
+  future `svg_core` slices. Do those separately because path behavior is the
+  highest-risk SVG parser surface.
+
+## 2026-05-25 - SVG Core Microsyntax Extraction
+
+### Docs Reviewed Before Coding
+- `scripts/preflight-context.ps1`
+- `.agents/skills/svg-zero-dep/SKILL.md`
+- latest `docs/CODE_COOP.md`
+- `docs/SVG_IMPORT.md`, `docs/SVG_RENDERER_ROADMAP.md`, `docs/ROADMAP.md`
+- `src/svg_import.rs`, `src/canvas/svg_rasterizer.rs`
+
+### Changes Made
+- Added `src/svg_core.rs` as the shared zero-dependency SVG microsyntax module.
+- Moved shared SVG color parsing into `svg_core::parse_color` /
+  `svg_core::parse_rgb`.
+- Moved shared SVG numeric-list scanning into `svg_core::parse_numbers` /
+  `svg_core::parse_numbers_f32`.
+- Wired both `src/svg_import.rs` and `src/canvas/svg_rasterizer.rs` to use the
+  shared module, removing duplicate color tables and number scanners.
+- Added `svg_core` unit tests for compact number syntax and shared color forms.
+
+### Verification
+- `cargo fmt --check` passed.
+- `cargo test svg_core -- --nocapture` passed: 2/2.
+- `cargo test svg_import -- --nocapture` passed: 16/16.
+- `cargo test svg_rasterizer -- --nocapture` passed: 11/11.
+- `cargo check` passed.
+- `cargo test` passed: 67/67.
+- `cargo clippy -- -D warnings` passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\validate-svg-import.ps1` passed.
+
+### Risks / Follow-ups
+- Transform and path parsing still have duplication. The next cleanup slice
+  should move `Matrix`/`Transform` compatibility into `svg_core` without
+  changing importer bounds behavior or renderer pixel output.
+
+## 2026-05-25 - SVG Scene Boundary
+
+### Docs Reviewed Before Coding
+- `scripts/preflight-context.ps1`
+- `.agents/skills/svg-zero-dep/SKILL.md`
+- latest `docs/CODE_COOP.md`
+- `docs/SVG_IMPORT.md`, `docs/SVG_RENDERER_ROADMAP.md`, `docs/ROADMAP.md`
+- `src/canvas/svg_rasterizer.rs`
+
+### Dirty Worktree Check
+- Current dirty non-SVG work includes Claude's Widget Builder files:
+  `src/panels/widget_builder.rs`, `src/app.rs`, `src/panels/mod.rs`, and
+  `src/panels/descriptor_editor.rs`.
+- This SVG pass intentionally stayed in the rasterizer and docs. `cargo fmt`
+  may still mechanically touch already-dirty Rust files.
+
+### Changes Made
+- Added an internal `SvgScene` and `SvgSceneItem` layer between parsed XML-ish
+  nodes and raster drawing.
+- Scene items now carry accumulated transforms, resolved inherited style, and a
+  flag for unsupported ancestors before rendering starts.
+- Shape-level `transform` attributes now affect raster output, not just group
+  transforms.
+- Added tests for scene flattening and element-transform pixels.
+
+### Verification
+- `cargo fmt --check` passed.
+- `cargo test svg_rasterizer -- --nocapture` passed: 11/11.
+- `cargo check` passed.
+- `cargo test` passed: 65/65.
+- `cargo clippy -- -D warnings` passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\validate-svg-import.ps1` passed.
+- `cargo run` smoke launched and was stopped after 8 seconds.
+
+### Risks / Follow-ups
+- This is the first scene boundary, not the finished display-list IR. Source
+  spans, node IDs, reference tables, exact bounding boxes, and shared
+  importer/rasterizer microsyntax modules are still future work.
+
+## 2026-05-25 - SVG Renderer Parsed Diagnostics
+
+### Docs Reviewed Before Coding
+- `scripts/preflight-context.ps1`
+- `.agents/skills/svg-zero-dep/SKILL.md`
+- latest `docs/CODE_COOP.md`
+- `src/canvas/svg_rasterizer.rs`
+- `docs/SVG_IMPORT.md`, `docs/SVG_RENDERER_ROADMAP.md`
+
+### Changes Made
+- Added `SvgNode::Unsupported` so known unsupported renderer elements are
+  represented in the parsed tree instead of only source-scanned.
+- Moved renderer unsupported diagnostics for known elements and supported-node
+  attributes onto parsed nodes/attributes.
+- Added skipped-subtree accounting so unsupported definitions such as `defs`
+  and gradient children count toward skipped work without rendering.
+- Added tests proving SVG comments do not produce fake unsupported diagnostics
+  and unsupported definition children are counted as skipped.
+- Ran `cargo fmt`, which also formatted recent uncommitted guide/bezel files in
+  the working tree.
+
+### Verification
+- `cargo fmt --check` passed.
+- `cargo test svg_rasterizer -- --nocapture` passed: 9/9.
+- `cargo check` passed.
+- `cargo test` passed: 55/55.
+- `cargo clippy -- -D warnings` passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\validate-svg-import.ps1` passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1` passed.
+- `cargo run` smoke launched and was stopped after 8 seconds.
+
+### Risks / Follow-ups
+- Diagnostics are now parsed-node driven for known tags/attributes, but a full
+  `SvgScene` IR is still needed before report UI should rely on precise source
+  spans or resolved references.
+
 ## 2026-05-24 — Stage 8 Close-out: Guide Snap, Lock Ratio, Canvas Bezel
 
 ### Docs Reviewed

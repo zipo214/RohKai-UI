@@ -15,8 +15,10 @@ being comfortable.
 ## App Shell
 
 - `src/main.rs` - eframe startup and app icon.
-- `src/app.rs` - `RohKaiApp`, panel wiring, app state, file menu, preferences,
-  dirty checks, import/export coordination.
+- `src/app.rs` - `RohKaiApp`, panel wiring, file menu, preferences, dirty
+  checks, import/export coordination. App state is split into focused structs:
+  `ProjectState`, `SessionState`, `MessageState`, `PreferencesState`,
+  `CodePanelState`, and `DescriptorState`.
 - `src/settings.rs` - user-level settings under app data. These are not project
   state and must not dirty `.rohkai.json`.
 
@@ -24,10 +26,15 @@ being comfortable.
 
 - `src/canvas/interaction.rs` - canvas input, drawing, selection, drag, resize,
   pan/zoom, guides, image preview cache.
-- `src/canvas/svg_rasterizer.rs` - current zero-new-dependency SVG rasterizer
+- `src/canvas/svg_rasterizer.rs` - current zero-new-dependency SVG rasterizer;
+  includes the first internal `SvgSceneItem` flattening boundary before raster
+  drawing
   used by canvas Image preview and generated exports. It is substantial and
   real, but still a supported subset, not full `resvg` / `usvg` / `tiny-skia`
   equivalence.
+- `src/svg_core.rs` - shared zero-dependency SVG microsyntax helpers used by the
+  importer and rasterizer; currently owns color, numeric-list, affine
+  transform, and path token parsing.
 - `src/canvas/widget_instance.rs` - canvas rect conversion helpers.
 - `src/widgets/` - palette/default constructors for each `WidgetKind`.
 
@@ -37,11 +44,20 @@ being comfortable.
 - `src/panels/properties.rs` - selected widget inspector.
 - `src/panels/code_preview.rs` - live/editable generated code panel.
 - `src/panels/templates.rs` - template file interactions and SVG import path.
+- `src/panels/descriptor_editor.rs` - full power-user `.rkwd` editor (all
+  template/schema fields). Entry: File → New Widget Descriptor… or Widgets menu.
+- `src/panels/widget_builder.rs` - Guided Descriptor Builder. Beginner-friendly
+  form over `WidgetDescriptor` (name, type, label, click handler) with live
+  descriptor preview. It is not the future Visual Widget Maker; it creates
+  simple `.rkwd` descriptors and can hand off to the full editor. Entry:
+  File → Create Custom Widget… or Widgets menu.
 
 ## Codegen
 
 - `src/codegen/egui_emitter.rs` - live egui preview code.
 - `src/codegen/export.rs` - generated standalone eframe project output.
+- `src/codegen/field_collector.rs` - shared AppState field collection for live
+  preview, export, and descriptor state fields.
 - `src/codegen/state_emitter.rs` - generated `AppState`.
 - `src/codegen/parser.rs` - Lazare/bidirectional code parsing.
 - `src/codegen/kind_table.rs` - field types and widget metadata for codegen.
@@ -63,9 +79,15 @@ being comfortable.
 - `AGENTS.md` - Codex-facing repo rules.
 - `CLAUDE.md` - Claude-facing repo rules.
 - `docs/ROADMAP.md` - strategic stage plan.
-- `docs/DEVLOG.md` - chronological session record.
-- `docs/CODE_COOP.md` - short agent-to-agent handoff diary.
+- `docs/CODE_COOP.md` - short newest-first agent handoff diary; this is the
+  default context-sharing doc.
+- `docs/DEVLOG.md` - chronological session record; read for history,
+  regression investigation, or when preflight is run with `-IncludeDevlog`.
 - `docs/ARCHITECTURE.md` - structural truth.
+- `docs/VISUAL_WIDGET_MAKER.md` - future WYSIWYG widget construction studio
+  plan. Distinguishes the true visual maker from the existing guided descriptor
+  builder.
+- Historical bug review/RCA docs are reference material, not normal preflight.
 
 ## Scripts
 

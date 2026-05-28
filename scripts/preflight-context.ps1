@@ -1,4 +1,6 @@
-param()
+param(
+    [switch]$IncludeDevlog
+)
 
 $ErrorActionPreference = "Continue"
 $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
@@ -55,25 +57,34 @@ if (Test-Path $Roadmap) {
 }
 
 Write-Host ""
-Write-Host "== Latest Devlog Entry =="
 $Devlog = Join-Path $ProjectRoot "docs\DEVLOG.md"
-if (Test-Path $Devlog) {
-    $lines = Get-Content -Path $Devlog -Encoding utf8
-    $heads = for ($i = 0; $i -lt $lines.Count; $i++) {
-        if ($lines[$i] -match "^## ") { $i }
-    }
-    if ($heads.Count -gt 0) {
-        $start = $heads[0]
-        $end = $lines.Count - 1
-        for ($i = $start + 1; $i -lt $lines.Count; $i++) {
-            if ($lines[$i] -match "^## ") { $end = $i - 1; break }
+if ($IncludeDevlog) {
+    Write-Host "== Latest Devlog Entry =="
+    if (Test-Path $Devlog) {
+        $lines = Get-Content -Path $Devlog -Encoding utf8
+        $heads = for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match "^## ") { $i }
         }
-        $lines[$start..([Math]::Min($end, $start + 24))]
+        if ($heads.Count -gt 0) {
+            $start = $heads[0]
+            $end = $lines.Count - 1
+            for ($i = $start + 1; $i -lt $lines.Count; $i++) {
+                if ($lines[$i] -match "^## ") { $end = $i - 1; break }
+            }
+            $lines[$start..([Math]::Min($end, $start + 24))]
+        } else {
+            Write-Host "No dated entries yet."
+        }
     } else {
-        Write-Host "No dated entries yet."
+        Write-Warning "Missing docs\DEVLOG.md"
     }
 } else {
-    Write-Warning "Missing docs\DEVLOG.md"
+    Write-Host "== Devlog =="
+    if (Test-Path $Devlog) {
+        Write-Host "Omitted by default to reduce agent token load. Re-run with -IncludeDevlog when investigating history or resuming a specific prior session."
+    } else {
+        Write-Warning "Missing docs\DEVLOG.md"
+    }
 }
 
 Write-Host ""
@@ -121,7 +132,7 @@ foreach ($pair in $pairs) {
         Write-Host "MISSING PAIR: $($pair[0]) <-> $($pair[1])"
     }
 }
-Write-Host "INFO: AGENTS.md, CLAUDE.md, and role-specific agent files may differ by tool, but both must be read."
+Write-Host "INFO: Read the entry doc for your tool. Cross-read AGENTS.md/CLAUDE.md only for guidance drift, handoff, or multi-agent coordination work."
 
 Write-Host ""
 Write-Host "== Text Encoding Policy =="
@@ -160,5 +171,5 @@ if (Test-Path $DependencyPolicy) {
 }
 
 Write-Host ""
-Write-Host "Reminder: read AGENTS.md, CLAUDE.md, docs/ROADMAP.md, docs/CODE_INDEX.md, latest docs/CODE_COOP.md note, latest docs/DEVLOG.md entry, git status, and relevant skills/agents before planning or edits."
+Write-Host "Reminder: low-token default is AGENTS/CLAUDE policy + this summary + latest Code CoOp + git status + relevant skills. Read ROADMAP/CODE_INDEX/ARCHITECTURE/DEVLOG only when the task needs planning, structure, or history."
 Pop-Location
