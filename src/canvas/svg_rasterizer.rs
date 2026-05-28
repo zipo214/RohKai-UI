@@ -8,6 +8,7 @@
 // Unsupported features (gradients, filters, masks, <use>): shape renders with
 // fill/stroke color only.
 
+use crate::svg_core::{self, Rgba};
 use egui::ColorImage;
 
 const MAX_SVG_BYTES: usize = 5_000_000;
@@ -32,6 +33,111 @@ pub enum SvgRasterError {
     ParseFailed,
 }
 
+/// Render result with diagnostics. Prefer this when callers need to explain
+/// partial SVG fidelity to users.
+#[allow(dead_code)]
+pub struct SvgRenderOutput {
+    pub image: ColorImage,
+    pub report: SvgRenderReport,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct SvgRenderReport {
+    pub requested_width: u32,
+    pub requested_height: u32,
+    pub output_width: u32,
+    pub output_height: u32,
+    pub rendered_element_count: usize,
+    pub skipped_element_count: usize,
+    pub warning_count: usize,
+    pub unsupported_feature_count: usize,
+    pub warnings: Vec<SvgRenderWarning>,
+    pub unsupported_features: Vec<SvgRenderUnsupportedFeature>,
+    pub fidelity: SvgRenderFidelity,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SvgRenderFidelity {
+    High,
+    Medium,
+    Low,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SvgRenderWarning {
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SvgRenderUnsupportedFeature {
+    pub feature: String,
+    pub message: String,
+}
+
+impl SvgRenderReport {
+    fn new(
+        requested_width: u32,
+        requested_height: u32,
+        output_width: u32,
+        output_height: u32,
+    ) -> Self {
+        Self {
+            requested_width,
+            requested_height,
+            output_width,
+            output_height,
+            rendered_element_count: 0,
+            skipped_element_count: 0,
+            warning_count: 0,
+            unsupported_feature_count: 0,
+            warnings: Vec::new(),
+            unsupported_features: Vec::new(),
+            fidelity: SvgRenderFidelity::High,
+        }
+    }
+
+    fn warning(&mut self, code: impl Into<String>, message: impl Into<String>) {
+        self.warnings.push(SvgRenderWarning {
+            code: code.into(),
+            message: message.into(),
+        });
+    }
+
+    fn unsupported(&mut self, feature: impl Into<String>, message: impl Into<String>) {
+        self.unsupported_features.push(SvgRenderUnsupportedFeature {
+            feature: feature.into(),
+            message: message.into(),
+        });
+    }
+
+    fn rendered(&mut self) {
+        self.rendered_element_count += 1;
+    }
+
+    fn skipped(&mut self) {
+        self.skipped_element_count += 1;
+    }
+
+    fn finalize(&mut self) {
+        self.warning_count = self.warnings.len();
+        self.unsupported_feature_count = self.unsupported_features.len();
+        let severe_unsupported = self.unsupported_feature_count > 3
+            || self
+                .unsupported_features
+                .iter()
+                .any(|u| matches!(u.feature.as_str(), "clipPath" | "mask" | "filter"));
+        self.fidelity = if self.rendered_element_count == 0 || severe_unsupported {
+            SvgRenderFidelity::Low
+        } else if self.warning_count > 0 || self.unsupported_feature_count > 0 {
+            SvgRenderFidelity::Medium
+        } else {
+            SvgRenderFidelity::High
+        };
+    }
+}
+
 impl std::fmt::Display for SvgRasterError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -43,25 +149,44 @@ impl std::fmt::Display for SvgRasterError {
     }
 }
 
-/// Rasterize an SVG string to a pixel buffer of the given dimensions.
-///
-/// Returns `Err` if the SVG fails security checks or cannot be parsed.
-/// On success the returned `ColorImage` is straight RGBA.
-pub fn rasterize(svg_text: &str, width: u32, height: u32) -> Result<ColorImage, SvgRasterError> {
+/// Rasterize an SVG string and return pixels plus structured diagnostics.
+pub fn rasterize_with_report(
+    svg_text: &str,
+    width: u32,
+    height: u32,
+) -> Result<SvgRenderOutput, SvgRasterError> {
     let (w, h) = raster_size(width, height);
+    let mut report = SvgRenderReport::new(width, height, w as u32, h as u32);
     let mut buf = vec![0u8; w * h * 4]; // transparent black
+    if w as u32 != width || h as u32 != height {
+        report.warning(
+            "limit.raster_size",
+            "requested raster size was clamped to renderer safety limits",
+        );
+    }
 
     if !svg_text_allowed(svg_text) {
         return Err(SvgRasterError::ForbiddenContent);
     }
 
-    let doc = SvgDoc::parse(svg_text).ok_or(SvgRasterError::ParseFailed)?;
+    let scene = SvgScene::parse(svg_text).ok_or(SvgRasterError::ParseFailed)?;
 
-    let vb_xform = viewbox_to_pixel_transform(&doc, w, h);
-    let default_style = Style::default();
-    render_nodes(&doc.nodes, &vb_xform, &default_style, &mut buf, w, h);
+    let vb_xform = viewbox_to_pixel_transform(&scene, w, h);
+    render_scene_items(&scene.items, &vb_xform, &mut buf, w, h, &mut report);
+    report.finalize();
 
-    Ok(ColorImage::from_rgba_unmultiplied([w, h], &buf))
+    Ok(SvgRenderOutput {
+        image: ColorImage::from_rgba_unmultiplied([w, h], &buf),
+        report,
+    })
+}
+
+/// Rasterize an SVG string to a pixel buffer of the given dimensions.
+///
+/// Returns `Err` if the SVG fails security checks or cannot be parsed.
+/// On success the returned `ColorImage` is straight RGBA.
+pub fn rasterize(svg_text: &str, width: u32, height: u32) -> Result<ColorImage, SvgRasterError> {
+    rasterize_with_report(svg_text, width, height).map(|output| output.image)
 }
 
 /// Rasterize an SVG string, returning a grey fallback image on any error.
@@ -119,6 +244,48 @@ fn svg_text_allowed(svg_text: &str) -> bool {
     true
 }
 
+fn diagnose_unsupported_attrs(attrs: &[(String, String)], report: &mut SvgRenderReport) {
+    for (key, value) in attrs {
+        match key.as_str() {
+            "clip-path" => report.unsupported(
+                "clip-path attribute",
+                "clip-path attributes are diagnosed but not applied yet",
+            ),
+            "mask" => report.unsupported(
+                "mask attribute",
+                "mask attributes are diagnosed but not applied yet",
+            ),
+            "filter" => report.unsupported(
+                "filter attribute",
+                "filter attributes are diagnosed but not applied yet",
+            ),
+            "stroke-dasharray" => report.unsupported(
+                "stroke dasharray",
+                "stroke dash arrays are not rasterized yet",
+            ),
+            "stroke-linecap" => report.unsupported(
+                "stroke linecap",
+                "stroke line caps use the current simple stroke fallback",
+            ),
+            "stroke-linejoin" => report.unsupported(
+                "stroke linejoin",
+                "stroke line joins use the current simple stroke fallback",
+            ),
+            "fill-rule" => report.unsupported(
+                "fill-rule",
+                "fill-rule is diagnosed; current path fill uses even-odd behavior",
+            ),
+            _ => {}
+        }
+        if value.to_ascii_lowercase().contains("url(#") {
+            report.unsupported(
+                "paint server reference",
+                "paint-server references are diagnosed; gradients/patterns are not rasterized yet",
+            );
+        }
+    }
+}
+
 fn fallback_image(w: usize, h: usize) -> ColorImage {
     let mut buf = vec![50u8; w * h * 4];
     for i in (3..buf.len()).step_by(4) {
@@ -130,23 +297,6 @@ fn fallback_image(w: usize, h: usize) -> ColorImage {
 // ---------------------------------------------------------------------------
 // RGBA + Paint
 // ---------------------------------------------------------------------------
-
-#[derive(Clone, Copy, Default)]
-struct Rgba {
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8,
-}
-
-impl Rgba {
-    const BLACK: Self = Self {
-        r: 0,
-        g: 0,
-        b: 0,
-        a: 255,
-    };
-}
 
 #[derive(Clone)]
 enum Paint {
@@ -310,264 +460,20 @@ fn parse_paint(s: &str) -> Paint {
     if s == "none" || s == "transparent" || s.is_empty() || s.starts_with("url(") {
         Paint::None
     } else {
-        match parse_color(s) {
+        match svg_core::parse_color(s) {
             Some(c) => Paint::Color(c),
             None => Paint::Color(Rgba::BLACK),
         }
     }
 }
 
-fn parse_color(s: &str) -> Option<Rgba> {
-    let s = s.trim();
-    if let Some(hex) = s.strip_prefix('#') {
-        match hex.len() {
-            3 | 4 => {
-                let r = u8::from_str_radix(&hex[0..1].repeat(2), 16).ok()?;
-                let g = u8::from_str_radix(&hex[1..2].repeat(2), 16).ok()?;
-                let b = u8::from_str_radix(&hex[2..3].repeat(2), 16).ok()?;
-                Some(Rgba { r, g, b, a: 255 })
-            }
-            6 | 8 => {
-                let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-                let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-                let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-                Some(Rgba { r, g, b, a: 255 })
-            }
-            _ => None,
-        }
-    } else if let Some(inner) = s
-        .strip_prefix("rgb(")
-        .or_else(|| s.strip_prefix("RGB("))
-        .and_then(|t| t.strip_suffix(')'))
-    {
-        let parts: Vec<&str> = inner.split(',').collect();
-        if parts.len() < 3 {
-            return None;
-        }
-        let parse_c = |p: &str| -> Option<u8> {
-            let p = p.trim();
-            if let Some(pct) = p.strip_suffix('%') {
-                let f: f32 = pct.parse().ok()?;
-                Some((f / 100.0 * 255.0).round() as u8)
-            } else {
-                p.parse::<f32>().ok().map(|v| v.clamp(0.0, 255.0) as u8)
-            }
-        };
-        Some(Rgba {
-            r: parse_c(parts[0])?,
-            g: parse_c(parts[1])?,
-            b: parse_c(parts[2])?,
-            a: 255,
-        })
-    } else {
-        named_color(s)
-    }
-}
-
-fn named_color(name: &str) -> Option<Rgba> {
-    let c = |r, g, b| Some(Rgba { r, g, b, a: 255 });
-    match name.trim().to_lowercase().as_str() {
-        "black" => c(0, 0, 0),
-        "white" => c(255, 255, 255),
-        "red" => c(255, 0, 0),
-        "green" => c(0, 128, 0),
-        "lime" => c(0, 255, 0),
-        "blue" => c(0, 0, 255),
-        "yellow" => c(255, 255, 0),
-        "orange" => c(255, 165, 0),
-        "purple" => c(128, 0, 128),
-        "fuchsia" | "magenta" => c(255, 0, 255),
-        "cyan" | "aqua" => c(0, 255, 255),
-        "gray" | "grey" => c(128, 128, 128),
-        "darkgray" | "darkgrey" => c(169, 169, 169),
-        "lightgray" | "lightgrey" => c(211, 211, 211),
-        "silver" => c(192, 192, 192),
-        "maroon" => c(128, 0, 0),
-        "navy" => c(0, 0, 128),
-        "olive" => c(128, 128, 0),
-        "teal" => c(0, 128, 128),
-        "transparent" => Some(Rgba {
-            r: 0,
-            g: 0,
-            b: 0,
-            a: 0,
-        }),
-        "brown" => c(165, 42, 42),
-        "coral" => c(255, 127, 80),
-        "crimson" => c(220, 20, 60),
-        "gold" => c(255, 215, 0),
-        "indigo" => c(75, 0, 130),
-        "ivory" => c(255, 255, 240),
-        "khaki" => c(240, 230, 140),
-        "lavender" => c(230, 230, 250),
-        "pink" => c(255, 192, 203),
-        "salmon" => c(250, 128, 114),
-        "tan" => c(210, 180, 140),
-        "violet" => c(238, 130, 238),
-        _ => None,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 2D Affine Transform
-// ---------------------------------------------------------------------------
-
-/// SVG affine matrix: x' = a*x + c*y + e,  y' = b*x + d*y + f
-#[derive(Clone, Copy)]
-struct Transform {
-    a: f32,
-    b: f32,
-    c: f32,
-    d: f32,
-    e: f32,
-    f: f32,
-}
-
-impl Transform {
-    fn identity() -> Self {
-        Self {
-            a: 1.0,
-            b: 0.0,
-            c: 0.0,
-            d: 1.0,
-            e: 0.0,
-            f: 0.0,
-        }
-    }
-
-    fn apply(self, x: f32, y: f32) -> (f32, f32) {
-        (
-            self.a * x + self.c * y + self.e,
-            self.b * x + self.d * y + self.f,
-        )
-    }
-
-    /// self * other  (apply other first, then self)
-    fn concat(self, other: Transform) -> Transform {
-        Transform {
-            a: self.a * other.a + self.c * other.b,
-            b: self.b * other.a + self.d * other.b,
-            c: self.a * other.c + self.c * other.d,
-            d: self.b * other.c + self.d * other.d,
-            e: self.a * other.e + self.c * other.f + self.e,
-            f: self.b * other.e + self.d * other.f + self.f,
-        }
-    }
-
-    fn parse_single(s: &str) -> Option<Self> {
-        let s = s.trim();
-        let lo = s.to_lowercase();
-        if lo.starts_with("matrix(") {
-            let inner = &s[7..s.rfind(')')?];
-            let v = parse_floats(inner);
-            if v.len() >= 6 {
-                return Some(Transform {
-                    a: v[0],
-                    b: v[1],
-                    c: v[2],
-                    d: v[3],
-                    e: v[4],
-                    f: v[5],
-                });
-            }
-        } else if lo.starts_with("translate(") {
-            let inner = &s[10..s.rfind(')')?];
-            let v = parse_floats(inner);
-            let tx = v.first().copied().unwrap_or(0.0);
-            let ty = v.get(1).copied().unwrap_or(0.0);
-            return Some(Transform {
-                a: 1.0,
-                b: 0.0,
-                c: 0.0,
-                d: 1.0,
-                e: tx,
-                f: ty,
-            });
-        } else if lo.starts_with("scale(") {
-            let inner = &s[6..s.rfind(')')?];
-            let v = parse_floats(inner);
-            let sx = v.first().copied().unwrap_or(1.0);
-            let sy = v.get(1).copied().unwrap_or(sx);
-            return Some(Transform {
-                a: sx,
-                b: 0.0,
-                c: 0.0,
-                d: sy,
-                e: 0.0,
-                f: 0.0,
-            });
-        } else if lo.starts_with("rotate(") {
-            let inner = &s[7..s.rfind(')')?];
-            let v = parse_floats(inner);
-            let angle = v.first().copied().unwrap_or(0.0).to_radians();
-            let cx = v.get(1).copied().unwrap_or(0.0);
-            let cy = v.get(2).copied().unwrap_or(0.0);
-            let (sin_a, cos_a) = angle.sin_cos();
-            return Some(Transform {
-                a: cos_a,
-                b: sin_a,
-                c: -sin_a,
-                d: cos_a,
-                e: cx - cx * cos_a + cy * sin_a,
-                f: cy - cx * sin_a - cy * cos_a,
-            });
-        }
-        None
-    }
-
-    fn parse_chained(s: &str) -> Transform {
-        let mut result = Transform::identity();
-        let s = s.trim();
-        let mut i = 0;
-        let bytes = s.as_bytes();
-
-        while i < s.len() {
-            // skip whitespace/commas
-            while i < s.len()
-                && (bytes[i] == b' ' || bytes[i] == b',' || bytes[i] == b'\t' || bytes[i] == b'\n')
-            {
-                i += 1;
-            }
-            if i >= s.len() {
-                break;
-            }
-
-            // find opening paren
-            let start = i;
-            while i < s.len() && bytes[i] != b'(' {
-                i += 1;
-            }
-            if i >= s.len() {
-                break;
-            }
-            // find closing paren
-            while i < s.len() && bytes[i] != b')' {
-                i += 1;
-            }
-            if i >= s.len() {
-                break;
-            }
-            let func_str = &s[start..i + 1];
-            if let Some(t) = Transform::parse_single(func_str) {
-                result = result.concat(t);
-            }
-            i += 1; // skip ')'
-        }
-        result
-    }
-}
-
-fn parse_floats(s: &str) -> Vec<f32> {
-    s.split(|c: char| c == ',' || c.is_ascii_whitespace())
-        .filter(|t| !t.is_empty())
-        .filter_map(|t| t.parse().ok())
-        .collect()
-}
+type Transform = svg_core::Affine2D;
 
 // ---------------------------------------------------------------------------
 // SVG Document model
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 enum SvgNode {
     Group {
         attrs: Vec<(String, String)>,
@@ -599,6 +505,11 @@ enum SvgNode {
         #[allow(dead_code)]
         attrs: Vec<(String, String)>,
     },
+    Unsupported {
+        tag: String,
+        attrs: Vec<(String, String)>,
+        children: Vec<SvgNode>,
+    },
 }
 
 struct SvgDoc {
@@ -606,6 +517,152 @@ struct SvgDoc {
     width: f32,
     height: f32,
     nodes: Vec<SvgNode>,
+}
+
+struct SvgScene {
+    viewbox: Option<[f32; 4]>,
+    width: f32,
+    height: f32,
+    items: Vec<SvgSceneItem>,
+}
+
+struct SvgSceneItem {
+    node: SvgNode,
+    transform: Transform,
+    style: Style,
+    skipped_by_unsupported_ancestor: bool,
+}
+
+impl SvgScene {
+    fn parse(svg_text: &str) -> Option<Self> {
+        SvgDoc::parse(svg_text).map(Self::from_doc)
+    }
+
+    fn from_doc(doc: SvgDoc) -> Self {
+        let mut items = Vec::new();
+        Self::build_items(
+            &doc.nodes,
+            Transform::identity(),
+            Style::default(),
+            false,
+            &mut items,
+        );
+        Self {
+            viewbox: doc.viewbox,
+            width: doc.width,
+            height: doc.height,
+            items,
+        }
+    }
+
+    fn build_items(
+        nodes: &[SvgNode],
+        inherited_transform: Transform,
+        inherited_style: Style,
+        skipped_by_unsupported_ancestor: bool,
+        items: &mut Vec<SvgSceneItem>,
+    ) {
+        for node in nodes {
+            let attrs = node.attrs();
+            let attr_pairs: Vec<(&str, &str)> = attrs
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            let local_style = inherited_style.inherit(&attr_pairs);
+            let local_transform = attr_get(attrs, "transform")
+                .map(Transform::parse_chained)
+                .unwrap_or_else(Transform::identity);
+            let combined_transform = inherited_transform.concat(local_transform);
+
+            match node {
+                SvgNode::Group { children, .. } => {
+                    items.push(SvgSceneItem {
+                        node: node.shallow(),
+                        transform: combined_transform,
+                        style: local_style.clone(),
+                        skipped_by_unsupported_ancestor,
+                    });
+                    Self::build_items(
+                        children,
+                        combined_transform,
+                        local_style,
+                        skipped_by_unsupported_ancestor,
+                        items,
+                    );
+                }
+                SvgNode::Unsupported { children, .. } => {
+                    items.push(SvgSceneItem {
+                        node: node.shallow(),
+                        transform: combined_transform,
+                        style: local_style.clone(),
+                        skipped_by_unsupported_ancestor,
+                    });
+                    Self::build_items(children, combined_transform, local_style, true, items);
+                }
+                _ => items.push(SvgSceneItem {
+                    node: node.shallow(),
+                    transform: combined_transform,
+                    style: local_style,
+                    skipped_by_unsupported_ancestor,
+                }),
+            }
+        }
+    }
+}
+
+impl SvgNode {
+    fn attrs(&self) -> &[(String, String)] {
+        match self {
+            SvgNode::Group { attrs, .. }
+            | SvgNode::Rect { attrs }
+            | SvgNode::Circle { attrs }
+            | SvgNode::Ellipse { attrs }
+            | SvgNode::Line { attrs }
+            | SvgNode::Polyline { attrs }
+            | SvgNode::Polygon { attrs }
+            | SvgNode::Path { attrs }
+            | SvgNode::Text { attrs }
+            | SvgNode::Unsupported { attrs, .. } => attrs,
+        }
+    }
+
+    fn shallow(&self) -> Self {
+        match self {
+            SvgNode::Group { attrs, .. } => SvgNode::Group {
+                attrs: attrs.clone(),
+                children: Vec::new(),
+            },
+            SvgNode::Rect { attrs } => SvgNode::Rect {
+                attrs: attrs.clone(),
+            },
+            SvgNode::Circle { attrs } => SvgNode::Circle {
+                attrs: attrs.clone(),
+            },
+            SvgNode::Ellipse { attrs } => SvgNode::Ellipse {
+                attrs: attrs.clone(),
+            },
+            SvgNode::Line { attrs } => SvgNode::Line {
+                attrs: attrs.clone(),
+            },
+            SvgNode::Polyline { attrs } => SvgNode::Polyline {
+                attrs: attrs.clone(),
+            },
+            SvgNode::Polygon { attrs } => SvgNode::Polygon {
+                attrs: attrs.clone(),
+            },
+            SvgNode::Path { attrs } => SvgNode::Path {
+                attrs: attrs.clone(),
+            },
+            SvgNode::Text { attrs } => SvgNode::Text {
+                attrs: attrs.clone(),
+            },
+            SvgNode::Unsupported { tag, attrs, .. } => SvgNode::Unsupported {
+                tag: tag.clone(),
+                attrs: attrs.clone(),
+                children: Vec::new(),
+            },
+        }
+    }
 }
 
 impl SvgDoc {
@@ -791,10 +848,7 @@ impl<'a> XmlParser<'a> {
             }
         }
 
-        let is_container = matches!(
-            tag.as_str(),
-            "g" | "svg" | "defs" | "symbol" | "clippath" | "mask"
-        );
+        let is_container = is_container_tag(&tag);
         let is_text = tag == "text" || tag == "tspan";
 
         let children = if !self_closing && is_container {
@@ -908,8 +962,92 @@ impl<'a> XmlParser<'a> {
             "polygon" => Some(SvgNode::Polygon { attrs }),
             "path" => Some(SvgNode::Path { attrs }),
             "text" | "tspan" => Some(SvgNode::Text { attrs }),
+            tag if unsupported_tag_feature(tag).is_some() => Some(SvgNode::Unsupported {
+                tag: tag.to_owned(),
+                attrs,
+                children,
+            }),
             _ => None,
         }
+    }
+}
+
+fn is_container_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "g" | "svg"
+            | "defs"
+            | "symbol"
+            | "clippath"
+            | "mask"
+            | "filter"
+            | "marker"
+            | "lineargradient"
+            | "radialgradient"
+            | "pattern"
+            | "foreignobject"
+            | "style"
+            | "switch"
+    )
+}
+
+fn unsupported_tag_feature(tag: &str) -> Option<(&'static str, &'static str)> {
+    match tag {
+        "defs" => Some((
+            "defs",
+            "defs content is preserved in source but not directly rendered",
+        )),
+        "symbol" => Some((
+            "symbol",
+            "symbols are not rendered until referenced use expansion is implemented",
+        )),
+        "use" => Some((
+            "use",
+            "use/symbol expansion is not implemented in raster mode yet",
+        )),
+        "clippath" => Some((
+            "clipPath",
+            "clip paths are diagnosed but not applied in raster output yet",
+        )),
+        "mask" => Some(("mask", "masks are diagnosed but not applied in raster output yet")),
+        "filter" => Some((
+            "filter",
+            "filters are diagnosed but not evaluated in raster output yet",
+        )),
+        "marker" => Some((
+            "marker",
+            "markers are diagnosed but not drawn on stroked paths yet",
+        )),
+        "lineargradient" => Some((
+            "linearGradient",
+            "linear gradients are diagnosed but not rasterized yet",
+        )),
+        "radialgradient" => Some((
+            "radialGradient",
+            "radial gradients are diagnosed but not rasterized yet",
+        )),
+        "pattern" => Some(("pattern", "patterns are diagnosed but not rasterized yet")),
+        "image" => Some((
+            "image",
+            "embedded raster images are diagnosed but not decoded by the zero-dependency renderer yet",
+        )),
+        "textpath" => Some(("textPath", "textPath is preserved in source but not rasterized yet")),
+        "foreignobject" => Some((
+            "foreignObject",
+            "foreignObject content is rejected from the secure static renderer profile",
+        )),
+        "animate" | "animatetransform" | "animatemotion" | "set" | "mpath" => {
+            Some(("animation", "animation elements are ignored by the static renderer"))
+        }
+        "style" => Some((
+            "style",
+            "style blocks are not parsed by the current rasterizer style engine",
+        )),
+        "switch" => Some((
+            "switch",
+            "switch conditional processing is not implemented in raster mode yet",
+        )),
+        _ => None,
     }
 }
 
@@ -938,13 +1076,13 @@ fn attr_f32(attrs: &[(String, String)], key: &str, default: f32) -> f32 {
 // ViewBox → pixel transform
 // ---------------------------------------------------------------------------
 
-fn viewbox_to_pixel_transform(doc: &SvgDoc, pw: usize, ph: usize) -> Transform {
-    let (vbx, vby, vbw, vbh) = match doc.viewbox {
+fn viewbox_to_pixel_transform(scene: &SvgScene, pw: usize, ph: usize) -> Transform {
+    let (vbx, vby, vbw, vbh) = match scene.viewbox {
         Some([x, y, w, h]) if w > 0.0 && h > 0.0 => (x, y, w, h),
         _ => {
             // Fall back to width/height if present
-            if doc.width > 0.0 && doc.height > 0.0 {
-                (0.0, 0.0, doc.width, doc.height)
+            if scene.width > 0.0 && scene.height > 0.0 {
+                (0.0, 0.0, scene.width, scene.height)
             } else {
                 return Transform::identity();
             }
@@ -956,12 +1094,12 @@ fn viewbox_to_pixel_transform(doc: &SvgDoc, pw: usize, ph: usize) -> Transform {
     let ty = (ph as f32 - vbh * scale) / 2.0 - vby * scale;
 
     Transform {
-        a: scale,
+        a: scale as f64,
         b: 0.0,
         c: 0.0,
-        d: scale,
-        e: tx,
-        f: ty,
+        d: scale as f64,
+        e: tx as f64,
+        f: ty as f64,
     }
 }
 
@@ -969,48 +1107,117 @@ fn viewbox_to_pixel_transform(doc: &SvgDoc, pw: usize, ph: usize) -> Transform {
 // Rendering
 // ---------------------------------------------------------------------------
 
-fn render_nodes(
-    nodes: &[SvgNode],
+fn render_scene_items(
+    items: &[SvgSceneItem],
     xform: &Transform,
-    style: &Style,
     buf: &mut [u8],
     w: usize,
     h: usize,
+    report: &mut SvgRenderReport,
 ) {
-    for node in nodes {
-        render_node(node, xform, style, buf, w, h);
+    for item in items {
+        render_scene_item(item, xform, buf, w, h, report);
     }
 }
 
-fn render_node(
-    node: &SvgNode,
-    xform: &Transform,
-    style: &Style,
+fn render_scene_item(
+    item: &SvgSceneItem,
+    view_xform: &Transform,
     buf: &mut [u8],
     w: usize,
     h: usize,
+    report: &mut SvgRenderReport,
 ) {
-    match node {
-        SvgNode::Group { attrs, children } => {
-            let attr_pairs: Vec<(&str, &str)> = attrs
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .collect();
-            let child_style = style.inherit(&attr_pairs);
-            let local_xform = attr_get(attrs, "transform")
-                .map(Transform::parse_chained)
-                .unwrap_or_else(Transform::identity);
-            let combined = xform.concat(local_xform);
-            render_nodes(children, &combined, &child_style, buf, w, h);
+    let node_xform = view_xform.concat(item.transform);
+    match &item.node {
+        SvgNode::Group { attrs, .. } => {
+            diagnose_unsupported_attrs(attrs, report);
         }
-        SvgNode::Rect { attrs } => render_rect(attrs, xform, style, buf, w, h),
-        SvgNode::Circle { attrs } => render_circle(attrs, xform, style, buf, w, h),
-        SvgNode::Ellipse { attrs } => render_ellipse(attrs, xform, style, buf, w, h),
-        SvgNode::Line { attrs } => render_line(attrs, xform, style, buf, w, h),
-        SvgNode::Polyline { attrs } => render_poly(attrs, xform, style, buf, w, h, false),
-        SvgNode::Polygon { attrs } => render_poly(attrs, xform, style, buf, w, h, true),
-        SvgNode::Path { attrs } => render_path(attrs, xform, style, buf, w, h),
-        SvgNode::Text { attrs: _ } => {} // not rendered
+        SvgNode::Rect { attrs } => {
+            diagnose_unsupported_attrs(attrs, report);
+            if item.skipped_by_unsupported_ancestor {
+                report.skipped();
+            } else if render_rect(attrs, &node_xform, &item.style, buf, w, h) {
+                report.rendered();
+            } else {
+                report.skipped();
+            }
+        }
+        SvgNode::Circle { attrs } => {
+            diagnose_unsupported_attrs(attrs, report);
+            if item.skipped_by_unsupported_ancestor {
+                report.skipped();
+            } else if render_circle(attrs, &node_xform, &item.style, buf, w, h) {
+                report.rendered();
+            } else {
+                report.skipped();
+            }
+        }
+        SvgNode::Ellipse { attrs } => {
+            diagnose_unsupported_attrs(attrs, report);
+            if item.skipped_by_unsupported_ancestor {
+                report.skipped();
+            } else if render_ellipse(attrs, &node_xform, &item.style, buf, w, h) {
+                report.rendered();
+            } else {
+                report.skipped();
+            }
+        }
+        SvgNode::Line { attrs } => {
+            diagnose_unsupported_attrs(attrs, report);
+            if item.skipped_by_unsupported_ancestor {
+                report.skipped();
+            } else if render_line(attrs, &node_xform, &item.style, buf, w, h) {
+                report.rendered();
+            } else {
+                report.skipped();
+            }
+        }
+        SvgNode::Polyline { attrs } => {
+            diagnose_unsupported_attrs(attrs, report);
+            if item.skipped_by_unsupported_ancestor {
+                report.skipped();
+            } else if render_poly(attrs, &node_xform, &item.style, buf, w, h, false) {
+                report.rendered();
+            } else {
+                report.skipped();
+            }
+        }
+        SvgNode::Polygon { attrs } => {
+            diagnose_unsupported_attrs(attrs, report);
+            if item.skipped_by_unsupported_ancestor {
+                report.skipped();
+            } else if render_poly(attrs, &node_xform, &item.style, buf, w, h, true) {
+                report.rendered();
+            } else {
+                report.skipped();
+            }
+        }
+        SvgNode::Path { attrs } => {
+            diagnose_unsupported_attrs(attrs, report);
+            if item.skipped_by_unsupported_ancestor {
+                report.skipped();
+            } else if render_path(attrs, &node_xform, &item.style, buf, w, h) {
+                report.rendered();
+            } else {
+                report.skipped();
+            }
+        }
+        SvgNode::Text { attrs } => {
+            diagnose_unsupported_attrs(attrs, report);
+            report.unsupported(
+                "text",
+                "text elements are preserved in source but not rasterized yet",
+            );
+            report.skipped();
+        }
+        SvgNode::Unsupported { tag, attrs, .. } => {
+            diagnose_unsupported_attrs(attrs, report);
+            if let Some((feature, message)) = unsupported_tag_feature(tag) {
+                report.unsupported(feature, message);
+            }
+            report.skipped();
+        }
     }
 }
 
@@ -1025,7 +1232,7 @@ fn render_rect(
     buf: &mut [u8],
     w: usize,
     h: usize,
-) {
+) -> bool {
     let attr_pairs: Vec<(&str, &str)> = attrs
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
@@ -1037,7 +1244,7 @@ fn render_rect(
     let rw = attr_f32(attrs, "width", 0.0);
     let rh = attr_f32(attrs, "height", 0.0);
     if rw <= 0.0 || rh <= 0.0 {
-        return;
+        return false;
     }
     let mut rx = attr_f32(attrs, "rx", 0.0);
     let mut ry = attr_f32(attrs, "ry", 0.0);
@@ -1050,14 +1257,21 @@ fn render_rect(
     }
 
     let pts = rounded_rect_pts(x, y, rw, rh, rx, ry);
-    let transformed: Vec<(f32, f32)> = pts.iter().map(|&(px, py)| xform.apply(px, py)).collect();
+    let transformed: Vec<(f32, f32)> = pts
+        .iter()
+        .map(|&(px, py)| xform.apply_f32(px, py))
+        .collect();
 
+    let mut rendered = false;
     if let Some(fill) = style.effective_fill() {
         fill_polygon(buf, w, h, &transformed, fill);
+        rendered = true;
     }
     if let Some((stroke_color, stroke_w)) = style.effective_stroke() {
         stroke_polyline(buf, w, h, &transformed, stroke_w, stroke_color, true);
+        rendered = true;
     }
+    rendered
 }
 
 fn render_circle(
@@ -1067,7 +1281,7 @@ fn render_circle(
     buf: &mut [u8],
     w: usize,
     h: usize,
-) {
+) -> bool {
     let attr_pairs: Vec<(&str, &str)> = attrs
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
@@ -1078,18 +1292,25 @@ fn render_circle(
     let cy = attr_f32(attrs, "cy", 0.0);
     let r = attr_f32(attrs, "r", 0.0);
     if r <= 0.0 {
-        return;
+        return false;
     }
 
     let pts = ellipse_pts(cx, cy, r, r);
-    let transformed: Vec<(f32, f32)> = pts.iter().map(|&(px, py)| xform.apply(px, py)).collect();
+    let transformed: Vec<(f32, f32)> = pts
+        .iter()
+        .map(|&(px, py)| xform.apply_f32(px, py))
+        .collect();
 
+    let mut rendered = false;
     if let Some(fill) = style.effective_fill() {
         fill_polygon(buf, w, h, &transformed, fill);
+        rendered = true;
     }
     if let Some((stroke_color, stroke_w)) = style.effective_stroke() {
         stroke_polyline(buf, w, h, &transformed, stroke_w, stroke_color, true);
+        rendered = true;
     }
+    rendered
 }
 
 fn render_ellipse(
@@ -1099,7 +1320,7 @@ fn render_ellipse(
     buf: &mut [u8],
     w: usize,
     h: usize,
-) {
+) -> bool {
     let attr_pairs: Vec<(&str, &str)> = attrs
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
@@ -1111,18 +1332,25 @@ fn render_ellipse(
     let erx = attr_f32(attrs, "rx", 0.0);
     let ery = attr_f32(attrs, "ry", 0.0);
     if erx <= 0.0 || ery <= 0.0 {
-        return;
+        return false;
     }
 
     let pts = ellipse_pts(cx, cy, erx, ery);
-    let transformed: Vec<(f32, f32)> = pts.iter().map(|&(px, py)| xform.apply(px, py)).collect();
+    let transformed: Vec<(f32, f32)> = pts
+        .iter()
+        .map(|&(px, py)| xform.apply_f32(px, py))
+        .collect();
 
+    let mut rendered = false;
     if let Some(fill) = style.effective_fill() {
         fill_polygon(buf, w, h, &transformed, fill);
+        rendered = true;
     }
     if let Some((stroke_color, stroke_w)) = style.effective_stroke() {
         stroke_polyline(buf, w, h, &transformed, stroke_w, stroke_color, true);
+        rendered = true;
     }
+    rendered
 }
 
 fn render_line(
@@ -1132,7 +1360,7 @@ fn render_line(
     buf: &mut [u8],
     w: usize,
     h: usize,
-) {
+) -> bool {
     let attr_pairs: Vec<(&str, &str)> = attrs
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
@@ -1144,9 +1372,12 @@ fn render_line(
     let x2 = attr_f32(attrs, "x2", 0.0);
     let y2 = attr_f32(attrs, "y2", 0.0);
 
-    let pts = vec![xform.apply(x1, y1), xform.apply(x2, y2)];
+    let pts = vec![xform.apply_f32(x1, y1), xform.apply_f32(x2, y2)];
     if let Some((stroke_color, stroke_w)) = style.effective_stroke() {
         stroke_polyline(buf, w, h, &pts, stroke_w, stroke_color, false);
+        true
+    } else {
+        false
     }
 }
 
@@ -1158,7 +1389,7 @@ fn render_poly(
     w: usize,
     h: usize,
     closed: bool,
-) {
+) -> bool {
     let attr_pairs: Vec<(&str, &str)> = attrs
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
@@ -1168,22 +1399,26 @@ fn render_poly(
     let pts_raw = attr_get(attrs, "points").unwrap_or("");
     let local_pts = parse_point_list(pts_raw);
     if local_pts.len() < 2 {
-        return;
+        return false;
     }
 
     let pts: Vec<(f32, f32)> = local_pts
         .iter()
-        .map(|&(px, py)| xform.apply(px, py))
+        .map(|&(px, py)| xform.apply_f32(px, py))
         .collect();
 
+    let mut rendered = false;
     if closed {
         if let Some(fill) = style.effective_fill() {
             fill_polygon(buf, w, h, &pts, fill);
+            rendered = true;
         }
     }
     if let Some((stroke_color, stroke_w)) = style.effective_stroke() {
         stroke_polyline(buf, w, h, &pts, stroke_w, stroke_color, closed);
+        rendered = true;
     }
+    rendered
 }
 
 fn render_path(
@@ -1193,7 +1428,7 @@ fn render_path(
     buf: &mut [u8],
     w: usize,
     h: usize,
-) {
+) -> bool {
     let attr_pairs: Vec<(&str, &str)> = attrs
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
@@ -1202,14 +1437,19 @@ fn render_path(
 
     let d = attr_get(attrs, "d").unwrap_or("");
     if d.is_empty() {
-        return;
+        return false;
     }
 
     let sub_paths = parse_path_d(d);
+    if sub_paths.is_empty() {
+        return false;
+    }
 
     // Fill: all sub-paths as a combined even-odd fill
+    let mut rendered = false;
     if let Some(fill) = style.effective_fill() {
         fill_path_subpaths(buf, w, h, &sub_paths, xform, fill);
+        rendered = true;
     }
 
     // Stroke: each sub-path individually
@@ -1219,77 +1459,24 @@ fn render_path(
                 continue;
             }
             let closed = sub.first() == sub.last() && sub.len() > 2;
-            let pts: Vec<(f32, f32)> = sub.iter().map(|&(px, py)| xform.apply(px, py)).collect();
+            let pts: Vec<(f32, f32)> = sub
+                .iter()
+                .map(|&(px, py)| xform.apply_f32(px, py))
+                .collect();
             stroke_polyline(buf, w, h, &pts, stroke_w, stroke_color, closed);
+            rendered = true;
         }
     }
+    rendered
 }
 
 // ---------------------------------------------------------------------------
 // Path data parser
 // ---------------------------------------------------------------------------
 
-enum PathToken {
-    Cmd(char),
-    Num(f32),
-}
-
-fn tokenize_path(d: &str) -> Vec<PathToken> {
-    let mut tokens = Vec::new();
-    let mut chars = d.chars().peekable();
-
-    while let Some(&c) = chars.peek() {
-        match c {
-            ' ' | '\t' | '\n' | '\r' | ',' => {
-                chars.next();
-            }
-            'M' | 'm' | 'L' | 'l' | 'H' | 'h' | 'V' | 'v' | 'C' | 'c' | 'Q' | 'q' | 'S' | 's'
-            | 'T' | 't' | 'A' | 'a' | 'Z' | 'z' => {
-                tokens.push(PathToken::Cmd(c));
-                chars.next();
-            }
-            '0'..='9' | '.' | '-' | '+' => {
-                let mut num = String::new();
-                if c == '-' || c == '+' {
-                    num.push(c);
-                    chars.next();
-                }
-                // Integer part
-                while chars.peek().map(|c| c.is_ascii_digit()).unwrap_or(false) {
-                    num.push(chars.next().unwrap());
-                }
-                // Optional decimal
-                if chars.peek() == Some(&'.') {
-                    num.push(chars.next().unwrap());
-                    while chars.peek().map(|c| c.is_ascii_digit()).unwrap_or(false) {
-                        num.push(chars.next().unwrap());
-                    }
-                }
-                // Optional exponent
-                if matches!(chars.peek(), Some(&'e') | Some(&'E')) {
-                    num.push(chars.next().unwrap());
-                    if matches!(chars.peek(), Some(&'+') | Some(&'-')) {
-                        num.push(chars.next().unwrap());
-                    }
-                    while chars.peek().map(|c| c.is_ascii_digit()).unwrap_or(false) {
-                        num.push(chars.next().unwrap());
-                    }
-                }
-                if let Ok(n) = num.parse::<f32>() {
-                    tokens.push(PathToken::Num(n));
-                }
-            }
-            _ => {
-                chars.next();
-            }
-        }
-    }
-    tokens
-}
-
 #[allow(clippy::while_let_loop)]
 fn parse_path_d(d: &str) -> Vec<Vec<(f32, f32)>> {
-    let tokens = tokenize_path(d);
+    let tokens = svg_core::tokenize_path_data(d);
     if tokens.len() > MAX_PATH_TOKENS {
         return Vec::new();
     }
@@ -1306,11 +1493,11 @@ fn parse_path_d(d: &str) -> Vec<Vec<(f32, f32)>> {
     let mut i = 0;
     while i < tokens.len() {
         let cmd = match &tokens[i] {
-            PathToken::Cmd(c) => {
+            svg_core::SvgPathToken::Command(c) => {
                 i += 1;
                 *c
             }
-            PathToken::Num(_) => {
+            svg_core::SvgPathToken::Number(_) => {
                 // Implicit repetition: use last command (M→L, m→l)
                 match last_cmd {
                     'M' => 'L',
@@ -1323,9 +1510,9 @@ fn parse_path_d(d: &str) -> Vec<Vec<(f32, f32)>> {
 
         macro_rules! get_num {
             () => {
-                if let Some(PathToken::Num(n)) = tokens.get(i) {
+                if let Some(svg_core::SvgPathToken::Number(n)) = tokens.get(i) {
                     i += 1;
-                    *n
+                    *n as f32
                 } else {
                     break;
                 }
@@ -1334,11 +1521,11 @@ fn parse_path_d(d: &str) -> Vec<Vec<(f32, f32)>> {
 
         match cmd {
             'M' | 'm' => loop {
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let x = get_num!();
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let y = get_num!();
@@ -1355,11 +1542,11 @@ fn parse_path_d(d: &str) -> Vec<Vec<(f32, f32)>> {
                 last_cmd = if cmd == 'm' { 'l' } else { 'L' };
             },
             'L' | 'l' => loop {
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let x = get_num!();
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let y = get_num!();
@@ -1369,7 +1556,7 @@ fn parse_path_d(d: &str) -> Vec<Vec<(f32, f32)>> {
                 current.push((cx, cy));
             },
             'H' | 'h' => loop {
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let x = get_num!();
@@ -1377,7 +1564,7 @@ fn parse_path_d(d: &str) -> Vec<Vec<(f32, f32)>> {
                 current.push((cx, cy));
             },
             'V' | 'v' => loop {
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let y = get_num!();
@@ -1385,27 +1572,27 @@ fn parse_path_d(d: &str) -> Vec<Vec<(f32, f32)>> {
                 current.push((cx, cy));
             },
             'C' | 'c' => loop {
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let x1 = get_num!();
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let y1 = get_num!();
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let x2 = get_num!();
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let y2 = get_num!();
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let x = get_num!();
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let y = get_num!();
@@ -1421,19 +1608,19 @@ fn parse_path_d(d: &str) -> Vec<Vec<(f32, f32)>> {
                 cy = ay;
             },
             'S' | 's' => loop {
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let x2 = get_num!();
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let y2 = get_num!();
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let x = get_num!();
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let y = get_num!();
@@ -1460,19 +1647,19 @@ fn parse_path_d(d: &str) -> Vec<Vec<(f32, f32)>> {
                 cy = ay;
             },
             'Q' | 'q' => loop {
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let x1 = get_num!();
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let y1 = get_num!();
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let x = get_num!();
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let y = get_num!();
@@ -1493,11 +1680,11 @@ fn parse_path_d(d: &str) -> Vec<Vec<(f32, f32)>> {
                 cy = ay;
             },
             'T' | 't' => loop {
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let x = get_num!();
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let y = get_num!();
@@ -1523,31 +1710,31 @@ fn parse_path_d(d: &str) -> Vec<Vec<(f32, f32)>> {
                 cy = ay;
             },
             'A' | 'a' => loop {
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let rx = get_num!();
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let ry = get_num!();
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let x_rot = get_num!();
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let large = get_num!() != 0.0;
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let sweep = get_num!() != 0.0;
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let x = get_num!();
-                let Some(PathToken::Num(_)) = tokens.get(i) else {
+                let Some(svg_core::SvgPathToken::Number(_)) = tokens.get(i) else {
                     break;
                 };
                 let y = get_num!();
@@ -1564,7 +1751,7 @@ fn parse_path_d(d: &str) -> Vec<Vec<(f32, f32)>> {
                 cx = start_x;
                 cy = start_y;
             }
-            _ => {}
+            _ => skip_path_numbers(&tokens, &mut i),
         }
     }
 
@@ -1572,6 +1759,12 @@ fn parse_path_d(d: &str) -> Vec<Vec<(f32, f32)>> {
         sub_paths.push(current);
     }
     sub_paths
+}
+
+fn skip_path_numbers(tokens: &[svg_core::SvgPathToken], index: &mut usize) {
+    while *index < tokens.len() && !matches!(tokens[*index], svg_core::SvgPathToken::Command(_)) {
+        *index += 1;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1850,7 +2043,7 @@ fn fill_path_subpaths(
     let all: Vec<Vec<(f32, f32)>> = sub_paths
         .iter()
         .filter(|s| s.len() >= 2)
-        .map(|s| s.iter().map(|&(px, py)| xform.apply(px, py)).collect())
+        .map(|s| s.iter().map(|&(px, py)| xform.apply_f32(px, py)).collect())
         .collect();
 
     for sub in &all {
@@ -1986,5 +2179,180 @@ mod tests {
 
         assert_eq!(pixel(&image, 5, 5), [0, 0, 0, 0]);
         assert_eq!(pixel(&image, 15, 5), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn render_report_counts_rendered_skipped_and_text_limitations() {
+        let svg = r##"<svg viewBox="0 0 20 20">
+<rect width="10" height="10" fill="#ff0000"/>
+<rect x="12" width="0" height="5" fill="#00ff00"/>
+<text x="1" y="18">Skipped text</text>
+</svg>"##;
+        let output = rasterize_with_report(svg, 20, 20).unwrap();
+
+        assert_eq!(output.report.rendered_element_count, 1);
+        assert_eq!(output.report.skipped_element_count, 2);
+        assert_eq!(output.report.warning_count, 0);
+        assert_eq!(output.report.unsupported_feature_count, 1);
+        assert_eq!(output.report.unsupported_features[0].feature, "text");
+        assert_eq!(output.report.fidelity, SvgRenderFidelity::Medium);
+        assert_eq!(pixel(&output.image, 5, 5), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn render_report_flags_unsupported_feature_buckets() {
+        let svg = r##"<svg viewBox="0 0 20 20">
+<defs>
+  <linearGradient id="g"/>
+  <clipPath id="c"><rect width="10" height="10"/></clipPath>
+  <filter id="f"/>
+</defs>
+<rect width="20" height="20" fill="url(#g)" clip-path="url(#c)" filter="url(#f)"/>
+</svg>"##;
+        let output = rasterize_with_report(svg, 20, 20).unwrap();
+        let features: Vec<&str> = output
+            .report
+            .unsupported_features
+            .iter()
+            .map(|u| u.feature.as_str())
+            .collect();
+
+        assert!(features.contains(&"linearGradient"));
+        assert!(features.contains(&"clipPath"));
+        assert!(features.contains(&"filter"));
+        assert!(features.contains(&"clip-path attribute"));
+        assert!(features.contains(&"filter attribute"));
+        assert!(features.contains(&"paint server reference"));
+        assert_eq!(output.report.fidelity, SvgRenderFidelity::Low);
+    }
+
+    #[test]
+    fn comments_do_not_create_unsupported_diagnostics() {
+        let svg = r##"<svg viewBox="0 0 10 10">
+<!-- <filter id="not-real"/><text>not real</text><use href="#x"/> -->
+<rect width="10" height="10" fill="#00ff00"/>
+</svg>"##;
+        let output = rasterize_with_report(svg, 10, 10).unwrap();
+
+        assert_eq!(output.report.rendered_element_count, 1);
+        assert_eq!(output.report.skipped_element_count, 0);
+        assert_eq!(output.report.unsupported_feature_count, 0);
+        assert_eq!(output.report.fidelity, SvgRenderFidelity::High);
+    }
+
+    #[test]
+    fn scene_flattens_group_style_and_element_transform() {
+        let svg = r##"<svg viewBox="0 0 20 10">
+<g fill="#ff0000" transform="translate(2,3)">
+  <rect width="4" height="4" transform="translate(8,0)"/>
+</g>
+</svg>"##;
+        let scene = SvgScene::parse(svg).unwrap();
+        let renderable: Vec<&SvgSceneItem> = scene
+            .items
+            .iter()
+            .filter(|item| matches!(item.node, SvgNode::Rect { .. }))
+            .collect();
+
+        assert_eq!(renderable.len(), 1);
+        let (x, y) = renderable[0].transform.apply(0.0, 0.0);
+        assert!((x - 10.0).abs() < 0.001);
+        assert!((y - 3.0).abs() < 0.001);
+        assert!(matches!(
+            renderable[0].style.fill,
+            Paint::Color(Rgba {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255
+            })
+        ));
+    }
+
+    #[test]
+    fn element_transform_affects_rendered_pixels() {
+        let svg = r##"<svg viewBox="0 0 20 10">
+<rect width="5" height="5" fill="#ff0000" transform="translate(10,0)"/>
+</svg>"##;
+        let image = rasterize(svg, 20, 10).unwrap();
+
+        assert_eq!(pixel(&image, 2, 2), [0, 0, 0, 0]);
+        assert_eq!(pixel(&image, 12, 2), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn compact_path_syntax_renders_visible_pixels() {
+        let svg = r##"<svg viewBox="0 0 10 10">
+<path d="M2 2L8.5.5L8 8L2 8Z" fill="#ff0000"/>
+</svg>"##;
+        let image = rasterize(svg, 10, 10).unwrap();
+
+        assert_eq!(pixel(&image, 5, 5), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn unknown_path_command_does_not_stall_renderer() {
+        let paths = parse_path_d("M1 1 R5 5 L8 1 L8 8 Z");
+
+        assert!(!paths.is_empty());
+        assert!(paths.iter().flatten().any(|point| *point == (8.0, 8.0)));
+    }
+
+    #[test]
+    fn unsupported_definition_children_are_counted_as_skipped() {
+        let svg = r##"<svg viewBox="0 0 10 10">
+<defs><linearGradient id="g"><stop offset="0%" stop-color="red"/></linearGradient></defs>
+<rect width="10" height="10" fill="url(#g)"/>
+</svg>"##;
+        let output = rasterize_with_report(svg, 10, 10).unwrap();
+        let features: Vec<&str> = output
+            .report
+            .unsupported_features
+            .iter()
+            .map(|u| u.feature.as_str())
+            .collect();
+
+        assert_eq!(output.report.rendered_element_count, 0);
+        assert!(output.report.skipped_element_count >= 3);
+        assert!(features.contains(&"defs"));
+        assert!(features.contains(&"linearGradient"));
+        assert!(features.contains(&"paint server reference"));
+        assert_eq!(output.report.fidelity, SvgRenderFidelity::Low);
+    }
+
+    #[test]
+    fn render_output_is_deterministic_for_same_svg_and_size() {
+        let svg = r##"<svg viewBox="-5 -5 20 20">
+<g transform="translate(2,3) scale(0.5)">
+  <path d="M0 0 L10 0 L10 10 Z" fill="#123456" opacity="0.8"/>
+</g>
+</svg>"##;
+        let first = rasterize_with_report(svg, 32, 32).unwrap();
+        let second = rasterize_with_report(svg, 32, 32).unwrap();
+
+        assert_eq!(first.image.size, second.image.size);
+        assert_eq!(first.image.pixels, second.image.pixels);
+        assert_eq!(
+            first.report.rendered_element_count,
+            second.report.rendered_element_count
+        );
+        assert_eq!(
+            first.report.unsupported_features,
+            second.report.unsupported_features
+        );
+        assert_eq!(first.report.fidelity, second.report.fidelity);
+    }
+
+    #[test]
+    fn render_report_records_raster_size_clamp() {
+        let svg = r##"<svg viewBox="0 0 1 1"><rect width="1" height="1"/></svg>"##;
+        let output = rasterize_with_report(svg, 5000, 1).unwrap();
+
+        assert_eq!(output.report.requested_width, 5000);
+        assert_eq!(output.report.requested_height, 1);
+        assert_eq!(output.report.output_width, MAX_RASTER_DIM);
+        assert_eq!(output.report.output_height, 1);
+        assert_eq!(output.report.warning_count, 1);
+        assert_eq!(output.report.warnings[0].code, "limit.raster_size");
     }
 }

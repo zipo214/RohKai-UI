@@ -6,6 +6,12 @@ with, while the original `.svg` is preserved beside it as the source of truth.
 
 The parser is pure Rust and adds no crates.
 
+Importer and rasterizer share `src/svg_core.rs` for dependency-free SVG
+microsyntax helpers. The shared module currently owns color parsing and
+numeric-list scanning, affine transform math and transform-list parsing, and
+path data tokenization, so those behaviors do not drift between editable
+placeholder import and image-mode rasterization.
+
 ## Public API
 
 - `import_svg_template(svg, SvgImportOptions::default())` returns widgets plus an
@@ -30,6 +36,25 @@ on the widget. This is still zero-new-dependency: the canvas preview and export
 path use RohKai's own in-repo software rasterizer for the supported visual
 subset. It is not full browser/SVG rasterization, and it does not add renderer
 crates.
+
+The rasterizer now has a richer diagnostic API:
+
+- `rasterize_with_report(svg, width, height)` returns `SvgRenderOutput` with
+  pixels and an `SvgRenderReport`.
+- `rasterize(svg, width, height)` remains a compatibility wrapper returning
+  only the `ColorImage`.
+- `rasterize_or_fallback(svg, width, height)` remains the caller-friendly
+  fallback path for canvas/export rendering.
+
+The report records requested/output raster dimensions, rendered/skipped element
+counts, warnings, unsupported feature diagnostics, and a conservative fidelity
+level.
+
+Renderer diagnostics for known unsupported elements and attributes are parsed
+from SVG nodes/attributes rather than raw comment-sensitive source scans. This
+reduces false positives and makes skipped counts more meaningful, though a full
+scene/display-list IR is still planned before the report becomes a complete UI
+surface.
 
 The generated standalone app embeds the same RohKai-owned rasterizer module when
 Image widgets are present. This removes the older gray-frame placeholder export
@@ -71,10 +96,22 @@ textures at runtime.
 - Image-mode rasterization supports solid fills/strokes, inherited
   display/visibility, viewBox mapping, transforms, basic shapes, and path
   flattening for the current supported subset.
+- Image-mode rasterization now builds an internal scene item list before
+  drawing. Scene items carry inherited style and accumulated transforms, so
+  both group-level and shape-level `transform` attributes affect output.
+- Image-mode rasterization emits structured diagnostics for known unsupported
+  renderer buckets such as gradients, patterns, clips, masks, filters, markers,
+  text, images, use/symbol, stroke dash/cap/join hints, fill-rule, and
+  paint-server references.
 - Text flattening for simple `tspan` content.
 - Path bounds for `M`, `L`, `H`, `V`, `C`, `S`, `Q`, `T`, `A`, and `Z`.
 - Relative and absolute path commands.
 - Compact path syntax such as `M10-20L.5.6`.
+- Shared path tokenization supports compact signs, adjacent decimals,
+  exponents, and unknown command letters without panics. Importer and
+  rasterizer keep separate semantics after tokenization: importer computes
+  bounds/provenance and structured warnings, while rasterizer flattens paths
+  into pixels.
 
 ## Limits
 
@@ -159,6 +196,8 @@ That runs:
 - SVG dependency policy checks
 - text encoding policy checks
 - SVG importer tests
+- SVG rasterizer tests
+- shared SVG core microsyntax tests
 - SVG source-preservation tests
 - deterministic output tests
 - real-world-style fixture tests from `tests/fixtures/svg_import/real_world/`

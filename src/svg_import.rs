@@ -1,4 +1,5 @@
 use crate::project::schema::{Rect, SvgImportMetadata, WidgetInstance, WidgetKind, WidgetProps};
+use crate::svg_core;
 use std::collections::HashMap;
 use std::fmt;
 use uuid::Uuid;
@@ -501,109 +502,7 @@ struct Tag {
     self_closing: bool,
 }
 
-#[derive(Clone, Copy, Debug)]
-struct Matrix {
-    a: f64,
-    b: f64,
-    c: f64,
-    d: f64,
-    e: f64,
-    f: f64,
-}
-
-impl Matrix {
-    const IDENTITY: Self = Self {
-        a: 1.0,
-        b: 0.0,
-        c: 0.0,
-        d: 1.0,
-        e: 0.0,
-        f: 0.0,
-    };
-
-    fn multiply(self, other: Self) -> Self {
-        Self {
-            a: self.a * other.a + self.c * other.b,
-            b: self.b * other.a + self.d * other.b,
-            c: self.a * other.c + self.c * other.d,
-            d: self.b * other.c + self.d * other.d,
-            e: self.a * other.e + self.c * other.f + self.e,
-            f: self.b * other.e + self.d * other.f + self.f,
-        }
-    }
-
-    fn translate(x: f64, y: f64) -> Self {
-        Self {
-            e: x,
-            f: y,
-            ..Self::IDENTITY
-        }
-    }
-
-    fn scale(x: f64, y: f64) -> Self {
-        Self {
-            a: x,
-            d: y,
-            ..Self::IDENTITY
-        }
-    }
-
-    fn rotate(deg: f64) -> Self {
-        let (sin, cos) = deg.to_radians().sin_cos();
-        Self {
-            a: cos,
-            b: sin,
-            c: -sin,
-            d: cos,
-            e: 0.0,
-            f: 0.0,
-        }
-    }
-
-    fn skew_x(deg: f64) -> Self {
-        Self {
-            c: deg.to_radians().tan(),
-            ..Self::IDENTITY
-        }
-    }
-
-    fn skew_y(deg: f64) -> Self {
-        Self {
-            b: deg.to_radians().tan(),
-            ..Self::IDENTITY
-        }
-    }
-
-    fn apply(self, x: f64, y: f64) -> (f64, f64) {
-        (
-            self.a * x + self.c * y + self.e,
-            self.b * x + self.d * y + self.f,
-        )
-    }
-
-    fn is_finite(self) -> bool {
-        self.a.is_finite()
-            && self.b.is_finite()
-            && self.c.is_finite()
-            && self.d.is_finite()
-            && self.e.is_finite()
-            && self.f.is_finite()
-    }
-
-    fn is_extreme(self) -> bool {
-        const EXTREME: f64 = 1_000_000.0;
-        [self.a, self.b, self.c, self.d, self.e, self.f]
-            .into_iter()
-            .any(|value| value.abs() > EXTREME)
-    }
-
-    fn summary(self) -> String {
-        format!(
-            "matrix({:.4} {:.4} {:.4} {:.4} {:.4} {:.4})",
-            self.a, self.b, self.c, self.d, self.e, self.f
-        )
-    }
-}
+type Matrix = svg_core::Affine2D;
 
 #[derive(Clone, Copy)]
 struct ParseState {
@@ -1717,114 +1616,12 @@ fn parse_length(value: &str, percent_base: f64) -> Option<f64> {
 }
 
 fn parse_transform(value: &str) -> Matrix {
-    let mut rest = value.trim();
-    let mut out = Matrix::IDENTITY;
-
-    while let Some(paren) = rest.find('(') {
-        let name = rest[..paren].trim().to_ascii_lowercase();
-        let after = &rest[paren + 1..];
-        let Some(end) = after.find(')') else {
-            break;
-        };
-        let nums = parse_numbers(&after[..end]).unwrap_or_default();
-        let local = match name.as_str() {
-            "matrix" if nums.len() >= 6 => Matrix {
-                a: nums[0],
-                b: nums[1],
-                c: nums[2],
-                d: nums[3],
-                e: nums[4],
-                f: nums[5],
-            },
-            "translate" if !nums.is_empty() => {
-                Matrix::translate(nums[0], *nums.get(1).unwrap_or(&0.0))
-            }
-            "scale" if !nums.is_empty() => Matrix::scale(nums[0], *nums.get(1).unwrap_or(&nums[0])),
-            "rotate" if !nums.is_empty() => {
-                if nums.len() >= 3 {
-                    Matrix::translate(nums[1], nums[2])
-                        .multiply(Matrix::rotate(nums[0]))
-                        .multiply(Matrix::translate(-nums[1], -nums[2]))
-                } else {
-                    Matrix::rotate(nums[0])
-                }
-            }
-            "skewx" if !nums.is_empty() => Matrix::skew_x(nums[0]),
-            "skewy" if !nums.is_empty() => Matrix::skew_y(nums[0]),
-            _ => Matrix::IDENTITY,
-        };
-        out = out.multiply(local);
-        rest = &after[end + 1..];
-    }
-
-    out
+    Matrix::parse_transform(value)
 }
 
 fn parse_numbers(value: &str) -> Option<Vec<f64>> {
-    let mut nums = Vec::new();
-    for token in number_spans(value) {
-        if let Ok(num) = token.parse::<f64>() {
-            nums.push(num);
-        }
-    }
+    let nums = svg_core::parse_numbers(value);
     (!nums.is_empty()).then_some(nums)
-}
-
-fn number_spans(value: &str) -> Vec<&str> {
-    let bytes = value.as_bytes();
-    let mut out = Vec::new();
-    let mut index = 0;
-    while index < bytes.len() {
-        while index < bytes.len() && !is_number_start(bytes[index] as char) {
-            index += 1;
-        }
-        let start = index;
-        if index < bytes.len() && matches!(bytes[index] as char, '+' | '-') {
-            index += 1;
-        }
-        let mut digits = 0usize;
-        while index < bytes.len() && (bytes[index] as char).is_ascii_digit() {
-            digits += 1;
-            index += 1;
-        }
-        if index < bytes.len() && bytes[index] == b'.' {
-            index += 1;
-            while index < bytes.len() && (bytes[index] as char).is_ascii_digit() {
-                digits += 1;
-                index += 1;
-            }
-        }
-        if digits > 0 && index < bytes.len() && matches!(bytes[index] as char, 'e' | 'E') {
-            let exp = index;
-            index += 1;
-            if index < bytes.len() && matches!(bytes[index] as char, '+' | '-') {
-                index += 1;
-            }
-            let exp_digits = index;
-            while index < bytes.len() && (bytes[index] as char).is_ascii_digit() {
-                index += 1;
-            }
-            if exp_digits == index {
-                index = exp;
-            }
-        }
-        if start < index && digits > 0 {
-            out.push(&value[start..index]);
-        } else if start == index {
-            index += 1;
-        }
-    }
-    out
-}
-
-fn is_number_start(c: char) -> bool {
-    c.is_ascii_digit() || matches!(c, '-' | '+' | '.')
-}
-
-#[derive(Clone, Copy, Debug)]
-enum PathToken {
-    Command(char),
-    Number(f64),
 }
 
 fn parse_path_points(
@@ -1834,7 +1631,7 @@ fn parse_path_points(
     node: &Node,
     warning_flags: &mut Vec<String>,
 ) -> Result<Vec<(f64, f64)>, SvgImportError> {
-    let tokens = path_tokens(data);
+    let tokens = svg_core::tokenize_path_data(data);
     let mut points = Vec::new();
     let mut index = 0;
     let mut command = 'M';
@@ -1851,7 +1648,7 @@ fn parse_path_points(
                 format!("path exceeded {max_commands} commands"),
             ));
         }
-        if let PathToken::Command(c) = tokens[index] {
+        if let svg_core::SvgPathToken::Command(c) = tokens[index] {
             command = c;
             index += 1;
         }
@@ -1975,75 +1772,25 @@ fn parse_path_points(
     Ok(points)
 }
 
-fn path_tokens(data: &str) -> Vec<PathToken> {
-    let mut out = Vec::new();
-    let bytes = data.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        let c = bytes[index] as char;
-        if c.is_ascii_alphabetic() {
-            out.push(PathToken::Command(c));
-            index += 1;
-        } else if is_number_start(c) {
-            let start = index;
-            if matches!(bytes[index] as char, '+' | '-') {
-                index += 1;
-            }
-            let mut digits = 0usize;
-            while index < bytes.len() && (bytes[index] as char).is_ascii_digit() {
-                index += 1;
-                digits += 1;
-            }
-            if index < bytes.len() && bytes[index] == b'.' {
-                index += 1;
-                while index < bytes.len() && (bytes[index] as char).is_ascii_digit() {
-                    index += 1;
-                    digits += 1;
-                }
-            }
-            if digits > 0 && index < bytes.len() && matches!(bytes[index] as char, 'e' | 'E') {
-                let exp = index;
-                index += 1;
-                if index < bytes.len() && matches!(bytes[index] as char, '+' | '-') {
-                    index += 1;
-                }
-                let exp_digits = index;
-                while index < bytes.len() && (bytes[index] as char).is_ascii_digit() {
-                    index += 1;
-                }
-                if exp_digits == index {
-                    index = exp;
-                }
-            }
-            if digits > 0 {
-                if let Ok(num) = data[start..index].parse::<f64>() {
-                    out.push(PathToken::Number(num));
-                }
-            } else {
-                index += 1;
-            }
-        } else {
-            index += 1;
-        }
-    }
-    out
-}
-
-fn read_number(tokens: &[PathToken], index: &mut usize) -> Option<f64> {
+fn read_number(tokens: &[svg_core::SvgPathToken], index: &mut usize) -> Option<f64> {
     match tokens.get(*index)? {
-        PathToken::Number(num) => {
+        svg_core::SvgPathToken::Number(num) => {
             *index += 1;
             Some(*num)
         }
-        PathToken::Command(_) => None,
+        svg_core::SvgPathToken::Command(_) => None,
     }
 }
 
-fn read_pair(tokens: &[PathToken], index: &mut usize) -> Option<(f64, f64)> {
+fn read_pair(tokens: &[svg_core::SvgPathToken], index: &mut usize) -> Option<(f64, f64)> {
     Some((read_number(tokens, index)?, read_number(tokens, index)?))
 }
 
-fn read_numbers(tokens: &[PathToken], index: &mut usize, count: usize) -> Option<Vec<f64>> {
+fn read_numbers(
+    tokens: &[svg_core::SvgPathToken],
+    index: &mut usize,
+    count: usize,
+) -> Option<Vec<f64>> {
     let start = *index;
     let mut out = Vec::with_capacity(count);
     for _ in 0..count {
@@ -2058,8 +1805,8 @@ fn read_numbers(tokens: &[PathToken], index: &mut usize, count: usize) -> Option
     Some(out)
 }
 
-fn skip_until_next_command(tokens: &[PathToken], index: &mut usize) {
-    while *index < tokens.len() && !matches!(tokens[*index], PathToken::Command(_)) {
+fn skip_until_next_command(tokens: &[svg_core::SvgPathToken], index: &mut usize) {
+    while *index < tokens.len() && !matches!(tokens[*index], svg_core::SvgPathToken::Command(_)) {
         *index += 1;
     }
 }
@@ -2257,57 +2004,7 @@ fn style_color(
 }
 
 fn parse_color(value: &str) -> Option<[u8; 3]> {
-    let value = value.trim();
-    if value.eq_ignore_ascii_case("none")
-        || value.eq_ignore_ascii_case("currentcolor")
-        || value.starts_with("url(")
-    {
-        return None;
-    }
-    if let Some(hex) = value.strip_prefix('#') {
-        return match hex.len() {
-            3 => {
-                let r = u8::from_str_radix(&hex[0..1].repeat(2), 16).ok()?;
-                let g = u8::from_str_radix(&hex[1..2].repeat(2), 16).ok()?;
-                let b = u8::from_str_radix(&hex[2..3].repeat(2), 16).ok()?;
-                Some([r, g, b])
-            }
-            6 => {
-                let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-                let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-                let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-                Some([r, g, b])
-            }
-            _ => None,
-        };
-    }
-    let lower = value.to_ascii_lowercase();
-    if let Some(body) = lower
-        .strip_prefix("rgb(")
-        .and_then(|body| body.strip_suffix(')'))
-    {
-        let nums = parse_numbers(body)?;
-        if nums.len() >= 3 {
-            return Some([
-                nums[0].round().clamp(0.0, 255.0) as u8,
-                nums[1].round().clamp(0.0, 255.0) as u8,
-                nums[2].round().clamp(0.0, 255.0) as u8,
-            ]);
-        }
-    }
-    match lower.as_str() {
-        "black" => Some([0, 0, 0]),
-        "white" => Some([255, 255, 255]),
-        "red" => Some([255, 0, 0]),
-        "green" => Some([0, 128, 0]),
-        "blue" => Some([0, 0, 255]),
-        "yellow" => Some([255, 255, 0]),
-        "cyan" | "aqua" => Some([0, 255, 255]),
-        "magenta" | "fuchsia" => Some([255, 0, 255]),
-        "gray" | "grey" => Some([128, 128, 128]),
-        "transparent" => Some([0, 0, 0]),
-        _ => None,
-    }
+    svg_core::parse_rgb(value)
 }
 
 fn collapse_ws(value: &str) -> String {
@@ -2466,6 +2163,19 @@ mod tests {
         assert_eq!(output.widgets.len(), 1);
         assert!(output.widgets[0].rect.w >= MIN_PLACEHOLDER_SIZE as f32);
         assert!(output.widgets[0].rect.h >= MIN_PLACEHOLDER_SIZE as f32);
+    }
+
+    #[test]
+    fn shared_path_tokenizer_preserves_unsupported_command_warning() {
+        let svg = r#"<svg><path d="M0 0 R5 5 L10 10"/></svg>"#;
+        let output = import_svg_template(svg, SvgImportOptions::default()).unwrap();
+
+        assert_eq!(output.widgets.len(), 1);
+        assert!(output
+            .report
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "path.unsupported_command"));
     }
 
     #[test]
