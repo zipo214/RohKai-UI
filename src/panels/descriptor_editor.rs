@@ -54,7 +54,7 @@ impl DescriptorEditorState {
     }
 }
 
-fn blank_descriptor() -> WidgetDescriptor {
+pub(crate) fn blank_descriptor() -> WidgetDescriptor {
     WidgetDescriptor {
         schema_version: 1,
         id: "my.widget".to_owned(),
@@ -667,7 +667,7 @@ fn field_row(ui: &mut egui::Ui, label: &str, content: impl FnOnce(&mut egui::Ui)
 // Preview helpers
 // ---------------------------------------------------------------------------
 
-fn expand_canvas_label(
+pub(crate) fn expand_canvas_label(
     template: &str,
     name: &str,
     label: &str,
@@ -686,7 +686,9 @@ fn expand_canvas_label(
         .fold(base, |s, (k, v)| s.replace(&format!("{{{{prop.{k}}}}}"), v))
 }
 
-fn make_dummy_widget(draft: &WidgetDescriptor) -> crate::project::schema::WidgetInstance {
+pub(crate) fn make_dummy_widget(
+    draft: &WidgetDescriptor,
+) -> crate::project::schema::WidgetInstance {
     use crate::project::schema::{Rect, WidgetInstance, WidgetKind, WidgetProps};
     let label = draft
         .properties
@@ -739,7 +741,10 @@ fn prop_type_label(ty: &DescriptorPropType) -> &'static str {
 // Save
 // ---------------------------------------------------------------------------
 
-fn save_descriptor(draft: &WidgetDescriptor, dir: &std::path::Path) -> Option<(bool, String)> {
+pub(crate) fn save_descriptor(
+    draft: &WidgetDescriptor,
+    dir: &std::path::Path,
+) -> Option<(bool, String)> {
     let json = match serde_json::to_string_pretty(draft) {
         Ok(j) => j,
         Err(e) => return Some((false, format!("Serialise error: {e}"))),

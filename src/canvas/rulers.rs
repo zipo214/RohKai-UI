@@ -195,15 +195,28 @@ pub fn draw_bezel(ui: &mut egui::Ui, ctx: &RulerCtx, title: &str) {
     );
 
     let painter = ui.painter_at(ctx.panel_rect);
-    painter.rect_filled(bezel_rect, egui::Rounding::same(4.0), egui::Color32::from_gray(45));
+    painter.rect_filled(
+        bezel_rect,
+        egui::Rounding::same(4.0),
+        egui::Color32::from_gray(45),
+    );
 
     // Traffic-light circles
     let cy = bezel_rect.center().y;
     let dot_r = 5.0;
     let dots = [
-        (bezel_rect.min.x + 14.0, egui::Color32::from_rgb(255, 95, 87)),
-        (bezel_rect.min.x + 30.0, egui::Color32::from_rgb(255, 189, 46)),
-        (bezel_rect.min.x + 46.0, egui::Color32::from_rgb(40, 201, 64)),
+        (
+            bezel_rect.min.x + 14.0,
+            egui::Color32::from_rgb(255, 95, 87),
+        ),
+        (
+            bezel_rect.min.x + 30.0,
+            egui::Color32::from_rgb(255, 189, 46),
+        ),
+        (
+            bezel_rect.min.x + 46.0,
+            egui::Color32::from_rgb(40, 201, 64),
+        ),
     ];
     for (cx, color) in dots {
         painter.circle_filled(egui::pos2(cx, cy), dot_r, color);

@@ -6,6 +6,7 @@ mod codegen;
 mod panels;
 mod project;
 mod settings;
+mod svg_core;
 mod svg_import;
 mod widgets;
 

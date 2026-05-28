@@ -118,6 +118,8 @@ pub struct DescriptorState {
     pub errors: Vec<String>,
     /// In-app descriptor editor — Some while window is open.
     pub editor: Option<crate::panels::descriptor_editor::DescriptorEditorState>,
+    /// Beginner widget builder — Some while window is open.
+    pub builder: Option<crate::panels::widget_builder::WidgetBuilderState>,
 }
 
 // ---------------------------------------------------------------------------
@@ -174,6 +176,7 @@ impl RohKaiApp {
                 widgets: widget_descriptors,
                 errors: descriptor_errors,
                 editor: None,
+                builder: None,
             },
             svg_texture_cache: crate::canvas::interaction::SvgTextureCache::default(),
             pending_command: None,
@@ -385,6 +388,10 @@ impl RohKaiApp {
     fn cmd_new_descriptor(&mut self) {
         self.descriptors.editor =
             Some(crate::panels::descriptor_editor::DescriptorEditorState::new_blank());
+    }
+
+    fn cmd_new_widget_builder(&mut self) {
+        self.descriptors.builder = Some(crate::panels::widget_builder::WidgetBuilderState::new());
     }
 
     fn cmd_edit_descriptor(&mut self, id: &str) {
@@ -955,6 +962,54 @@ impl RohKaiApp {
         }
     }
 
+    fn show_widget_builder_window(&mut self, ctx: &egui::Context) {
+        // Snapshot save_msg state BEFORE show() so we detect a new save.
+        let was_saved = self
+            .descriptors
+            .builder
+            .as_ref()
+            .and_then(|s| s.save_msg.as_ref())
+            .map(|(ok, _)| *ok)
+            .unwrap_or(false);
+
+        // Read one-shot signal before any mutable borrow to avoid split-borrow.
+        let open_adv = self
+            .descriptors
+            .builder
+            .as_ref()
+            .is_some_and(|b| b.open_advanced_requested);
+
+        let Some(state) = self.descriptors.builder.as_mut() else {
+            return;
+        };
+        let widgets_dir = Self::widgets_dir();
+        let still_open = crate::panels::widget_builder::show(ctx, state, widgets_dir);
+        if !still_open {
+            self.descriptors.builder = None;
+            return;
+        }
+
+        // Reload palette on fresh save.
+        let now_saved = self
+            .descriptors
+            .builder
+            .as_ref()
+            .and_then(|s| s.save_msg.as_ref())
+            .map(|(ok, _)| *ok)
+            .unwrap_or(false);
+        if now_saved && !was_saved {
+            self.cmd_reload_descriptors();
+        }
+
+        // Advanced handoff: copy draft into editor and close builder atomically.
+        if open_adv {
+            let draft = self.descriptors.builder.take().unwrap().draft;
+            self.descriptors.editor = Some(
+                crate::panels::descriptor_editor::DescriptorEditorState::from_descriptor(&draft),
+            );
+        }
+    }
+
     fn show_theme_window(&mut self, ctx: &egui::Context) {
         if !self.session.theme_open {
             return;
@@ -1365,6 +1420,14 @@ impl eframe::App for RohKaiApp {
                         ui.close_menu();
                     }
                     if ui
+                        .button("Create Custom Widget…")
+                        .on_hover_text("Guided builder for new custom widgets")
+                        .clicked()
+                    {
+                        self.cmd_new_widget_builder();
+                        ui.close_menu();
+                    }
+                    if ui
                         .button("New Widget Descriptor…")
                         .on_hover_text("Open the in-app .rkwd editor to create a new widget type")
                         .clicked()
@@ -1382,6 +1445,15 @@ impl eframe::App for RohKaiApp {
 
                 // Widgets menu
                 ui.menu_button("Widgets", |ui| {
+                    if ui
+                        .button("Create Custom Widget…")
+                        .on_hover_text("Guided builder for new custom widgets")
+                        .clicked()
+                    {
+                        self.cmd_new_widget_builder();
+                        ui.close_menu();
+                    }
+                    ui.separator();
                     if ui
                         .button("New Descriptor…")
                         .on_hover_text("Open the in-app .rkwd editor to create a new widget type")
@@ -1809,8 +1881,7 @@ impl eframe::App for RohKaiApp {
                 delete_pressed && has_hovered_guide,
             );
 
-            self.session.canvas_settings.guide_drag_active =
-                self.session.dragging_guide.is_some();
+            self.session.canvas_settings.guide_drag_active = self.session.dragging_guide.is_some();
             crate::canvas::interaction::handle(
                 ui,
                 &mut self.project.ui_tree,
@@ -1877,6 +1948,7 @@ impl eframe::App for RohKaiApp {
         self.show_preferences_window(ctx);
         self.show_svg_source_window(ctx);
         self.show_descriptor_editor_window(ctx);
+        self.show_widget_builder_window(ctx);
         self.show_theme_window(ctx);
     }
 }
