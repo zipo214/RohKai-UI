@@ -352,37 +352,40 @@ requiring schema changes.
 - [ ] Performance benchmarks — measure speedup for projects with 50+, 100+, 500+ widgets
 
 ### Lazarus Completeness
-- [ ] Full contextual properties per widget kind — schema audit pass: ensure every
-      widget exposes the full set of egui properties applicable to its kind
-      (padding, spacing, text wrap, image scale mode, per-widget colors, etc.)
+- [x] Full contextual properties per widget kind — schema audit pass: `text_wrap`
+      field added (Label/TextArea), TextInput bg_color+corner_radius exposed,
+      ProgressBar fg_color wired to `.fill()` in codegen, TextArea fully audited
 - [ ] Design-time non-visual components — timers, data sources, app lifecycle
       represented as clickable icons on a component tray below canvas
-- [ ] Full event list per widget — not just OnClick/OnChange but all applicable
-      egui events for that widget kind
-- [ ] Object Inspector true bidirectionality — editing any property field updates
-      canvas immediately with no lag or focus loss
+- [x] Full event list per widget — `on_double_click` (Button), `on_lost_focus`
+      (TextInput/TextArea), `on_drag_stopped` (Slider/SpinBox) added to schema
+      and codegen; properties panel shows dynamic per-kind event list with Tracé chips
+- [x] Object Inspector true bidirectionality — properties edits update UiTree
+      immediately (immediate-mode architecture); canvas re-renders every frame;
+      code panel resyncs via `generated != last_generated`; pending-code warning
+      added to properties panel when code has unsaved edits
 
-### SVG Renderer Progression
+### SVG Renderer Progression (Codex track)
 - [ ] SVG renderer scene/display-list IR split
 - [ ] Golden renderer fixture harness for supported raster output
 
 ### New Widget Kinds — Layouts & Spacers
-- [ ] Vertical Layout
-- [ ] Horizontal Layout
+- [x] Vertical Layout (`VLayout`) — canvas box with ↕ indicator
+- [x] Horizontal Layout (`HLayout`) — canvas box with ↔ indicator
 - [ ] Grid Layout
 - [ ] Form Layout
-- [ ] Horizontal Spacer
-- [ ] Vertical Spacer
+- [x] Horizontal Spacer — dashed horizontal bar
+- [x] Vertical Spacer — dashed vertical bar
 
 ### New Widget Kinds — Containers
-- [ ] Scroll Area
-- [ ] Group Box
+- [x] Scroll Area — canvas box with simulated scrollbar indicator
+- [x] Group Box — labeled group frame (egui::Frame::group with heading)
 - [ ] Tab Widget
 
 ### New Widget Kinds — Input Additions
-- [ ] Font Combo Box
-- [ ] Multi-line Text Edit (distinct from single-line TextInput)
-- [ ] Numeric / spinner controls
+- [x] Font Combo Box — `FontComboBox` with Aa indicator
+- [x] Multi-line Text Edit — `TextArea` (egui::TextEdit::multiline)
+- [x] Numeric / spinner controls — `SpinBox` (egui::DragValue)
 
 ---
 

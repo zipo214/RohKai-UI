@@ -1850,10 +1850,23 @@ impl eframe::App for RohKaiApp {
                     ui.add_space(4.0);
 
                     let shift_held = ui.input(|i| i.modifiers.shift);
+                    let code_pending = matches!(
+                        self.code.status,
+                        crate::panels::code_preview::CodeStatus::Pending
+                    );
                     let mut props_action = crate::panels::properties::PropertiesAction::None;
                     egui::CollapsingHeader::new("Properties")
                         .default_open(true)
                         .show(ui, |ui| {
+                            if code_pending {
+                                ui.label(
+                                    egui::RichText::new(
+                                        "⚠ Code has pending edits — property changes will reset",
+                                    )
+                                    .small()
+                                    .color(egui::Color32::from_rgb(234, 179, 8)),
+                                );
+                            }
                             props_action = crate::panels::properties::show_content(
                                 ui,
                                 &mut self.project.ui_tree,
