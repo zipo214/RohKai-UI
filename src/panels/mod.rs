@@ -1,4 +1,5 @@
 pub mod code_preview;
+pub mod component_tray;
 pub mod descriptor_editor;
 pub mod outline;
 pub mod palette;

@@ -56,6 +56,8 @@ pub struct SessionState {
     pub show_outline: bool,
     /// Whether the keyboard shortcut reference window is open.
     pub shortcuts_open: bool,
+    /// Selected design-time component in the tray, if any.
+    pub selected_component: Option<Uuid>,
     /// Whether preview mode is active (F5 toggle).
     pub preview_mode: bool,
     /// Live runtime values for preview mode widgets.
@@ -79,6 +81,7 @@ impl Default for SessionState {
             lock_aspect_ratio: false,
             show_outline: true,
             shortcuts_open: false,
+            selected_component: None,
             preview_mode: false,
             preview_state: crate::canvas::preview::PreviewState::default(),
         }
@@ -1796,8 +1799,10 @@ impl eframe::App for RohKaiApp {
         let left_full = window_w >= 580.0;
 
         let mut outline_action = crate::panels::outline::OutlineAction::None;
+        let mut tray_action = crate::panels::component_tray::TrayAction::None;
         let preview_mode = self.session.preview_mode;
         let show_outline = self.session.show_outline;
+        let selected_component = self.session.selected_component;
 
         let (palette_click, palette_drag, tmpl_action, props_action) =
             egui::SidePanel::left("left_panel")
@@ -1906,6 +1911,33 @@ impl eframe::App for RohKaiApp {
                             });
                     }
 
+                    // Component tray — design-time non-visual components.
+                    ui.add_space(4.0);
+                    ui.separator();
+                    egui::CollapsingHeader::new("Components")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            tray_action = crate::panels::component_tray::show_tray(
+                                ui,
+                                &self.project.ui_tree.app_props.components,
+                                selected_component,
+                            );
+                            // Config editor for the selected component
+                            if let Some(sel) = selected_component {
+                                if let Some(comp) = self
+                                    .project
+                                    .ui_tree
+                                    .app_props
+                                    .components
+                                    .iter_mut()
+                                    .find(|c| c.id == sel)
+                                {
+                                    ui.separator();
+                                    crate::panels::component_tray::show_config(ui, comp);
+                                }
+                            }
+                        });
+
                     (palette_click, palette_drag, tmpl_action, props_action)
                 })
                 .inner;
@@ -1966,6 +1998,52 @@ impl eframe::App for RohKaiApp {
                 }
             }
             crate::panels::outline::OutlineAction::None => {}
+        }
+
+        // Component tray actions
+        match tray_action {
+            crate::panels::component_tray::TrayAction::Select(id) => {
+                self.session.selected_component = if self.session.selected_component == Some(id) {
+                    None
+                } else {
+                    Some(id)
+                };
+            }
+            crate::panels::component_tray::TrayAction::Add(kind) => {
+                let name = match kind {
+                    crate::project::schema::ComponentKind::Timer => "timer",
+                    crate::project::schema::ComponentKind::DataSource => "data_source",
+                    crate::project::schema::ComponentKind::Lifecycle => "lifecycle",
+                };
+                let count = self.project.ui_tree.app_props.components.len() + 1;
+                let new_id = Uuid::new_v4();
+                let interval_ms = if kind == crate::project::schema::ComponentKind::Timer {
+                    Some(1000)
+                } else {
+                    None
+                };
+                self.project.ui_tree.app_props.components.push(
+                    crate::project::schema::DesignComponent {
+                        id: new_id,
+                        kind,
+                        name: format!("{name}_{count}"),
+                        interval_ms,
+                        handler: String::new(),
+                    },
+                );
+                self.session.selected_component = Some(new_id);
+            }
+            crate::panels::component_tray::TrayAction::Remove(id) => {
+                self.project
+                    .ui_tree
+                    .app_props
+                    .components
+                    .retain(|c| c.id != id);
+                if self.session.selected_component == Some(id) {
+                    self.session.selected_component = None;
+                }
+            }
+            crate::panels::component_tray::TrayAction::None => {}
         }
 
         // Palette click → place at viewport center (accounting for zoom/pan)

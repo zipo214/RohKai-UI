@@ -86,6 +86,9 @@ pub struct AppProps {
     /// Show mock OS title-bar bezel above the canvas boundary.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub show_bezel: bool,
+    /// Design-time non-visual components (timers, data sources, etc.).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub components: Vec<DesignComponent>,
 }
 
 impl Default for AppProps {
@@ -101,8 +104,38 @@ impl Default for AppProps {
             theme: ThemeSettings::default(),
             guides: Vec::new(),
             show_bezel: false,
+            components: Vec::new(),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Design-time non-visual components
+// ---------------------------------------------------------------------------
+
+/// A non-visual design-time component (timer, data source, lifecycle hook).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesignComponent {
+    pub id: uuid::Uuid,
+    pub kind: ComponentKind,
+    /// Display name shown in the component tray.
+    pub name: String,
+    /// Interval in milliseconds (Timer only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interval_ms: Option<u32>,
+    /// Handler function name emitted in codegen.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub handler: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ComponentKind {
+    /// Periodic timer — fires `handler` every `interval_ms`.
+    Timer,
+    /// Data source placeholder — emits a field + fetch function stub.
+    DataSource,
+    /// App lifecycle hook — on_startup / on_shutdown.
+    Lifecycle,
 }
 
 // ---------------------------------------------------------------------------
