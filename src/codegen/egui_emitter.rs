@@ -448,6 +448,30 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                     "        egui::ScrollArea::vertical().show(ui, |_ui| {});".to_owned(),
                 ));
             }
+            WidgetKind::GridLayout => {
+                lines.push((
+                    Some(w.id),
+                    format!(
+                        "        egui::Grid::new(\"{}\").show(ui, |_ui| {{}});",
+                        w.id.as_simple()
+                    ),
+                ));
+            }
+            WidgetKind::TabWidget => {
+                let tabs = w.props.options.to_vec();
+                let mut tab_lines = format!(
+                    "        egui::TopBottomPanel::top(\"{}_tabs\").show_inside(ui, |ui| {{\n",
+                    w.id.as_simple()
+                );
+                for tab in &tabs {
+                    tab_lines.push_str(&format!(
+                        "            ui.selectable_label(false, {});\n",
+                        crate::codegen::rust::string_literal(tab)
+                    ));
+                }
+                tab_lines.push_str("        });");
+                lines.push((Some(w.id), tab_lines));
+            }
             WidgetKind::Image => {
                 lines.push((Some(w.id), image_preview_line(w, 8)));
             }
@@ -649,7 +673,9 @@ fn emit_child_lines(
         WidgetKind::GroupBox
         | WidgetKind::VLayout
         | WidgetKind::HLayout
-        | WidgetKind::ScrollArea => {
+        | WidgetKind::ScrollArea
+        | WidgetKind::GridLayout
+        | WidgetKind::TabWidget => {
             format!("            // Nested container {:?} — not expanded in child codegen", child.kind)
         }
         WidgetKind::Image => image_child_preview_line(child, &rect_expr),

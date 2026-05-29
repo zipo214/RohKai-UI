@@ -328,10 +328,16 @@ fn render_widget(
                 });
             });
         }
-        WidgetKind::VLayout | WidgetKind::HLayout | WidgetKind::ScrollArea => {
+        WidgetKind::VLayout
+        | WidgetKind::HLayout
+        | WidgetKind::ScrollArea
+        | WidgetKind::GridLayout
+        | WidgetKind::TabWidget => {
             let tag = match &widget.kind {
                 WidgetKind::VLayout => "↕",
                 WidgetKind::HLayout => "↔",
+                WidgetKind::GridLayout => "⊞",
+                WidgetKind::TabWidget => "⊡",
                 _ => "⊡",
             };
             placeholder_box(ui, w_rect, tag);

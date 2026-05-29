@@ -102,6 +102,8 @@ fn show_content_inner(
                 show_layout_container(ui, w, &mut do_delete)
             }
             WidgetKind::ScrollArea => show_scroll_area(ui, w, &mut do_delete),
+            WidgetKind::GridLayout => show_layout_container(ui, w, &mut do_delete),
+            WidgetKind::TabWidget => show_tab_widget(ui, w, &mut do_delete),
             WidgetKind::Image => {
                 if show_image(ui, w, &mut do_delete) {
                     props_action = PropertiesAction::ShowSvgSource(id);
@@ -1382,6 +1384,36 @@ fn show_layout_container(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &
 
 fn show_scroll_area(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
     field_text(ui, "Label", &mut w.props.label);
+    show_geometry(ui, w);
+    ui.separator();
+    show_custom_props(ui, w);
+    show_delete_button(ui, do_delete);
+}
+
+fn show_tab_widget(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
+    ui.label(egui::RichText::new("Tabs").small().weak());
+    let mut to_remove: Option<usize> = None;
+    for (i, opt) in w.props.options.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            let ow = (ui.available_width() - 28.0).clamp(60.0, 160.0);
+            ui.add(
+                egui::TextEdit::singleline(opt)
+                    .hint_text(format!("Tab {}", i + 1))
+                    .desired_width(ow),
+            );
+            if ui.small_button("x").clicked() {
+                to_remove = Some(i);
+            }
+        });
+    }
+    if let Some(i) = to_remove {
+        w.props.options.remove(i);
+    }
+    if ui.small_button("+ Add tab").clicked() {
+        w.props
+            .options
+            .push(format!("Tab {}", w.props.options.len() + 1));
+    }
     show_geometry(ui, w);
     ui.separator();
     show_custom_props(ui, w);

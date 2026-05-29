@@ -21,6 +21,8 @@ pub fn state_info(kind: &WidgetKind) -> Option<KindInfo> {
         | WidgetKind::VLayout
         | WidgetKind::HLayout
         | WidgetKind::ScrollArea
+        | WidgetKind::GridLayout
+        | WidgetKind::TabWidget
         | WidgetKind::Custom(_) => None,
 
         // String-state widgets

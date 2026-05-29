@@ -145,6 +145,10 @@ pub enum WidgetKind {
     HLayout,
     /// Scrollable container.
     ScrollArea,
+    /// Grid layout container (egui::Grid).
+    GridLayout,
+    /// Tabbed container widget.
+    TabWidget,
 }
 
 // ---------------------------------------------------------------------------

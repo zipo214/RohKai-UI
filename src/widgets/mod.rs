@@ -3,6 +3,7 @@ pub mod checkbox;
 pub mod combo_box;
 pub mod font_combo_box;
 pub mod frame;
+pub mod grid_layout;
 pub mod group_box;
 pub mod label;
 pub mod layouts;
@@ -11,6 +12,7 @@ pub mod radio_button;
 pub mod slider;
 pub mod spacers;
 pub mod spin_box;
+pub mod tab_widget;
 pub mod text_area;
 pub mod text_input;
 
@@ -37,6 +39,8 @@ pub fn default_for(kind: &WidgetKind) -> WidgetInstance {
         WidgetKind::VLayout => layouts::vlayout_default(),
         WidgetKind::HLayout => layouts::hlayout_default(),
         WidgetKind::ScrollArea => layouts::scroll_area_default(),
+        WidgetKind::GridLayout => grid_layout::default_instance(),
+        WidgetKind::TabWidget => tab_widget::default_instance(),
         WidgetKind::Image => crate::project::schema::WidgetInstance {
             kind: WidgetKind::Image,
             rect: crate::project::schema::Rect {
@@ -135,4 +139,6 @@ pub const ALL_KINDS: &[WidgetKind] = &[
     WidgetKind::VLayout,
     WidgetKind::HLayout,
     WidgetKind::ScrollArea,
+    WidgetKind::GridLayout,
+    WidgetKind::TabWidget,
 ];

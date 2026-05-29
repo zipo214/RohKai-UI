@@ -252,6 +252,8 @@ pub fn kind_accent(kind: &WidgetKind) -> egui::Color32 {
         WidgetKind::VLayout => egui::Color32::from_rgb(130, 200, 160),
         WidgetKind::HLayout => egui::Color32::from_rgb(160, 200, 130),
         WidgetKind::ScrollArea => egui::Color32::from_rgb(140, 180, 200),
+        WidgetKind::GridLayout => egui::Color32::from_rgb(160, 190, 150),
+        WidgetKind::TabWidget => egui::Color32::from_rgb(180, 150, 200),
         WidgetKind::Custom(_) => egui::Color32::from_rgb(150, 150, 220),
     }
 }
@@ -277,6 +279,8 @@ pub fn kind_tag(kind: &WidgetKind) -> &'static str {
         WidgetKind::VLayout => "v-lay",
         WidgetKind::HLayout => "h-lay",
         WidgetKind::ScrollArea => "scrl",
+        WidgetKind::GridLayout => "grid",
+        WidgetKind::TabWidget => "tabs",
         WidgetKind::Custom(_) => "cst",
     }
 }
@@ -954,6 +958,100 @@ fn draw_widget(
             );
         }
 
+        // GridLayout: container with grid lines
+        WidgetKind::GridLayout => {
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(
+                    if flags.is_selected { stroke_width } else { 1.0 },
+                    stroke_color,
+                ),
+            );
+            // Draw simple 3×3 grid lines
+            let cols = 3_i32;
+            let rows = 3_i32;
+            for c in 1..cols {
+                let x = rect.min.x + (rect.width() * c as f32) / cols as f32;
+                painter.line_segment(
+                    [
+                        egui::pos2(x, rect.min.y + 2.0),
+                        egui::pos2(x, rect.max.y - 2.0),
+                    ],
+                    egui::Stroke::new(0.5, accent.linear_multiply(0.3)),
+                );
+            }
+            for r in 1..rows {
+                let y = rect.min.y + (rect.height() * r as f32) / rows as f32;
+                painter.line_segment(
+                    [
+                        egui::pos2(rect.min.x + 2.0, y),
+                        egui::pos2(rect.max.x - 2.0, y),
+                    ],
+                    egui::Stroke::new(0.5, accent.linear_multiply(0.3)),
+                );
+            }
+            painter.text(
+                rect.left_top() + egui::vec2(4.0, 2.0),
+                egui::Align2::LEFT_TOP,
+                &widget.props.label,
+                egui::FontId::proportional(tag_size),
+                accent.linear_multiply(0.7),
+            );
+        }
+
+        // TabWidget: container with tab header bar
+        WidgetKind::TabWidget => {
+            let tab_h = (label_size + 8.0).max(20.0);
+            // Tab bar background
+            let tab_bar_rect =
+                egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.min.y + tab_h));
+            painter.rect_filled(
+                tab_bar_rect,
+                egui::Rounding::same(rounding),
+                kind_fill(accent),
+            );
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(
+                    if flags.is_selected { stroke_width } else { 1.0 },
+                    stroke_color,
+                ),
+            );
+            // Draw tab labels from options
+            let tabs: Vec<&str> = widget.props.options.iter().map(String::as_str).collect();
+            let tab_w = if tabs.is_empty() {
+                60.0
+            } else {
+                (rect.width() / tabs.len() as f32).min(80.0)
+            };
+            for (i, tab_label) in tabs.iter().take(4).enumerate() {
+                let tx = rect.min.x + i as f32 * tab_w;
+                let is_first = i == 0;
+                let tab_rect =
+                    egui::Rect::from_min_size(egui::pos2(tx, rect.min.y), egui::vec2(tab_w, tab_h));
+                if is_first {
+                    painter.rect_filled(
+                        tab_rect,
+                        egui::Rounding::same(2.0),
+                        egui::Color32::from_gray(45),
+                    );
+                }
+                painter.text(
+                    tab_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    tab_label,
+                    egui::FontId::proportional(tag_size),
+                    if is_first {
+                        accent
+                    } else {
+                        egui::Color32::from_gray(150)
+                    },
+                );
+            }
+        }
+
         // Custom: accent box with descriptor name or label.
         WidgetKind::Custom(_) => {
             let custom_accent = widget
@@ -1062,6 +1160,8 @@ fn draw_widget(
             | WidgetKind::VLayout
             | WidgetKind::HLayout
             | WidgetKind::ScrollArea
+            | WidgetKind::GridLayout
+            | WidgetKind::TabWidget
             | WidgetKind::Image
     );
     if flags.is_child && !is_container {
@@ -1080,6 +1180,8 @@ fn draw_widget(
             | WidgetKind::VLayout
             | WidgetKind::HLayout
             | WidgetKind::ScrollArea
+            | WidgetKind::GridLayout
+            | WidgetKind::TabWidget
             | WidgetKind::HorizontalSpacer
             | WidgetKind::VerticalSpacer
             | WidgetKind::Label

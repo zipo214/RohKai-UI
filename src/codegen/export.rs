@@ -495,6 +495,26 @@ fn gen_app_rs(tree: &UiTree) -> String {
             WidgetKind::ScrollArea => {
                 "                egui::ScrollArea::vertical().show(ui, |_ui| {});\n".to_string()
             }
+            WidgetKind::GridLayout => {
+                format!(
+                    "                egui::Grid::new(\"{}\").show(ui, |_ui| {{}});\n",
+                    w.id.as_simple()
+                )
+            }
+            WidgetKind::TabWidget => {
+                let mut s = format!(
+                    "                egui::TopBottomPanel::top(\"{}_tabs\").show_inside(ui, |ui| {{\n",
+                    w.id.as_simple()
+                );
+                for tab in &w.props.options {
+                    s.push_str(&format!(
+                        "                    ui.selectable_label(false, {});\n",
+                        string_literal(tab)
+                    ));
+                }
+                s.push_str("                });\n");
+                s
+            }
             WidgetKind::Image => image_export_line(w, tip.as_deref(), 16),
             WidgetKind::Custom(_) => {
                 if let Some(ref tpl) = w.descriptor_export_tpl {
@@ -676,7 +696,9 @@ fn export_child_line(
         | WidgetKind::GroupBox
         | WidgetKind::VLayout
         | WidgetKind::HLayout
-        | WidgetKind::ScrollArea => format!(
+        | WidgetKind::ScrollArea
+        | WidgetKind::GridLayout
+        | WidgetKind::TabWidget => format!(
             "                        // Nested container {:?} - not recursive in export\n",
             child.kind
         ),
