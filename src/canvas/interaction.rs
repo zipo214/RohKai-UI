@@ -247,7 +247,7 @@ pub fn kind_accent(kind: &WidgetKind) -> egui::Color32 {
     }
 }
 
-fn kind_tag(kind: &WidgetKind) -> &'static str {
+pub fn kind_tag(kind: &WidgetKind) -> &'static str {
     match kind {
         WidgetKind::Button => "btn",
         WidgetKind::Label => "lbl",

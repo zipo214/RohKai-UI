@@ -7,6 +7,18 @@ know" note at the start of a meaningful planning or coding session.
 KEEP ENTRIES  newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-05-28 — Claude Stage 8.5: Outline Panel + Preview Mode
+
+On `dev`, implemented Stage 8.5 — two features landed: (1) Document outline
+panel (`src/panels/outline.rs`) — Ctrl+L toggle, "Layers" section in left
+panel, accent-dot rows in draw order, click-select, Ctrl+click multi-select,
+double-click canvas-center, drag-to-reorder z-order, Frame children indented,
+read-only in preview mode; (2) Preview mode (`src/canvas/preview.rs`) — F5
+toggle, actual egui widget rendering at 1:1 zoom, `PreviewState` holds live
+runtime values keyed by binding, code panel hidden, status bar indicator,
+PREVIEW badge + exit button overlaid. `allocate_ui_at_rect` replaced with
+`allocate_new_ui` (deprecated in egui 0.29). 75/75 tests, zero warnings.
+
 ## 2026-05-25 - Codex Widget Maker Taxonomy Docs
 
 On `dev`, I clarified that `src/panels/widget_builder.rs` is a Guided

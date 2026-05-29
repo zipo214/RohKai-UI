@@ -325,12 +325,16 @@ recommendations. Status recorded here for traceability.
 Bridges Stage 8 polish and Stage 9 depth. Improves designer usability without
 requiring schema changes.
 
-- [ ] Document outline panel — collapsible sidebar showing all widgets as a
-      labelled tree (id, kind, label excerpt); click to select, drag to reorder
-      z-order; replaces manual Z-order menu for most operations
-- [ ] Preview mode — F5 toggle that hides all designer chrome (palette, properties,
-      code panel, rulers, guides, status bar) and shows the canvas at 1:1 zoom,
-      giving a faithful preview of the exported window layout
+- [x] Document outline panel — `src/panels/outline.rs`; Ctrl+L toggle; layers
+      sidebar in left panel showing all widgets in draw order with accent dots,
+      labels, kind tags; click-select, Ctrl+click multi-select, double-click
+      canvas-center, drag-to-reorder z-order; indents Frame children; read-only
+      in preview mode
+- [x] Preview mode — F5 toggle; `src/canvas/preview.rs`; replaces painter-based
+      canvas with actual egui widget calls at 1:1 zoom; `PreviewState` holds
+      runtime values; code panel hidden; status bar shows PREVIEW MODE indicator;
+      PREVIEW badge + "Exit Preview [F5]" button overlaid on canvas; outline
+      panel remains visible read-only
 - [ ] Keyboard shortcut reference — ? button or F1 opens an in-app overlay listing
       all keyboard shortcuts (Ctrl+S, G, Delete, arrow nudge, Ctrl+R, etc.)
 

@@ -52,6 +52,12 @@ pub struct SessionState {
     pub theme_open: bool,
     /// Lock canvas W:H ratio when editing canvas size in the status bar.
     pub lock_aspect_ratio: bool,
+    /// Whether the document outline (layers) panel is visible.
+    pub show_outline: bool,
+    /// Whether preview mode is active (F5 toggle).
+    pub preview_mode: bool,
+    /// Live runtime values for preview mode widgets.
+    pub preview_state: crate::canvas::preview::PreviewState,
 }
 
 impl Default for SessionState {
@@ -69,6 +75,9 @@ impl Default for SessionState {
             dragging_guide: None,
             theme_open: false,
             lock_aspect_ratio: false,
+            show_outline: true,
+            preview_mode: false,
+            preview_state: crate::canvas::preview::PreviewState::default(),
         }
     }
 }
@@ -1274,8 +1283,20 @@ impl eframe::App for RohKaiApp {
             ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::G));
         let ctrl_g = ctx.input(|i| i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(Key::G));
         let ctrl_r = ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::R));
+        let ctrl_l = ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::L));
+        let f5 = ctx.input(|i| i.key_pressed(Key::F5));
         if ctrl_r {
             self.session.canvas_settings.show_rulers = !self.session.canvas_settings.show_rulers;
+        }
+        if ctrl_l {
+            self.session.show_outline = !self.session.show_outline;
+        }
+        if f5 {
+            self.session.preview_mode = !self.session.preview_mode;
+            if self.session.preview_mode {
+                self.session.preview_state =
+                    crate::canvas::preview::PreviewState::init_from_tree(&self.project.ui_tree);
+            }
         }
 
         if ctrl_n {
@@ -1599,6 +1620,16 @@ impl eframe::App for RohKaiApp {
         let prev_canvas_w = self.project.ui_tree.app_props.win_w;
         let prev_canvas_h = self.project.ui_tree.app_props.win_h;
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
+            if self.session.preview_mode {
+                ui.centered_and_justified(|ui| {
+                    ui.label(
+                        egui::RichText::new("PREVIEW MODE  —  F5 to exit")
+                            .color(egui::Color32::from_rgb(251, 191, 36))
+                            .small(),
+                    );
+                });
+                return;
+            }
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("W").small().weak());
                 ui.add(
@@ -1721,28 +1752,34 @@ impl eframe::App for RohKaiApp {
         }
 
         // ---------------------------------------------------------------
-        // Right panel: generated code
+        // Right panel: generated code (hidden in preview mode)
         // ---------------------------------------------------------------
-        crate::panels::code_preview::show(
-            ctx,
-            &mut self.project.ui_tree,
-            CodePreviewArgs {
-                highlighted_id: self.session.highlighted_code_id,
-                scroll_to: &mut self.session.scroll_to_code,
-                scroll_to_handler: &mut self.session.scroll_to_handler,
-                code_buffer: &mut self.code.buffer,
-                code_status: &mut self.code.status,
-                last_generated: &mut self.code.last_generated,
-                split_ratio: &mut self.code.split_ratio,
-                code_font_size: self.prefs.user_settings.code_font_size,
-            },
-        );
+        if !self.session.preview_mode {
+            crate::panels::code_preview::show(
+                ctx,
+                &mut self.project.ui_tree,
+                CodePreviewArgs {
+                    highlighted_id: self.session.highlighted_code_id,
+                    scroll_to: &mut self.session.scroll_to_code,
+                    scroll_to_handler: &mut self.session.scroll_to_handler,
+                    code_buffer: &mut self.code.buffer,
+                    code_status: &mut self.code.status,
+                    last_generated: &mut self.code.last_generated,
+                    split_ratio: &mut self.code.split_ratio,
+                    code_font_size: self.prefs.user_settings.code_font_size,
+                },
+            );
+        } // end !preview_mode gate for code panel
 
         // ---------------------------------------------------------------
         // Left panel — returns (palette_drag, template_action) to process outside
         // ---------------------------------------------------------------
         let window_w = ctx.screen_rect().width();
         let left_full = window_w >= 580.0;
+
+        let mut outline_action = crate::panels::outline::OutlineAction::None;
+        let preview_mode = self.session.preview_mode;
+        let show_outline = self.session.show_outline;
 
         let (palette_click, palette_drag, tmpl_action, props_action) =
             egui::SidePanel::left("left_panel")
@@ -1753,6 +1790,35 @@ impl eframe::App for RohKaiApp {
                         ui.centered_and_justified(|ui| {
                             ui.label(egui::RichText::new("«").weak());
                         });
+                        return (
+                            None,
+                            None,
+                            crate::panels::templates::TemplateAction::None,
+                            crate::panels::properties::PropertiesAction::None,
+                        );
+                    }
+
+                    let ctrl_held_inner = ui.input(|i| i.modifiers.ctrl);
+
+                    if preview_mode {
+                        // In preview mode: show outline only (read-only).
+                        ui.label(
+                            egui::RichText::new("PREVIEW MODE")
+                                .small()
+                                .color(egui::Color32::from_rgb(251, 191, 36)),
+                        );
+                        ui.separator();
+                        egui::CollapsingHeader::new("Layers")
+                            .default_open(true)
+                            .show(ui, |ui| {
+                                outline_action = crate::panels::outline::show_content(
+                                    ui,
+                                    &self.project.ui_tree,
+                                    &self.session.selected,
+                                    ctrl_held_inner,
+                                    true, // read-only in preview
+                                );
+                            });
                         return (
                             None,
                             None,
@@ -1792,6 +1858,23 @@ impl eframe::App for RohKaiApp {
                             );
                         });
 
+                    // Layers / outline panel (toggleable via Ctrl+L).
+                    if show_outline {
+                        ui.add_space(4.0);
+                        ui.separator();
+                        egui::CollapsingHeader::new("Layers  [Ctrl+L]")
+                            .default_open(true)
+                            .show(ui, |ui| {
+                                outline_action = crate::panels::outline::show_content(
+                                    ui,
+                                    &self.project.ui_tree,
+                                    &self.session.selected,
+                                    ctrl_held_inner,
+                                    false,
+                                );
+                            });
+                    }
+
                     (palette_click, palette_drag, tmpl_action, props_action)
                 })
                 .inner;
@@ -1808,6 +1891,50 @@ impl eframe::App for RohKaiApp {
                 self.cmd_edit_descriptor(&desc_id);
             }
             crate::panels::properties::PropertiesAction::None => {}
+        }
+
+        // Outline (layers) panel actions.
+        match outline_action {
+            crate::panels::outline::OutlineAction::Select(id) => {
+                self.session.selected.clear();
+                self.session.selected.push(id);
+            }
+            crate::panels::outline::OutlineAction::AddToSelection(id) => {
+                if self.session.selected.contains(&id) {
+                    self.session.selected.retain(|&x| x != id);
+                } else {
+                    self.session.selected.push(id);
+                }
+            }
+            crate::panels::outline::OutlineAction::ReorderTo {
+                id,
+                from_idx,
+                to_idx,
+            } => {
+                // Move widget from from_idx to to_idx via repeated swaps.
+                let n = self.project.ui_tree.widgets.len();
+                if from_idx < n && to_idx < n {
+                    let step: isize = if to_idx > from_idx { 1 } else { -1 };
+                    let mut cur = from_idx;
+                    while cur != to_idx {
+                        let next = (cur as isize + step) as usize;
+                        self.project.ui_tree.widgets.swap(cur, next);
+                        cur = next;
+                    }
+                    let _ = id; // id is used for identification above
+                }
+            }
+            crate::panels::outline::OutlineAction::CenterOn(id) => {
+                // Adjust pan so the widget is centred in the canvas panel.
+                if let Some(w) = self.project.ui_tree.widgets.iter().find(|w| w.id == id) {
+                    let zoom = self.session.canvas_settings.zoom;
+                    let widget_cx = w.rect.x + w.rect.w / 2.0;
+                    let widget_cy = w.rect.y + w.rect.h / 2.0;
+                    self.session.canvas_settings.pan =
+                        egui::vec2(-widget_cx * zoom, -widget_cy * zoom);
+                }
+            }
+            crate::panels::outline::OutlineAction::None => {}
         }
 
         // Palette click → place at viewport center (accounting for zoom/pan)
@@ -1857,6 +1984,22 @@ impl eframe::App for RohKaiApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             self.session.last_canvas_rect = ui.max_rect();
             let panel_rect = ui.max_rect();
+
+            // --- Preview mode ---
+            if self.session.preview_mode {
+                let exited = crate::canvas::preview::render(
+                    ui,
+                    &self.project.ui_tree,
+                    &mut self.session.preview_state,
+                    panel_rect,
+                );
+                if exited {
+                    self.session.preview_mode = false;
+                }
+                return;
+            }
+
+            // --- Design mode ---
             let zoom = self.session.canvas_settings.zoom;
             let pan = self.session.canvas_settings.pan;
             let canvas_size = [
