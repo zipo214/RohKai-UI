@@ -54,6 +54,8 @@ pub struct SessionState {
     pub lock_aspect_ratio: bool,
     /// Whether the document outline (layers) panel is visible.
     pub show_outline: bool,
+    /// Whether the keyboard shortcut reference window is open.
+    pub shortcuts_open: bool,
     /// Whether preview mode is active (F5 toggle).
     pub preview_mode: bool,
     /// Live runtime values for preview mode widgets.
@@ -76,6 +78,7 @@ impl Default for SessionState {
             theme_open: false,
             lock_aspect_ratio: false,
             show_outline: true,
+            shortcuts_open: false,
             preview_mode: false,
             preview_state: crate::canvas::preview::PreviewState::default(),
         }
@@ -1285,6 +1288,7 @@ impl eframe::App for RohKaiApp {
         let ctrl_r = ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::R));
         let ctrl_l = ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::L));
         let f5 = ctx.input(|i| i.key_pressed(Key::F5));
+        let f1 = ctx.input(|i| i.key_pressed(Key::F1));
         if ctrl_r {
             self.session.canvas_settings.show_rulers = !self.session.canvas_settings.show_rulers;
         }
@@ -1297,6 +1301,9 @@ impl eframe::App for RohKaiApp {
                 self.session.preview_state =
                     crate::canvas::preview::PreviewState::init_from_tree(&self.project.ui_tree);
             }
+        }
+        if f1 {
+            self.session.shortcuts_open = !self.session.shortcuts_open;
         }
 
         if ctrl_n {
@@ -1611,6 +1618,17 @@ impl eframe::App for RohKaiApp {
                     }
                     None => {}
                 }
+
+                // Shortcut reference toggle
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .small_button("?")
+                        .on_hover_text("Keyboard shortcuts  [F1]")
+                        .clicked()
+                    {
+                        self.session.shortcuts_open = !self.session.shortcuts_open;
+                    }
+                });
             });
         });
 
@@ -2093,5 +2111,6 @@ impl eframe::App for RohKaiApp {
         self.show_descriptor_editor_window(ctx);
         self.show_widget_builder_window(ctx);
         self.show_theme_window(ctx);
+        crate::panels::shortcuts::show(ctx, &mut self.session.shortcuts_open);
     }
 }

@@ -335,8 +335,9 @@ requiring schema changes.
       runtime values; code panel hidden; status bar shows PREVIEW MODE indicator;
       PREVIEW badge + "Exit Preview [F5]" button overlaid on canvas; outline
       panel remains visible read-only
-- [ ] Keyboard shortcut reference — ? button or F1 opens an in-app overlay listing
-      all keyboard shortcuts (Ctrl+S, G, Delete, arrow nudge, Ctrl+R, etc.)
+- [x] Keyboard shortcut reference — `?` button in menu bar or F1; `src/panels/shortcuts.rs`;
+      floating window listing all shortcuts by category (File, Canvas, Selection,
+      Grid Snap, Grouping, Help)
 
 ---
 

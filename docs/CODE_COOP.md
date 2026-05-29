@@ -7,6 +7,14 @@ know" note at the start of a meaningful planning or coding session.
 KEEP ENTRIES  newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-05-28 — Claude Stage 8.5 Complete
+
+On `dev`, closed the final Stage 8.5 item: keyboard shortcut reference
+(`src/panels/shortcuts.rs`). Floating window, F1 or `?` button in menu bar,
+categorised shortcut table (File / Canvas / Selection / Grid Snap / Grouping /
+Help). `shortcuts_open: bool` added to `SessionState`. All three Stage 8.5
+items now ticked. 75/75 tests, zero warnings. Active scope moves to Stage 9.
+
 ## 2026-05-28 — Claude Stage 8.5: Outline Panel + Preview Mode
 
 On `dev`, implemented Stage 8.5 — two features landed: (1) Document outline

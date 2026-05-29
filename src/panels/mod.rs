@@ -3,5 +3,6 @@ pub mod descriptor_editor;
 pub mod outline;
 pub mod palette;
 pub mod properties;
+pub mod shortcuts;
 pub mod templates;
 pub mod widget_builder;
