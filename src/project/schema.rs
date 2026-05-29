@@ -229,6 +229,11 @@ pub struct WidgetProps {
         skip_serializing_if = "is_default_stroke_width"
     )]
     pub stroke_width: f32,
+
+    // Stage 9 schema audit
+    /// Wrap text at widget boundary (Label, TextArea). None = egui default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_wrap: Option<bool>,
 }
 
 // ---------------------------------------------------------------------------
@@ -293,6 +298,7 @@ impl Default for WidgetProps {
             inner_margin: 8.0,
             stroke_color: None,
             stroke_width: 1.0,
+            text_wrap: None,
         }
     }
 }

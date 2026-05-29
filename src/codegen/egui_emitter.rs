@@ -145,7 +145,15 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                 } else {
                     rich_text_expr(&label_lit, w.font_size, fg_color_expr.as_deref())
                 };
-                let base = format!("ui.label({text_expr})");
+                let mut lbl = format!("egui::Label::new({text_expr})");
+                if let Some(wrap) = w.props.text_wrap {
+                    if wrap {
+                        lbl.push_str(".wrap()");
+                    } else {
+                        lbl.push_str(".extend()");
+                    }
+                }
+                let base = format!("ui.add({lbl})");
                 let line = format!("        {};", append_tip(base, tip.as_deref()));
                 lines.push((Some(w.id), line));
             }
@@ -312,6 +320,12 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                         if w.props.animated {
                             pb.push_str(".animate(true)");
                         }
+                        if let Some(c) = w.fg_color {
+                            pb.push_str(&format!(
+                                ".fill(egui::Color32::from_rgb({}, {}, {}))",
+                                c[0], c[1], c[2]
+                            ));
+                        }
                         let sized =
                             format!("ui.add_sized([{:.1}, {:.1}], {pb})", w.rect.w, w.rect.h);
                         let with_tip = append_tip(sized, tip.as_deref());
@@ -330,6 +344,9 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                                 ".hint_text({})",
                                 string_literal(&w.props.placeholder)
                             ));
+                        }
+                        if w.props.text_wrap == Some(false) {
+                            te.push_str(".desired_rows(1)"); // no-wrap hint
                         }
                         let sized =
                             format!("ui.add_sized([{:.1}, {:.1}], {te})", w.rect.w, w.rect.h);

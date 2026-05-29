@@ -198,6 +198,7 @@ fn show_label(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
     show_fg_color(ui, w);
     show_font_size(ui, w);
     show_text_align(ui, w);
+    show_text_wrap(ui, w);
     ui.separator();
     show_tooltip(ui, w);
     show_custom_props(ui, w);
@@ -232,7 +233,9 @@ fn show_text_input(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bo
     binding_field(ui, w);
     show_geometry(ui, w);
     ui.separator();
+    show_bg_color(ui, w);
     show_fg_color(ui, w);
+    show_corner_radius(ui, w);
     show_font_size(ui, w);
     ui.separator();
     show_tooltip(ui, w);
@@ -716,6 +719,34 @@ fn show_orientation(ui: &mut egui::Ui, w: &mut WidgetInstance) {
             .on_hover_text("Horizontal");
         ui.selectable_value(&mut w.props.orientation, Orientation::Vertical, "V")
             .on_hover_text("Vertical");
+    });
+}
+
+fn show_text_wrap(ui: &mut egui::Ui, w: &mut WidgetInstance) {
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Wrap text").small().weak());
+        let current = w.props.text_wrap;
+        if ui
+            .selectable_label(current.is_none(), "Default")
+            .on_hover_text("Use egui default wrapping")
+            .clicked()
+        {
+            w.props.text_wrap = None;
+        }
+        if ui
+            .selectable_label(current == Some(true), "Wrap")
+            .on_hover_text("Wrap at widget boundary")
+            .clicked()
+        {
+            w.props.text_wrap = Some(true);
+        }
+        if ui
+            .selectable_label(current == Some(false), "Clip")
+            .on_hover_text("Do not wrap; clip excess")
+            .clicked()
+        {
+            w.props.text_wrap = Some(false);
+        }
     });
 }
 
@@ -1216,8 +1247,11 @@ fn show_text_area(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut boo
     binding_field(ui, w);
     show_geometry(ui, w);
     ui.separator();
+    show_bg_color(ui, w);
     show_fg_color(ui, w);
+    show_corner_radius(ui, w);
     show_font_size(ui, w);
+    show_text_wrap(ui, w);
     ui.separator();
     show_tooltip(ui, w);
     show_enabled(ui, w);

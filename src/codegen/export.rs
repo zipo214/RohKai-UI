@@ -224,7 +224,15 @@ fn gen_app_rs(tree: &UiTree) -> String {
                         } else {
                             rich_text_export_expr(&label, w.font_size, w.fg_color)
                         };
-                        format!("ui.label({text})")
+                        let mut lbl = format!("egui::Label::new({text})");
+                        if let Some(wrap) = w.props.text_wrap {
+                            if wrap {
+                                lbl.push_str(".wrap()");
+                            } else {
+                                lbl.push_str(".extend()");
+                            }
+                        }
+                        format!("ui.add({lbl})")
                     }
                 };
                 format!("                {};\n", export_tip(expr, tip.as_deref()))
@@ -412,6 +420,12 @@ fn gen_app_rs(tree: &UiTree) -> String {
                     }
                     if w.props.animated {
                         pb.push_str(".animate(true)");
+                    }
+                    if let Some(c) = w.fg_color {
+                        pb.push_str(&format!(
+                            ".fill(egui::Color32::from_rgb({}, {}, {}))",
+                            c[0], c[1], c[2]
+                        ));
                     }
                     let sized = format!("ui.add_sized([{:.1}, {:.1}], {pb})", w.rect.w, w.rect.h);
                     let with_tip = export_tip(sized, tip.as_deref());
