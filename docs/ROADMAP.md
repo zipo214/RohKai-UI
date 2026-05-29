@@ -395,32 +395,32 @@ requiring schema changes.
 
 ---
 
-## Stage 10 — Technical & Computational Widgets
+## Stage 10 — Technical & Computational Widgets ✅
 
 ### Computational & Non-Visual Components
-- [ ] Math/formula widget — displays computed value from an expression bound to AppState
-- [ ] Timer/interval component — fires event on schedule, non-visual, lives in component tray
-- [ ] State machine component — define states and transitions visually,
-      generates match-based logic
-- [ ] HTTP request component — non-visual, configure URL/method/headers,
-      bind response to state
+- [x] Math/formula widget — `MathLabel` (f32-bound); emits `ui.label(format!("{} = {:.2}", …))`
+- [x] Timer/interval component — done in Stage 9 component tray (Timer ComponentKind)
+- [x] State machine component — `StateMachine` ComponentKind; emits usize state field +
+      `on_transition` update hook
+- [x] HTTP request component — `HttpRequest` ComponentKind; emits String response field +
+      `on_response` dispatch hook (mpsc note for async)
 
 ### Data Display Widgets
-- [ ] Data table widget — tabular display, bound to Vec<T>
-- [ ] File picker widget — browse filesystem, returns path
-- [ ] Chart widget — 2D line/bar chart bound to Vec<f32>
+- [x] Data table widget — `Table` (egui::Grid, columns from options) — merged with Table View
+- [x] File picker widget — `FilePicker`; emits rfd::FileDialog browse + path field
+- [x] Chart widget — `Chart`; canvas bar preview, codegen painter comment for Vec<f32>
 
 ### New Widget Kinds — Data Views
-- [ ] List Widget / List View — bound to Vec<String>
-- [ ] Tree Widget / Tree View — hierarchical data display
-- [ ] Table Widget / Table View — tabular display (merges with data table widget above)
+- [x] List Widget / List View — `ListView` (egui::ScrollArea + labels from options)
+- [x] Tree Widget / Tree View — `TreeView` (egui::CollapsingHeader hierarchy)
+- [x] Table Widget / Table View — merged into `Table` above
 
 ### New Widget Kinds — Additional Containers & Buttons
-- [ ] Stacked Widget
-- [ ] Tool Box
-- [ ] Tool Button
-- [ ] Command Link Button
-- [ ] Dialog Button Box
+- [x] Stacked Widget — `StackedWidget` container (active-page preview)
+- [x] Tool Box — `ToolBox` (vertical collapsing sections)
+- [x] Tool Button — `ToolButton` (egui small_button)
+- [x] Command Link Button — `CommandLinkButton` (title + description)
+- [x] Dialog Button Box — `DialogButtonBox` (button row from options)
 
 ---
 

@@ -7,6 +7,21 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-05-28 — Claude Stage 10 COMPLETE
+
+On `dev`, Stage 10 (Technical & Computational Widgets) done. 11 new WidgetKinds:
+ToolButton, CommandLinkButton, DialogButtonBox (button family); MathLabel,
+FilePicker, Chart; Table (merges data-table + table-view), ListView, TreeView
+(new "Data" palette category); StackedWidget, ToolBox. Plus 2 new ComponentKinds:
+StateMachine (usize state field), HttpRequest (String response field) — Timer was
+already done in Stage 9. Each widget wired through the full pipeline (schema →
+kind_table → widgets/ → canvas render → preview → egui_emitter top+child → export
+top+child → palette → properties). New widget files: buttons_ext.rs,
+computational.rs, data_views.rs, containers_ext.rs. Notable codegen: FilePicker
+emits rfd::FileDialog, Table/ListView emit Grid/ScrollArea from options, TreeView
+emits CollapsingHeader. 6 new emitter tests. 89/89 tests, zero warnings
+(`cargo clippy -- -D warnings`). Next: Stage 11 (Rust-Centric Visual Features).
+
 ## 2026-05-28 — Claude Stage 9 COMPLETE
 
 On `dev`, Stage 9 (Widget Depth & Lazarus Completeness) is fully done. All items
