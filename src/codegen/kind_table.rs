@@ -11,23 +11,39 @@ pub struct KindInfo {
 /// maintaining their own per-kind match arms.
 pub fn state_info(kind: &WidgetKind) -> Option<KindInfo> {
     match kind {
-        WidgetKind::Button | WidgetKind::Frame => None,
+        // Stateless widgets
+        WidgetKind::Button
+        | WidgetKind::Frame
+        | WidgetKind::Image
+        | WidgetKind::HorizontalSpacer
+        | WidgetKind::VerticalSpacer
+        | WidgetKind::GroupBox
+        | WidgetKind::VLayout
+        | WidgetKind::HLayout
+        | WidgetKind::ScrollArea
+        | WidgetKind::Custom(_) => None,
+
+        // String-state widgets
         WidgetKind::Label
         | WidgetKind::TextInput
+        | WidgetKind::TextArea
         | WidgetKind::ComboBox
+        | WidgetKind::FontComboBox
         | WidgetKind::RadioButton => Some(KindInfo {
             rust_type: "String",
             default_expr: "String::new()",
         }),
-        WidgetKind::Slider | WidgetKind::ProgressBar => Some(KindInfo {
+
+        // f32-state widgets
+        WidgetKind::Slider | WidgetKind::ProgressBar | WidgetKind::SpinBox => Some(KindInfo {
             rust_type: "f32",
             default_expr: "0.0",
         }),
+
+        // bool-state widgets
         WidgetKind::Checkbox => Some(KindInfo {
             rust_type: "bool",
             default_expr: "false",
         }),
-        WidgetKind::Image => None,
-        WidgetKind::Custom(_) => None,
     }
 }

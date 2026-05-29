@@ -321,6 +321,96 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                 };
                 lines.push((Some(w.id), line));
             }
+            WidgetKind::TextArea => {
+                let line = match binding {
+                    Some(b) => {
+                        let mut te = format!("egui::TextEdit::multiline(&mut self.{b})");
+                        if !w.props.placeholder.is_empty() {
+                            te.push_str(&format!(
+                                ".hint_text({})",
+                                string_literal(&w.props.placeholder)
+                            ));
+                        }
+                        let sized =
+                            format!("ui.add_sized([{:.1}, {:.1}], {te})", w.rect.w, w.rect.h);
+                        format!("        {};", append_tip(sized, tip.as_deref()))
+                    }
+                    None => format!("        // TextArea {label_lit}: set a valid Binding"),
+                };
+                lines.push((Some(w.id), line));
+            }
+            WidgetKind::SpinBox => {
+                let line = match binding {
+                    Some(b) => {
+                        let dv = format!(
+                            "egui::DragValue::new(&mut self.{b}).range({:.1}..={:.1})",
+                            w.props.min, w.props.max
+                        );
+                        let sized = format!("ui.add({dv})");
+                        let with_tip = append_tip(sized, tip.as_deref());
+                        let with_handler = if let Some(h) = resolve_handler_change(w) {
+                            format!(
+                                "if {with_tip}.changed() {{\n            self.{h}();\n        }}"
+                            )
+                        } else {
+                            format!("{with_tip};")
+                        };
+                        format!("        {with_handler}")
+                    }
+                    None => format!("        // SpinBox {label_lit}: set a valid Binding"),
+                };
+                lines.push((Some(w.id), line));
+            }
+            WidgetKind::FontComboBox => {
+                let line = match binding {
+                    Some(b) => {
+                        let line = format!(
+                            "        egui::ComboBox::from_id_salt(\"{b}\")\n            \
+                            .selected_text(&self.{b})\n            \
+                            .show_ui(ui, |ui| {{\n                \
+                            for font in [\"Proportional\", \"Monospace\"] {{\n                    \
+                            ui.selectable_value(&mut self.{b}, font.to_owned(), font);\n                \
+                            }}\n            }});"
+                        );
+                        line
+                    }
+                    None => format!("        // FontComboBox {label_lit}: set a valid Binding"),
+                };
+                lines.push((Some(w.id), line));
+            }
+            WidgetKind::HorizontalSpacer => {
+                lines.push((
+                    Some(w.id),
+                    format!("        ui.add_space({:.1});", w.rect.w),
+                ));
+            }
+            WidgetKind::VerticalSpacer => {
+                lines.push((
+                    Some(w.id),
+                    format!("        ui.add_space({:.1});", w.rect.h),
+                ));
+            }
+            WidgetKind::GroupBox => {
+                let lbl = string_literal(&w.props.label);
+                lines.push((
+                    Some(w.id),
+                    format!(
+                        "        egui::Frame::group(ui.style()).show(ui, |ui| {{\n            ui.label({lbl});\n        }});"
+                    ),
+                ));
+            }
+            WidgetKind::VLayout => {
+                lines.push((Some(w.id), "        ui.vertical(|_ui| {});".to_owned()));
+            }
+            WidgetKind::HLayout => {
+                lines.push((Some(w.id), "        ui.horizontal(|_ui| {});".to_owned()));
+            }
+            WidgetKind::ScrollArea => {
+                lines.push((
+                    Some(w.id),
+                    "        egui::ScrollArea::vertical().show(ui, |_ui| {});".to_owned(),
+                ));
+            }
             WidgetKind::Image => {
                 lines.push((Some(w.id), image_preview_line(w, 8)));
             }
@@ -494,6 +584,37 @@ fn emit_child_lines(
             }
             None => format!("            // ProgressBar {label}: set a valid Binding"),
         },
+        WidgetKind::TextArea => match binding {
+            Some(b) => format!(
+                "            ui.put({rect_expr}, egui::TextEdit::multiline(&mut self.{b}));"
+            ),
+            None => format!("            // TextArea {label}: set a valid Binding"),
+        },
+        WidgetKind::SpinBox => match binding {
+            Some(b) => format!(
+                "            ui.put({rect_expr}, egui::DragValue::new(&mut self.{b}).range({:.1}..={:.1}));",
+                child.props.min, child.props.max
+            ),
+            None => format!("            // SpinBox {label}: set a valid Binding"),
+        },
+        WidgetKind::FontComboBox => match binding {
+            Some(b) => format!(
+                "            ui.put({rect_expr}, egui::Label::new(self.{b}.as_str())); // FontComboBox"
+            ),
+            None => format!("            // FontComboBox {label}: set a valid Binding"),
+        },
+        WidgetKind::HorizontalSpacer => {
+            format!("            ui.add_space({:.1}); // HorizontalSpacer", child.rect.w)
+        }
+        WidgetKind::VerticalSpacer => {
+            format!("            ui.add_space({:.1}); // VerticalSpacer", child.rect.h)
+        }
+        WidgetKind::GroupBox
+        | WidgetKind::VLayout
+        | WidgetKind::HLayout
+        | WidgetKind::ScrollArea => {
+            format!("            // Nested container {:?} — not expanded in child codegen", child.kind)
+        }
         WidgetKind::Image => image_child_preview_line(child, &rect_expr),
         WidgetKind::Custom(_) => {
             if let Some(ref tpl) = child.descriptor_live_tpl {

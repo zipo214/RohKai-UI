@@ -1,11 +1,17 @@
 pub mod button;
 pub mod checkbox;
 pub mod combo_box;
+pub mod font_combo_box;
 pub mod frame;
+pub mod group_box;
 pub mod label;
+pub mod layouts;
 pub mod progress_bar;
 pub mod radio_button;
 pub mod slider;
+pub mod spacers;
+pub mod spin_box;
+pub mod text_area;
 pub mod text_input;
 
 use crate::codegen::widget_descriptor::WidgetDescriptor;
@@ -22,6 +28,15 @@ pub fn default_for(kind: &WidgetKind) -> WidgetInstance {
         WidgetKind::ComboBox => combo_box::default_instance(),
         WidgetKind::RadioButton => radio_button::default_instance(),
         WidgetKind::ProgressBar => progress_bar::default_instance(),
+        WidgetKind::TextArea => text_area::default_instance(),
+        WidgetKind::SpinBox => spin_box::default_instance(),
+        WidgetKind::FontComboBox => font_combo_box::default_instance(),
+        WidgetKind::HorizontalSpacer => spacers::horizontal_default(),
+        WidgetKind::VerticalSpacer => spacers::vertical_default(),
+        WidgetKind::GroupBox => group_box::default_instance(),
+        WidgetKind::VLayout => layouts::vlayout_default(),
+        WidgetKind::HLayout => layouts::hlayout_default(),
+        WidgetKind::ScrollArea => layouts::scroll_area_default(),
         WidgetKind::Image => crate::project::schema::WidgetInstance {
             kind: WidgetKind::Image,
             rect: crate::project::schema::Rect {
@@ -105,10 +120,19 @@ pub const ALL_KINDS: &[WidgetKind] = &[
     WidgetKind::Button,
     WidgetKind::Label,
     WidgetKind::TextInput,
+    WidgetKind::TextArea,
     WidgetKind::Slider,
+    WidgetKind::SpinBox,
     WidgetKind::Checkbox,
+    WidgetKind::FontComboBox,
     WidgetKind::Frame,
     WidgetKind::ComboBox,
     WidgetKind::RadioButton,
     WidgetKind::ProgressBar,
+    WidgetKind::HorizontalSpacer,
+    WidgetKind::VerticalSpacer,
+    WidgetKind::GroupBox,
+    WidgetKind::VLayout,
+    WidgetKind::HLayout,
+    WidgetKind::ScrollArea,
 ];

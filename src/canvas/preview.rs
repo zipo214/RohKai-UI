@@ -255,6 +255,87 @@ fn render_widget(
                     .show(ui, |_ui| {});
             });
         }
+        WidgetKind::TextArea => {
+            let hint = widget.props.placeholder.clone();
+            if let Some(PreviewValue::Str(s)) = state.values.get_mut(binding) {
+                let te = egui::TextEdit::multiline(s).hint_text(&hint);
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+                    ui.add_sized(size, te);
+                });
+            } else {
+                placeholder_box(ui, w_rect, "area");
+            }
+        }
+        WidgetKind::SpinBox => {
+            let min = widget.props.min;
+            let max = widget.props.max;
+            if let Some(PreviewValue::Float(f)) = state.values.get_mut(binding) {
+                let dv = egui::DragValue::new(f).range(min..=max);
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+                    ui.add_sized(size, dv);
+                });
+            } else {
+                placeholder_box(ui, w_rect, "spin");
+            }
+        }
+        WidgetKind::FontComboBox => {
+            const FONTS: &[&str] = &["Proportional", "Monospace"];
+            let selected = state
+                .values
+                .get(binding)
+                .and_then(|v| {
+                    if let PreviewValue::Str(s) = v {
+                        Some(s.clone())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| "Proportional".to_owned());
+            let mut sel = selected.clone();
+            let cid = egui::Id::new(("preview_font_combo", widget.id));
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+                egui::ComboBox::from_id_salt(cid)
+                    .selected_text(&sel)
+                    .width(size.x)
+                    .show_ui(ui, |ui| {
+                        for f in FONTS {
+                            ui.selectable_value(&mut sel, f.to_string(), *f);
+                        }
+                    });
+            });
+            if sel != selected {
+                state
+                    .values
+                    .insert(binding.to_string(), PreviewValue::Str(sel));
+            }
+        }
+        WidgetKind::HorizontalSpacer => {
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+                ui.add_space(w_rect.width());
+            });
+        }
+        WidgetKind::VerticalSpacer => {
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+                ui.add_space(w_rect.height());
+            });
+        }
+        WidgetKind::GroupBox => {
+            let label = widget.props.label.clone();
+            let style = ui.style().clone();
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+                egui::Frame::group(&style).show(ui, |ui| {
+                    ui.label(&label);
+                });
+            });
+        }
+        WidgetKind::VLayout | WidgetKind::HLayout | WidgetKind::ScrollArea => {
+            let tag = match &widget.kind {
+                WidgetKind::VLayout => "↕",
+                WidgetKind::HLayout => "↔",
+                _ => "⊡",
+            };
+            placeholder_box(ui, w_rect, tag);
+        }
         WidgetKind::Image | WidgetKind::Custom(_) => {
             let tag = match &widget.kind {
                 WidgetKind::Image => "img",

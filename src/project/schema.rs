@@ -126,6 +126,25 @@ pub enum WidgetKind {
     Image,
     // Stage 7 — runtime-loaded `.rkwd` widget descriptor
     Custom(String),
+    // Stage 9 — new input widgets
+    /// Multi-line text editor.
+    TextArea,
+    /// Numeric spinner / drag-value input.
+    SpinBox,
+    /// Font family picker combo-box.
+    FontComboBox,
+    // Stage 9 — spacers
+    HorizontalSpacer,
+    VerticalSpacer,
+    // Stage 9 — layout containers
+    /// Labeled group box (Frame with a heading).
+    GroupBox,
+    /// Vertical stack layout container.
+    VLayout,
+    /// Horizontal stack layout container.
+    HLayout,
+    /// Scrollable container.
+    ScrollArea,
 }
 
 // ---------------------------------------------------------------------------

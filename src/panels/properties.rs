@@ -91,6 +91,17 @@ fn show_content_inner(
             WidgetKind::ComboBox => show_combo_box(ui, w, &mut do_delete),
             WidgetKind::ProgressBar => show_progress_bar(ui, w, &mut do_delete),
             WidgetKind::Frame => show_frame(ui, w, &mut do_delete),
+            WidgetKind::TextArea => show_text_area(ui, w, &mut do_delete),
+            WidgetKind::SpinBox => show_spin_box(ui, w, &mut do_delete),
+            WidgetKind::FontComboBox => show_font_combo_box(ui, w, &mut do_delete),
+            WidgetKind::HorizontalSpacer | WidgetKind::VerticalSpacer => {
+                show_spacer(ui, w, &mut do_delete)
+            }
+            WidgetKind::GroupBox => show_group_box(ui, w, &mut do_delete),
+            WidgetKind::VLayout | WidgetKind::HLayout => {
+                show_layout_container(ui, w, &mut do_delete)
+            }
+            WidgetKind::ScrollArea => show_scroll_area(ui, w, &mut do_delete),
             WidgetKind::Image => {
                 if show_image(ui, w, &mut do_delete) {
                     props_action = PropertiesAction::ShowSvgSource(id);
@@ -1194,6 +1205,104 @@ fn show_alignment(ui: &mut egui::Ui, tree: &mut UiTree, selected: &[Uuid], shift
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Stage 9 widget panels
+// ---------------------------------------------------------------------------
+
+fn show_text_area(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
+    field_text(ui, "Placeholder", &mut w.props.placeholder);
+    binding_field(ui, w);
+    show_geometry(ui, w);
+    ui.separator();
+    show_fg_color(ui, w);
+    show_font_size(ui, w);
+    ui.separator();
+    show_tooltip(ui, w);
+    show_enabled(ui, w);
+    show_custom_props(ui, w);
+    show_delete_button(ui, do_delete);
+}
+
+fn show_spin_box(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
+    field_text(ui, "Label", &mut w.props.label);
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Range").small().weak());
+        ui.add(
+            egui::DragValue::new(&mut w.props.min)
+                .speed(1.0)
+                .prefix("Min "),
+        );
+        ui.add(
+            egui::DragValue::new(&mut w.props.max)
+                .speed(1.0)
+                .prefix("Max "),
+        );
+    });
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Default").small().weak());
+        ui.add(
+            egui::DragValue::new(&mut w.props.default_value)
+                .speed(0.1)
+                .range(w.props.min..=w.props.max),
+        );
+    });
+    binding_field(ui, w);
+    show_geometry(ui, w);
+    ui.separator();
+    show_fg_color(ui, w);
+    show_tooltip(ui, w);
+    show_enabled(ui, w);
+    show_custom_props(ui, w);
+    show_delete_button(ui, do_delete);
+}
+
+fn show_font_combo_box(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
+    ui.label(
+        egui::RichText::new("Font selector combo. Binding holds selected font name.")
+            .small()
+            .weak(),
+    );
+    binding_field(ui, w);
+    show_geometry(ui, w);
+    ui.separator();
+    show_tooltip(ui, w);
+    show_enabled(ui, w);
+    show_custom_props(ui, w);
+    show_delete_button(ui, do_delete);
+}
+
+fn show_spacer(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
+    show_geometry(ui, w);
+    show_delete_button(ui, do_delete);
+}
+
+fn show_group_box(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
+    field_text(ui, "Title", &mut w.props.label);
+    show_geometry(ui, w);
+    ui.separator();
+    show_fg_color(ui, w);
+    show_font_size(ui, w);
+    show_tooltip(ui, w);
+    show_custom_props(ui, w);
+    show_delete_button(ui, do_delete);
+}
+
+fn show_layout_container(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
+    field_text(ui, "Label", &mut w.props.label);
+    show_geometry(ui, w);
+    ui.separator();
+    show_custom_props(ui, w);
+    show_delete_button(ui, do_delete);
+}
+
+fn show_scroll_area(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
+    field_text(ui, "Label", &mut w.props.label);
+    show_geometry(ui, w);
+    ui.separator();
+    show_custom_props(ui, w);
+    show_delete_button(ui, do_delete);
 }
 
 // ---------------------------------------------------------------------------

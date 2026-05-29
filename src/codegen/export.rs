@@ -419,6 +419,68 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 }
                 None => format!("                // ProgressBar {label}: set a valid Binding\n"),
             },
+            WidgetKind::TextArea => match binding {
+                Some(b) => {
+                    let mut te = format!("egui::TextEdit::multiline(&mut self.state.{b})");
+                    if !w.props.placeholder.is_empty() {
+                        te.push_str(&format!(
+                            ".hint_text({})",
+                            string_literal(&w.props.placeholder)
+                        ));
+                    }
+                    let sized =
+                        format!("ui.add_sized([{:.1}, {:.1}], {te})", w.rect.w, w.rect.h);
+                    format!("                {};\n", export_tip(sized, tip.as_deref()))
+                }
+                None => format!("                // TextArea {label}: set a valid Binding\n"),
+            },
+            WidgetKind::SpinBox => match binding {
+                Some(b) => {
+                    let dv = format!(
+                        "egui::DragValue::new(&mut self.state.{b}).range({:.1}..={:.1})",
+                        w.props.min, w.props.max
+                    );
+                    format!(
+                        "                {};\n",
+                        export_tip(format!("ui.add({dv})"), tip.as_deref())
+                    )
+                }
+                None => format!("                // SpinBox {label}: set a valid Binding\n"),
+            },
+            WidgetKind::FontComboBox => match binding {
+                Some(b) => format!(
+                    "                egui::ComboBox::from_id_salt(\"{b}\")\n                    \
+                    .selected_text(&self.state.{b})\n                    \
+                    .show_ui(ui, |ui| {{\n                        \
+                    for font in [\"Proportional\", \"Monospace\"] {{\n                            \
+                    ui.selectable_value(&mut self.state.{b}, font.to_owned(), font);\n                        \
+                    }}\n                    }});\n"
+                ),
+                None => {
+                    format!("                // FontComboBox {label}: set a valid Binding\n")
+                }
+            },
+            WidgetKind::HorizontalSpacer => {
+                format!("                ui.add_space({:.1});\n", w.rect.w)
+            }
+            WidgetKind::VerticalSpacer => {
+                format!("                ui.add_space({:.1});\n", w.rect.h)
+            }
+            WidgetKind::GroupBox => {
+                let lbl = string_literal(&w.props.label);
+                format!(
+                    "                egui::Frame::group(ui.style()).show(ui, |ui| {{\n                    ui.label({lbl});\n                }});\n"
+                )
+            }
+            WidgetKind::VLayout => {
+                "                ui.vertical(|_ui| {});\n".to_string()
+            }
+            WidgetKind::HLayout => {
+                "                ui.horizontal(|_ui| {});\n".to_string()
+            }
+            WidgetKind::ScrollArea => {
+                "                egui::ScrollArea::vertical().show(ui, |_ui| {});\n".to_string()
+            }
             WidgetKind::Image => image_export_line(w, tip.as_deref(), 16),
             WidgetKind::Custom(_) => {
                 if let Some(ref tpl) = w.descriptor_export_tpl {
@@ -596,9 +658,39 @@ fn export_child_line(
             }
             None => format!("                        // ProgressBar {child_label}: set a valid Binding\n"),
         },
-        WidgetKind::Frame => format!(
-            "                        // Nested Frame {child_label} - not recursive in export\n"
+        WidgetKind::Frame
+        | WidgetKind::GroupBox
+        | WidgetKind::VLayout
+        | WidgetKind::HLayout
+        | WidgetKind::ScrollArea => format!(
+            "                        // Nested container {:?} - not recursive in export\n",
+            child.kind
         ),
+        WidgetKind::TextArea => match child_binding {
+            Some(b) => format!(
+                "                        ui.put({rect_expr}, egui::TextEdit::multiline(&mut self.state.{b}));\n"
+            ),
+            None => format!("                        // TextArea {child_label}: set a valid Binding\n"),
+        },
+        WidgetKind::SpinBox => match child_binding {
+            Some(b) => format!(
+                "                        ui.put({rect_expr}, egui::DragValue::new(&mut self.state.{b}).range({:.1}..={:.1}));\n",
+                child.props.min, child.props.max
+            ),
+            None => format!("                        // SpinBox {child_label}: set a valid Binding\n"),
+        },
+        WidgetKind::FontComboBox => match child_binding {
+            Some(b) => format!(
+                "                        ui.put({rect_expr}, egui::Label::new(self.state.{b}.as_str())); // FontComboBox\n"
+            ),
+            None => format!("                        // FontComboBox {child_label}: set a valid Binding\n"),
+        },
+        WidgetKind::HorizontalSpacer => {
+            format!("                        ui.add_space({:.1}); // HorizontalSpacer\n", child.rect.w)
+        }
+        WidgetKind::VerticalSpacer => {
+            format!("                        ui.add_space({:.1}); // VerticalSpacer\n", child.rect.h)
+        }
         WidgetKind::Image => image_export_child_line(child, rect_expr),
         WidgetKind::Custom(_) => {
             if let Some(ref tpl) = child.descriptor_export_tpl {

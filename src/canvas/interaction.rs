@@ -236,13 +236,22 @@ pub fn kind_accent(kind: &WidgetKind) -> egui::Color32 {
         WidgetKind::Button => egui::Color32::from_rgb(52, 211, 153),
         WidgetKind::Label => egui::Color32::from_rgb(156, 163, 175),
         WidgetKind::TextInput => egui::Color32::from_rgb(96, 165, 250),
+        WidgetKind::TextArea => egui::Color32::from_rgb(56, 145, 240),
         WidgetKind::Slider => egui::Color32::from_rgb(251, 146, 60),
+        WidgetKind::SpinBox => egui::Color32::from_rgb(251, 170, 80),
         WidgetKind::Checkbox => egui::Color32::from_rgb(167, 139, 250),
         WidgetKind::Frame => egui::Color32::from_rgb(200, 200, 200),
         WidgetKind::ComboBox => egui::Color32::from_rgb(251, 191, 36),
+        WidgetKind::FontComboBox => egui::Color32::from_rgb(240, 180, 40),
         WidgetKind::RadioButton => egui::Color32::from_rgb(251, 113, 133),
         WidgetKind::ProgressBar => egui::Color32::from_rgb(34, 211, 238),
         WidgetKind::Image => egui::Color32::from_rgb(248, 113, 113),
+        WidgetKind::HorizontalSpacer => egui::Color32::from_rgb(100, 130, 100),
+        WidgetKind::VerticalSpacer => egui::Color32::from_rgb(100, 130, 100),
+        WidgetKind::GroupBox => egui::Color32::from_rgb(180, 180, 210),
+        WidgetKind::VLayout => egui::Color32::from_rgb(130, 200, 160),
+        WidgetKind::HLayout => egui::Color32::from_rgb(160, 200, 130),
+        WidgetKind::ScrollArea => egui::Color32::from_rgb(140, 180, 200),
         WidgetKind::Custom(_) => egui::Color32::from_rgb(150, 150, 220),
     }
 }
@@ -252,13 +261,22 @@ pub fn kind_tag(kind: &WidgetKind) -> &'static str {
         WidgetKind::Button => "btn",
         WidgetKind::Label => "lbl",
         WidgetKind::TextInput => "txt",
+        WidgetKind::TextArea => "area",
         WidgetKind::Slider => "sldr",
+        WidgetKind::SpinBox => "spin",
         WidgetKind::Checkbox => "chk",
         WidgetKind::Frame => "frm",
         WidgetKind::ComboBox => "cmb",
+        WidgetKind::FontComboBox => "font",
         WidgetKind::RadioButton => "rad",
         WidgetKind::ProgressBar => "prg",
         WidgetKind::Image => "img",
+        WidgetKind::HorizontalSpacer => "h-sp",
+        WidgetKind::VerticalSpacer => "v-sp",
+        WidgetKind::GroupBox => "grp",
+        WidgetKind::VLayout => "v-lay",
+        WidgetKind::HLayout => "h-lay",
+        WidgetKind::ScrollArea => "scrl",
         WidgetKind::Custom(_) => "cst",
     }
 }
@@ -691,6 +709,251 @@ fn draw_widget(
             );
         }
 
+        // TextArea: dark multi-line field
+        WidgetKind::TextArea => {
+            painter.rect_filled(rect, rounding, bg.unwrap_or(egui::Color32::from_gray(30)));
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(stroke_width, stroke_color),
+            );
+            let hint = if widget.props.placeholder.is_empty() {
+                widget.props.label.as_str()
+            } else {
+                widget.props.placeholder.as_str()
+            };
+            painter.text(
+                rect.left_top() + egui::vec2(6.0, label_size * 0.7),
+                egui::Align2::LEFT_TOP,
+                hint,
+                egui::FontId::proportional(label_size),
+                fg.unwrap_or(egui::Color32::from_gray(120)),
+            );
+            // Dashed lines to suggest multi-line
+            for i in 1..3_i32 {
+                let y = rect.min.y + i as f32 * (rect.height() / 3.5);
+                if y < rect.max.y - 4.0 {
+                    painter.line_segment(
+                        [
+                            egui::pos2(rect.min.x + 6.0, y),
+                            egui::pos2(rect.max.x - 6.0, y),
+                        ],
+                        egui::Stroke::new(0.5, egui::Color32::from_gray(55)),
+                    );
+                }
+            }
+        }
+
+        // SpinBox: dark field with +/- indicators
+        WidgetKind::SpinBox => {
+            painter.rect_filled(rect, rounding, bg.unwrap_or(egui::Color32::from_gray(30)));
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(stroke_width, stroke_color),
+            );
+            let val_str = format!("{:.1}", widget.props.default_value);
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                &val_str,
+                egui::FontId::proportional(label_size),
+                fg.unwrap_or(egui::Color32::from_gray(200)),
+            );
+            let arrow_x = rect.max.x - 8.0;
+            painter.text(
+                egui::pos2(arrow_x, rect.center().y - 4.0),
+                egui::Align2::RIGHT_CENTER,
+                "▲",
+                egui::FontId::proportional(tag_size),
+                accent,
+            );
+            painter.text(
+                egui::pos2(arrow_x, rect.center().y + 4.0),
+                egui::Align2::RIGHT_CENTER,
+                "▼",
+                egui::FontId::proportional(tag_size),
+                accent,
+            );
+        }
+
+        // FontComboBox: field + "Aa" glyph indicator
+        WidgetKind::FontComboBox => {
+            painter.rect_filled(rect, rounding, egui::Color32::from_gray(30));
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(stroke_width, stroke_color),
+            );
+            painter.text(
+                egui::pos2(rect.min.x + 6.0, rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                &widget.props.label,
+                egui::FontId::proportional(label_size),
+                fg.unwrap_or(egui::Color32::from_gray(200)),
+            );
+            painter.text(
+                egui::pos2(rect.max.x - 18.0, rect.center().y),
+                egui::Align2::RIGHT_CENTER,
+                "Aa",
+                egui::FontId::proportional(label_size),
+                accent,
+            );
+            painter.text(
+                egui::pos2(rect.max.x - 6.0, rect.center().y),
+                egui::Align2::RIGHT_CENTER,
+                "▾",
+                egui::FontId::proportional(label_size),
+                accent,
+            );
+        }
+
+        // HorizontalSpacer: thin dashed horizontal bar
+        WidgetKind::HorizontalSpacer => {
+            let mid_y = rect.center().y;
+            let dash_len = 6.0_f32;
+            let gap = 4.0_f32;
+            let mut x = rect.min.x;
+            while x < rect.max.x {
+                let x_end = (x + dash_len).min(rect.max.x);
+                painter.line_segment(
+                    [egui::pos2(x, mid_y), egui::pos2(x_end, mid_y)],
+                    egui::Stroke::new(1.5, accent),
+                );
+                x += dash_len + gap;
+            }
+            if flags.is_selected {
+                painter.rect_stroke(rect, 1.0, egui::Stroke::new(1.0, accent));
+            }
+        }
+
+        // VerticalSpacer: thin dashed vertical bar
+        WidgetKind::VerticalSpacer => {
+            let mid_x = rect.center().x;
+            let dash_len = 6.0_f32;
+            let gap = 4.0_f32;
+            let mut y = rect.min.y;
+            while y < rect.max.y {
+                let y_end = (y + dash_len).min(rect.max.y);
+                painter.line_segment(
+                    [egui::pos2(mid_x, y), egui::pos2(mid_x, y_end)],
+                    egui::Stroke::new(1.5, accent),
+                );
+                y += dash_len + gap;
+            }
+            if flags.is_selected {
+                painter.rect_stroke(rect, 1.0, egui::Stroke::new(1.0, accent));
+            }
+        }
+
+        // GroupBox: group frame with heading label top-left
+        WidgetKind::GroupBox => {
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(
+                    if flags.is_selected { stroke_width } else { 1.0 },
+                    stroke_color,
+                ),
+            );
+            let label_bg_rect = egui::Rect::from_min_size(
+                egui::pos2(rect.min.x + 8.0, rect.min.y - label_size * 0.6),
+                egui::vec2(
+                    widget.props.label.len() as f32 * label_size * 0.55 + 8.0,
+                    label_size,
+                ),
+            );
+            painter.rect_filled(label_bg_rect, 2.0, egui::Color32::from_gray(28));
+            painter.text(
+                egui::pos2(rect.min.x + 12.0, rect.min.y),
+                egui::Align2::LEFT_CENTER,
+                &widget.props.label,
+                egui::FontId::proportional(label_size),
+                fg.unwrap_or(accent),
+            );
+        }
+
+        // VLayout: container with ↕ arrow indicator
+        WidgetKind::VLayout => {
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(
+                    if flags.is_selected { stroke_width } else { 1.0 },
+                    stroke_color,
+                ),
+            );
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "↕",
+                egui::FontId::proportional(label_size * 1.5),
+                accent.linear_multiply(0.4),
+            );
+            painter.text(
+                rect.left_top() + egui::vec2(4.0, 2.0),
+                egui::Align2::LEFT_TOP,
+                &widget.props.label,
+                egui::FontId::proportional(tag_size),
+                accent.linear_multiply(0.7),
+            );
+        }
+
+        // HLayout: container with ↔ arrow indicator
+        WidgetKind::HLayout => {
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(
+                    if flags.is_selected { stroke_width } else { 1.0 },
+                    stroke_color,
+                ),
+            );
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "↔",
+                egui::FontId::proportional(label_size * 1.5),
+                accent.linear_multiply(0.4),
+            );
+            painter.text(
+                rect.left_top() + egui::vec2(4.0, 2.0),
+                egui::Align2::LEFT_TOP,
+                &widget.props.label,
+                egui::FontId::proportional(tag_size),
+                accent.linear_multiply(0.7),
+            );
+        }
+
+        // ScrollArea: container with scroll-bar indicator
+        WidgetKind::ScrollArea => {
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(
+                    if flags.is_selected { stroke_width } else { 1.0 },
+                    stroke_color,
+                ),
+            );
+            // Simulated scrollbar on right edge
+            let sb_w = 6.0_f32;
+            let sb_rect = egui::Rect::from_min_max(
+                egui::pos2(rect.max.x - sb_w - 2.0, rect.min.y + 4.0),
+                egui::pos2(rect.max.x - 2.0, rect.max.y - 4.0),
+            );
+            painter.rect_filled(sb_rect, 2.0, egui::Color32::from_gray(45));
+            let thumb_h = (sb_rect.height() * 0.35).max(8.0);
+            let thumb_rect = egui::Rect::from_min_size(sb_rect.min, egui::vec2(sb_w, thumb_h));
+            painter.rect_filled(thumb_rect, 2.0, accent.linear_multiply(0.6));
+            painter.text(
+                rect.left_top() + egui::vec2(4.0, 2.0),
+                egui::Align2::LEFT_TOP,
+                &widget.props.label,
+                egui::FontId::proportional(tag_size),
+                accent.linear_multiply(0.7),
+            );
+        }
+
         // Custom: accent box with descriptor name or label.
         WidgetKind::Custom(_) => {
             let custom_accent = widget
@@ -792,7 +1055,16 @@ fn draw_widget(
     }
 
     // Subtle white overlay for child widgets (shows they belong to a group)
-    if flags.is_child && widget.kind != WidgetKind::Frame && widget.kind != WidgetKind::Image {
+    let is_container = matches!(
+        widget.kind,
+        WidgetKind::Frame
+            | WidgetKind::GroupBox
+            | WidgetKind::VLayout
+            | WidgetKind::HLayout
+            | WidgetKind::ScrollArea
+            | WidgetKind::Image
+    );
+    if flags.is_child && !is_container {
         painter.rect_filled(
             rect,
             rounding,
@@ -800,11 +1072,20 @@ fn draw_widget(
         );
     }
 
-    // Kind tag (bottom-right) — not on Frame, Label, or Image
-    if widget.kind != WidgetKind::Frame
-        && widget.kind != WidgetKind::Label
-        && widget.kind != WidgetKind::Image
-    {
+    // Kind tag (bottom-right) — not on Frame-like containers, Label, spacers, or Image
+    let is_container_or_spacer = matches!(
+        widget.kind,
+        WidgetKind::Frame
+            | WidgetKind::GroupBox
+            | WidgetKind::VLayout
+            | WidgetKind::HLayout
+            | WidgetKind::ScrollArea
+            | WidgetKind::HorizontalSpacer
+            | WidgetKind::VerticalSpacer
+            | WidgetKind::Label
+            | WidgetKind::Image
+    );
+    if !is_container_or_spacer {
         painter.text(
             rect.right_bottom() - egui::vec2(3.0, 2.0),
             egui::Align2::RIGHT_BOTTOM,

@@ -11,18 +11,36 @@ const _PALETTE_KIND_COUNT: usize = widgets::ALL_KINDS.len();
 const CATEGORIES: &[(&str, &[WidgetKind])] = &[
     (
         "Basic",
-        &[WidgetKind::Button, WidgetKind::Label, WidgetKind::TextInput],
+        &[
+            WidgetKind::Button,
+            WidgetKind::Label,
+            WidgetKind::TextInput,
+            WidgetKind::TextArea,
+        ],
     ),
     (
         "Input",
         &[
             WidgetKind::Slider,
+            WidgetKind::SpinBox,
             WidgetKind::Checkbox,
             WidgetKind::RadioButton,
             WidgetKind::ComboBox,
+            WidgetKind::FontComboBox,
         ],
     ),
-    ("Layout", &[WidgetKind::Frame]),
+    (
+        "Layout",
+        &[
+            WidgetKind::Frame,
+            WidgetKind::GroupBox,
+            WidgetKind::VLayout,
+            WidgetKind::HLayout,
+            WidgetKind::ScrollArea,
+            WidgetKind::HorizontalSpacer,
+            WidgetKind::VerticalSpacer,
+        ],
+    ),
     ("Display", &[WidgetKind::ProgressBar]),
 ];
 
