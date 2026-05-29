@@ -355,8 +355,10 @@ requiring schema changes.
 - [x] Full contextual properties per widget kind — schema audit pass: `text_wrap`
       field added (Label/TextArea), TextInput bg_color+corner_radius exposed,
       ProgressBar fg_color wired to `.fill()` in codegen, TextArea fully audited
-- [ ] Design-time non-visual components — timers, data sources, app lifecycle
-      represented as clickable icons on a component tray below canvas
+- [x] Design-time non-visual components — `src/panels/component_tray.rs`;
+      Timer/DataSource/Lifecycle as clickable icon-chips in left-panel
+      "Components" section; per-component config editor; codegen emits
+      DataSource AppState fields + Timer update() interval comments
 - [x] Full event list per widget — `on_double_click` (Button), `on_lost_focus`
       (TextInput/TextArea), `on_drag_stopped` (Slider/SpinBox) added to schema
       and codegen; properties panel shows dynamic per-kind event list with Tracé chips
@@ -365,22 +367,26 @@ requiring schema changes.
       code panel resyncs via `generated != last_generated`; pending-code warning
       added to properties panel when code has unsaved edits
 
-### SVG Renderer Progression (Codex track)
-- [ ] SVG renderer scene/display-list IR split
-- [ ] Golden renderer fixture harness for supported raster output
+### SVG Renderer Progression
+- [x] SVG renderer scene/display-list IR split — `DisplayList`/`DrawCommand` IR
+      in `svg_rasterizer.rs`; build() lowers scene graph → flat command stream,
+      execute() rasterizes; pixel output unchanged
+- [x] Golden renderer fixture harness for supported raster output —
+      `src/canvas/svg_golden.rs` (#[cfg(test)]); deterministic ASCII-grid
+      signatures, 5 fixtures, drift-detecting tests; zero new dependencies
 
 ### New Widget Kinds — Layouts & Spacers
 - [x] Vertical Layout (`VLayout`) — canvas box with ↕ indicator
 - [x] Horizontal Layout (`HLayout`) — canvas box with ↔ indicator
-- [ ] Grid Layout
-- [ ] Form Layout
+- [x] Grid Layout (`GridLayout`) — canvas box with 3×3 grid lines; emits egui::Grid
+- [ ] Form Layout (deferred — egui has no distinct form primitive; Grid covers it)
 - [x] Horizontal Spacer — dashed horizontal bar
 - [x] Vertical Spacer — dashed vertical bar
 
 ### New Widget Kinds — Containers
 - [x] Scroll Area — canvas box with simulated scrollbar indicator
 - [x] Group Box — labeled group frame (egui::Frame::group with heading)
-- [ ] Tab Widget
+- [x] Tab Widget — tab header bar; options = tab names; emits top-panel tabs
 
 ### New Widget Kinds — Input Additions
 - [x] Font Combo Box — `FontComboBox` with Aa indicator

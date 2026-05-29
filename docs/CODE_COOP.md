@@ -7,18 +7,22 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
-## 2026-05-28 — Claude Stage 9 (partial): New Widgets, Schema Audit, Events, Bidirectionality
+## 2026-05-28 — Claude Stage 9 COMPLETE
 
-On `dev`, completed four Stage 9 clusters in one session: (1) 9 new widget kinds
-(TextArea, SpinBox, FontComboBox, HorizontalSpacer, VerticalSpacer, GroupBox, VLayout,
-HLayout, ScrollArea) — each wired through schema, canvas rendering, codegen, export,
-palette, and properties panel; (2) Properties schema audit — `text_wrap` field added,
-TextInput/TextArea panels completed, ProgressBar `.fill()` wired from fg_color; (3) Full
-event list per widget — `on_double_click`, `on_lost_focus`, `on_drag_stopped` added to
-schema + codegen + properties panel with dynamic per-kind event list; (4) Object
-Inspector bidirectionality confirmed complete; added pending-code warning in properties
-panel. Still open in Stage 9: non-visual component tray, SVG renderer IR split + golden
-harness (Codex track), GridLayout, TabWidget. 75/75 tests, zero warnings.
+On `dev`, Stage 9 (Widget Depth & Lazarus Completeness) is fully done. All items
+across multiple commits: (1) 11 new widget kinds — TextArea, SpinBox, FontComboBox,
+H/V Spacer, GroupBox, VLayout, HLayout, ScrollArea, GridLayout, TabWidget — each wired
+through schema → canvas → codegen → export → palette → properties; (2) Properties
+schema audit — `text_wrap`, TextInput/TextArea polish, ProgressBar `.fill()`; (3) Full
+event list — `on_double_click`/`on_lost_focus`/`on_drag_stopped` with dynamic per-kind
+panel; (4) Object Inspector bidirectionality + pending-code warning; (5) Design-time
+component tray (`component_tray.rs`) — Timer/DataSource/Lifecycle chips + config +
+codegen; (6) SVG scene/display-list IR split (`DisplayList`/`DrawCommand` in
+svg_rasterizer.rs); (7) Golden fixture harness (`svg_golden.rs`, #[cfg(test)], ASCII
+signatures, 5 fixtures). 83/83 tests, zero warnings. Next: Stage 10 (Technical &
+Computational Widgets). Note: `cargo clippy --all-targets` flags 3 PRE-EXISTING lints
+(examples/hello_button, field_collector test helper, templates.rs) — not from Stage 9;
+the project gate `cargo clippy -- -D warnings` is clean.
 
 ## 2026-05-28 — Claude Stage 8.5 Complete
 
