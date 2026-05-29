@@ -172,7 +172,10 @@ pub fn rasterize_with_report(
     let scene = SvgScene::parse(svg_text).ok_or(SvgRasterError::ParseFailed)?;
 
     let vb_xform = viewbox_to_pixel_transform(&scene, w, h);
-    render_scene_items(&scene.items, &vb_xform, &mut buf, w, h, &mut report);
+    // Scene graph → display list IR (build phase: classify + resolve transforms),
+    // then execute the flat command stream (raster phase).
+    let display_list = DisplayList::build(&scene, &vb_xform);
+    display_list.execute(&mut buf, w, h, &mut report);
     report.finalize();
 
     Ok(SvgRenderOutput {
@@ -1107,117 +1110,155 @@ fn viewbox_to_pixel_transform(scene: &SvgScene, pw: usize, ph: usize) -> Transfo
 // Rendering
 // ---------------------------------------------------------------------------
 
-fn render_scene_items(
-    items: &[SvgSceneItem],
-    xform: &Transform,
-    buf: &mut [u8],
-    w: usize,
-    h: usize,
-    report: &mut SvgRenderReport,
-) {
-    for item in items {
-        render_scene_item(item, xform, buf, w, h, report);
+// ---------------------------------------------------------------------------
+// Display list IR
+//
+// The scene graph (`SvgScene` — flattened items still tied to parse nodes) is
+// lowered into a `DisplayList`: a flat, render-ready stream of `DrawCommand`s
+// with final transforms computed and skip/unsupported classification resolved.
+// `build()` is the lowering pass (no pixels touched); `execute()` is the raster
+// pass (no classification logic).  This mirrors mature renderers (scene tree →
+// display list → raster) and makes the render-ready IR independently testable.
+// ---------------------------------------------------------------------------
+
+/// Shape primitive kinds carried by a draw command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShapeKind {
+    Rect,
+    Circle,
+    Ellipse,
+    Line,
+    Polyline,
+    Polygon,
+    Path,
+}
+
+/// One render-ready command in the display list.
+enum DrawCommand<'a> {
+    /// A renderable shape with its final (view ∘ item) transform and resolved style.
+    Shape {
+        kind: ShapeKind,
+        attrs: &'a [(String, String)],
+        transform: Transform,
+        style: &'a Style,
+    },
+    /// A shape under an unsupported ancestor — counted as skipped, not drawn.
+    SkippedShape { attrs: &'a [(String, String)] },
+    /// A group container — carried only so attribute diagnostics still fire.
+    GroupDiagnostics { attrs: &'a [(String, String)] },
+    /// Text — preserved in source but not rasterized.
+    UnsupportedText { attrs: &'a [(String, String)] },
+    /// Unsupported element — diagnostics + skip.
+    UnsupportedNode {
+        tag: &'a str,
+        attrs: &'a [(String, String)],
+    },
+}
+
+struct DisplayList<'a> {
+    commands: Vec<DrawCommand<'a>>,
+}
+
+impl<'a> DisplayList<'a> {
+    /// Lowering pass: scene items → flat draw-command stream.
+    fn build(scene: &'a SvgScene, view_xform: &Transform) -> Self {
+        let mut commands = Vec::with_capacity(scene.items.len());
+        for item in &scene.items {
+            let node_xform = view_xform.concat(item.transform);
+            let cmd = match &item.node {
+                SvgNode::Group { attrs, .. } => DrawCommand::GroupDiagnostics { attrs },
+                SvgNode::Text { attrs } => DrawCommand::UnsupportedText { attrs },
+                SvgNode::Unsupported { tag, attrs, .. } => {
+                    DrawCommand::UnsupportedNode { tag, attrs }
+                }
+                shape_node => {
+                    let attrs = shape_node.attrs();
+                    if item.skipped_by_unsupported_ancestor {
+                        DrawCommand::SkippedShape { attrs }
+                    } else if let Some(kind) = shape_kind_of(shape_node) {
+                        DrawCommand::Shape {
+                            kind,
+                            attrs,
+                            transform: node_xform,
+                            style: &item.style,
+                        }
+                    } else {
+                        DrawCommand::SkippedShape { attrs }
+                    }
+                }
+            };
+            commands.push(cmd);
+        }
+        Self { commands }
+    }
+
+    /// Raster pass: execute each command, writing pixels and updating the report.
+    fn execute(&self, buf: &mut [u8], w: usize, h: usize, report: &mut SvgRenderReport) {
+        for cmd in &self.commands {
+            match cmd {
+                DrawCommand::GroupDiagnostics { attrs } => {
+                    diagnose_unsupported_attrs(attrs, report);
+                }
+                DrawCommand::Shape {
+                    kind,
+                    attrs,
+                    transform,
+                    style,
+                } => {
+                    diagnose_unsupported_attrs(attrs, report);
+                    let drawn = match kind {
+                        ShapeKind::Rect => render_rect(attrs, transform, style, buf, w, h),
+                        ShapeKind::Circle => render_circle(attrs, transform, style, buf, w, h),
+                        ShapeKind::Ellipse => render_ellipse(attrs, transform, style, buf, w, h),
+                        ShapeKind::Line => render_line(attrs, transform, style, buf, w, h),
+                        ShapeKind::Polyline => {
+                            render_poly(attrs, transform, style, buf, w, h, false)
+                        }
+                        ShapeKind::Polygon => render_poly(attrs, transform, style, buf, w, h, true),
+                        ShapeKind::Path => render_path(attrs, transform, style, buf, w, h),
+                    };
+                    if drawn {
+                        report.rendered();
+                    } else {
+                        report.skipped();
+                    }
+                }
+                DrawCommand::SkippedShape { attrs } => {
+                    diagnose_unsupported_attrs(attrs, report);
+                    report.skipped();
+                }
+                DrawCommand::UnsupportedText { attrs } => {
+                    diagnose_unsupported_attrs(attrs, report);
+                    report.unsupported(
+                        "text",
+                        "text elements are preserved in source but not rasterized yet",
+                    );
+                    report.skipped();
+                }
+                DrawCommand::UnsupportedNode { tag, attrs } => {
+                    diagnose_unsupported_attrs(attrs, report);
+                    if let Some((feature, message)) = unsupported_tag_feature(tag) {
+                        report.unsupported(feature, message);
+                    }
+                    report.skipped();
+                }
+            }
+        }
     }
 }
 
-fn render_scene_item(
-    item: &SvgSceneItem,
-    view_xform: &Transform,
-    buf: &mut [u8],
-    w: usize,
-    h: usize,
-    report: &mut SvgRenderReport,
-) {
-    let node_xform = view_xform.concat(item.transform);
-    match &item.node {
-        SvgNode::Group { attrs, .. } => {
-            diagnose_unsupported_attrs(attrs, report);
-        }
-        SvgNode::Rect { attrs } => {
-            diagnose_unsupported_attrs(attrs, report);
-            if item.skipped_by_unsupported_ancestor {
-                report.skipped();
-            } else if render_rect(attrs, &node_xform, &item.style, buf, w, h) {
-                report.rendered();
-            } else {
-                report.skipped();
-            }
-        }
-        SvgNode::Circle { attrs } => {
-            diagnose_unsupported_attrs(attrs, report);
-            if item.skipped_by_unsupported_ancestor {
-                report.skipped();
-            } else if render_circle(attrs, &node_xform, &item.style, buf, w, h) {
-                report.rendered();
-            } else {
-                report.skipped();
-            }
-        }
-        SvgNode::Ellipse { attrs } => {
-            diagnose_unsupported_attrs(attrs, report);
-            if item.skipped_by_unsupported_ancestor {
-                report.skipped();
-            } else if render_ellipse(attrs, &node_xform, &item.style, buf, w, h) {
-                report.rendered();
-            } else {
-                report.skipped();
-            }
-        }
-        SvgNode::Line { attrs } => {
-            diagnose_unsupported_attrs(attrs, report);
-            if item.skipped_by_unsupported_ancestor {
-                report.skipped();
-            } else if render_line(attrs, &node_xform, &item.style, buf, w, h) {
-                report.rendered();
-            } else {
-                report.skipped();
-            }
-        }
-        SvgNode::Polyline { attrs } => {
-            diagnose_unsupported_attrs(attrs, report);
-            if item.skipped_by_unsupported_ancestor {
-                report.skipped();
-            } else if render_poly(attrs, &node_xform, &item.style, buf, w, h, false) {
-                report.rendered();
-            } else {
-                report.skipped();
-            }
-        }
-        SvgNode::Polygon { attrs } => {
-            diagnose_unsupported_attrs(attrs, report);
-            if item.skipped_by_unsupported_ancestor {
-                report.skipped();
-            } else if render_poly(attrs, &node_xform, &item.style, buf, w, h, true) {
-                report.rendered();
-            } else {
-                report.skipped();
-            }
-        }
-        SvgNode::Path { attrs } => {
-            diagnose_unsupported_attrs(attrs, report);
-            if item.skipped_by_unsupported_ancestor {
-                report.skipped();
-            } else if render_path(attrs, &node_xform, &item.style, buf, w, h) {
-                report.rendered();
-            } else {
-                report.skipped();
-            }
-        }
-        SvgNode::Text { attrs } => {
-            diagnose_unsupported_attrs(attrs, report);
-            report.unsupported(
-                "text",
-                "text elements are preserved in source but not rasterized yet",
-            );
-            report.skipped();
-        }
-        SvgNode::Unsupported { tag, attrs, .. } => {
-            diagnose_unsupported_attrs(attrs, report);
-            if let Some((feature, message)) = unsupported_tag_feature(tag) {
-                report.unsupported(feature, message);
-            }
-            report.skipped();
-        }
+/// Map a shape `SvgNode` to its `ShapeKind`.  Returns `None` for non-shapes
+/// (Group/Text/Unsupported), which are handled by dedicated commands.
+fn shape_kind_of(node: &SvgNode) -> Option<ShapeKind> {
+    match node {
+        SvgNode::Rect { .. } => Some(ShapeKind::Rect),
+        SvgNode::Circle { .. } => Some(ShapeKind::Circle),
+        SvgNode::Ellipse { .. } => Some(ShapeKind::Ellipse),
+        SvgNode::Line { .. } => Some(ShapeKind::Line),
+        SvgNode::Polyline { .. } => Some(ShapeKind::Polyline),
+        SvgNode::Polygon { .. } => Some(ShapeKind::Polygon),
+        SvgNode::Path { .. } => Some(ShapeKind::Path),
+        _ => None,
     }
 }
 
