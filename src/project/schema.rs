@@ -136,6 +136,10 @@ pub enum ComponentKind {
     DataSource,
     /// App lifecycle hook — on_startup / on_shutdown.
     Lifecycle,
+    /// State machine — generates a state enum + transition handler (Stage 10).
+    StateMachine,
+    /// HTTP request component — emits a fetch stub + response field (Stage 10).
+    HttpRequest,
 }
 
 // ---------------------------------------------------------------------------
@@ -182,6 +186,32 @@ pub enum WidgetKind {
     GridLayout,
     /// Tabbed container widget.
     TabWidget,
+    // Stage 10 — button family
+    /// Compact tool button.
+    ToolButton,
+    /// Command link button — title + description.
+    CommandLinkButton,
+    /// Row of dialog buttons (OK / Cancel / …), from `options`.
+    DialogButtonBox,
+    // Stage 10 — computational / IO
+    /// Displays a computed value from a bound AppState f32 field.
+    MathLabel,
+    /// File picker — browse button + selected-path display.
+    FilePicker,
+    /// 2D line / bar chart bound to a `Vec<f32>`.
+    Chart,
+    // Stage 10 — data views
+    /// Tabular display (data table / table view), columns from `options`.
+    Table,
+    /// List view bound to a `Vec<String>`.
+    ListView,
+    /// Tree view — hierarchical data display.
+    TreeView,
+    // Stage 10 — additional containers
+    /// Stacked container — shows one child page at a time.
+    StackedWidget,
+    /// Tool box — vertical collapsing sections.
+    ToolBox,
 }
 
 // ---------------------------------------------------------------------------

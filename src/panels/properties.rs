@@ -104,6 +104,17 @@ fn show_content_inner(
             WidgetKind::ScrollArea => show_scroll_area(ui, w, &mut do_delete),
             WidgetKind::GridLayout => show_layout_container(ui, w, &mut do_delete),
             WidgetKind::TabWidget => show_tab_widget(ui, w, &mut do_delete),
+            WidgetKind::ToolButton => show_button(ui, w, &mut do_delete),
+            WidgetKind::CommandLinkButton => show_command_link(ui, w, &mut do_delete),
+            WidgetKind::DialogButtonBox => show_options_widget(ui, w, &mut do_delete, "Buttons"),
+            WidgetKind::MathLabel => show_math_label(ui, w, &mut do_delete),
+            WidgetKind::FilePicker => show_file_picker(ui, w, &mut do_delete),
+            WidgetKind::Chart => show_layout_container(ui, w, &mut do_delete),
+            WidgetKind::Table => show_options_widget(ui, w, &mut do_delete, "Columns"),
+            WidgetKind::ListView => show_options_widget(ui, w, &mut do_delete, "Items"),
+            WidgetKind::TreeView => show_options_widget(ui, w, &mut do_delete, "Nodes"),
+            WidgetKind::StackedWidget => show_options_widget(ui, w, &mut do_delete, "Pages"),
+            WidgetKind::ToolBox => show_options_widget(ui, w, &mut do_delete, "Sections"),
             WidgetKind::Image => {
                 if show_image(ui, w, &mut do_delete) {
                     props_action = PropertiesAction::ShowSvgSource(id);
@@ -1384,6 +1395,90 @@ fn show_layout_container(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &
 
 fn show_scroll_area(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
     field_text(ui, "Label", &mut w.props.label);
+    show_geometry(ui, w);
+    ui.separator();
+    show_custom_props(ui, w);
+    show_delete_button(ui, do_delete);
+}
+
+fn show_command_link(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
+    field_text(ui, "Title", &mut w.props.label);
+    field_text(ui, "Description", &mut w.props.placeholder);
+    show_geometry(ui, w);
+    ui.separator();
+    show_bg_color(ui, w);
+    show_fg_color(ui, w);
+    show_corner_radius(ui, w);
+    ui.separator();
+    show_tooltip(ui, w);
+    show_enabled(ui, w);
+    show_delete_button(ui, do_delete);
+}
+
+fn show_math_label(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
+    field_text(ui, "Label", &mut w.props.label);
+    ui.label(
+        egui::RichText::new("Displays a computed f32 from the bound AppState field.")
+            .small()
+            .weak(),
+    );
+    binding_field(ui, w);
+    show_geometry(ui, w);
+    ui.separator();
+    show_fg_color(ui, w);
+    show_font_size(ui, w);
+    show_tooltip(ui, w);
+    show_custom_props(ui, w);
+    show_delete_button(ui, do_delete);
+}
+
+fn show_file_picker(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
+    field_text(ui, "Button text", &mut w.props.label);
+    ui.label(
+        egui::RichText::new("Selected path stored in the bound String field.")
+            .small()
+            .weak(),
+    );
+    binding_field(ui, w);
+    show_geometry(ui, w);
+    ui.separator();
+    show_tooltip(ui, w);
+    show_enabled(ui, w);
+    show_custom_props(ui, w);
+    show_delete_button(ui, do_delete);
+}
+
+/// Generic editor for widgets whose content is the `options` list
+/// (Table columns, ListView items, TreeView nodes, etc.).
+fn show_options_widget(
+    ui: &mut egui::Ui,
+    w: &mut WidgetInstance,
+    do_delete: &mut bool,
+    item_label: &str,
+) {
+    field_text(ui, "Label", &mut w.props.label);
+    ui.label(egui::RichText::new(item_label).small().weak());
+    let mut to_remove: Option<usize> = None;
+    for (i, opt) in w.props.options.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            let ow = (ui.available_width() - 28.0).clamp(60.0, 180.0);
+            ui.add(
+                egui::TextEdit::singleline(opt)
+                    .hint_text(format!("{item_label} {}", i + 1))
+                    .desired_width(ow),
+            );
+            if ui.small_button("x").clicked() {
+                to_remove = Some(i);
+            }
+        });
+    }
+    if let Some(i) = to_remove {
+        w.props.options.remove(i);
+    }
+    if ui.small_button(format!("+ Add {item_label}")).clicked() {
+        let n = w.props.options.len() + 1;
+        w.props.options.push(format!("{item_label} {n}"));
+    }
     show_geometry(ui, w);
     ui.separator();
     show_custom_props(ui, w);

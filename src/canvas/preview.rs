@@ -342,6 +342,83 @@ fn render_widget(
             };
             placeholder_box(ui, w_rect, tag);
         }
+        WidgetKind::ToolButton => {
+            let label = widget.props.label.clone();
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+                ui.add_sized(size, egui::Button::new(&label));
+            });
+        }
+        WidgetKind::CommandLinkButton => {
+            let title = widget.props.label.clone();
+            let desc = widget.props.placeholder.clone();
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+                ui.add_sized(size, egui::Button::new(format!("{title}\n{desc}")));
+            });
+        }
+        WidgetKind::DialogButtonBox => {
+            let opts = widget.props.options.clone();
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+                ui.horizontal(|ui| {
+                    for o in &opts {
+                        let _ = ui.button(o);
+                    }
+                });
+            });
+        }
+        WidgetKind::MathLabel => {
+            let val = state.values.get(binding).and_then(|v| {
+                if let PreviewValue::Float(f) = v {
+                    Some(*f)
+                } else {
+                    None
+                }
+            });
+            let label = widget.props.label.clone();
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+                ui.label(format!("{label} = {:.2}", val.unwrap_or(0.0)));
+            });
+        }
+        WidgetKind::FilePicker => {
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+                ui.horizontal(|ui| {
+                    let _ = ui.button("Browse…");
+                    let path = state.values.get(binding).and_then(|v| {
+                        if let PreviewValue::Str(s) = v {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    });
+                    ui.label(path.unwrap_or_else(|| "(no file)".to_owned()));
+                });
+            });
+        }
+        WidgetKind::ListView => {
+            let opts = widget.props.options.clone();
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt(("preview_list", widget.id))
+                    .show(ui, |ui| {
+                        for o in &opts {
+                            ui.label(o);
+                        }
+                    });
+            });
+        }
+        WidgetKind::Chart
+        | WidgetKind::Table
+        | WidgetKind::TreeView
+        | WidgetKind::StackedWidget
+        | WidgetKind::ToolBox => {
+            let tag = match &widget.kind {
+                WidgetKind::Chart => "chart",
+                WidgetKind::Table => "table",
+                WidgetKind::TreeView => "tree",
+                WidgetKind::StackedWidget => "stack",
+                _ => "toolbox",
+            };
+            placeholder_box(ui, w_rect, tag);
+        }
         WidgetKind::Image | WidgetKind::Custom(_) => {
             let tag = match &widget.kind {
                 WidgetKind::Image => "img",

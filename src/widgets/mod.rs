@@ -1,6 +1,10 @@
 pub mod button;
+pub mod buttons_ext;
 pub mod checkbox;
 pub mod combo_box;
+pub mod computational;
+pub mod containers_ext;
+pub mod data_views;
 pub mod font_combo_box;
 pub mod frame;
 pub mod grid_layout;
@@ -41,6 +45,17 @@ pub fn default_for(kind: &WidgetKind) -> WidgetInstance {
         WidgetKind::ScrollArea => layouts::scroll_area_default(),
         WidgetKind::GridLayout => grid_layout::default_instance(),
         WidgetKind::TabWidget => tab_widget::default_instance(),
+        WidgetKind::ToolButton => buttons_ext::tool_button_default(),
+        WidgetKind::CommandLinkButton => buttons_ext::command_link_default(),
+        WidgetKind::DialogButtonBox => buttons_ext::dialog_button_box_default(),
+        WidgetKind::MathLabel => computational::math_label_default(),
+        WidgetKind::FilePicker => computational::file_picker_default(),
+        WidgetKind::Chart => computational::chart_default(),
+        WidgetKind::Table => data_views::table_default(),
+        WidgetKind::ListView => data_views::list_view_default(),
+        WidgetKind::TreeView => data_views::tree_view_default(),
+        WidgetKind::StackedWidget => containers_ext::stacked_default(),
+        WidgetKind::ToolBox => containers_ext::tool_box_default(),
         WidgetKind::Image => crate::project::schema::WidgetInstance {
             kind: WidgetKind::Image,
             rect: crate::project::schema::Rect {
@@ -141,4 +156,15 @@ pub const ALL_KINDS: &[WidgetKind] = &[
     WidgetKind::ScrollArea,
     WidgetKind::GridLayout,
     WidgetKind::TabWidget,
+    WidgetKind::ToolButton,
+    WidgetKind::CommandLinkButton,
+    WidgetKind::DialogButtonBox,
+    WidgetKind::MathLabel,
+    WidgetKind::FilePicker,
+    WidgetKind::Chart,
+    WidgetKind::Table,
+    WidgetKind::ListView,
+    WidgetKind::TreeView,
+    WidgetKind::StackedWidget,
+    WidgetKind::ToolBox,
 ];

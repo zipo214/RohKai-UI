@@ -71,6 +71,8 @@ pub fn show_tray(
             ComponentKind::Timer,
             ComponentKind::DataSource,
             ComponentKind::Lifecycle,
+            ComponentKind::StateMachine,
+            ComponentKind::HttpRequest,
         ] {
             let (icon, _) = component_icon(&kind);
             let label = format!("+ {icon}");
@@ -163,11 +165,18 @@ pub fn component_state_field_pairs(components: &[DesignComponent]) -> Vec<(Strin
     let mut pairs = Vec::new();
     for comp in components {
         match comp.kind {
-            ComponentKind::DataSource => {
+            ComponentKind::DataSource | ComponentKind::HttpRequest => {
                 let name = sanitize_field_name(&comp.name);
                 pairs.push((
                     format!("    {name}_data: String,"),
                     format!("            {name}_data: String::new(),"),
+                ));
+            }
+            ComponentKind::StateMachine => {
+                let name = sanitize_field_name(&comp.name);
+                pairs.push((
+                    format!("    {name}_state: usize,"),
+                    format!("            {name}_state: 0,"),
                 ));
             }
             ComponentKind::Timer | ComponentKind::Lifecycle => {}
@@ -180,17 +189,32 @@ pub fn component_state_field_pairs(components: &[DesignComponent]) -> Vec<(Strin
 pub fn component_update_lines(components: &[DesignComponent]) -> Vec<String> {
     let mut lines = Vec::new();
     for comp in components {
-        if comp.kind == ComponentKind::Timer {
-            let handler = if comp.handler.is_empty() {
-                default_handler_name(&comp.kind).to_owned()
-            } else {
-                comp.handler.clone()
-            };
-            let ms = comp.interval_ms.unwrap_or(1000);
-            lines.push(format!(
-                "        // Timer '{}': fires every {ms}ms → self.{handler}()",
-                comp.name
-            ));
+        let handler = if comp.handler.is_empty() {
+            default_handler_name(&comp.kind).to_owned()
+        } else {
+            comp.handler.clone()
+        };
+        match comp.kind {
+            ComponentKind::Timer => {
+                let ms = comp.interval_ms.unwrap_or(1000);
+                lines.push(format!(
+                    "        // Timer '{}': fires every {ms}ms → self.{handler}()",
+                    comp.name
+                ));
+            }
+            ComponentKind::StateMachine => {
+                lines.push(format!(
+                    "        // StateMachine '{}': self.{handler}() drives state transitions",
+                    comp.name
+                ));
+            }
+            ComponentKind::HttpRequest => {
+                lines.push(format!(
+                    "        // HttpRequest '{}': call self.{handler}() to dispatch (use mpsc for async)",
+                    comp.name
+                ));
+            }
+            ComponentKind::DataSource | ComponentKind::Lifecycle => {}
         }
     }
     lines
@@ -205,6 +229,8 @@ fn component_icon(kind: &ComponentKind) -> (&'static str, egui::Color32) {
         ComponentKind::Timer => ("⏱", egui::Color32::from_rgb(251, 191, 36)),
         ComponentKind::DataSource => ("🗄", egui::Color32::from_rgb(96, 165, 250)),
         ComponentKind::Lifecycle => ("⚙", egui::Color32::from_rgb(167, 139, 250)),
+        ComponentKind::StateMachine => ("⮌", egui::Color32::from_rgb(52, 211, 153)),
+        ComponentKind::HttpRequest => ("🌐", egui::Color32::from_rgb(96, 200, 220)),
     }
 }
 
@@ -213,6 +239,8 @@ fn component_kind_label(kind: &ComponentKind) -> &'static str {
         ComponentKind::Timer => "Timer",
         ComponentKind::DataSource => "Data Source",
         ComponentKind::Lifecycle => "Lifecycle",
+        ComponentKind::StateMachine => "State Machine",
+        ComponentKind::HttpRequest => "HTTP Request",
     }
 }
 
@@ -221,6 +249,8 @@ fn default_handler_name(kind: &ComponentKind) -> &'static str {
         ComponentKind::Timer => "on_tick",
         ComponentKind::DataSource => "fetch_data",
         ComponentKind::Lifecycle => "on_startup",
+        ComponentKind::StateMachine => "on_transition",
+        ComponentKind::HttpRequest => "on_response",
     }
 }
 

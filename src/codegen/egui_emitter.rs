@@ -472,6 +472,143 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                 tab_lines.push_str("        });");
                 lines.push((Some(w.id), tab_lines));
             }
+            WidgetKind::ToolButton => {
+                let lbl = rich_text_expr(&label_lit, w.font_size, fg_color_expr.as_deref());
+                let base = format!("ui.small_button({lbl})");
+                let with_tip = append_tip(base, tip.as_deref());
+                let line = if let Some(h) = resolve_handler_click(w) {
+                    format!(
+                        "        if {with_tip}.clicked() {{\n            self.{h}();\n        }}"
+                    )
+                } else {
+                    format!("        if {with_tip}.clicked() {{}}")
+                };
+                lines.push((Some(w.id), line));
+            }
+            WidgetKind::CommandLinkButton => {
+                let title = string_literal(&w.props.label);
+                let desc = string_literal(&w.props.placeholder);
+                let base = format!(
+                    "ui.add_sized([{:.1}, {:.1}], egui::Button::new(format!(\"{{}}\\n{{}}\", {title}, {desc})))",
+                    w.rect.w, w.rect.h
+                );
+                let with_tip = append_tip(base, tip.as_deref());
+                let line = if let Some(h) = resolve_handler_click(w) {
+                    format!(
+                        "        if {with_tip}.clicked() {{\n            self.{h}();\n        }}"
+                    )
+                } else {
+                    format!("        if {with_tip}.clicked() {{}}")
+                };
+                lines.push((Some(w.id), line));
+            }
+            WidgetKind::DialogButtonBox => {
+                let mut s = String::from("        ui.horizontal(|ui| {\n");
+                for opt in &w.props.options {
+                    s.push_str(&format!(
+                        "            if ui.button({}).clicked() {{}}\n",
+                        string_literal(opt)
+                    ));
+                }
+                s.push_str("        });");
+                lines.push((Some(w.id), s));
+            }
+            WidgetKind::MathLabel => {
+                let line = match binding {
+                    Some(b) => format!(
+                        "        ui.label(format!(\"{} = {{:.2}}\", self.{b}));",
+                        w.props.label.replace('"', "")
+                    ),
+                    None => format!("        // MathLabel {label_lit}: set a valid Binding"),
+                };
+                lines.push((Some(w.id), line));
+            }
+            WidgetKind::FilePicker => {
+                let line = match binding {
+                    Some(b) => format!(
+                        "        if ui.button(\"Browse…\").clicked() {{\n            \
+                        if let Some(p) = rfd::FileDialog::new().pick_file() {{\n                \
+                        self.{b} = p.display().to_string();\n            }}\n        }}\n        \
+                        ui.label(&self.{b});"
+                    ),
+                    None => format!("        // FilePicker {label_lit}: set a valid Binding"),
+                };
+                lines.push((Some(w.id), line));
+            }
+            WidgetKind::Chart => {
+                lines.push((
+                    Some(w.id),
+                    format!(
+                        "        // Chart '{}': bind a Vec<f32> and paint bars/lines via ui.painter()",
+                        w.props.label
+                    ),
+                ));
+            }
+            WidgetKind::Table => {
+                let mut s = format!(
+                    "        egui::Grid::new(\"{}\").striped(true).show(ui, |ui| {{\n",
+                    w.id.as_simple()
+                );
+                for col in &w.props.options {
+                    s.push_str(&format!("            ui.label({});\n", string_literal(col)));
+                }
+                s.push_str("            ui.end_row();\n        });");
+                lines.push((Some(w.id), s));
+            }
+            WidgetKind::ListView => {
+                let mut s = format!(
+                    "        egui::ScrollArea::vertical().id_salt(\"{}\").show(ui, |ui| {{\n",
+                    w.id.as_simple()
+                );
+                for item in &w.props.options {
+                    s.push_str(&format!(
+                        "            ui.label({});\n",
+                        string_literal(item)
+                    ));
+                }
+                s.push_str("        });");
+                lines.push((Some(w.id), s));
+            }
+            WidgetKind::TreeView => {
+                let mut s = String::new();
+                let root = w
+                    .props
+                    .options
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "Root".into());
+                s.push_str(&format!(
+                    "        egui::CollapsingHeader::new({}).default_open(true).show(ui, |ui| {{\n",
+                    string_literal(&root)
+                ));
+                for child in w.props.options.iter().skip(1) {
+                    s.push_str(&format!(
+                        "            ui.label({});\n",
+                        string_literal(child)
+                    ));
+                }
+                s.push_str("        });");
+                lines.push((Some(w.id), s));
+            }
+            WidgetKind::StackedWidget => {
+                lines.push((
+                    Some(w.id),
+                    "        ui.group(|_ui| {}); // StackedWidget: show active page".to_owned(),
+                ));
+            }
+            WidgetKind::ToolBox => {
+                let mut s = String::new();
+                for sec in &w.props.options {
+                    s.push_str(&format!(
+                        "        egui::CollapsingHeader::new({}).show(ui, |_ui| {{}});\n",
+                        string_literal(sec)
+                    ));
+                }
+                if s.ends_with('\n') {
+                    s.pop();
+                }
+                lines.push((Some(w.id), s));
+            }
             WidgetKind::Image => {
                 lines.push((Some(w.id), image_preview_line(w, 8)));
             }
@@ -681,9 +818,36 @@ fn emit_child_lines(
         | WidgetKind::HLayout
         | WidgetKind::ScrollArea
         | WidgetKind::GridLayout
-        | WidgetKind::TabWidget => {
+        | WidgetKind::TabWidget
+        | WidgetKind::StackedWidget
+        | WidgetKind::ToolBox
+        | WidgetKind::Table
+        | WidgetKind::ListView
+        | WidgetKind::TreeView
+        | WidgetKind::Chart => {
             format!("            // Nested container {:?} — not expanded in child codegen", child.kind)
         }
+        WidgetKind::ToolButton => {
+            format!("            if ui.put({rect_expr}, egui::Button::new({label}).small()).clicked() {{}}")
+        }
+        WidgetKind::CommandLinkButton => {
+            format!("            if ui.put({rect_expr}, egui::Button::new({label})).clicked() {{}}")
+        }
+        WidgetKind::DialogButtonBox => {
+            format!("            ui.put({rect_expr}, egui::Label::new({label})); // DialogButtonBox")
+        }
+        WidgetKind::MathLabel => match binding {
+            Some(b) => format!(
+                "            ui.put({rect_expr}, egui::Label::new(format!(\"{{:.2}}\", self.{b})));"
+            ),
+            None => format!("            // MathLabel {label}: set a valid Binding"),
+        },
+        WidgetKind::FilePicker => match binding {
+            Some(b) => format!(
+                "            ui.put({rect_expr}, egui::Label::new(&self.{b})); // FilePicker"
+            ),
+            None => format!("            // FilePicker {label}: set a valid Binding"),
+        },
         WidgetKind::Image => image_child_preview_line(child, &rect_expr),
         WidgetKind::Custom(_) => {
             if let Some(ref tpl) = child.descriptor_live_tpl {
@@ -771,5 +935,83 @@ mod tests {
         assert!(generated.contains("120.0"));
         assert!(generated.contains("80.0"));
         assert!(!generated.contains("egui::Frame::none()"));
+    }
+
+    fn emit_joined(kind: WidgetKind, setup: impl FnOnce(&mut WidgetInstance)) -> String {
+        let mut w = WidgetInstance {
+            id: Uuid::nil(),
+            kind,
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 100.0,
+                h: 30.0,
+            },
+            ..Default::default()
+        };
+        setup(&mut w);
+        let tree = UiTree {
+            widgets: vec![w],
+            ..Default::default()
+        };
+        emit_indexed(&tree)
+            .into_iter()
+            .map(|(_, l)| l)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn tool_button_emits_small_button() {
+        let g = emit_joined(WidgetKind::ToolButton, |w| w.props.label = "Go".into());
+        assert!(g.contains("ui.small_button"));
+    }
+
+    #[test]
+    fn math_label_emits_bound_format() {
+        let g = emit_joined(WidgetKind::MathLabel, |w| {
+            w.props.label = "Total".into();
+            w.state_binding = Some("total".into());
+        });
+        assert!(g.contains("format!"));
+        assert!(g.contains("self.total"));
+    }
+
+    #[test]
+    fn table_emits_grid_with_columns() {
+        let g = emit_joined(WidgetKind::Table, |w| {
+            w.props.options = vec!["A".into(), "B".into()];
+        });
+        assert!(g.contains("egui::Grid::new"));
+        assert!(g.contains("\"A\""));
+        assert!(g.contains("\"B\""));
+    }
+
+    #[test]
+    fn list_view_emits_scroll_area_with_items() {
+        let g = emit_joined(WidgetKind::ListView, |w| {
+            w.props.options = vec!["One".into(), "Two".into()];
+        });
+        assert!(g.contains("ScrollArea"));
+        assert!(g.contains("\"One\""));
+    }
+
+    #[test]
+    fn dialog_button_box_emits_buttons() {
+        let g = emit_joined(WidgetKind::DialogButtonBox, |w| {
+            w.props.options = vec!["OK".into(), "Cancel".into()];
+        });
+        assert!(g.contains("\"OK\""));
+        assert!(g.contains("\"Cancel\""));
+        assert!(g.contains(".clicked()"));
+    }
+
+    #[test]
+    fn file_picker_emits_rfd_dialog() {
+        let g = emit_joined(WidgetKind::FilePicker, |w| {
+            w.state_binding = Some("path".into());
+        });
+        assert!(g.contains("rfd::FileDialog"));
+        assert!(g.contains("self.path"));
     }
 }

@@ -13,6 +13,9 @@ const CATEGORIES: &[(&str, &[WidgetKind])] = &[
         "Basic",
         &[
             WidgetKind::Button,
+            WidgetKind::ToolButton,
+            WidgetKind::CommandLinkButton,
+            WidgetKind::DialogButtonBox,
             WidgetKind::Label,
             WidgetKind::TextInput,
             WidgetKind::TextArea,
@@ -27,6 +30,7 @@ const CATEGORIES: &[(&str, &[WidgetKind])] = &[
             WidgetKind::RadioButton,
             WidgetKind::ComboBox,
             WidgetKind::FontComboBox,
+            WidgetKind::FilePicker,
         ],
     ),
     (
@@ -39,11 +43,22 @@ const CATEGORIES: &[(&str, &[WidgetKind])] = &[
             WidgetKind::GridLayout,
             WidgetKind::ScrollArea,
             WidgetKind::TabWidget,
+            WidgetKind::StackedWidget,
+            WidgetKind::ToolBox,
             WidgetKind::HorizontalSpacer,
             WidgetKind::VerticalSpacer,
         ],
     ),
-    ("Display", &[WidgetKind::ProgressBar]),
+    (
+        "Data",
+        &[
+            WidgetKind::Table,
+            WidgetKind::ListView,
+            WidgetKind::TreeView,
+            WidgetKind::Chart,
+        ],
+    ),
+    ("Display", &[WidgetKind::ProgressBar, WidgetKind::MathLabel]),
 ];
 
 /// Inner palette content.

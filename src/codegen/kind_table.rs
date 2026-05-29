@@ -23,6 +23,15 @@ pub fn state_info(kind: &WidgetKind) -> Option<KindInfo> {
         | WidgetKind::ScrollArea
         | WidgetKind::GridLayout
         | WidgetKind::TabWidget
+        | WidgetKind::ToolButton
+        | WidgetKind::CommandLinkButton
+        | WidgetKind::DialogButtonBox
+        | WidgetKind::Chart
+        | WidgetKind::Table
+        | WidgetKind::ListView
+        | WidgetKind::TreeView
+        | WidgetKind::StackedWidget
+        | WidgetKind::ToolBox
         | WidgetKind::Custom(_) => None,
 
         // String-state widgets
@@ -31,13 +40,17 @@ pub fn state_info(kind: &WidgetKind) -> Option<KindInfo> {
         | WidgetKind::TextArea
         | WidgetKind::ComboBox
         | WidgetKind::FontComboBox
-        | WidgetKind::RadioButton => Some(KindInfo {
+        | WidgetKind::RadioButton
+        | WidgetKind::FilePicker => Some(KindInfo {
             rust_type: "String",
             default_expr: "String::new()",
         }),
 
         // f32-state widgets
-        WidgetKind::Slider | WidgetKind::ProgressBar | WidgetKind::SpinBox => Some(KindInfo {
+        WidgetKind::Slider
+        | WidgetKind::ProgressBar
+        | WidgetKind::SpinBox
+        | WidgetKind::MathLabel => Some(KindInfo {
             rust_type: "f32",
             default_expr: "0.0",
         }),

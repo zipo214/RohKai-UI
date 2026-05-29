@@ -515,6 +515,110 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 s.push_str("                });\n");
                 s
             }
+            WidgetKind::ToolButton => {
+                format!(
+                    "                if ui.small_button({}).clicked() {{}}\n",
+                    string_literal(&w.props.label)
+                )
+            }
+            WidgetKind::CommandLinkButton => {
+                format!(
+                    "                if ui.add_sized([{:.1}, {:.1}], egui::Button::new(format!(\"{{}}\\n{{}}\", {}, {}))).clicked() {{}}\n",
+                    w.rect.w,
+                    w.rect.h,
+                    string_literal(&w.props.label),
+                    string_literal(&w.props.placeholder)
+                )
+            }
+            WidgetKind::DialogButtonBox => {
+                let mut s = String::from("                ui.horizontal(|ui| {\n");
+                for opt in &w.props.options {
+                    s.push_str(&format!(
+                        "                    if ui.button({}).clicked() {{}}\n",
+                        string_literal(opt)
+                    ));
+                }
+                s.push_str("                });\n");
+                s
+            }
+            WidgetKind::MathLabel => match binding {
+                Some(b) => format!(
+                    "                ui.label(format!(\"{} = {{:.2}}\", self.state.{b}));\n",
+                    w.props.label.replace('"', "")
+                ),
+                None => format!("                // MathLabel {label}: set a valid Binding\n"),
+            },
+            WidgetKind::FilePicker => match binding {
+                Some(b) => format!(
+                    "                if ui.button(\"Browse…\").clicked() {{\n                    \
+                    if let Some(p) = rfd::FileDialog::new().pick_file() {{\n                        \
+                    self.state.{b} = p.display().to_string();\n                    }}\n                \
+                    }}\n                ui.label(&self.state.{b});\n"
+                ),
+                None => format!("                // FilePicker {label}: set a valid Binding\n"),
+            },
+            WidgetKind::Chart => {
+                format!(
+                    "                // Chart '{}': bind a Vec<f32> and paint via ui.painter()\n",
+                    w.props.label
+                )
+            }
+            WidgetKind::Table => {
+                let mut s = format!(
+                    "                egui::Grid::new(\"{}\").striped(true).show(ui, |ui| {{\n",
+                    w.id.as_simple()
+                );
+                for col in &w.props.options {
+                    s.push_str(&format!(
+                        "                    ui.label({});\n",
+                        string_literal(col)
+                    ));
+                }
+                s.push_str("                    ui.end_row();\n                });\n");
+                s
+            }
+            WidgetKind::ListView => {
+                let mut s = format!(
+                    "                egui::ScrollArea::vertical().id_salt(\"{}\").show(ui, |ui| {{\n",
+                    w.id.as_simple()
+                );
+                for item in &w.props.options {
+                    s.push_str(&format!(
+                        "                    ui.label({});\n",
+                        string_literal(item)
+                    ));
+                }
+                s.push_str("                });\n");
+                s
+            }
+            WidgetKind::TreeView => {
+                let root = w.props.options.first().cloned().unwrap_or_else(|| "Root".into());
+                let mut s = format!(
+                    "                egui::CollapsingHeader::new({}).default_open(true).show(ui, |ui| {{\n",
+                    string_literal(&root)
+                );
+                for child in w.props.options.iter().skip(1) {
+                    s.push_str(&format!(
+                        "                    ui.label({});\n",
+                        string_literal(child)
+                    ));
+                }
+                s.push_str("                });\n");
+                s
+            }
+            WidgetKind::StackedWidget => {
+                "                ui.group(|_ui| {}); // StackedWidget\n".to_string()
+            }
+            WidgetKind::ToolBox => {
+                let mut s = String::new();
+                for sec in &w.props.options {
+                    s.push_str(&format!(
+                        "                egui::CollapsingHeader::new({}).show(ui, |_ui| {{}});\n",
+                        string_literal(sec)
+                    ));
+                }
+                s
+            }
             WidgetKind::Image => image_export_line(w, tip.as_deref(), 16),
             WidgetKind::Custom(_) => {
                 if let Some(ref tpl) = w.descriptor_export_tpl {
@@ -698,10 +802,37 @@ fn export_child_line(
         | WidgetKind::HLayout
         | WidgetKind::ScrollArea
         | WidgetKind::GridLayout
-        | WidgetKind::TabWidget => format!(
+        | WidgetKind::TabWidget
+        | WidgetKind::StackedWidget
+        | WidgetKind::ToolBox
+        | WidgetKind::Table
+        | WidgetKind::ListView
+        | WidgetKind::TreeView
+        | WidgetKind::Chart => format!(
             "                        // Nested container {:?} - not recursive in export\n",
             child.kind
         ),
+        WidgetKind::ToolButton => format!(
+            "                        if ui.put({rect_expr}, egui::Button::new({child_label}).small()).clicked() {{}}\n"
+        ),
+        WidgetKind::CommandLinkButton => format!(
+            "                        if ui.put({rect_expr}, egui::Button::new({child_label})).clicked() {{}}\n"
+        ),
+        WidgetKind::DialogButtonBox => format!(
+            "                        ui.put({rect_expr}, egui::Label::new({child_label})); // DialogButtonBox\n"
+        ),
+        WidgetKind::MathLabel => match child_binding {
+            Some(b) => format!(
+                "                        ui.put({rect_expr}, egui::Label::new(format!(\"{{:.2}}\", self.state.{b})));\n"
+            ),
+            None => format!("                        // MathLabel {child_label}: set a valid Binding\n"),
+        },
+        WidgetKind::FilePicker => match child_binding {
+            Some(b) => format!(
+                "                        ui.put({rect_expr}, egui::Label::new(&self.state.{b})); // FilePicker\n"
+            ),
+            None => format!("                        // FilePicker {child_label}: set a valid Binding\n"),
+        },
         WidgetKind::TextArea => match child_binding {
             Some(b) => format!(
                 "                        ui.put({rect_expr}, egui::TextEdit::multiline(&mut self.state.{b}));\n"

@@ -2014,6 +2014,8 @@ impl eframe::App for RohKaiApp {
                     crate::project::schema::ComponentKind::Timer => "timer",
                     crate::project::schema::ComponentKind::DataSource => "data_source",
                     crate::project::schema::ComponentKind::Lifecycle => "lifecycle",
+                    crate::project::schema::ComponentKind::StateMachine => "state_machine",
+                    crate::project::schema::ComponentKind::HttpRequest => "http_request",
                 };
                 let count = self.project.ui_tree.app_props.components.len() + 1;
                 let new_id = Uuid::new_v4();

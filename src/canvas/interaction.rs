@@ -254,6 +254,17 @@ pub fn kind_accent(kind: &WidgetKind) -> egui::Color32 {
         WidgetKind::ScrollArea => egui::Color32::from_rgb(140, 180, 200),
         WidgetKind::GridLayout => egui::Color32::from_rgb(160, 190, 150),
         WidgetKind::TabWidget => egui::Color32::from_rgb(180, 150, 200),
+        WidgetKind::ToolButton => egui::Color32::from_rgb(72, 201, 173),
+        WidgetKind::CommandLinkButton => egui::Color32::from_rgb(92, 211, 163),
+        WidgetKind::DialogButtonBox => egui::Color32::from_rgb(52, 191, 143),
+        WidgetKind::MathLabel => egui::Color32::from_rgb(120, 200, 220),
+        WidgetKind::FilePicker => egui::Color32::from_rgb(116, 175, 240),
+        WidgetKind::Chart => egui::Color32::from_rgb(60, 200, 200),
+        WidgetKind::Table => egui::Color32::from_rgb(210, 180, 120),
+        WidgetKind::ListView => egui::Color32::from_rgb(200, 190, 130),
+        WidgetKind::TreeView => egui::Color32::from_rgb(190, 200, 120),
+        WidgetKind::StackedWidget => egui::Color32::from_rgb(170, 160, 210),
+        WidgetKind::ToolBox => egui::Color32::from_rgb(160, 170, 210),
         WidgetKind::Custom(_) => egui::Color32::from_rgb(150, 150, 220),
     }
 }
@@ -281,6 +292,17 @@ pub fn kind_tag(kind: &WidgetKind) -> &'static str {
         WidgetKind::ScrollArea => "scrl",
         WidgetKind::GridLayout => "grid",
         WidgetKind::TabWidget => "tabs",
+        WidgetKind::ToolButton => "tool",
+        WidgetKind::CommandLinkButton => "clnk",
+        WidgetKind::DialogButtonBox => "btns",
+        WidgetKind::MathLabel => "math",
+        WidgetKind::FilePicker => "file",
+        WidgetKind::Chart => "chrt",
+        WidgetKind::Table => "tbl",
+        WidgetKind::ListView => "list",
+        WidgetKind::TreeView => "tree",
+        WidgetKind::StackedWidget => "stk",
+        WidgetKind::ToolBox => "tbox",
         WidgetKind::Custom(_) => "cst",
     }
 }
@@ -1052,6 +1074,343 @@ fn draw_widget(
             }
         }
 
+        // ToolButton: compact square button
+        WidgetKind::ToolButton => {
+            painter.rect_filled(rect, rounding, bg.unwrap_or(egui::Color32::from_gray(58)));
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(stroke_width, stroke_color),
+            );
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                &widget.props.label,
+                egui::FontId::proportional(label_size),
+                fg.unwrap_or(egui::Color32::WHITE),
+            );
+        }
+
+        // CommandLinkButton: title + description on a raised surface
+        WidgetKind::CommandLinkButton => {
+            painter.rect_filled(
+                rect,
+                rounding.max(4.0),
+                bg.unwrap_or(egui::Color32::from_gray(52)),
+            );
+            painter.rect_stroke(
+                rect,
+                rounding.max(4.0),
+                egui::Stroke::new(stroke_width, accent),
+            );
+            painter.text(
+                rect.left_top() + egui::vec2(10.0, 8.0),
+                egui::Align2::LEFT_TOP,
+                &widget.props.label,
+                egui::FontId::proportional(label_size + 1.0),
+                fg.unwrap_or(egui::Color32::WHITE),
+            );
+            if !widget.props.placeholder.is_empty() {
+                painter.text(
+                    rect.left_top() + egui::vec2(10.0, 8.0 + label_size + 4.0),
+                    egui::Align2::LEFT_TOP,
+                    &widget.props.placeholder,
+                    egui::FontId::proportional(label_size - 1.0),
+                    egui::Color32::from_gray(160),
+                );
+            }
+        }
+
+        // DialogButtonBox: right-aligned row of buttons from options
+        WidgetKind::DialogButtonBox => {
+            let n = widget.props.options.len().max(1);
+            let btn_w = 64.0_f32.min((rect.width() - 8.0) / n as f32);
+            let gap = 6.0;
+            let mut x = rect.max.x - 4.0;
+            for opt in widget.props.options.iter().rev() {
+                let b_rect = egui::Rect::from_min_max(
+                    egui::pos2(x - btn_w, rect.center().y - 12.0),
+                    egui::pos2(x, rect.center().y + 12.0),
+                );
+                painter.rect_filled(b_rect, 3.0, egui::Color32::from_gray(58));
+                painter.rect_stroke(b_rect, 3.0, egui::Stroke::new(1.0, accent));
+                painter.text(
+                    b_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    opt,
+                    egui::FontId::proportional(label_size - 1.0),
+                    egui::Color32::WHITE,
+                );
+                x -= btn_w + gap;
+            }
+        }
+
+        // MathLabel: computed-value display with fx glyph
+        WidgetKind::MathLabel => {
+            painter.rect_filled(rect, rounding, bg.unwrap_or(egui::Color32::from_gray(28)));
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(stroke_width, stroke_color),
+            );
+            painter.text(
+                rect.left_center() + egui::vec2(6.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                format!("ƒ {} =", widget.props.label),
+                egui::FontId::proportional(label_size),
+                fg.unwrap_or(egui::Color32::from_gray(200)),
+            );
+            painter.text(
+                rect.right_center() - egui::vec2(6.0, 0.0),
+                egui::Align2::RIGHT_CENTER,
+                "0.0",
+                egui::FontId::monospace(label_size),
+                accent,
+            );
+        }
+
+        // FilePicker: browse button + path field
+        WidgetKind::FilePicker => {
+            let btn_w = 64.0_f32.min(rect.width() * 0.4);
+            let btn_rect =
+                egui::Rect::from_min_max(rect.min, egui::pos2(rect.min.x + btn_w, rect.max.y));
+            painter.rect_filled(btn_rect, rounding, egui::Color32::from_gray(58));
+            painter.rect_stroke(btn_rect, rounding, egui::Stroke::new(1.0, accent));
+            painter.text(
+                btn_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "Browse…",
+                egui::FontId::proportional(label_size - 1.0),
+                egui::Color32::WHITE,
+            );
+            let field_rect =
+                egui::Rect::from_min_max(egui::pos2(btn_rect.max.x + 4.0, rect.min.y), rect.max);
+            painter.rect_filled(field_rect, rounding, egui::Color32::from_gray(30));
+            painter.text(
+                field_rect.left_center() + egui::vec2(4.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                "(no file selected)",
+                egui::FontId::proportional(label_size - 1.0),
+                egui::Color32::from_gray(120),
+            );
+        }
+
+        // Chart: axes + sample bars
+        WidgetKind::Chart => {
+            painter.rect_filled(rect, rounding, bg.unwrap_or(egui::Color32::from_gray(24)));
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(stroke_width, stroke_color),
+            );
+            // axes
+            let pad = 8.0;
+            let origin = egui::pos2(rect.min.x + pad, rect.max.y - pad);
+            painter.line_segment(
+                [origin, egui::pos2(rect.max.x - pad, rect.max.y - pad)],
+                egui::Stroke::new(1.0, egui::Color32::from_gray(90)),
+            );
+            painter.line_segment(
+                [origin, egui::pos2(rect.min.x + pad, rect.min.y + pad)],
+                egui::Stroke::new(1.0, egui::Color32::from_gray(90)),
+            );
+            // sample bars
+            let bars = [0.4_f32, 0.7, 0.5, 0.9, 0.6];
+            let area_w = rect.width() - pad * 2.0;
+            let area_h = rect.height() - pad * 2.0;
+            let bw = area_w / (bars.len() as f32 * 1.5);
+            for (i, &v) in bars.iter().enumerate() {
+                let bx = rect.min.x + pad + i as f32 * bw * 1.5 + bw * 0.25;
+                let bh = area_h * v;
+                let b_rect = egui::Rect::from_min_max(
+                    egui::pos2(bx, rect.max.y - pad - bh),
+                    egui::pos2(bx + bw, rect.max.y - pad),
+                );
+                painter.rect_filled(b_rect, 1.0, accent);
+            }
+            painter.text(
+                rect.left_top() + egui::vec2(4.0, 2.0),
+                egui::Align2::LEFT_TOP,
+                &widget.props.label,
+                egui::FontId::proportional(tag_size),
+                accent.linear_multiply(0.8),
+            );
+        }
+
+        // Table: header row + grid lines
+        WidgetKind::Table => {
+            painter.rect_filled(rect, rounding, bg.unwrap_or(egui::Color32::from_gray(26)));
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(stroke_width, stroke_color),
+            );
+            let cols = widget.props.options.len().max(1);
+            let col_w = rect.width() / cols as f32;
+            let header_h = (label_size + 6.0).min(rect.height());
+            // header background
+            let header_rect =
+                egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.min.y + header_h));
+            painter.rect_filled(header_rect, rounding, kind_fill(accent));
+            for (i, col) in widget.props.options.iter().enumerate() {
+                let cx = rect.min.x + i as f32 * col_w;
+                painter.text(
+                    egui::pos2(cx + 4.0, rect.min.y + header_h * 0.5),
+                    egui::Align2::LEFT_CENTER,
+                    col,
+                    egui::FontId::proportional(tag_size),
+                    accent,
+                );
+                if i > 0 {
+                    painter.line_segment(
+                        [egui::pos2(cx, rect.min.y), egui::pos2(cx, rect.max.y)],
+                        egui::Stroke::new(0.5, egui::Color32::from_gray(55)),
+                    );
+                }
+            }
+            // row lines
+            let mut y = rect.min.y + header_h;
+            while y < rect.max.y {
+                painter.line_segment(
+                    [egui::pos2(rect.min.x, y), egui::pos2(rect.max.x, y)],
+                    egui::Stroke::new(0.5, egui::Color32::from_gray(45)),
+                );
+                y += header_h;
+            }
+        }
+
+        // ListView: vertical list of items
+        WidgetKind::ListView => {
+            painter.rect_filled(rect, rounding, bg.unwrap_or(egui::Color32::from_gray(28)));
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(stroke_width, stroke_color),
+            );
+            let row_h = label_size + 6.0;
+            let mut y = rect.min.y + 2.0;
+            for (i, item) in widget.props.options.iter().enumerate() {
+                if y + row_h > rect.max.y {
+                    break;
+                }
+                if i == 0 {
+                    let sel_rect = egui::Rect::from_min_max(
+                        egui::pos2(rect.min.x + 1.0, y),
+                        egui::pos2(rect.max.x - 1.0, y + row_h),
+                    );
+                    painter.rect_filled(sel_rect, 1.0, kind_fill(accent));
+                }
+                painter.text(
+                    egui::pos2(rect.min.x + 6.0, y + row_h * 0.5),
+                    egui::Align2::LEFT_CENTER,
+                    item,
+                    egui::FontId::proportional(label_size - 1.0),
+                    if i == 0 {
+                        accent
+                    } else {
+                        egui::Color32::from_gray(190)
+                    },
+                );
+                y += row_h;
+            }
+        }
+
+        // TreeView: indented nodes with ▸ markers
+        WidgetKind::TreeView => {
+            painter.rect_filled(rect, rounding, bg.unwrap_or(egui::Color32::from_gray(28)));
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(stroke_width, stroke_color),
+            );
+            let row_h = label_size + 6.0;
+            let mut y = rect.min.y + 2.0;
+            for (i, node) in widget.props.options.iter().enumerate() {
+                if y + row_h > rect.max.y {
+                    break;
+                }
+                let indent = if i == 0 { 0.0 } else { 14.0 };
+                let marker = if i == 0 { "▾" } else { "•" };
+                painter.text(
+                    egui::pos2(rect.min.x + 6.0 + indent, y + row_h * 0.5),
+                    egui::Align2::LEFT_CENTER,
+                    format!("{marker} {node}"),
+                    egui::FontId::proportional(label_size - 1.0),
+                    egui::Color32::from_gray(190),
+                );
+                y += row_h;
+            }
+        }
+
+        // StackedWidget: page container showing active page tab
+        WidgetKind::StackedWidget => {
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(
+                    if flags.is_selected { stroke_width } else { 1.0 },
+                    stroke_color,
+                ),
+            );
+            let label = widget
+                .props
+                .options
+                .first()
+                .map(String::as_str)
+                .unwrap_or("Page 1");
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                format!("▣ {label}"),
+                egui::FontId::proportional(label_size),
+                accent.linear_multiply(0.7),
+            );
+            painter.text(
+                rect.left_top() + egui::vec2(4.0, 2.0),
+                egui::Align2::LEFT_TOP,
+                &widget.props.label,
+                egui::FontId::proportional(tag_size),
+                accent.linear_multiply(0.7),
+            );
+        }
+
+        // ToolBox: vertical collapsing section headers
+        WidgetKind::ToolBox => {
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(
+                    if flags.is_selected { stroke_width } else { 1.0 },
+                    stroke_color,
+                ),
+            );
+            let sec_h = label_size + 8.0;
+            let mut y = rect.min.y;
+            for (i, sec) in widget.props.options.iter().enumerate() {
+                if y + sec_h > rect.max.y {
+                    break;
+                }
+                let hdr_rect = egui::Rect::from_min_max(
+                    egui::pos2(rect.min.x, y),
+                    egui::pos2(rect.max.x, y + sec_h),
+                );
+                painter.rect_filled(hdr_rect, 1.0, kind_fill(accent));
+                let marker = if i == 0 { "▾" } else { "▸" };
+                painter.text(
+                    egui::pos2(rect.min.x + 6.0, y + sec_h * 0.5),
+                    egui::Align2::LEFT_CENTER,
+                    format!("{marker} {sec}"),
+                    egui::FontId::proportional(label_size - 1.0),
+                    accent,
+                );
+                y += sec_h;
+                // leave gap for the first (expanded) section
+                if i == 0 {
+                    y += sec_h;
+                }
+            }
+        }
+
         // Custom: accent box with descriptor name or label.
         WidgetKind::Custom(_) => {
             let custom_accent = widget
@@ -1163,6 +1522,12 @@ fn draw_widget(
             | WidgetKind::GridLayout
             | WidgetKind::TabWidget
             | WidgetKind::Image
+            | WidgetKind::Table
+            | WidgetKind::ListView
+            | WidgetKind::TreeView
+            | WidgetKind::StackedWidget
+            | WidgetKind::ToolBox
+            | WidgetKind::Chart
     );
     if flags.is_child && !is_container {
         painter.rect_filled(
@@ -1186,6 +1551,13 @@ fn draw_widget(
             | WidgetKind::VerticalSpacer
             | WidgetKind::Label
             | WidgetKind::Image
+            | WidgetKind::Table
+            | WidgetKind::ListView
+            | WidgetKind::TreeView
+            | WidgetKind::StackedWidget
+            | WidgetKind::ToolBox
+            | WidgetKind::Chart
+            | WidgetKind::DialogButtonBox
     );
     if !is_container_or_spacer {
         painter.text(
