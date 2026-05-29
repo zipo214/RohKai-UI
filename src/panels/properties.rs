@@ -856,78 +856,127 @@ fn show_delete_button(ui: &mut egui::Ui, do_delete: &mut bool) {
 // Event handler (re-borrows tree after validate_and_repair)
 // ---------------------------------------------------------------------------
 
+/// Tag identifying which event field to read/write.
+#[derive(Clone, Copy, PartialEq)]
+enum EventField {
+    Click,
+    DoubleClick,
+    Change,
+    LostFocus,
+    DragStopped,
+}
+
 fn show_event_handler(
     ui: &mut egui::Ui,
     tree: &mut UiTree,
     id: Uuid,
     action: &mut PropertiesAction,
 ) {
-    let Some(w) = tree.get_mut(id) else {
-        return;
-    };
+    // Collect applicable events without holding a borrow on tree.
+    let applicable: Vec<(EventField, &'static str, &'static str)> = {
+        let Some(w) = tree.get_mut(id) else { return };
 
-    let (event_label, is_button) = match &w.kind {
-        WidgetKind::Button => ("On Click", true),
-        WidgetKind::TextInput
-        | WidgetKind::Slider
-        | WidgetKind::Checkbox
-        | WidgetKind::ComboBox
-        | WidgetKind::RadioButton => ("On Change", false),
-        _ => return,
-    };
+        // Migrate legacy event_handler → on_click / on_change on first display.
+        if let Some(ref eh) = w.event_handler.clone() {
+            if !eh.is_empty() {
+                if w.kind == WidgetKind::Button && w.on_click.is_empty() {
+                    w.on_click = eh.clone();
+                } else if w.kind != WidgetKind::Button && w.on_change.is_empty() {
+                    w.on_change = eh.clone();
+                }
+            }
+        }
 
-    // Migrate legacy event_handler → on_click / on_change on first display
-    if let Some(ref eh) = w.event_handler.clone() {
-        if !eh.is_empty() {
-            if is_button && w.on_click.is_empty() {
-                w.on_click = eh.clone();
-            } else if !is_button && w.on_change.is_empty() {
-                w.on_change = eh.clone();
+        match &w.kind {
+            WidgetKind::Button => vec![
+                (EventField::Click, "On Click", "handle_click"),
+                (
+                    EventField::DoubleClick,
+                    "On Double-click",
+                    "handle_double_click",
+                ),
+            ],
+            WidgetKind::TextInput | WidgetKind::TextArea => vec![
+                (EventField::Change, "On Change", "handle_change"),
+                (EventField::LostFocus, "On Lost Focus", "handle_lost_focus"),
+            ],
+            WidgetKind::Slider | WidgetKind::SpinBox => vec![
+                (EventField::Change, "On Change", "handle_change"),
+                (
+                    EventField::DragStopped,
+                    "On Drag Stopped",
+                    "handle_drag_stopped",
+                ),
+            ],
+            WidgetKind::Checkbox
+            | WidgetKind::ComboBox
+            | WidgetKind::FontComboBox
+            | WidgetKind::RadioButton => vec![(EventField::Change, "On Change", "handle_change")],
+            _ => return,
+        }
+    }; // tree borrow released here
+
+    ui.separator();
+    ui.label(egui::RichText::new("Events").small().weak());
+
+    for (field, label, hint) in &applicable {
+        let field = *field;
+        // Read current value — borrow, clone, release.
+        let current: String = tree
+            .get_mut(id)
+            .map(|w| event_field_get(w, field).to_owned())
+            .unwrap_or_default();
+
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(*label).small());
+            if !current.is_empty() {
+                let chip = format!("→ fn {current}");
+                if ui
+                    .button(egui::RichText::new(chip).small().color(TEAL))
+                    .on_hover_text("Click to jump to handler in code panel (Tracé)")
+                    .clicked()
+                {
+                    *action = PropertiesAction::ScrollToHandler(current.clone());
+                }
+            }
+        });
+
+        let mut handler = current;
+        let changed = ui
+            .add(
+                egui::TextEdit::singleline(&mut handler)
+                    .hint_text(format!("e.g. {hint}"))
+                    .desired_width(f32::INFINITY),
+            )
+            .on_hover_text("Ctrl+double-click widget on canvas to jump to handler (Tracé)")
+            .changed();
+
+        if changed {
+            let trimmed = handler.trim().to_owned();
+            if let Some(w) = tree.get_mut(id) {
+                event_field_set(w, field, trimmed);
             }
         }
     }
+}
 
-    let current = if is_button {
-        w.on_click.clone()
-    } else {
-        w.on_change.clone()
-    };
+fn event_field_get(w: &WidgetInstance, field: EventField) -> &str {
+    match field {
+        EventField::Click => &w.on_click,
+        EventField::DoubleClick => &w.on_double_click,
+        EventField::Change => &w.on_change,
+        EventField::LostFocus => &w.on_lost_focus,
+        EventField::DragStopped => &w.on_drag_stopped,
+    }
+}
 
-    ui.separator();
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(event_label).small().weak());
-        if !current.is_empty() {
-            let chip = format!("→ fn {current}");
-            if ui
-                .button(egui::RichText::new(chip).small().color(TEAL))
-                .on_hover_text("Click to jump to handler in code panel (Tracé)")
-                .clicked()
-            {
-                *action = PropertiesAction::ScrollToHandler(current.clone());
-            }
-        }
-    });
-
-    let mut handler = current;
-    let hint = format!(
-        "e.g. handle_{}",
-        event_label.to_lowercase().replace(' ', "_")
-    );
-    if ui
-        .add(
-            egui::TextEdit::singleline(&mut handler)
-                .hint_text(hint)
-                .desired_width(f32::INFINITY),
-        )
-        .on_hover_text("Ctrl+double-click widget to jump to handler")
-        .changed()
-    {
-        let trimmed = handler.trim().to_owned();
-        if is_button {
-            w.on_click = trimmed;
-        } else {
-            w.on_change = trimmed;
-        }
+fn event_field_set(w: &mut WidgetInstance, field: EventField, value: String) {
+    match field {
+        EventField::Click => w.on_click = value,
+        EventField::DoubleClick => w.on_double_click = value,
+        EventField::Change => w.on_change = value,
+        EventField::LostFocus => w.on_lost_focus = value,
+        EventField::DragStopped => w.on_drag_stopped = value,
     }
 }
 

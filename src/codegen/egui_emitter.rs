@@ -130,13 +130,21 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                     w.rect.w, w.rect.h
                 );
                 let with_tip = append_tip(base, tip.as_deref());
-                let line = if let Some(h) = resolve_handler_click(w) {
+                let mut line = if let Some(h) = resolve_handler_click(w) {
                     format!(
-                        "        if {with_tip}.clicked() {{\n            self.{h}();\n        }}"
+                        "        let _btn_{id} = {with_tip};\n        if _btn_{id}.clicked() {{\n            self.{h}();\n        }}",
+                        id = w.id.as_simple()
                     )
                 } else {
-                    format!("        if {with_tip}.clicked() {{}}")
+                    format!("        let _btn_{id} = {with_tip};", id = w.id.as_simple())
                 };
+                if !w.on_double_click.is_empty() {
+                    let h = &w.on_double_click;
+                    let id = w.id.as_simple();
+                    line.push_str(&format!(
+                        "\n        if _btn_{id}.double_clicked() {{\n            self.{h}();\n        }}"
+                    ));
+                }
                 lines.push((Some(w.id), line));
             }
             WidgetKind::Label => {
@@ -173,14 +181,20 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                         let sized =
                             format!("ui.add_sized([{:.1}, {:.1}], {te})", w.rect.w, w.rect.h);
                         let with_tip = append_tip(sized, tip.as_deref());
-                        let with_handler = if let Some(h) = resolve_handler_change(w) {
-                            format!(
-                                "if {with_tip}.changed() {{\n            self.{h}();\n        }}"
-                            )
-                        } else {
-                            format!("{with_tip};")
-                        };
-                        format!("        {with_handler}")
+                        let id = w.id.as_simple();
+                        let mut parts = format!("        let _ti_{id} = {with_tip};");
+                        if let Some(h) = resolve_handler_change(w) {
+                            parts.push_str(&format!(
+                                "\n        if _ti_{id}.changed() {{\n            self.{h}();\n        }}"
+                            ));
+                        }
+                        if !w.on_lost_focus.is_empty() {
+                            let h = &w.on_lost_focus;
+                            parts.push_str(&format!(
+                                "\n        if _ti_{id}.lost_focus() {{\n            self.{h}();\n        }}"
+                            ));
+                        }
+                        parts
                     }
                     None => format!("        // TextInput {label_lit}: set a valid Binding"),
                 };
@@ -205,14 +219,20 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                         let sized =
                             format!("ui.add_sized([{:.1}, {:.1}], {slider})", w.rect.w, w.rect.h);
                         let with_tip = append_tip(sized, tip.as_deref());
-                        let with_handler = if let Some(h) = resolve_handler_change(w) {
-                            format!(
-                                "if {with_tip}.changed() {{\n            self.{h}();\n        }}"
-                            )
-                        } else {
-                            format!("{with_tip};")
-                        };
-                        format!("        {with_handler}")
+                        let id = w.id.as_simple();
+                        let mut parts = format!("        let _sl_{id} = {with_tip};");
+                        if let Some(h) = resolve_handler_change(w) {
+                            parts.push_str(&format!(
+                                "\n        if _sl_{id}.changed() {{\n            self.{h}();\n        }}"
+                            ));
+                        }
+                        if !w.on_drag_stopped.is_empty() {
+                            let h = &w.on_drag_stopped;
+                            parts.push_str(&format!(
+                                "\n        if _sl_{id}.drag_stopped() {{\n            self.{h}();\n        }}"
+                            ));
+                        }
+                        parts
                     }
                     None => format!("        // Slider {label_lit}: set a valid Binding"),
                 };

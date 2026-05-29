@@ -417,13 +417,22 @@ pub struct WidgetInstance {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub custom_props: Vec<CustomProp>,
 
-    // Stage 5.5 — Event Wiring
+    // Stage 5.5 / Stage 9 — Event Wiring
     /// Handler for Button.on_click.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub on_click: String,
     /// Handler for interactive widget .on_change.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub on_change: String,
+    /// Handler for Button.double_clicked() — Stage 9.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub on_double_click: String,
+    /// Handler fired when a text field loses focus — Stage 9.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub on_lost_focus: String,
+    /// Handler fired when a drag interaction ends (Slider, SpinBox) — Stage 9.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub on_drag_stopped: String,
     /// Legacy single handler field — kept for backward-compat with old saves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event_handler: Option<String>,
@@ -484,6 +493,9 @@ impl Default for WidgetInstance {
             custom_props: Vec::new(),
             on_click: String::new(),
             on_change: String::new(),
+            on_double_click: String::new(),
+            on_lost_focus: String::new(),
+            on_drag_stopped: String::new(),
             event_handler: None,
             svg_source: None,
             expand_svg_inline: false,
