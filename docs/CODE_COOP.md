@@ -7,6 +7,22 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-05-28 — Claude Stage 11 COMPLETE (Rust-Centric Visual Features)
+
+On `dev`, Stage 11 done after writing `docs/STAGE11_PLAN.md` (full design:
+function/depth/UX/impact per feature). All 7 features: (1) Ownership overlay +
+(4) Error-flow overlay → `canvas/overlays.rs`, read-only, View-menu toggles,
+driven by field_collector + per-widget handler annotations. (2) Async wiring +
+(3) Channels + (5) Iterator pipelines + (6) Trait impls → schema
+(`WidgetInstance.async_handler`/`handler_result`, `AppProps.rust_wiring`) +
+`codegen/rust_wiring.rs` (std-only, NO tokio — uses std::thread+mpsc as the
+roadmap's "or similar") + export integration + `panels/rust_wiring.rs` editor
+window. (7) Macro palette → `panels/macro_palette.rs`, appends snippets to the
+Lazare code buffer. Properties panel gained async checkbox + error-mode dropdown.
+108/108 tests (14 new), zero warnings, cargo run smoke OK. Key decision logged in
+ROADMAP: tokio deliberately avoided per architecture rules. Remaining open:
+Stage 12 (Platform/WASM), Stage 13 (Data/Integration), Stage 15 (Own Renderer).
+
 ## 2026-05-28 — Claude Stage 14 COMPLETE (out of order, per user goal)
 
 On `dev`, executed Stage 14 (Project Infrastructure) ahead of 11–13 by user

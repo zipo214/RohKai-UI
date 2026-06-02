@@ -424,17 +424,34 @@ requiring schema changes.
 
 ---
 
-## Stage 11 — Rust-Centric Visual Features
-- [ ] Ownership visualization — canvas overlay showing which widgets own which AppState fields
-- [ ] Async task wiring — visually connect a widget event to an async fn,
-      generates tokio::spawn or similar
-- [ ] Channel connections — draw mpsc::channel connections between components visually
-- [ ] Error propagation — visual Result/Option flow from widget events through state
-- [ ] Iterator pipeline builder — chain .map/.filter/.collect operations visually,
-      generates correct iterator code
-- [ ] Trait binding — assign a trait implementation to a widget's behavior visually
-- [ ] Macro palette — common Rust macros (vec!, format!, println!) as droppable canvas
-      components that wire into event handlers
+## Stage 11 — Rust-Centric Visual Features ✅
+
+See `docs/STAGE11_PLAN.md` for the full design (function, depth, UX, impact).
+
+- [x] Ownership visualization — `canvas/overlays.rs::draw_ownership`; View → Show
+      Ownership Overlay; per-widget `→ field: Type` badges + AppState legend,
+      driven by `field_collector` (never diverges from codegen)
+- [x] Async task wiring — `WidgetInstance.async_handler`; Properties → "Run async";
+      export wraps the handler call in `std::thread::spawn` (std-only, no tokio —
+      the "or similar" honoring the no-new-crate rule)
+- [x] Channel connections — `RustWiring.channels`; Rust Wiring window; export emits
+      `std::sync::mpsc` Sender/Receiver fields + init on `ExportedApp`
+- [x] Error propagation — `WidgetInstance.handler_result` (Plain/Result/Option);
+      Properties → Error mode dropdown; `overlays.rs::draw_error_flow`; handler
+      signature + call site reflect the contract
+- [x] Iterator pipeline builder — `RustWiring.iterators` (source + ordered
+      Map/Filter ops); Rust Wiring window with live preview; export emits a
+      `fn name(&self) -> Vec<_> { .iter()….collect() }` method
+- [x] Trait binding — `RustWiring.trait_impls`; Rust Wiring window; export emits
+      `impl Trait for ExportedApp { method { body } }`
+- [x] Macro palette — `panels/macro_palette.rs`; View → Macro Palette…; clicking a
+      macro (vec!/format!/println!/dbg!/assert!/todo!/matches!) appends its snippet
+      to the live Lazare code buffer
+
+> Note on async: the roadmap originally said "tokio::spawn or similar". RohKai's
+> architecture rules forbid a tokio runtime without an explicit need, so Stage 11
+> generates the std `thread::spawn` + `mpsc` pattern — the "or similar" — which
+> compiles with zero added dependencies. Recorded as an intentional decision.
 
 ---
 

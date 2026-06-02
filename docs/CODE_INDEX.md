@@ -36,6 +36,9 @@ being comfortable.
   importer and rasterizer; currently owns color, numeric-list, affine
   transform, and path token parsing.
 - `src/canvas/widget_instance.rs` - canvas rect conversion helpers.
+- `src/canvas/preview.rs` - F5 preview mode: renders the canvas as live egui widgets.
+- `src/canvas/overlays.rs` - Stage 11 read-only overlays: ownership (widget→field)
+  and error-flow (handler Result/Option) badges. Toggled from the View menu.
 - `src/widgets/` - palette/default constructors for each `WidgetKind`.
 
 ## Panels
@@ -51,6 +54,15 @@ being comfortable.
   descriptor preview. It is not the future Visual Widget Maker; it creates
   simple `.rkwd` descriptors and can hand off to the full editor. Entry:
   File → Create Custom Widget… or Widgets menu.
+- `src/panels/outline.rs` - document outline / layers panel (Ctrl+L).
+- `src/panels/project_tree.rs` - project file tree + read-only viewer + asset
+  registry (File → Project Files…).
+- `src/panels/component_tray.rs` - design-time non-visual component tray
+  (timers, data sources, state machines, HTTP).
+- `src/panels/shortcuts.rs` - keyboard shortcut reference (F1 / ?).
+- `src/panels/rust_wiring.rs` - Stage 11 Rust Wiring editor: mpsc channels,
+  iterator pipelines, trait impls, with live generated-code preview.
+- `src/panels/macro_palette.rs` - Stage 11 macro snippet palette → code buffer.
 
 ## Codegen
 
@@ -62,6 +74,9 @@ being comfortable.
 - `src/codegen/parser.rs` - Lazare/bidirectional code parsing.
 - `src/codegen/kind_table.rs` - field types and widget metadata for codegen.
 - `src/codegen/rust.rs` - Rust string/binding helpers.
+- `src/codegen/rust_wiring.rs` - Stage 11 Rust-centric emitters: mpsc channel
+  fields, iterator-pipeline methods, trait-impl blocks, async/Result-aware
+  handler signatures + call sites (std-only, no tokio).
 - `src/codegen/widget_descriptor.rs` - `.rkwd` descriptor types, loader,
   template engine. Drop `.rkwd` files in `<binary_dir>/widgets/` to extend
   the palette without recompiling.
