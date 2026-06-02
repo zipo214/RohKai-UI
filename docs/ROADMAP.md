@@ -320,7 +320,7 @@ recommendations. Status recorded here for traceability.
 
 ---
 
-## Stage 8.5 — Document Outline & Preview Mode
+## Stage 8.5 — Document Outline & Preview Mode ✅
 
 Bridges Stage 8 polish and Stage 9 depth. Improves designer usability without
 requiring schema changes.
@@ -397,22 +397,45 @@ requiring schema changes.
 
 ## Stage 10 — Technical & Computational Widgets ✅
 
+### Feature Depth Status
+- **Full enough for current export:** `FilePicker` now emits `rfd::FileDialog`,
+      generated AppState path storage, and the required exported `rfd = "0.14"`
+      Cargo dependency.
+- **Functional MVP:** `MathLabel` is a computed `f32` label, not a formula
+      editor; `Chart` is a minimal `Vec<f32>` bar painter, not a charting
+      library; `Table`, `ListView`, and `TreeView` are static option-backed
+      display widgets, not model-bound data views.
+- **Design-time MVP / documented stubs:** `Timer`, `StateMachine`, and
+      `HttpRequest` create design-time components and generated state/comment
+      hooks; they do not yet schedule runtime ticks, execute transitions, or
+      perform network requests.
+- **Planned competitor-depth work:** formula parsing/validation, data models,
+      interactive chart axes/series/legends, runtime component dispatch, and
+      data-bound table/list/tree views remain future work.
+
 ### Computational & Non-Visual Components
-- [x] Math/formula widget — `MathLabel` (f32-bound); emits `ui.label(format!("{} = {:.2}", …))`
-- [x] Timer/interval component — done in Stage 9 component tray (Timer ComponentKind)
-- [x] State machine component — `StateMachine` ComponentKind; emits usize state field +
-      `on_transition` update hook
-- [x] HTTP request component — `HttpRequest` ComponentKind; emits String response field +
-      `on_response` dispatch hook (mpsc note for async)
+- [x] Math/formula widget MVP — `MathLabel` (f32-bound); emits safe
+      `ui.label(format!("{} = {:.2}", label, value))`
+- [ ] Formula Widget — expression parser, dependency tracking, validation,
+      formatting controls, multiple input fields, and diagnostics
+- [x] Timer/interval component MVP — design-time ComponentKind with documented
+      generated update comment; runtime scheduling remains future work
+- [x] State machine component MVP — emits usize state field + documented
+      state-transition stub comment; visual transition editor remains future work
+- [x] HTTP request component MVP — emits String response field + documented
+      stub comment; runtime HTTP needs a user-approved crate/stage decision
 
 ### Data Display Widgets
-- [x] Data table widget — `Table` (egui::Grid, columns from options) — merged with Table View
-- [x] File picker widget — `FilePicker`; emits rfd::FileDialog browse + path field
-- [x] Chart widget — `Chart`; canvas bar preview, codegen painter comment for Vec<f32>
+- [x] Data table widget MVP — `Table` (egui::Grid, columns from static options)
+      — merged with Table View; model/data binding remains future work
+- [x] File picker widget — `FilePicker`; emits `rfd::FileDialog`, path field,
+      and generated `rfd = "0.14"` dependency
+- [x] Chart widget MVP — `Chart`; canvas bar preview and generated egui painter
+      bar output from a `Vec<f32>` binding
 
 ### New Widget Kinds — Data Views
-- [x] List Widget / List View — `ListView` (egui::ScrollArea + labels from options)
-- [x] Tree Widget / Tree View — `TreeView` (egui::CollapsingHeader hierarchy)
+- [x] List Widget / List View MVP — static option-backed `ScrollArea` labels
+- [x] Tree Widget / Tree View MVP — static option-backed `CollapsingHeader` hierarchy
 - [x] Table Widget / Table View — merged into `Table` above
 
 ### New Widget Kinds — Additional Containers & Buttons

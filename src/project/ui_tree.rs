@@ -235,6 +235,23 @@ impl UiTree {
         }
     }
 
+    /// Move a widget to an explicit draw-order index.
+    ///
+    /// Higher indices are drawn later and therefore appear visually above lower indices.
+    pub fn move_to_index(&mut self, id: Uuid, to_idx: usize) {
+        if let Some(from_idx) = self.widgets.iter().position(|w| w.id == id) {
+            let widget = self.widgets.remove(from_idx);
+            let target = to_idx.min(self.widgets.len());
+            self.widgets.insert(target, widget);
+            debug_assert_eq!(
+                self.widgets.get(target).map(|w| w.id),
+                Some(id),
+                "move_to_index: widget not at target index"
+            );
+            self.validate_and_repair();
+        }
+    }
+
     /// Swap with next index — higher index = drawn later = more on top.
     pub fn bring_forward(&mut self, id: Uuid) {
         if let Some(idx) = self.widgets.iter().position(|w| w.id == id) {
@@ -253,5 +270,57 @@ impl UiTree {
                 debug_assert_eq!(self.widgets[idx - 1].id, id, "send_back: swap failed");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn widget(id: Uuid) -> WidgetInstance {
+        WidgetInstance {
+            id,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn move_to_index_reorders_draw_order() {
+        let a = Uuid::from_u128(1);
+        let b = Uuid::from_u128(2);
+        let c = Uuid::from_u128(3);
+        let d = Uuid::from_u128(4);
+        let mut tree = UiTree {
+            widgets: vec![widget(a), widget(b), widget(c), widget(d)],
+            ..Default::default()
+        };
+
+        tree.move_to_index(b, 3);
+        assert_eq!(
+            tree.widgets.iter().map(|w| w.id).collect::<Vec<_>>(),
+            vec![a, c, d, b]
+        );
+
+        tree.move_to_index(b, 1);
+        assert_eq!(
+            tree.widgets.iter().map(|w| w.id).collect::<Vec<_>>(),
+            vec![a, b, c, d]
+        );
+    }
+
+    #[test]
+    fn move_to_index_unknown_id_is_noop() {
+        let a = Uuid::from_u128(1);
+        let b = Uuid::from_u128(2);
+        let mut tree = UiTree {
+            widgets: vec![widget(a), widget(b)],
+            ..Default::default()
+        };
+
+        tree.move_to_index(Uuid::from_u128(99), 0);
+        assert_eq!(
+            tree.widgets.iter().map(|w| w.id).collect::<Vec<_>>(),
+            vec![a, b]
+        );
     }
 }

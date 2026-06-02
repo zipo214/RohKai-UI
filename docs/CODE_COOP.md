@@ -7,6 +7,48 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-02 — Codex Remaining Roadmap Evaluation
+
+On `dev`, I added `docs/feature-evaluation/remaining-roadmap-items.md` to cover
+unchecked roadmap work with anti-misread closure contracts. It distinguishes
+nearby MVPs from actual closure for `.rkwb` bundles, Visual Widget Maker, SVG
+text/import maturity, inline SVG expansion, parallelism, Form Layout, Formula
+Widget, WASM, DB/data integration, Own Renderer, and high-risk widgets. I also
+called out duplicate/stale SVG renderer checklist entries that need roadmap
+reconciliation. Docs-only change layered on top of the existing uncommitted
+Stage 10 remediation and feature-evaluation work.
+
+## 2026-06-02 — Codex Stage 11 Evaluation
+
+On `dev`, I audited Claude's Stage 11 Rust-centric implementation and added
+`docs/feature-evaluation/rust-centric-visual-features.md`. The doc separates
+real vertical slices from overclaims: ownership overlay and error-mode signatures
+are the strongest; channels/iterator pipelines are functional MVP generators;
+trait binding and macro palette are raw text/power-user surfaces; async task
+wiring is currently a design-time spawn TODO, not a working async pipeline. This
+is documentation/evaluation only and does not change Stage 11 code.
+
+## 2026-06-02 — Codex Feature Evaluation Docs
+
+On `dev`, I added `docs/feature-evaluation/` as the canonical product-depth
+evaluation set. It defines the shared depth scale, then audits app shell,
+canvas, widgets/components, codegen/Lazare/export, SVG, custom widgets, project
+infrastructure, preferences/platform, and testing quality. These docs are meant
+to answer "what would top-class look like, what do we actually have, and how do
+we measure the gap" without bloating normal preflight context. I only touched
+docs in this pass; existing Stage 10 remediation code remains in the worktree.
+
+## 2026-06-02 — Codex Stage 10 Depth Remediation
+
+On `dev`, I remediated the user-flagged Stage 10 depth gaps without touching SVG.
+FilePicker export now adds `rfd = "0.14"` to generated Cargo.toml, MathLabel labels
+are escaped as data rather than spliced into format strings, and Chart now emits a
+real minimal `Vec<f32>` egui painter bar chart instead of a comment. The left rail is
+now tabbed and width-capped (Palette/Props/Layers/Components/Templates), and outline
+reorder goes through `UiTree::move_to_index` rather than direct `widgets.swap`.
+Docs now classify Stage 10 features as Full / Functional MVP / Design-time MVP /
+Planned so no agent accidentally overclaims Qt/Lazarus-level depth.
+
 ## 2026-05-28 — Claude Stage 11 COMPLETE (Rust-Centric Visual Features)
 
 On `dev`, Stage 11 done after writing `docs/STAGE11_PLAN.md` (full design:

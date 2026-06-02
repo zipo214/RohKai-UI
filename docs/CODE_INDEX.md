@@ -64,6 +64,19 @@ being comfortable.
   iterator pipelines, trait impls, with live generated-code preview.
 - `src/panels/macro_palette.rs` - Stage 11 macro snippet palette → code buffer.
 
+## Feature Depth Status
+
+- **Full enough for current export:** FilePicker includes generated `rfd`
+  dependency wiring and path state.
+- **Functional MVP:** MathLabel is a safe computed `f32` label; Chart is a
+  minimal `Vec<f32>` bar painter; Table/ListView/TreeView are static
+  option-backed widgets.
+- **Design-time MVP / documented stubs:** Timer, StateMachine, and HttpRequest
+  components expose state/config and generated comments, not full runtime
+  schedulers, transition engines, or HTTP clients.
+- **Planned depth:** formula engine, model-bound data views, chart axes/series,
+  runtime component dispatch, and true visual widget construction.
+
 ## Codegen
 
 - `src/codegen/egui_emitter.rs` - live egui preview code.
@@ -102,6 +115,10 @@ being comfortable.
 - `docs/VISUAL_WIDGET_MAKER.md` - future WYSIWYG widget construction studio
   plan. Distinguishes the true visual maker from the existing guided descriptor
   builder.
+- `docs/feature-evaluation/` - exhaustive feature-depth evaluations by product
+  area. Use this when deciding whether a feature is Full, MVP, Stub, or Planned,
+  and what top-class behavior should mean. Includes a dedicated Stage 11
+  Rust-centric feature evaluation and a remaining-roadmap gap-closure audit.
 - Historical bug review/RCA docs are reference material, not normal preflight.
 
 ## Scripts

@@ -42,6 +42,16 @@ pub fn project_files(tree: &UiTree) -> Vec<(String, String)> {
             }
         }
     }
+    if tree
+        .widgets
+        .iter()
+        .any(|w| w.kind == WidgetKind::FilePicker)
+    {
+        let dep_line = String::from("rfd = \"0.14\"");
+        if seen_deps.insert(dep_line.clone()) {
+            extra_deps.push(dep_line);
+        }
+    }
 
     let mut files = vec![
         ("Cargo.toml".to_owned(), gen_cargo_toml(&extra_deps)),
@@ -612,10 +622,12 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 s
             }
             WidgetKind::MathLabel => match binding {
-                Some(b) => format!(
-                    "                ui.label(format!(\"{} = {{:.2}}\", self.state.{b}));\n",
-                    w.props.label.replace('"', "")
-                ),
+                Some(b) => {
+                    let label_lit = string_literal(&w.props.label);
+                    format!(
+                        "                ui.label(format!(\"{{}} = {{:.2}}\", {label_lit}, self.state.{b}));\n"
+                    )
+                }
                 None => format!("                // MathLabel {label}: set a valid Binding\n"),
             },
             WidgetKind::FilePicker => match binding {
@@ -627,12 +639,12 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 ),
                 None => format!("                // FilePicker {label}: set a valid Binding\n"),
             },
-            WidgetKind::Chart => {
-                format!(
-                    "                // Chart '{}': bind a Vec<f32> and paint via ui.painter()\n",
-                    w.props.label
-                )
-            }
+            WidgetKind::Chart => match binding {
+                Some(b) => chart_export_block(&format!("self.state.{b}"), w.rect.w, w.rect.h, 16),
+                None => format!(
+                    "                // Chart {label}: set a Vec<f32> Binding for painter output\n"
+                ),
+            },
             WidgetKind::Table => {
                 let mut s = format!(
                     "                egui::Grid::new(\"{}\").striped(true).show(ui, |ui| {{\n",
@@ -811,6 +823,33 @@ fn rich_text_export_expr(
     }
 }
 
+fn chart_export_block(binding_expr: &str, width: f32, height: f32, indent: usize) -> String {
+    let pad = " ".repeat(indent);
+    format!(
+        "{pad}let chart_size = egui::vec2({width:.1}, {height:.1});\n\
+{pad}let (chart_rect, _) = ui.allocate_exact_size(chart_size, egui::Sense::hover());\n\
+{pad}let chart_painter = ui.painter_at(chart_rect);\n\
+{pad}chart_painter.rect_stroke(chart_rect, 2.0, egui::Stroke::new(1.0, egui::Color32::from_gray(120)));\n\
+{pad}let chart_values = &{binding_expr};\n\
+{pad}if !chart_values.is_empty() {{\n\
+{pad}    let chart_max = chart_values.iter().copied().fold(0.0_f32, f32::max).max(1.0);\n\
+{pad}    let bar_w = chart_rect.width() / chart_values.len() as f32;\n\
+{pad}    for (i, value) in chart_values.iter().enumerate() {{\n\
+{pad}        let v = (*value).max(0.0) / chart_max;\n\
+{pad}        let x0 = chart_rect.left() + i as f32 * bar_w + 2.0;\n\
+{pad}        let x1 = (x0 + bar_w - 4.0).max(x0 + 1.0);\n\
+{pad}        let y1 = chart_rect.bottom() - 2.0;\n\
+{pad}        let y0 = y1 - (chart_rect.height() - 4.0) * v;\n\
+{pad}        chart_painter.rect_filled(\n\
+{pad}            egui::Rect::from_min_max(egui::pos2(x0, y0), egui::pos2(x1, y1)),\n\
+{pad}            1.0,\n\
+{pad}            egui::Color32::from_rgb(52, 211, 153),\n\
+{pad}        );\n\
+{pad}    }}\n\
+{pad}}}\n"
+    )
+}
+
 fn export_child_line(
     child: &crate::project::schema::WidgetInstance,
     rect_expr: &str,
@@ -902,9 +941,12 @@ fn export_child_line(
             "                        ui.put({rect_expr}, egui::Label::new({child_label})); // DialogButtonBox\n"
         ),
         WidgetKind::MathLabel => match child_binding {
-            Some(b) => format!(
-                "                        ui.put({rect_expr}, egui::Label::new(format!(\"{{:.2}}\", self.state.{b})));\n"
-            ),
+            Some(b) => {
+                let label_lit = string_literal(&child.props.label);
+                format!(
+                    "                        ui.put({rect_expr}, egui::Label::new(format!(\"{{}} = {{:.2}}\", {label_lit}, self.state.{b})));\n"
+                )
+            }
             None => format!("                        // MathLabel {child_label}: set a valid Binding\n"),
         },
         WidgetKind::FilePicker => match child_binding {
@@ -1138,5 +1180,82 @@ mod tests {
         assert!(g.contains("std::sync::mpsc::channel::<f32>()"));
         assert!(g.contains("fn evens(&self) -> Vec<_>"));
         assert!(g.contains("impl Tick for ExportedApp"));
+    }
+
+    #[test]
+    fn file_picker_export_includes_rfd_dependency() {
+        let tree = UiTree {
+            widgets: vec![WidgetInstance {
+                id: Uuid::nil(),
+                kind: WidgetKind::FilePicker,
+                state_binding: Some("picked_path".to_owned()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let files = project_files(&tree);
+        let cargo_toml = files
+            .iter()
+            .find(|(path, _)| path == "Cargo.toml")
+            .map(|(_, contents)| contents.as_str())
+            .unwrap();
+        let app_rs = files
+            .iter()
+            .find(|(path, _)| path == "src/app.rs")
+            .map(|(_, contents)| contents.as_str())
+            .unwrap();
+
+        assert!(cargo_toml.contains("rfd = \"0.14\""));
+        assert!(app_rs.contains("rfd::FileDialog"));
+        assert!(app_rs.contains("self.state.picked_path"));
+    }
+
+    #[test]
+    fn math_label_export_escapes_label_as_value() {
+        let tree = UiTree {
+            widgets: vec![WidgetInstance {
+                id: Uuid::nil(),
+                kind: WidgetKind::MathLabel,
+                state_binding: Some("total".to_owned()),
+                props: crate::project::schema::WidgetProps {
+                    label: "A {quoted} \"Total\"".to_owned(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let generated = gen_app_rs(&tree);
+        assert!(generated.contains("format!(\"{} = {:.2}\""));
+        assert!(generated.contains("\"A {quoted} \\\"Total\\\"\""));
+        assert!(generated.contains("self.state.total"));
+    }
+
+    #[test]
+    fn chart_export_emits_bound_painter_code() {
+        let tree = UiTree {
+            widgets: vec![WidgetInstance {
+                id: Uuid::nil(),
+                kind: WidgetKind::Chart,
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 180.0,
+                    h: 90.0,
+                },
+                state_binding: Some("values".to_owned()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let generated = gen_app_rs(&tree);
+        assert!(generated.contains("pub values: Vec<f32>"));
+        assert!(generated.contains("values: vec![0.2, 0.5, 0.8, 0.4]"));
+        assert!(generated.contains("let chart_values = &self.state.values"));
+        assert!(generated.contains("chart_painter.rect_filled"));
+        assert!(!generated.contains("bind a Vec<f32> and paint"));
     }
 }

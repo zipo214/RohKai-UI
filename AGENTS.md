@@ -53,7 +53,10 @@ src/
 ```
 
 ## Current Stage (see docs/ROADMAP.md for full history)
-Stages 0–8 complete. Active scope is Stage 9 (Widget Depth & Lazarus Completeness).
+Stages 0–8, 8.5, 9 (core), 10, 11, and 14 complete. Stage 9's parallel-processing
+sub-cluster (rayon-based parallel rasterization/codegen/export/template-load +
+benchmarks) and Form Layout remain deferred. Open stages: 12 (Platform Targets),
+13 (Data & Integration), 15 (Own Renderer), plus the deferred Stage 9 items.
 
 Core features implemented:
 - Canvas: drag, drop, select, multi-select, resize, rubber-band, z-order, snap, smart guides,

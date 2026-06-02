@@ -22,7 +22,7 @@ All panels read from it; the canvas mutates it in-place through `tree.get_mut(id
 
 | Type | Purpose |
 |---|---|
-| `WidgetKind` | Enum: Button, Label, TextInput, Slider, Checkbox, Frame, ComboBox, RadioButton, ProgressBar, Image, Custom(String) |
+| `WidgetKind` | Enum, grouped by era. Core: Button, Label, TextInput, Slider, Checkbox, Frame, ComboBox, RadioButton, ProgressBar, Image, Custom(String). Stage 9: TextArea, SpinBox, FontComboBox, HorizontalSpacer, VerticalSpacer, GroupBox, VLayout, HLayout, ScrollArea, GridLayout, TabWidget. Stage 10: ToolButton, CommandLinkButton, DialogButtonBox, MathLabel, FilePicker, Chart, Table, ListView, TreeView, StackedWidget, ToolBox. The canonical list is `widgets::ALL_KINDS`. |
 | `WidgetProps` | Per-widget content and behaviour knobs (see table below) |
 | `Rect` | `{ x, y, w, h }` in canvas-local pixels; default `(20, 20, 120, 32)` |
 | `WidgetInstance` | Full widget node (see table below) |
@@ -143,6 +143,9 @@ src/codegen/
   widget_descriptor.rs — .rkwd descriptor types, loader, template engine, validation
   widget_bundle.rs     — .rkwb bundle (multi-descriptor JSON envelope)
   rust.rs              — Rust string/binding helpers (string_literal, field_binding)
+  rust_wiring.rs       — Stage 11: mpsc channel fields, iterator-pipeline methods,
+                         trait-impl blocks, async/Result-aware handler signatures +
+                         call sites (std-only — no tokio)
   mod.rs               — re-exports
 ```
 

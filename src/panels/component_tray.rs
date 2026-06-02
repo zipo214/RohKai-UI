@@ -198,19 +198,19 @@ pub fn component_update_lines(components: &[DesignComponent]) -> Vec<String> {
             ComponentKind::Timer => {
                 let ms = comp.interval_ms.unwrap_or(1000);
                 lines.push(format!(
-                    "        // Timer '{}': fires every {ms}ms → self.{handler}()",
+                    "        // Timer '{}': design-time MVP; add runtime clock dispatch every {ms}ms to call self.{handler}()",
                     comp.name
                 ));
             }
             ComponentKind::StateMachine => {
                 lines.push(format!(
-                    "        // StateMachine '{}': self.{handler}() drives state transitions",
+                    "        // StateMachine '{}': design-time MVP; implement self.{handler}() to change the generated state field",
                     comp.name
                 ));
             }
             ComponentKind::HttpRequest => {
                 lines.push(format!(
-                    "        // HttpRequest '{}': call self.{handler}() to dispatch (use mpsc for async)",
+                    "        // HttpRequest '{}': design-time MVP; wire self.{handler}() to std::sync::mpsc or a user-approved HTTP crate",
                     comp.name
                 ));
             }
@@ -297,6 +297,7 @@ mod tests {
         assert!(lines.len() == 1);
         assert!(lines[0].contains("on_refresh"));
         assert!(lines[0].contains("500ms"));
+        assert!(lines[0].contains("design-time MVP"));
     }
 
     #[test]
@@ -332,5 +333,37 @@ mod tests {
         assert_eq!(lines.len(), 1); // only Timer produces update lines
         let pairs = component_state_field_pairs(&components);
         assert_eq!(pairs.len(), 1); // only DataSource produces state fields
+    }
+
+    #[test]
+    fn state_machine_update_line_is_documented_stub() {
+        let comp = DesignComponent {
+            id: Uuid::new_v4(),
+            kind: ComponentKind::StateMachine,
+            name: "flow".to_owned(),
+            interval_ms: None,
+            handler: "advance".to_owned(),
+        };
+        let lines = component_update_lines(&[comp]);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("StateMachine"));
+        assert!(lines[0].contains("design-time MVP"));
+        assert!(lines[0].contains("advance"));
+    }
+
+    #[test]
+    fn http_request_update_line_is_documented_stub() {
+        let comp = DesignComponent {
+            id: Uuid::new_v4(),
+            kind: ComponentKind::HttpRequest,
+            name: "api".to_owned(),
+            interval_ms: None,
+            handler: "fetch_api".to_owned(),
+        };
+        let lines = component_update_lines(&[comp]);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("HttpRequest"));
+        assert!(lines[0].contains("design-time MVP"));
+        assert!(lines[0].contains("fetch_api"));
     }
 }

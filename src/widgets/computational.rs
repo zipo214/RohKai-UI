@@ -54,6 +54,7 @@ pub fn chart_default() -> WidgetInstance {
             label: String::from("Chart"),
             ..Default::default()
         },
+        state_binding: Some(String::from("chart_values")),
         ..Default::default()
     }
 }

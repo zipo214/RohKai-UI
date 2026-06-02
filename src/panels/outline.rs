@@ -20,10 +20,9 @@ use uuid::Uuid;
 pub enum OutlineAction {
     Select(Uuid),
     AddToSelection(Uuid),
-    /// Move widget at `from_idx` to `to_idx` in `tree.widgets`.
+    /// Move widget to `to_idx` in `tree.widgets`.
     ReorderTo {
         id: Uuid,
-        from_idx: usize,
         to_idx: usize,
     },
     /// Center canvas viewport on this widget.
@@ -145,7 +144,6 @@ pub fn show_content(
             if to_idx != drag.from_idx {
                 action = OutlineAction::ReorderTo {
                     id: dragged_id,
-                    from_idx: drag.from_idx,
                     to_idx,
                 };
             }

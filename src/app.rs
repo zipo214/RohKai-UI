@@ -18,6 +18,15 @@ struct PendingSvgImport {
     svg_text: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LeftPanelTab {
+    Palette,
+    Properties,
+    Layers,
+    Components,
+    Templates,
+}
+
 // ---------------------------------------------------------------------------
 // RohKaiApp state sub-structs
 // ---------------------------------------------------------------------------
@@ -62,6 +71,8 @@ pub struct SessionState {
     pub selected_project_file: Option<String>,
     /// Selected design-time component in the tray, if any.
     pub selected_component: Option<Uuid>,
+    /// Active section in the compact left rail.
+    pub left_panel_tab: LeftPanelTab,
     /// Whether preview mode is active (F5 toggle).
     pub preview_mode: bool,
     /// Live runtime values for preview mode widgets.
@@ -96,6 +107,7 @@ impl Default for SessionState {
             project_tree_open: false,
             selected_project_file: None,
             selected_component: None,
+            left_panel_tab: LeftPanelTab::Palette,
             preview_mode: false,
             preview_state: crate::canvas::preview::PreviewState::default(),
             show_ownership: false,
@@ -1409,7 +1421,8 @@ impl eframe::App for RohKaiApp {
             self.session.canvas_settings.show_rulers = !self.session.canvas_settings.show_rulers;
         }
         if ctrl_l {
-            self.session.show_outline = !self.session.show_outline;
+            self.session.left_panel_tab = LeftPanelTab::Layers;
+            self.session.show_outline = true;
         }
         if f5 {
             self.session.preview_mode = !self.session.preview_mode;
@@ -1982,13 +1995,13 @@ impl eframe::App for RohKaiApp {
         let mut outline_action = crate::panels::outline::OutlineAction::None;
         let mut tray_action = crate::panels::component_tray::TrayAction::None;
         let preview_mode = self.session.preview_mode;
-        let show_outline = self.session.show_outline;
         let selected_component = self.session.selected_component;
 
         let (palette_click, palette_drag, tmpl_action, props_action) =
             egui::SidePanel::left("left_panel")
                 .min_width(if left_full { 160.0 } else { 28.0 })
-                .max_width(if left_full { f32::INFINITY } else { 28.0 })
+                .default_width(if left_full { 280.0 } else { 28.0 })
+                .max_width(if left_full { 340.0 } else { 28.0 })
                 .show(ctx, |ui| {
                     if !left_full {
                         ui.centered_and_justified(|ui| {
@@ -2031,27 +2044,62 @@ impl eframe::App for RohKaiApp {
                         );
                     }
 
-                    let (palette_click, palette_drag) =
-                        crate::panels::palette::show_content(ui, &self.descriptors.widgets);
-                    ui.add_space(4.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.selectable_value(
+                            &mut self.session.left_panel_tab,
+                            LeftPanelTab::Palette,
+                            "Palette",
+                        );
+                        ui.selectable_value(
+                            &mut self.session.left_panel_tab,
+                            LeftPanelTab::Properties,
+                            "Props",
+                        );
+                        ui.selectable_value(
+                            &mut self.session.left_panel_tab,
+                            LeftPanelTab::Layers,
+                            "Layers",
+                        );
+                        ui.selectable_value(
+                            &mut self.session.left_panel_tab,
+                            LeftPanelTab::Components,
+                            "Components",
+                        );
+                        ui.selectable_value(
+                            &mut self.session.left_panel_tab,
+                            LeftPanelTab::Templates,
+                            "Templates",
+                        );
+                    });
+                    ui.separator();
 
-                    let shift_held = ui.input(|i| i.modifiers.shift);
-                    let code_pending = matches!(
-                        self.code.status,
-                        crate::panels::code_preview::CodeStatus::Pending
-                    );
+                    let mut palette_click = None;
+                    let mut palette_drag = None;
                     let mut props_action = crate::panels::properties::PropertiesAction::None;
-                    egui::CollapsingHeader::new("Properties")
-                        .default_open(true)
-                        .show(ui, |ui| {
+                    let mut tmpl_action = crate::panels::templates::TemplateAction::None;
+
+                    match self.session.left_panel_tab {
+                        LeftPanelTab::Palette => {
+                            ui.label(egui::RichText::new("Palette").strong());
+                            ui.add_space(2.0);
+                            (palette_click, palette_drag) =
+                                crate::panels::palette::show_content(ui, &self.descriptors.widgets);
+                        }
+                        LeftPanelTab::Properties => {
+                            let shift_held = ui.input(|i| i.modifiers.shift);
+                            let code_pending = matches!(
+                                self.code.status,
+                                crate::panels::code_preview::CodeStatus::Pending
+                            );
                             if code_pending {
                                 ui.label(
                                     egui::RichText::new(
-                                        "⚠ Code has pending edits — property changes will reset",
+                                        "Code has pending edits - property changes will reset",
                                     )
                                     .small()
                                     .color(egui::Color32::from_rgb(234, 179, 8)),
                                 );
+                                ui.separator();
                             }
                             props_action = crate::panels::properties::show_content(
                                 ui,
@@ -2060,50 +2108,32 @@ impl eframe::App for RohKaiApp {
                                 shift_held,
                                 &self.descriptors.widgets,
                             );
-                        });
-
-                    ui.add_space(4.0);
-                    ui.separator();
-
-                    let mut tmpl_action = crate::panels::templates::TemplateAction::None;
-                    egui::CollapsingHeader::new("Templates")
-                        .default_open(true)
-                        .show(ui, |ui| {
-                            tmpl_action = crate::panels::templates::show(
+                        }
+                        LeftPanelTab::Layers => {
+                            ui.label(egui::RichText::new("Layers").strong());
+                            ui.add_space(2.0);
+                            outline_action = crate::panels::outline::show_content(
                                 ui,
-                                &mut self.messages.template_message,
+                                &self.project.ui_tree,
+                                &self.session.selected,
+                                ctrl_held_inner,
+                                false,
                             );
-                        });
-
-                    // Layers / outline panel (toggleable via Ctrl+L).
-                    if show_outline {
-                        ui.add_space(4.0);
-                        ui.separator();
-                        egui::CollapsingHeader::new("Layers  [Ctrl+L]")
-                            .default_open(true)
-                            .show(ui, |ui| {
-                                outline_action = crate::panels::outline::show_content(
-                                    ui,
-                                    &self.project.ui_tree,
-                                    &self.session.selected,
-                                    ctrl_held_inner,
-                                    false,
+                        }
+                        LeftPanelTab::Components => {
+                            ui.label(egui::RichText::new("Components").strong());
+                            if self.project.ui_tree.app_props.components.is_empty() {
+                                ui.label(
+                                    egui::RichText::new("No components yet. Add one below.")
+                                        .small()
+                                        .weak(),
                                 );
-                            });
-                    }
-
-                    // Component tray — design-time non-visual components.
-                    ui.add_space(4.0);
-                    ui.separator();
-                    egui::CollapsingHeader::new("Components")
-                        .default_open(true)
-                        .show(ui, |ui| {
+                            }
                             tray_action = crate::panels::component_tray::show_tray(
                                 ui,
                                 &self.project.ui_tree.app_props.components,
                                 selected_component,
                             );
-                            // Config editor for the selected component
                             if let Some(sel) = selected_component {
                                 if let Some(comp) = self
                                     .project
@@ -2117,7 +2147,16 @@ impl eframe::App for RohKaiApp {
                                     crate::panels::component_tray::show_config(ui, comp);
                                 }
                             }
-                        });
+                        }
+                        LeftPanelTab::Templates => {
+                            ui.label(egui::RichText::new("Templates").strong());
+                            ui.add_space(2.0);
+                            tmpl_action = crate::panels::templates::show(
+                                ui,
+                                &mut self.messages.template_message,
+                            );
+                        }
+                    }
 
                     (palette_click, palette_drag, tmpl_action, props_action)
                 })
@@ -2150,23 +2189,8 @@ impl eframe::App for RohKaiApp {
                     self.session.selected.push(id);
                 }
             }
-            crate::panels::outline::OutlineAction::ReorderTo {
-                id,
-                from_idx,
-                to_idx,
-            } => {
-                // Move widget from from_idx to to_idx via repeated swaps.
-                let n = self.project.ui_tree.widgets.len();
-                if from_idx < n && to_idx < n {
-                    let step: isize = if to_idx > from_idx { 1 } else { -1 };
-                    let mut cur = from_idx;
-                    while cur != to_idx {
-                        let next = (cur as isize + step) as usize;
-                        self.project.ui_tree.widgets.swap(cur, next);
-                        cur = next;
-                    }
-                    let _ = id; // id is used for identification above
-                }
+            crate::panels::outline::OutlineAction::ReorderTo { id, to_idx } => {
+                self.project.ui_tree.move_to_index(id, to_idx);
             }
             crate::panels::outline::OutlineAction::CenterOn(id) => {
                 // Adjust pan so the widget is centred in the canvas panel.

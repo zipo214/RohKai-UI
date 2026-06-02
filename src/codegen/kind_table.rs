@@ -26,7 +26,6 @@ pub fn state_info(kind: &WidgetKind) -> Option<KindInfo> {
         | WidgetKind::ToolButton
         | WidgetKind::CommandLinkButton
         | WidgetKind::DialogButtonBox
-        | WidgetKind::Chart
         | WidgetKind::Table
         | WidgetKind::ListView
         | WidgetKind::TreeView
@@ -53,6 +52,12 @@ pub fn state_info(kind: &WidgetKind) -> Option<KindInfo> {
         | WidgetKind::MathLabel => Some(KindInfo {
             rust_type: "f32",
             default_expr: "0.0",
+        }),
+
+        // Vec<f32>-state widgets
+        WidgetKind::Chart => Some(KindInfo {
+            rust_type: "Vec<f32>",
+            default_expr: "vec![0.2, 0.5, 0.8, 0.4]",
         }),
 
         // bool-state widgets

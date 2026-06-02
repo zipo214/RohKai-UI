@@ -515,10 +515,12 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
             }
             WidgetKind::MathLabel => {
                 let line = match binding {
-                    Some(b) => format!(
-                        "        ui.label(format!(\"{} = {{:.2}}\", self.{b}));",
-                        w.props.label.replace('"', "")
-                    ),
+                    Some(b) => {
+                        let label_lit = string_literal(&w.props.label);
+                        format!(
+                            "        ui.label(format!(\"{{}} = {{:.2}}\", {label_lit}, self.{b}));"
+                        )
+                    }
                     None => format!("        // MathLabel {label_lit}: set a valid Binding"),
                 };
                 lines.push((Some(w.id), line));
@@ -536,13 +538,13 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                 lines.push((Some(w.id), line));
             }
             WidgetKind::Chart => {
-                lines.push((
-                    Some(w.id),
-                    format!(
-                        "        // Chart '{}': bind a Vec<f32> and paint bars/lines via ui.painter()",
-                        w.props.label
+                let line = match binding {
+                    Some(b) => chart_preview_block(&format!("self.{b}"), w.rect.w, w.rect.h, 8),
+                    None => format!(
+                        "        // Chart {label_lit}: set a Vec<f32> Binding for painter output"
                     ),
-                ));
+                };
+                lines.push((Some(w.id), line));
             }
             WidgetKind::Table => {
                 let mut s = format!(
@@ -671,6 +673,33 @@ fn rich_text_expr(label_lit: &str, font_size: Option<f32>, fg_color: Option<&str
         (None, Some(col)) => format!("egui::RichText::new({label_lit}).color({col})"),
         (None, None) => label_lit.to_owned(),
     }
+}
+
+fn chart_preview_block(binding_expr: &str, width: f32, height: f32, indent: usize) -> String {
+    let pad = " ".repeat(indent);
+    format!(
+        "{pad}let chart_size = egui::vec2({width:.1}, {height:.1});\n\
+{pad}let (chart_rect, _) = ui.allocate_exact_size(chart_size, egui::Sense::hover());\n\
+{pad}let chart_painter = ui.painter_at(chart_rect);\n\
+{pad}chart_painter.rect_stroke(chart_rect, 2.0, egui::Stroke::new(1.0, egui::Color32::from_gray(120)));\n\
+{pad}let chart_values = &{binding_expr};\n\
+{pad}if !chart_values.is_empty() {{\n\
+{pad}    let chart_max = chart_values.iter().copied().fold(0.0_f32, f32::max).max(1.0);\n\
+{pad}    let bar_w = chart_rect.width() / chart_values.len() as f32;\n\
+{pad}    for (i, value) in chart_values.iter().enumerate() {{\n\
+{pad}        let v = (*value).max(0.0) / chart_max;\n\
+{pad}        let x0 = chart_rect.left() + i as f32 * bar_w + 2.0;\n\
+{pad}        let x1 = (x0 + bar_w - 4.0).max(x0 + 1.0);\n\
+{pad}        let y1 = chart_rect.bottom() - 2.0;\n\
+{pad}        let y0 = y1 - (chart_rect.height() - 4.0) * v;\n\
+{pad}        chart_painter.rect_filled(\n\
+{pad}            egui::Rect::from_min_max(egui::pos2(x0, y0), egui::pos2(x1, y1)),\n\
+{pad}            1.0,\n\
+{pad}            egui::Color32::from_rgb(52, 211, 153),\n\
+{pad}        );\n\
+{pad}    }}\n\
+{pad}}}"
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -838,7 +867,7 @@ fn emit_child_lines(
         }
         WidgetKind::MathLabel => match binding {
             Some(b) => format!(
-                "            ui.put({rect_expr}, egui::Label::new(format!(\"{{:.2}}\", self.{b})));"
+                "            ui.put({rect_expr}, egui::Label::new(format!(\"{{}} = {{:.2}}\", {label}, self.{b})));"
             ),
             None => format!("            // MathLabel {label}: set a valid Binding"),
         },
@@ -970,11 +999,25 @@ mod tests {
     #[test]
     fn math_label_emits_bound_format() {
         let g = emit_joined(WidgetKind::MathLabel, |w| {
-            w.props.label = "Total".into();
+            w.props.label = "A {quoted} \"Total\"".into();
             w.state_binding = Some("total".into());
         });
-        assert!(g.contains("format!"));
+        assert!(g.contains("format!(\"{} = {:.2}\""));
+        assert!(g.contains("\"A {quoted} \\\"Total\\\"\""));
         assert!(g.contains("self.total"));
+    }
+
+    #[test]
+    fn chart_emits_bound_painter_code() {
+        let g = emit_joined(WidgetKind::Chart, |w| {
+            w.rect.w = 180.0;
+            w.rect.h = 90.0;
+            w.state_binding = Some("values".into());
+        });
+        assert!(g.contains("let chart_values = &self.values"));
+        assert!(g.contains("chart_painter.rect_filled"));
+        assert!(g.contains("egui::vec2(180.0, 90.0)"));
+        assert!(!g.contains("bind a Vec<f32> and paint"));
     }
 
     #[test]

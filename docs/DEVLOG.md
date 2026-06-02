@@ -2,6 +2,167 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-02 — Remaining Roadmap Item Evaluation
+
+### Docs Reviewed Before Editing
+- `scripts/preflight-context.ps1` output
+- `docs/ROADMAP.md`
+- `docs/feature-evaluation/README.md`
+- latest `docs/CODE_COOP.md`
+
+### Changes Made
+- Added `docs/feature-evaluation/remaining-roadmap-items.md`.
+- Updated feature-evaluation README, Code Index, and Code CoOp to reference it.
+- Covered unchecked roadmap items with current implementation contracts,
+  insufficient existing surface, desired closure contracts, and closure criteria.
+
+### Findings
+- The largest planned gaps are Visual Widget Maker, SVG text/import maturity,
+  Formula Widget, WASM export, DB/data integration, and Own Renderer.
+- Several unchecked items have nearby MVPs that must not be confused with
+  closure: MathLabel vs Formula Widget, static views vs model/data views,
+  Guided Descriptor Builder vs Visual Widget Maker, SVG source preservation vs
+  robust `tspan`/report UI.
+- Roadmap has duplicate/stale SVG renderer checklist entries: Stage 9 marks
+  scene/display-list IR and golden harness complete while Stage 7.x still has
+  similar unchecked entries.
+
+### Verification
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1` — passed.
+- `cargo fmt --check` — passed.
+- `cargo check` — passed.
+
+### Risks / Follow-ups
+- Roadmap reconciliation is recommended before another agent implements SVG
+  renderer tasks, otherwise they may redo completed work or close future work
+  incorrectly.
+
+## 2026-06-02 — Stage 11 Rust-Centric Feature Evaluation
+
+### Docs Reviewed Before Editing
+- `scripts/preflight-context.ps1` output
+- `docs/STAGE11_PLAN.md`
+- `docs/ROADMAP.md`
+- latest `docs/CODE_COOP.md`
+- `docs/feature-evaluation/codegen-lazare-export.md`
+
+### Code Reviewed
+- `src/canvas/overlays.rs`
+- `src/codegen/rust_wiring.rs`
+- `src/codegen/export.rs`
+- `src/panels/rust_wiring.rs`
+- `src/panels/macro_palette.rs`
+- `src/panels/properties.rs`
+- `src/project/schema.rs`
+- Stage 11 integration in `src/app.rs`
+
+### Changes Made
+- Added `docs/feature-evaluation/rust-centric-visual-features.md`.
+- Updated `docs/feature-evaluation/README.md` and `docs/CODE_INDEX.md` to list
+  the new evaluation.
+- Updated Code CoOp with the Stage 11 evaluation summary.
+
+### Findings
+- Ownership overlay is a usable read-only feature because it derives from
+  `field_collector`.
+- Error-flow is a functional MVP: signatures/call sites change, but there is no
+  true propagation graph or UI error destination.
+- Channels and iterator pipelines are useful code-generation MVPs, but not
+  visually connected or type-validated systems.
+- Trait binding is raw Rust text insertion, not semantic trait binding.
+- Macro palette appends snippets to the code buffer, but is not cursor- or
+  handler-aware.
+- Async task wiring is the largest overclaim: current generated async code emits
+  a `std::thread::spawn` TODO block and does not call the handler or return
+  results through a channel.
+
+### Verification
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1` — passed.
+- `cargo fmt --check` — passed.
+- `cargo check` — passed.
+
+### Risks / Follow-ups
+- Stage 11 should not be treated as competitor-depth Rust visual programming
+  until generated-project compile fixtures, validation, runtime task/channel
+  behavior, and visual flow graphs exist.
+
+## 2026-06-02 — Feature Evaluation Documentation Set
+
+### Docs Reviewed Before Editing
+- `scripts/preflight-context.ps1` output
+- `docs/CODE_INDEX.md`
+- `docs/ROADMAP.md`
+- latest `docs/CODE_COOP.md`
+
+### Changes Made
+- Created `docs/feature-evaluation/`.
+- Added a shared feature-depth model covering Planned, Surface, Functional MVP,
+  Usable Product Feature, Competitive, and Top-Class levels.
+- Added area evaluations for:
+  - app shell and navigation
+  - canvas authoring
+  - widgets and components
+  - codegen, Lazare, and export
+  - SVG import and renderer
+  - custom widget system
+  - project infrastructure
+  - preferences, theming, and platform
+  - testing and quality gates
+- Updated Code Index and Code CoOp so future agents can find the new evaluation
+  docs without loading them during every preflight.
+
+### Verification
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1` — passed.
+- `cargo fmt --check` — passed.
+- `cargo check` — passed.
+
+### Risks / Follow-ups
+- These are qualitative evaluation docs, not executable tests. The next useful
+  step is a machine-readable feature-depth manifest that maps feature claims to
+  required evidence.
+
+## 2026-06-02 — Stage 10/14 Depth Remediation And Parity Audit
+
+### Docs Reviewed Before Editing
+- `scripts/preflight-context.ps1` output
+- `AGENTS.md` rules from session context
+- `docs/CODE_COOP.md`, `docs/ROADMAP.md`, `docs/CODE_INDEX.md`
+- `project-model` skill for `UiTree` mutation discipline
+- Relevant code: `src/codegen/export.rs`, `src/codegen/egui_emitter.rs`,
+  `src/codegen/kind_table.rs`, `src/widgets/computational.rs`,
+  `src/project/ui_tree.rs`, `src/panels/outline.rs`, `src/panels/component_tray.rs`,
+  `src/app.rs`
+
+### Changes Made
+- Fixed FilePicker export depth: generated projects that use `FilePicker` now
+  include `rfd = "0.14"` in `Cargo.toml`.
+- Fixed MathLabel codegen correctness: labels are passed as escaped Rust string
+  values into `format!`, so braces and quotes cannot break generated Rust.
+- Upgraded Chart from comment-only codegen to a minimal egui painter bar chart
+  bound to `Vec<f32>` state; default Chart instances bind `chart_values`.
+- Added `UiTree::move_to_index()` and routed outline drag reorder through it
+  instead of direct `widgets.swap`.
+- Split the left rail into bounded tabs: Palette, Props, Layers, Components,
+  Templates. `Ctrl+L` now opens the Layers tab.
+- Reworded Timer/StateMachine/HttpRequest generated comments and tests as
+  design-time MVP stubs rather than claiming runtime dispatch.
+- Updated Roadmap, Code CoOp, and Code Index with Feature Depth Status:
+  Full / Functional MVP / Design-time MVP / Planned.
+
+### Verification
+- `cargo check` — passed.
+- `cargo test` — 116/116 passed.
+- `cargo clippy -- -D warnings` — passed.
+
+### Risks / Follow-ups
+- Chart is now real but intentionally minimal: no axes, legends, multiple series,
+  tooltips, scaling modes, or editing workflow.
+- MathLabel is still a computed f32 label, not a formula widget.
+- Table/ListView/TreeView remain static option-backed widgets; model-bound data
+  views belong in future data integration work.
+- Timer/StateMachine/HttpRequest still need true runtime engines before they can
+  be called competitor-depth components.
+
 ## 2026-05-26 — Comprehensive Code Review & Rayon Integration
 
 ### Docs Reviewed Before Editing
