@@ -458,15 +458,22 @@ requiring schema changes.
 
 ---
 
-## Stage 14 — Project Infrastructure
-- [ ] Project tree panel — shows all files in the exported project structure
-- [ ] Click a file to view/edit its generated content
-- [ ] Add non-generated files to project (assets, configs)
-- [ ] Assets folder management — images, fonts, data files referenced in generated code by path
-- [ ] Help system — ? button, F1 shortcut, in-app keyboard shortcut reference panel
-- [ ] Interactive sandbox mode — F5 toggle to preview generated app behavior without exporting
-- [ ] Full undo/redo stack — Vec<UiTreeSnapshot>, 50 steps, Ctrl+Z / Ctrl+Y
-- [ ] Widget hierarchy/layers panel — tree view of UiTree, click to select, drag to reorder
+## Stage 14 — Project Infrastructure ✅
+- [x] Project tree panel — `src/panels/project_tree.rs`; File → Project Files…;
+      lists generated files from `export::project_files()` (single source of truth)
+- [x] Click a file to view/edit its generated content — read-only code viewer pane
+      (right side of the project tree window)
+- [x] Add non-generated files to project (assets, configs) — asset registry with
+      rfd file picker; `AppProps.assets: Vec<AssetEntry>`
+- [x] Assets folder management — `AssetEntry`/`AssetKind` (Image/Font/Data/Other);
+      `assets/MANIFEST.txt` emitted on export listing referenced files
+- [x] Help system — done in Stage 8.5 (`src/panels/shortcuts.rs`, F1 / `?` button)
+- [x] Interactive sandbox mode — done in Stage 8.5 (`src/canvas/preview.rs`, F5 toggle)
+- [x] Full undo/redo stack — `src/project/undo.rs`; serialized UiTree snapshots,
+      50-step cap, Ctrl+Z / Ctrl+Y (and Ctrl+Shift+Z); Edit menu; drag-coalescing
+      commit boundaries
+- [x] Widget hierarchy/layers panel — done in Stage 8.5 (`src/panels/outline.rs`,
+      Ctrl+L, click-select, drag-reorder z-order)
 
 ---
 

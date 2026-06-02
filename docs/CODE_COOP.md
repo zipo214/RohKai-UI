@@ -7,6 +7,22 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-05-28 — Claude Stage 14 COMPLETE (out of order, per user goal)
+
+On `dev`, executed Stage 14 (Project Infrastructure) ahead of 11–13 by user
+request. Three items were already satisfied by Stage 8.5 (Help system →
+shortcuts.rs, Interactive sandbox → preview.rs F5, Widget hierarchy → outline.rs
+Ctrl+L) and are now ticked. New work this session: (1) Undo/redo —
+`src/project/undo.rs`, serialized UiTree snapshots, 50-step cap, Ctrl+Z/Ctrl+Y/
+Ctrl+Shift+Z, Edit menu, commit boundaries recorded each frame when pointer is up
+(coalesces drags); `io::deserialize` extracted for restore. (2) Project tree +
+file viewer — `src/panels/project_tree.rs`, File → Project Files…, reads
+`export::project_files()` (newly extracted as the single source of truth for disk
+export AND viewer). (3) Asset registry — `AppProps.assets: Vec<AssetEntry>`,
+`AssetKind`, rfd picker add/remove, `assets/MANIFEST.txt` on export. 96/96 tests,
+zero warnings. NOTE: Stages 11 (Rust-Centric Visual), 12 (Platform/WASM), 13
+(Data/Integration) still open — user said "we will come back to the others."
+
 ## 2026-05-28 — Claude Stage 10 COMPLETE
 
 On `dev`, Stage 10 (Technical & Computational Widgets) done. 11 new WidgetKinds:
