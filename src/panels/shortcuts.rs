@@ -56,6 +56,10 @@ pub fn show(ctx: &egui::Context, open: &mut bool) {
                 section(ui, "Grid Snap");
                 row(ui, "G", "Toggle grid snap on / off");
 
+                section(ui, "Edit");
+                row(ui, "Ctrl+Z", "Undo");
+                row(ui, "Ctrl+Y  /  Ctrl+Shift+Z", "Redo");
+
                 section(ui, "Grouping");
                 row(ui, "Ctrl+G", "Group 2+ selected widgets into a Frame");
                 row(ui, "Ctrl+Shift+G", "Ungroup selected Frame");

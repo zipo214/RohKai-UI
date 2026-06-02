@@ -152,6 +152,9 @@ pub struct RohKaiApp {
     base_pixels_per_point: f32,
     dirty_cache: bool,
     dirty_cache_checked_at: f64,
+    undo: crate::project::undo::UndoStack,
+    /// Suppresses undo recording for the frame after an undo/redo restore.
+    undo_suppress_record: bool,
 }
 
 impl RohKaiApp {
@@ -199,6 +202,8 @@ impl RohKaiApp {
             base_pixels_per_point,
             dirty_cache: false,
             dirty_cache_checked_at: 0.0,
+            undo: crate::project::undo::UndoStack::new(),
+            undo_suppress_record: false,
         }
     }
 
@@ -256,6 +261,42 @@ impl RohKaiApp {
         self.session.highlighted_code_id = None;
         self.dirty_cache = false;
         self.dirty_cache_checked_at = 0.0;
+        self.reset_undo_baseline();
+    }
+
+    /// Re-seed the undo stack to the current tree, clearing history.
+    fn reset_undo_baseline(&mut self) {
+        let json = crate::project::io::serialize(&self.project.ui_tree).unwrap_or_default();
+        self.undo.reset(json);
+        self.undo_suppress_record = true;
+    }
+
+    /// Apply a restored snapshot (from undo/redo) to the live tree.
+    fn apply_undo_snapshot(&mut self, json: String) {
+        match crate::project::io::deserialize(&json) {
+            Ok(tree) => {
+                self.project.ui_tree = tree;
+                // Drop selections that no longer exist.
+                let live: std::collections::HashSet<Uuid> =
+                    self.project.ui_tree.widgets.iter().map(|w| w.id).collect();
+                self.session.selected.retain(|id| live.contains(id));
+                self.dirty_cache_checked_at = 0.0;
+                self.undo_suppress_record = true;
+            }
+            Err(e) => self.messages.last_error = Some(format!("Undo restore failed: {e}")),
+        }
+    }
+
+    fn cmd_undo(&mut self) {
+        if let Some(json) = self.undo.undo() {
+            self.apply_undo_snapshot(json);
+        }
+    }
+
+    fn cmd_redo(&mut self) {
+        if let Some(json) = self.undo.redo() {
+            self.apply_undo_snapshot(json);
+        }
     }
 
     fn cmd_open(&mut self) {
@@ -274,6 +315,7 @@ impl RohKaiApp {
                     self.session.highlighted_code_id = None;
                     self.dirty_cache = false;
                     self.dirty_cache_checked_at = 0.0;
+                    self.reset_undo_baseline();
                 }
                 Err(e) => self.messages.last_error = Some(e),
             }
@@ -1292,6 +1334,17 @@ impl eframe::App for RohKaiApp {
         let ctrl_l = ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::L));
         let f5 = ctx.input(|i| i.key_pressed(Key::F5));
         let f1 = ctx.input(|i| i.key_pressed(Key::F1));
+        // Undo: Ctrl+Z. Redo: Ctrl+Y or Ctrl+Shift+Z.
+        let ctrl_z = ctx.input(|i| i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(Key::Z));
+        let ctrl_redo = ctx.input(|i| {
+            i.modifiers.ctrl
+                && (i.key_pressed(Key::Y) || (i.modifiers.shift && i.key_pressed(Key::Z)))
+        });
+        if ctrl_z {
+            self.cmd_undo();
+        } else if ctrl_redo {
+            self.cmd_redo();
+        }
         if ctrl_r {
             self.session.canvas_settings.show_rulers = !self.session.canvas_settings.show_rulers;
         }
@@ -1470,6 +1523,30 @@ impl eframe::App for RohKaiApp {
                     if ui.button("Preferences…").clicked() {
                         self.prefs.draft = self.prefs.user_settings.clone();
                         self.prefs.open = true;
+                        ui.close_menu();
+                    }
+                });
+
+                // Edit menu
+                ui.menu_button("Edit", |ui| {
+                    if ui
+                        .add_enabled(
+                            self.undo.can_undo(),
+                            egui::Button::new("Undo").shortcut_text("Ctrl+Z"),
+                        )
+                        .clicked()
+                    {
+                        self.cmd_undo();
+                        ui.close_menu();
+                    }
+                    if ui
+                        .add_enabled(
+                            self.undo.can_redo(),
+                            egui::Button::new("Redo").shortcut_text("Ctrl+Y"),
+                        )
+                        .clicked()
+                    {
+                        self.cmd_redo();
                         ui.close_menu();
                     }
                 });
@@ -2205,5 +2282,26 @@ impl eframe::App for RohKaiApp {
         self.show_widget_builder_window(ctx);
         self.show_theme_window(ctx);
         crate::panels::shortcuts::show(ctx, &mut self.session.shortcuts_open);
+
+        // ---------------------------------------------------------------
+        // Undo/redo commit boundary
+        //
+        // Record a snapshot only when the pointer is up (so an in-progress
+        // drag/resize coalesces into ONE undo step on release) and we are not
+        // restoring from undo this frame.  `record()` de-dups identical states,
+        // so idle frames are free.  Skipped in preview mode (no edits there).
+        // ---------------------------------------------------------------
+        if self.undo_suppress_record {
+            // Re-seed `current` to the restored/baseline tree without history churn.
+            let json = crate::project::io::serialize(&self.project.ui_tree).unwrap_or_default();
+            self.undo.sync_current(json);
+            self.undo_suppress_record = false;
+        } else if !self.session.preview_mode {
+            let pointer_down = ctx.input(|i| i.pointer.any_down());
+            if !pointer_down {
+                let json = crate::project::io::serialize(&self.project.ui_tree).unwrap_or_default();
+                self.undo.record(json);
+            }
+        }
     }
 }
