@@ -151,19 +151,52 @@ fn gen_app_rs(tree: &UiTree) -> String {
     s.push_str("        }\n    }\n}\n\n");
 
     // ExportedApp
+    let channel_pairs =
+        crate::codegen::rust_wiring::channel_field_pairs(&tree.app_props.rust_wiring);
     s.push_str("pub struct ExportedApp {\n    pub state: AppState,\n");
     if has_images {
         s.push_str("    svg_textures: HashMap<&'static str, egui::TextureHandle>,\n");
     }
-    s.push_str("}\n\n");
-    s.push_str("impl Default for ExportedApp {\n    fn default() -> Self {\n        Self {\n            state: AppState::default(),\n");
-    if has_images {
-        s.push_str("            svg_textures: HashMap::new(),\n");
+    for (decl, _) in &channel_pairs {
+        s.push_str(decl);
+        s.push('\n');
     }
-    s.push_str("        }\n    }\n}\n\n");
+    s.push_str("}\n\n");
+    // ExportedApp::default — channels need explicit construction (not Default-able),
+    // so when channels exist we build them in a `fn default()` body.
+    if channel_pairs.is_empty() {
+        s.push_str("impl Default for ExportedApp {\n    fn default() -> Self {\n        Self {\n            state: AppState::default(),\n");
+        if has_images {
+            s.push_str("            svg_textures: HashMap::new(),\n");
+        }
+        s.push_str("        }\n    }\n}\n\n");
+    } else {
+        s.push_str("impl Default for ExportedApp {\n    fn default() -> Self {\n");
+        for (_, init) in &channel_pairs {
+            if !init.is_empty() {
+                s.push_str(init);
+                s.push('\n');
+            }
+        }
+        s.push_str("        Self {\n            state: AppState::default(),\n");
+        if has_images {
+            s.push_str("            svg_textures: HashMap::new(),\n");
+        }
+        for ch in &tree.app_props.rust_wiring.channels {
+            let name = ch
+                .name
+                .chars()
+                .map(|c| if c.is_alphanumeric() { c } else { '_' })
+                .collect::<String>()
+                .to_lowercase();
+            s.push_str(&format!("            {name}_tx,\n            {name}_rx,\n"));
+        }
+        s.push_str("        }\n    }\n}\n\n");
+    }
 
-    // Collect unique handler names
-    let mut handler_names: Vec<String> = Vec::new();
+    // Collect unique handler names, capturing each handler's result mode
+    // (first widget using the name wins, mirroring the call-site form).
+    let mut handler_names: Vec<(String, crate::project::schema::HandlerResult)> = Vec::new();
     let mut seen_handlers: HashSet<String> = HashSet::new();
     for w in &tree.widgets {
         let handler = match &w.kind {
@@ -172,7 +205,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
         };
         if let Some(h) = handler {
             if seen_handlers.insert(h.to_owned()) {
-                handler_names.push(h.to_owned());
+                handler_names.push((h.to_owned(), w.handler_result.clone()));
             }
         }
     }
@@ -241,9 +274,13 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 );
                 let with_tip = export_tip(base, tip.as_deref());
                 if let Some(h) = resolve_export_handler_click(w) {
-                    format!(
-                        "                if {with_tip}.clicked() {{\n                    self.{h}();\n                }}\n"
-                    )
+                    let call = crate::codegen::rust_wiring::handler_call(
+                        h,
+                        w.async_handler,
+                        &w.handler_result,
+                        "                    ",
+                    );
+                    format!("                if {with_tip}.clicked() {{\n{call}\n                }}\n")
                 } else {
                     format!("                if {with_tip}.clicked() {{}}\n")
                 }
@@ -674,13 +711,18 @@ fn gen_app_rs(tree: &UiTree) -> String {
     }
     s.push_str("    }\n}\n");
 
-    // Event handler stubs and Image helpers
-    if !handler_names.is_empty() || has_images {
+    // Iterator-pipeline methods + handler stubs + Image helpers
+    let iter_methods =
+        crate::codegen::rust_wiring::iterator_methods(&tree.app_props.rust_wiring, "    ");
+    if !handler_names.is_empty() || has_images || !iter_methods.is_empty() {
         s.push_str("\nimpl ExportedApp {\n");
-        for h in &handler_names {
-            s.push_str(&format!(
-                "    fn {h}(&mut self) {{\n        // TODO: implement {h}\n    }}\n"
-            ));
+        for (h, result) in &handler_names {
+            let sig = crate::codegen::rust_wiring::handler_signature(h, result);
+            let body = crate::codegen::rust_wiring::handler_stub_body(result, h);
+            s.push_str(&format!("    {sig} {{\n{body}\n    }}\n"));
+        }
+        if !iter_methods.is_empty() {
+            s.push_str(&iter_methods);
         }
         if has_images {
             s.push_str(
@@ -698,6 +740,11 @@ fn gen_app_rs(tree: &UiTree) -> String {
         }
         s.push_str("}\n");
     }
+
+    // Stage 11 — user-authored trait impls.
+    s.push_str(&crate::codegen::rust_wiring::trait_impl_blocks(
+        &tree.app_props.rust_wiring,
+    ));
 
     s
 }
@@ -1032,5 +1079,64 @@ mod tests {
         assert!(generated.contains("r\"<svg/>\""));
         assert!(!generated.contains("egui::Frame::none()"));
         assert!(!generated.contains("image_export_frame_placeholder_line"));
+    }
+
+    #[test]
+    fn async_result_button_emits_thread_and_result_stub() {
+        let tree = UiTree {
+            widgets: vec![WidgetInstance {
+                id: Uuid::nil(),
+                kind: WidgetKind::Button,
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 80.0,
+                    h: 30.0,
+                },
+                on_click: "on_save".to_owned(),
+                async_handler: true,
+                handler_result: crate::project::schema::HandlerResult::Result,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let g = gen_app_rs(&tree);
+        // call site: async wrapper
+        assert!(g.contains("std::thread::spawn"));
+        // stub signature reflects Result mode + returns Ok(())
+        assert!(g.contains("fn on_save(&mut self) -> Result<(), String>"));
+        assert!(g.contains("Ok(())"));
+    }
+
+    #[test]
+    fn rust_wiring_emits_channel_iterator_trait() {
+        use crate::project::schema::{ChannelDef, IteratorPipeline, RustWiring, TraitImpl};
+        let mut tree = UiTree::default();
+        tree.app_props.rust_wiring = RustWiring {
+            channels: vec![ChannelDef {
+                id: Uuid::nil(),
+                name: "progress".to_owned(),
+                ty: "f32".to_owned(),
+            }],
+            iterators: vec![IteratorPipeline {
+                id: Uuid::nil(),
+                name: "evens".to_owned(),
+                source: "self.state.nums".to_owned(),
+                ops: vec![crate::project::schema::IterOp::Filter(
+                    "x % 2 == 0".to_owned(),
+                )],
+            }],
+            trait_impls: vec![TraitImpl {
+                id: Uuid::nil(),
+                trait_name: "Tick".to_owned(),
+                method: "fn tick(&mut self)".to_owned(),
+                body: "// tick".to_owned(),
+            }],
+        };
+        let g = gen_app_rs(&tree);
+        assert!(g.contains("progress_tx: std::sync::mpsc::Sender<f32>"));
+        assert!(g.contains("std::sync::mpsc::channel::<f32>()"));
+        assert!(g.contains("fn evens(&self) -> Vec<_>"));
+        assert!(g.contains("impl Tick for ExportedApp"));
     }
 }

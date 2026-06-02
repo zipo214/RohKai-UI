@@ -1,6 +1,6 @@
 use crate::codegen::widget_descriptor::{DescriptorPropType, WidgetDescriptor};
 use crate::project::schema::{
-    CustomProp, CustomPropType, Orientation, TextAlign, WidgetInstance, WidgetKind,
+    CustomProp, CustomPropType, HandlerResult, Orientation, TextAlign, WidgetInstance, WidgetKind,
 };
 use crate::project::ui_tree::UiTree;
 use uuid::Uuid;
@@ -968,6 +968,57 @@ fn show_event_handler(
             let trimmed = handler.trim().to_owned();
             if let Some(w) = tree.get_mut(id) {
                 event_field_set(w, field, trimmed);
+            }
+        }
+    }
+
+    // Stage 11 — async + error-mode controls, shown when any handler is set.
+    let has_any_handler = tree
+        .get_mut(id)
+        .map(|w| {
+            !w.on_click.is_empty()
+                || !w.on_change.is_empty()
+                || !w.on_double_click.is_empty()
+                || !w.on_lost_focus.is_empty()
+                || !w.on_drag_stopped.is_empty()
+        })
+        .unwrap_or(false);
+
+    if has_any_handler {
+        // Async checkbox
+        let mut is_async = tree.get_mut(id).map(|w| w.async_handler).unwrap_or(false);
+        if ui
+            .checkbox(&mut is_async, "⚙ Run async (background thread)")
+            .on_hover_text("Wrap the handler in std::thread::spawn (no tokio)")
+            .changed()
+        {
+            if let Some(w) = tree.get_mut(id) {
+                w.async_handler = is_async;
+            }
+        }
+
+        // Error-mode dropdown
+        let mut mode = tree
+            .get_mut(id)
+            .map(|w| w.handler_result.clone())
+            .unwrap_or(HandlerResult::Plain);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Error mode").small().weak());
+            egui::ComboBox::from_id_salt(("handler_result", id))
+                .selected_text(mode.label())
+                .show_ui(ui, |ui| {
+                    for m in [
+                        HandlerResult::Plain,
+                        HandlerResult::Result,
+                        HandlerResult::Option,
+                    ] {
+                        ui.selectable_value(&mut mode, m.clone(), m.label());
+                    }
+                });
+        });
+        if let Some(w) = tree.get_mut(id) {
+            if w.handler_result != mode {
+                w.handler_result = mode;
             }
         }
     }

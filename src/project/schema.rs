@@ -92,6 +92,13 @@ pub struct AppProps {
     /// Project assets (images, fonts, data files) referenced by path.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub assets: Vec<AssetEntry>,
+    /// Stage 11 — app-wide Rust wiring (channels, iterators, trait impls).
+    #[serde(default, skip_serializing_if = "rust_wiring_is_empty")]
+    pub rust_wiring: RustWiring,
+}
+
+fn rust_wiring_is_empty(w: &RustWiring) -> bool {
+    w.channels.is_empty() && w.iterators.is_empty() && w.trait_impls.is_empty()
 }
 
 impl Default for AppProps {
@@ -109,6 +116,7 @@ impl Default for AppProps {
             show_bezel: false,
             components: Vec::new(),
             assets: Vec::new(),
+            rust_wiring: RustWiring::default(),
         }
     }
 }
@@ -152,6 +160,90 @@ pub enum AssetKind {
     Image,
     Font,
     Data,
+}
+
+// ---------------------------------------------------------------------------
+// Stage 11 — Rust-centric wiring
+// ---------------------------------------------------------------------------
+
+/// Error-handling contract for a widget's event handler.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub enum HandlerResult {
+    /// `fn h(&mut self)` — no error channel.
+    #[default]
+    Plain,
+    /// `fn h(&mut self) -> Result<(), String>` — call site logs `Err`.
+    Result,
+    /// `fn h(&mut self) -> Option<()>` — call site ignores `None`.
+    Option,
+}
+
+impl HandlerResult {
+    pub fn is_plain(&self) -> bool {
+        matches!(self, HandlerResult::Plain)
+    }
+    /// Return-type suffix for a handler signature (empty for Plain).
+    pub fn return_suffix(&self) -> &'static str {
+        match self {
+            HandlerResult::Plain => "",
+            HandlerResult::Result => " -> Result<(), String>",
+            HandlerResult::Option => " -> Option<()>",
+        }
+    }
+    pub fn label(&self) -> &'static str {
+        match self {
+            HandlerResult::Plain => "Plain",
+            HandlerResult::Result => "Result",
+            HandlerResult::Option => "Option",
+        }
+    }
+}
+
+/// App-wide Rust wiring: channels, iterator pipelines, trait impls.
+/// Persisted on `AppProps`; emitted by `codegen::rust_wiring`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RustWiring {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channels: Vec<ChannelDef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub iterators: Vec<IteratorPipeline>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trait_impls: Vec<TraitImpl>,
+}
+
+/// A named `std::sync::mpsc` channel.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChannelDef {
+    pub id: Uuid,
+    pub name: String,
+    /// Rust element type carried by the channel, e.g. `f32`, `String`.
+    pub ty: String,
+}
+
+/// A visually-built iterator pipeline that generates a method.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IteratorPipeline {
+    pub id: Uuid,
+    pub name: String,
+    /// Source expression iterated over, e.g. `self.state.items`.
+    pub source: String,
+    pub ops: Vec<IterOp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum IterOp {
+    Map(String),
+    Filter(String),
+}
+
+/// A user-authored trait implementation for the exported app.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TraitImpl {
+    pub id: Uuid,
+    pub trait_name: String,
+    /// Method signature without the trailing block, e.g. `fn run(&mut self)`.
+    pub method: String,
+    pub body: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -529,6 +621,12 @@ pub struct WidgetInstance {
     /// Legacy single handler field — kept for backward-compat with old saves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event_handler: Option<String>,
+    /// Stage 11 — run this widget's handler on a background thread (std::thread + mpsc).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub async_handler: bool,
+    /// Stage 11 — handler error-handling contract (Plain / Result / Option).
+    #[serde(default, skip_serializing_if = "HandlerResult::is_plain")]
+    pub handler_result: HandlerResult,
     /// Raw SVG source for Image widgets. Canvas preview is drawn by RohKai's
     /// native zero-dependency SVG placeholder painter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -590,6 +688,8 @@ impl Default for WidgetInstance {
             on_lost_focus: String::new(),
             on_drag_stopped: String::new(),
             event_handler: None,
+            async_handler: false,
+            handler_result: HandlerResult::Plain,
             svg_source: None,
             expand_svg_inline: false,
             descriptor_name: None,

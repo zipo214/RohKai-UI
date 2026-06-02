@@ -66,6 +66,14 @@ pub struct SessionState {
     pub preview_mode: bool,
     /// Live runtime values for preview mode widgets.
     pub preview_state: crate::canvas::preview::PreviewState,
+    /// Stage 11 — ownership overlay toggle.
+    pub show_ownership: bool,
+    /// Stage 11 — error-flow overlay toggle.
+    pub show_error_flow: bool,
+    /// Stage 11 — Rust wiring editor window open.
+    pub rust_wiring_open: bool,
+    /// Stage 11 — macro palette window open.
+    pub macro_palette_open: bool,
 }
 
 impl Default for SessionState {
@@ -90,6 +98,10 @@ impl Default for SessionState {
             selected_component: None,
             preview_mode: false,
             preview_state: crate::canvas::preview::PreviewState::default(),
+            show_ownership: false,
+            show_error_flow: false,
+            rust_wiring_open: false,
+            macro_palette_open: false,
         }
     }
 }
@@ -1703,6 +1715,42 @@ impl eframe::App for RohKaiApp {
                         ui.close_menu();
                     }
                     ui.separator();
+                    // Stage 11 — Rust-centric views
+                    let own_label = if self.session.show_ownership {
+                        "Hide Ownership Overlay"
+                    } else {
+                        "Show Ownership Overlay"
+                    };
+                    if ui.button(own_label).clicked() {
+                        self.session.show_ownership = !self.session.show_ownership;
+                        ui.close_menu();
+                    }
+                    let err_label = if self.session.show_error_flow {
+                        "Hide Error-Flow Overlay"
+                    } else {
+                        "Show Error-Flow Overlay"
+                    };
+                    if ui.button(err_label).clicked() {
+                        self.session.show_error_flow = !self.session.show_error_flow;
+                        ui.close_menu();
+                    }
+                    if ui
+                        .button("Rust Wiring…")
+                        .on_hover_text("Channels, iterator pipelines, trait impls")
+                        .clicked()
+                    {
+                        self.session.rust_wiring_open = true;
+                        ui.close_menu();
+                    }
+                    if ui
+                        .button("Macro Palette…")
+                        .on_hover_text("Insert common Rust macros into the code panel")
+                        .clicked()
+                    {
+                        self.session.macro_palette_open = true;
+                        ui.close_menu();
+                    }
+                    ui.separator();
                     if ui.button("Theme…").clicked() {
                         self.session.theme_open = true;
                         ui.close_menu();
@@ -2297,6 +2345,31 @@ impl eframe::App for RohKaiApp {
                     &ruler_ctx,
                     &self.project.ui_tree.app_props.title,
                 );
+            }
+
+            // Stage 11 — Rust-centric overlays (read-only).
+            if self.session.show_ownership || self.session.show_error_flow {
+                let origin =
+                    crate::canvas::rulers::canvas_origin(canvas_size, zoom, pan, panel_rect);
+                let painter = ui.painter_at(panel_rect);
+                if self.session.show_ownership {
+                    crate::canvas::overlays::draw_ownership(
+                        &painter,
+                        &self.project.ui_tree,
+                        origin,
+                        zoom,
+                        panel_rect,
+                    );
+                }
+                if self.session.show_error_flow {
+                    crate::canvas::overlays::draw_error_flow(
+                        &painter,
+                        &self.project.ui_tree,
+                        origin,
+                        zoom,
+                        panel_rect,
+                    );
+                }
             }
         });
 

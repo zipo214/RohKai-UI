@@ -1,4 +1,5 @@
 pub mod interaction;
+pub mod overlays;
 pub mod preview;
 pub mod rulers;
 #[cfg(test)]
