@@ -89,6 +89,9 @@ pub struct AppProps {
     /// Design-time non-visual components (timers, data sources, etc.).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub components: Vec<DesignComponent>,
+    /// Project assets (images, fonts, data files) referenced by path.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assets: Vec<AssetEntry>,
 }
 
 impl Default for AppProps {
@@ -105,6 +108,7 @@ impl Default for AppProps {
             guides: Vec::new(),
             show_bezel: false,
             components: Vec::new(),
+            assets: Vec::new(),
         }
     }
 }
@@ -126,6 +130,28 @@ pub struct DesignComponent {
     /// Handler function name emitted in codegen.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub handler: String,
+}
+
+/// A project asset reference (image, font, data file).
+/// `name` is the in-project file name under `assets/`; `source_path` is where
+/// the original lives on disk (for the manifest / future copy-on-export).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssetEntry {
+    pub id: Uuid,
+    pub name: String,
+    #[serde(default)]
+    pub source_path: String,
+    #[serde(default)]
+    pub kind: AssetKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub enum AssetKind {
+    #[default]
+    Other,
+    Image,
+    Font,
+    Data,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

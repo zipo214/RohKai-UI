@@ -56,6 +56,10 @@ pub struct SessionState {
     pub show_outline: bool,
     /// Whether the keyboard shortcut reference window is open.
     pub shortcuts_open: bool,
+    /// Whether the project files (tree + viewer) window is open.
+    pub project_tree_open: bool,
+    /// Selected file path in the project tree viewer.
+    pub selected_project_file: Option<String>,
     /// Selected design-time component in the tray, if any.
     pub selected_component: Option<Uuid>,
     /// Whether preview mode is active (F5 toggle).
@@ -81,6 +85,8 @@ impl Default for SessionState {
             lock_aspect_ratio: false,
             show_outline: true,
             shortcuts_open: false,
+            project_tree_open: false,
+            selected_project_file: None,
             selected_component: None,
             preview_mode: false,
             preview_state: crate::canvas::preview::PreviewState::default(),
@@ -1067,6 +1073,48 @@ impl RohKaiApp {
         }
     }
 
+    fn show_project_tree_window(&mut self, ctx: &egui::Context) {
+        if !self.session.project_tree_open {
+            return;
+        }
+        // Generate the in-memory project file list (same source as disk export).
+        let files = crate::codegen::export::project_files(&self.project.ui_tree);
+        let mut open = self.session.project_tree_open;
+        let action = crate::panels::project_tree::show(
+            ctx,
+            &mut open,
+            &files,
+            &self.project.ui_tree.app_props.assets,
+            &mut self.session.selected_project_file,
+        );
+        self.session.project_tree_open = open;
+
+        match action {
+            crate::panels::project_tree::ProjectTreeAction::AddAsset => {
+                if let Some(path) = rfd::FileDialog::new().pick_file() {
+                    let name = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("asset")
+                        .to_owned();
+                    let kind = crate::panels::project_tree::classify_asset(&name);
+                    self.project.ui_tree.app_props.assets.push(
+                        crate::project::schema::AssetEntry {
+                            id: Uuid::new_v4(),
+                            name,
+                            source_path: path.display().to_string(),
+                            kind,
+                        },
+                    );
+                }
+            }
+            crate::panels::project_tree::ProjectTreeAction::RemoveAsset(id) => {
+                self.project.ui_tree.app_props.assets.retain(|a| a.id != id);
+            }
+            crate::panels::project_tree::ProjectTreeAction::None => {}
+        }
+    }
+
     fn show_theme_window(&mut self, ctx: &egui::Context) {
         if !self.session.theme_open {
             return;
@@ -1465,6 +1513,14 @@ impl eframe::App for RohKaiApp {
                     ui.separator();
                     if ui.button("Export Project…").clicked() {
                         self.cmd_export();
+                        ui.close_menu();
+                    }
+                    if ui
+                        .button("Project Files…")
+                        .on_hover_text("Browse the generated project tree and manage assets")
+                        .clicked()
+                    {
+                        self.session.project_tree_open = true;
                         ui.close_menu();
                     }
                     ui.separator();
@@ -2281,6 +2337,7 @@ impl eframe::App for RohKaiApp {
         self.show_descriptor_editor_window(ctx);
         self.show_widget_builder_window(ctx);
         self.show_theme_window(ctx);
+        self.show_project_tree_window(ctx);
         crate::panels::shortcuts::show(ctx, &mut self.session.shortcuts_open);
 
         // ---------------------------------------------------------------

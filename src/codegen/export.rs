@@ -15,6 +15,23 @@ pub fn write_project(tree: &UiTree, dest: &Path) -> Result<(), String> {
     let src_dir = dest.join("src");
     fs::create_dir_all(&src_dir).map_err(|e| format!("create dirs: {e}"))?;
 
+    for (rel_path, content) in project_files(tree) {
+        let full = dest.join(&rel_path);
+        if let Some(parent) = full.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("create dirs: {e}"))?;
+        }
+        fs::write(&full, content).map_err(|e| format!("{rel_path}: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Generate the exported project as an in-memory list of
+/// `(relative_path, file_contents)` pairs — the single source of truth for both
+/// disk export (`write_project`) and the in-app project-tree viewer.
+///
+/// Asset entries declared in `AppProps.assets` are surfaced as an `assets/`
+/// manifest so the viewer and the exported project agree on referenced files.
+pub fn project_files(tree: &UiTree) -> Vec<(String, String)> {
     // Collect unique Cargo dependency lines from Custom widgets
     let mut extra_deps: Vec<String> = Vec::new();
     let mut seen_deps: HashSet<String> = HashSet::new();
@@ -26,11 +43,27 @@ pub fn write_project(tree: &UiTree, dest: &Path) -> Result<(), String> {
         }
     }
 
-    fs::write(dest.join("Cargo.toml"), gen_cargo_toml(&extra_deps))
-        .map_err(|e| format!("Cargo.toml: {e}"))?;
-    fs::write(src_dir.join("main.rs"), gen_main_rs(tree)).map_err(|e| format!("main.rs: {e}"))?;
-    fs::write(src_dir.join("app.rs"), gen_app_rs(tree)).map_err(|e| format!("app.rs: {e}"))?;
-    Ok(())
+    let mut files = vec![
+        ("Cargo.toml".to_owned(), gen_cargo_toml(&extra_deps)),
+        ("src/main.rs".to_owned(), gen_main_rs(tree)),
+        ("src/app.rs".to_owned(), gen_app_rs(tree)),
+    ];
+
+    if !tree.app_props.assets.is_empty() {
+        files.push(("assets/MANIFEST.txt".to_owned(), gen_asset_manifest(tree)));
+    }
+
+    files
+}
+
+/// Build the `assets/MANIFEST.txt` listing declared asset references.
+fn gen_asset_manifest(tree: &UiTree) -> String {
+    let mut s = String::from("# Asset manifest — files referenced by this project.\n");
+    s.push_str("# Copy the listed source files into this assets/ folder before building.\n\n");
+    for a in &tree.app_props.assets {
+        s.push_str(&format!("{}\t<- {}\n", a.name, a.source_path));
+    }
+    s
 }
 
 // ---------------------------------------------------------------------------
