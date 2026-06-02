@@ -2413,6 +2413,23 @@ impl eframe::App for RohKaiApp {
         self.show_project_tree_window(ctx);
         crate::panels::shortcuts::show(ctx, &mut self.session.shortcuts_open);
 
+        // Stage 11 — Rust wiring editor + macro palette.
+        crate::panels::rust_wiring::show(
+            ctx,
+            &mut self.session.rust_wiring_open,
+            &mut self.project.ui_tree.app_props.rust_wiring,
+        );
+        if let Some(snippet) =
+            crate::panels::macro_palette::show(ctx, &mut self.session.macro_palette_open)
+        {
+            // Append the macro snippet to the live code buffer.
+            if !self.code.buffer.ends_with('\n') && !self.code.buffer.is_empty() {
+                self.code.buffer.push('\n');
+            }
+            self.code.buffer.push_str(&snippet);
+            self.code.buffer.push('\n');
+        }
+
         // ---------------------------------------------------------------
         // Undo/redo commit boundary
         //

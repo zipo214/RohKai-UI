@@ -1,10 +1,12 @@
 pub mod code_preview;
 pub mod component_tray;
 pub mod descriptor_editor;
+pub mod macro_palette;
 pub mod outline;
 pub mod palette;
 pub mod project_tree;
 pub mod properties;
+pub mod rust_wiring;
 pub mod shortcuts;
 pub mod templates;
 pub mod widget_builder;
