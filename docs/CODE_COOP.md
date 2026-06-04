@@ -7,6 +7,21 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-04 — Codex VLayout Ownership Slice
+
+On `dev`, I started the layout-depth pass with only `VLayout`, using the existing
+`WidgetInstance.children` source-of-truth relation rather than adding a parallel
+layout model. `UiTree::attach_to_vlayout_at()` attaches/detaches children based
+on final canvas drop center, and `UiTree::reflow_vlayouts()` gives direct
+children absolute canvas rects inside the parent so existing hit-testing,
+selection, save/load, and child rendering still work. Canvas palette/template
+drops, drag release, and VLayout resize now call that model path; live codegen
+and export emit direct children inside `ui.vertical(|ui| { ... })`, and the real
+generated-project compile fixture includes a VLayout-owned child button. Still
+open: HLayout/GridLayout ownership, spacing/alignment/stretch properties,
+layout-aware spacers, parser round-trip for layout hierarchy, and deeper outline
+semantics.
+
 ## 2026-06-04 — Codex Pre-Release Reliability + SVG Maturity
 
 On `dev`, I moved the roadmap toward depth-first release closure and verified the

@@ -437,7 +437,13 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                 ));
             }
             WidgetKind::VLayout => {
-                lines.push((Some(w.id), "        ui.vertical(|_ui| {});".to_owned()));
+                lines.push((Some(w.id), "        ui.vertical(|ui| {".to_owned()));
+                for &child_id in &w.children {
+                    if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
+                        emit_layout_child_lines(child, &mut lines);
+                    }
+                }
+                lines.push((Some(w.id), "        });".to_owned()));
             }
             WidgetKind::HLayout => {
                 lines.push((Some(w.id), "        ui.horizontal(|_ui| {});".to_owned()));
@@ -924,6 +930,124 @@ fn image_child_preview_line(child: &WidgetInstance, rect_expr: &str) -> String {
     format!("            self.show_svg_image_at(ui, {rect_expr}, {key}, {src_arg});")
 }
 
+/// Emit a child owned by an egui layout container.
+///
+/// Unlike Frame children, layout children are not positioned with `ui.put`.
+/// The layout closure owns their placement order.
+fn emit_layout_child_lines(child: &WidgetInstance, lines: &mut Vec<(Option<Uuid>, String)>) {
+    let label = string_literal(&child.props.label);
+    let binding = field_binding(child.state_binding.as_deref());
+    lines.push((
+        Some(child.id),
+        format!("            // widget_{}", child.id),
+    ));
+    let line = match &child.kind {
+        WidgetKind::Button => {
+            let id = child.id.as_simple();
+            let mut s = format!(
+                "            let _btn_{id} = ui.add_sized([{:.1}, {:.1}], egui::Button::new({label}));",
+                child.rect.w, child.rect.h
+            );
+            if let Some(h) = resolve_handler_click(child) {
+                s.push_str(&format!(
+                    "\n            if _btn_{id}.clicked() {{\n                self.{h}();\n            }}"
+                ));
+            }
+            if !child.on_double_click.is_empty() {
+                let h = &child.on_double_click;
+                s.push_str(&format!(
+                    "\n            if _btn_{id}.double_clicked() {{\n                self.{h}();\n            }}"
+                ));
+            }
+            s
+        }
+        WidgetKind::Label => match binding {
+            Some(b) => format!("            ui.label(&self.{b});"),
+            None => format!("            ui.label({label});"),
+        },
+        WidgetKind::TextInput => match binding {
+            Some(b) => format!(
+                "            ui.add_sized([{:.1}, {:.1}], egui::TextEdit::singleline(&mut self.{b}));",
+                child.rect.w, child.rect.h
+            ),
+            None => format!("            // TextInput {label}: set a valid Binding"),
+        },
+        WidgetKind::TextArea => match binding {
+            Some(b) => format!(
+                "            ui.add_sized([{:.1}, {:.1}], egui::TextEdit::multiline(&mut self.{b}));",
+                child.rect.w, child.rect.h
+            ),
+            None => format!("            // TextArea {label}: set a valid Binding"),
+        },
+        WidgetKind::Slider => match binding {
+            Some(b) => format!(
+                "            ui.add_sized([{:.1}, {:.1}], egui::Slider::new(&mut self.{b}, {:.1}..={:.1}).text({label}));",
+                child.rect.w, child.rect.h, child.props.min, child.props.max
+            ),
+            None => format!("            // Slider {label}: set a valid Binding"),
+        },
+        WidgetKind::SpinBox => match binding {
+            Some(b) => format!("            ui.add(egui::DragValue::new(&mut self.{b}));"),
+            None => format!("            // SpinBox {label}: set a valid Binding"),
+        },
+        WidgetKind::Checkbox => match binding {
+            Some(b) => format!("            ui.checkbox(&mut self.{b}, {label});"),
+            None => format!("            // Checkbox {label}: set a valid Binding"),
+        },
+        WidgetKind::RadioButton => match binding {
+            Some(b) => {
+                let value = if child.props.radio_value.is_empty() {
+                    label.clone()
+                } else {
+                    string_literal(&child.props.radio_value)
+                };
+                format!("            ui.radio_value(&mut self.{b}, {value}.to_owned(), {label});")
+            }
+            None => format!("            // RadioButton {label}: set a valid Binding"),
+        },
+        WidgetKind::ComboBox => match binding {
+            Some(b) => {
+                let id = child.id.as_simple();
+                let mut s = format!(
+                    "            egui::ComboBox::from_id_salt(\"layout_combo_{id}\")\n                .selected_text(&self.{b})\n                .show_ui(ui, |ui| {{\n"
+                );
+                for option in combo_option_values(child) {
+                    let opt = string_literal(&option);
+                    s.push_str(&format!(
+                        "                    ui.selectable_value(&mut self.{b}, {opt}.to_owned(), {opt});\n"
+                    ));
+                }
+                s.push_str("                });");
+                s
+            }
+            None => format!("            // ComboBox {label}: set a valid Binding"),
+        },
+        WidgetKind::ProgressBar => match binding {
+            Some(b) => format!(
+                "            ui.add_sized([{:.1}, {:.1}], egui::ProgressBar::new(self.{b}));",
+                child.rect.w, child.rect.h
+            ),
+            None => format!("            // ProgressBar {label}: set a valid Binding"),
+        },
+        WidgetKind::HorizontalSpacer => format!("            ui.add_space({:.1});", child.rect.w),
+        WidgetKind::VerticalSpacer => format!("            ui.add_space({:.1});", child.rect.h),
+        WidgetKind::Image => image_child_preview_line(child, "ui.available_rect_before_wrap()"),
+        WidgetKind::Custom(_) => {
+            if let Some(ref tpl) = child.descriptor_live_tpl {
+                crate::codegen::widget_descriptor::apply_template(
+                    tpl,
+                    child,
+                    child.descriptor_name.as_deref().unwrap_or("Custom"),
+                )
+            } else {
+                format!("            // Custom child {:?}: descriptor not loaded", child.kind)
+            }
+        }
+        _ => format!("            // Layout child {:?}: sequential export not implemented yet", child.kind),
+    };
+    lines.push((Some(child.id), line));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -964,6 +1088,41 @@ mod tests {
         assert!(generated.contains("120.0"));
         assert!(generated.contains("80.0"));
         assert!(!generated.contains("egui::Frame::none()"));
+    }
+
+    #[test]
+    fn vlayout_emits_owned_children_sequentially() {
+        let parent_id = Uuid::from_u128(1);
+        let child_id = Uuid::from_u128(2);
+        let tree = UiTree {
+            widgets: vec![
+                WidgetInstance {
+                    id: parent_id,
+                    kind: WidgetKind::VLayout,
+                    children: vec![child_id],
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: child_id,
+                    kind: WidgetKind::Button,
+                    on_click: "handle_child".to_owned(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let generated = emit_indexed(&tree)
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_eq!(generated.matches("egui::Area::new").count(), 1);
+        assert!(generated.contains("ui.vertical(|ui| {"));
+        assert!(generated.contains(&format!("// widget_{child_id}")));
+        assert!(generated.contains("egui::Button::new"));
+        assert!(generated.contains("self.handle_child();"));
     }
 
     fn emit_joined(kind: WidgetKind, setup: impl FnOnce(&mut WidgetInstance)) -> String {

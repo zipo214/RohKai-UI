@@ -2,6 +2,50 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-04 — VLayout Real Ownership Vertical Slice
+
+### Docs Reviewed Before Editing
+- Preflight context (`scripts/preflight-context.ps1`)
+- `.agents/skills/project-model/SKILL.md`
+- `.agents/skills/canvas-patterns/SKILL.md`
+- `.agents/skills/codegen-rules/SKILL.md`
+- `docs/ROADMAP.md`
+- `src/project/ui_tree.rs`, `src/canvas/interaction.rs`,
+  `src/codegen/egui_emitter.rs`, `src/codegen/export.rs`
+
+### Changes Made
+- Added `UiTree::attach_to_vlayout_at()` and `UiTree::reflow_vlayouts()` so
+  VLayout child ownership/reflow lives in the project model rather than canvas
+  glue.
+- VLayout now attaches direct child widgets when they are dropped/released inside
+  the container and detaches them when dragged outside.
+- VLayout resize reflows direct children immediately.
+- Palette click, palette drag, and template add/drop paths now route new
+  non-VLayout widgets through VLayout attachment when their center lands inside a
+  VLayout.
+- Live codegen emits VLayout children sequentially inside
+  `ui.vertical(|ui| { ... })` instead of an empty layout closure.
+- Export emits VLayout children sequentially inside the `ui.vertical` closure and
+  preserves child event dispatch through the existing handler registry.
+- The generated-project compile fixture now includes a VLayout-owned child
+  button, proving the exported nested layout path compiles.
+- Updated `docs/ROADMAP.md` to mark only the VLayout vertical slice done while
+  keeping HLayout/GridLayout, layout properties, layout-aware spacers, parser
+  round-trip, and deeper outline semantics open.
+
+### Verification
+- `cargo check`: clean
+- `cargo test vlayout -- --nocapture`: 4 passed
+- `cargo test export_compile_fixture_generates_required_files_and_matrix -- --nocapture`: passed
+- `cargo test export_compile_fixture_cargo_check -- --ignored --nocapture`: passed
+
+### Remaining Gaps
+- HLayout and GridLayout do not yet own/reflow children.
+- Spacing, padding, alignment, stretch/fill, and per-child layout policies remain
+  default/implicit.
+- Lazare parser does not yet reconstruct layout-child hierarchy from edited code.
+- Layers/Outline still needs richer layout hierarchy controls.
+
 ## 2026-06-04 — Pre-Release Reliability Gate + SVG Export/Golden Hardening
 
 ### Docs Reviewed Before Editing

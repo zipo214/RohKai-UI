@@ -2381,7 +2381,16 @@ impl eframe::App for RohKaiApp {
             let cy = (-pan.y / zoom + win_h / 2.0).clamp(0.0, win_h);
             instance.rect.x = (cx - instance.rect.w / 2.0).max(0.0);
             instance.rect.y = (cy - instance.rect.h / 2.0).max(0.0);
+            let id = instance.id;
+            let center = (
+                instance.rect.x + instance.rect.w * 0.5,
+                instance.rect.y + instance.rect.h * 0.5,
+            );
+            let is_vlayout = instance.kind == crate::project::schema::WidgetKind::VLayout;
             self.project.ui_tree.add(instance);
+            if !is_vlayout {
+                self.project.ui_tree.attach_to_vlayout_at(id, center);
+            }
         }
 
         // Palette drag — set interaction.template_drag for canvas drop next frame
@@ -2401,7 +2410,13 @@ impl eframe::App for RohKaiApp {
                     w.id = Uuid::new_v4();
                     w.rect.x = (w.rect.x - min_x + cx).max(0.0);
                     w.rect.y = (w.rect.y - min_y + cy).max(0.0);
+                    let id = w.id;
+                    let center = (w.rect.x + w.rect.w * 0.5, w.rect.y + w.rect.h * 0.5);
+                    let is_vlayout = w.kind == crate::project::schema::WidgetKind::VLayout;
                     self.project.ui_tree.add(w);
+                    if !is_vlayout {
+                        self.project.ui_tree.attach_to_vlayout_at(id, center);
+                    }
                 }
             }
             crate::panels::templates::TemplateAction::BeginDrag(instances) => {

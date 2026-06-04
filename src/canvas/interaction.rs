@@ -2012,7 +2012,15 @@ pub fn handle(
                         w.id = Uuid::new_v4();
                         w.rect.x = (w.rect.x - min_x + offset_x).max(0.0);
                         w.rect.y = (w.rect.y - min_y + offset_y).max(0.0);
+                        let id = w.id;
+                        let center = (w.rect.x + w.rect.w * 0.5, w.rect.y + w.rect.h * 0.5);
                         tree.add(w);
+                        if !matches!(
+                            tree.widgets.iter().find(|w| w.id == id).map(|w| &w.kind),
+                            Some(WidgetKind::VLayout)
+                        ) {
+                            tree.attach_to_vlayout_at(id, center);
+                        }
                     }
                 }
             }
@@ -2271,6 +2279,7 @@ pub fn handle(
             if let Some(w) = tree.get_mut(resize_id) {
                 w.rect = new_rect;
             }
+            tree.reflow_vlayouts();
             ui.ctx().set_cursor_icon(cursor);
         }
     }
@@ -2515,6 +2524,22 @@ pub fn handle(
     // Release — rubber-band finalise
     // -------------------------------------------------------------------
     if !is_down {
+        if let Some(ds) = &state.drag {
+            let dragged_ids: Vec<Uuid> = ds.start_rects.iter().map(|(id, _)| *id).collect();
+            for id in dragged_ids {
+                let Some(widget) = tree.widgets.iter().find(|w| w.id == id) else {
+                    continue;
+                };
+                if matches!(widget.kind, WidgetKind::VLayout) {
+                    continue;
+                }
+                let center = (
+                    widget.rect.x + widget.rect.w * 0.5,
+                    widget.rect.y + widget.rect.h * 0.5,
+                );
+                tree.attach_to_vlayout_at(id, center);
+            }
+        }
         if let (Some(band_start), Some(pos)) = (state.rubber_band, pointer) {
             let band_rect = egui::Rect::from_two_pos(band_start, pos);
             if band_rect.width() > 4.0 || band_rect.height() > 4.0 {

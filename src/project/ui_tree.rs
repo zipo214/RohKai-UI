@@ -143,6 +143,81 @@ impl UiTree {
         self.widgets.clear();
     }
 
+    /// Attach a widget to the topmost VLayout whose rect contains `canvas_point`.
+    ///
+    /// If no VLayout contains the point, the widget is detached from any VLayout
+    /// parent. The widget itself remains in `widgets`; `children` is an ownership
+    /// relation used by canvas/codegen/export, not nested storage.
+    pub fn attach_to_vlayout_at(
+        &mut self,
+        child_id: Uuid,
+        canvas_point: (f32, f32),
+    ) -> Option<Uuid> {
+        let parent_id = self
+            .widgets
+            .iter()
+            .rev()
+            .find(|w| {
+                w.id != child_id
+                    && w.kind == WidgetKind::VLayout
+                    && rect_contains_point(&w.rect, canvas_point)
+            })
+            .map(|w| w.id);
+
+        for w in &mut self.widgets {
+            if w.kind == WidgetKind::VLayout {
+                w.children.retain(|&id| id != child_id);
+            }
+        }
+
+        if let Some(pid) = parent_id {
+            if let Some(parent) = self.get_mut(pid) {
+                parent.children.push(child_id);
+            }
+        }
+
+        self.reflow_vlayouts();
+        parent_id
+    }
+
+    /// Reflow direct children inside each VLayout using absolute canvas rects.
+    ///
+    /// This intentionally keeps child `Rect`s absolute so existing hit testing,
+    /// selection, save/load, and child codegen can share one coordinate model.
+    pub fn reflow_vlayouts(&mut self) {
+        let parents: Vec<(Uuid, Rect, f32, Vec<Uuid>)> = self
+            .widgets
+            .iter()
+            .filter(|w| w.kind == WidgetKind::VLayout)
+            .map(|w| {
+                (
+                    w.id,
+                    w.rect.clone(),
+                    w.props.inner_margin.max(0.0),
+                    w.children.clone(),
+                )
+            })
+            .collect();
+
+        for (_parent_id, parent_rect, padding, child_ids) in parents {
+            let spacing = 6.0;
+            let mut y = parent_rect.y + padding;
+            let child_x = parent_rect.x + padding;
+            let child_w = (parent_rect.w - padding * 2.0).max(MIN_WIDGET_SIZE);
+            let max_bottom = parent_rect.y + parent_rect.h - padding;
+
+            for child_id in child_ids {
+                if let Some(child) = self.get_mut(child_id) {
+                    child.rect.x = child_x;
+                    child.rect.y = y.min(max_bottom);
+                    child.rect.w = child_w;
+                    child.rect.h = child.rect.h.max(MIN_WIDGET_SIZE);
+                    y += child.rect.h + spacing;
+                }
+            }
+        }
+    }
+
     pub fn validate_and_repair(&mut self) {
         let mut seen_ids = HashSet::new();
         let mut seen_bindings = HashSet::new();
@@ -162,6 +237,8 @@ impl UiTree {
         for widget in &mut self.widgets {
             widget.children.retain(|id| all_ids.contains(id));
         }
+
+        self.reflow_vlayouts();
     }
 
     fn repair_widget(widget: &mut WidgetInstance) {
@@ -278,6 +355,10 @@ impl UiTree {
     }
 }
 
+fn rect_contains_point(rect: &Rect, (x, y): (f32, f32)) -> bool {
+    x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,5 +422,83 @@ mod tests {
 
         assert!(tree.widgets.is_empty());
         assert_eq!(tree.app_props.title, "Keep Me");
+    }
+
+    #[test]
+    fn attach_to_vlayout_reflows_child_inside_parent() {
+        let parent_id = Uuid::from_u128(10);
+        let child_id = Uuid::from_u128(11);
+        let mut tree = UiTree {
+            widgets: vec![
+                WidgetInstance {
+                    id: parent_id,
+                    kind: WidgetKind::VLayout,
+                    rect: Rect {
+                        x: 100.0,
+                        y: 50.0,
+                        w: 220.0,
+                        h: 300.0,
+                    },
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: child_id,
+                    kind: WidgetKind::Button,
+                    rect: Rect {
+                        x: 120.0,
+                        y: 90.0,
+                        w: 80.0,
+                        h: 32.0,
+                    },
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            tree.attach_to_vlayout_at(child_id, (140.0, 100.0)),
+            Some(parent_id)
+        );
+
+        let parent = tree.widgets.iter().find(|w| w.id == parent_id).unwrap();
+        assert_eq!(parent.children, vec![child_id]);
+        let child = tree.widgets.iter().find(|w| w.id == child_id).unwrap();
+        assert_eq!(child.rect.x, 108.0);
+        assert_eq!(child.rect.y, 58.0);
+        assert_eq!(child.rect.w, 204.0);
+    }
+
+    #[test]
+    fn attach_to_vlayout_detaches_when_dropped_outside() {
+        let parent_id = Uuid::from_u128(20);
+        let child_id = Uuid::from_u128(21);
+        let mut tree = UiTree {
+            widgets: vec![
+                WidgetInstance {
+                    id: parent_id,
+                    kind: WidgetKind::VLayout,
+                    rect: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        w: 200.0,
+                        h: 200.0,
+                    },
+                    children: vec![child_id],
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: child_id,
+                    kind: WidgetKind::Button,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(tree.attach_to_vlayout_at(child_id, (300.0, 300.0)), None);
+
+        let parent = tree.widgets.iter().find(|w| w.id == parent_id).unwrap();
+        assert!(parent.children.is_empty());
     }
 }

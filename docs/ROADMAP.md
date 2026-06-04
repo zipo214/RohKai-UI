@@ -393,19 +393,21 @@ they show the user's intended structure on the canvas and emit the matching egui
 layout call, but they do not yet manage child placement like Qt/Lazarus layout
 managers. Do not treat the existing MVP surface as closing the real layout gap.
 
-- [ ] Layout containers own/drop child widgets as explicit children, not merely
-      nearby absolute-position widgets.
-- [ ] Canvas preview reflows children inside `VLayout`, `HLayout`, and
-      `GridLayout` when the container resizes.
+- [x] First vertical slice: `VLayout` can own/drop child widgets as explicit
+      `WidgetInstance.children`, detach them when dragged outside, and reflow
+      direct children in source-of-truth `UiTree` coordinates.
+- [x] First vertical slice: canvas preview reflows direct `VLayout` children
+      when the container resizes.
+- [ ] Extend true ownership/drop/reflow behavior to `HLayout` and `GridLayout`.
 - [ ] Properties expose spacing, padding/margins, alignment, fill/stretch rules,
       and per-child stretch/fixed-size behavior.
 - [ ] Spacers become layout-aware flexible/fixed spacer items inside layout
       containers, not only standalone dashed markers.
 - [ ] Hit testing, rubber-band selection, outline/layers, group/ungroup, and
       delete semantics respect layout-child ownership.
-- [ ] Lazare parser/codegen/export preserve the same hierarchy: generated code
-      places child widgets inside the layout closure in the same order shown on
-      the canvas.
+- [x] First vertical slice: live codegen and export place direct `VLayout`
+      children inside the `ui.vertical(|ui| { ... })` closure in child order.
+- [ ] Lazare parser round-trips layout-owned hierarchy from edited code.
 - [ ] Add tests proving canvas child order, resize reflow, generated code nesting,
       export output, and round-trip parser behavior stay consistent.
 
