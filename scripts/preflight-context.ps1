@@ -115,7 +115,8 @@ $pairs = @(
     @(".agents\skills\project-model\SKILL.md", ".claude\skills\project-model\SKILL.md"),
     @(".agents\skills\canvas-patterns\SKILL.md", ".claude\skills\canvas-patterns\SKILL.md"),
     @(".agents\skills\codegen-rules\SKILL.md", ".claude\skills\codegen-rules\SKILL.md"),
-    @(".agents\skills\svg-zero-dep\SKILL.md", ".claude\skills\svg-zero-dep\SKILL.md")
+    @(".agents\skills\svg-zero-dep\SKILL.md", ".claude\skills\svg-zero-dep\SKILL.md"),
+    @(".agents\skills\task-decomposition\SKILL.md", ".claude\skills\task-decomposition\SKILL.md")
 )
 foreach ($pair in $pairs) {
     $left = Join-Path $ProjectRoot $pair[0]

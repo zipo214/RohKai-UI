@@ -333,6 +333,106 @@ pub enum WidgetKind {
 }
 
 // ---------------------------------------------------------------------------
+// Widget event capability — single source of truth
+//
+// `WidgetKind::supported_events` is the ONE place that decides which UI events a
+// widget kind exposes.  Both the Properties panel (`panels::properties`) and the
+// export parity tests (`codegen::export`) derive from it, so the editor UI and
+// the generated code can never silently disagree about which events exist.
+// ---------------------------------------------------------------------------
+
+/// A user-interaction event a widget can expose a handler for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WidgetEvent {
+    Click,
+    DoubleClick,
+    Change,
+    LostFocus,
+    DragStopped,
+}
+
+/// Every widget kind that exposes at least one event in the Properties panel.
+/// Iterated by the export parity test so a new event-capable kind that forgets
+/// its export handler wiring fails CI.  Only unit variants (no `Custom`).
+///
+/// Test-only: the canonical enumeration the parity test walks.  Production code
+/// derives capability per-widget via [`WidgetKind::supported_events`] /
+/// [`WidgetKind::primary_event`], so this list never needs to exist at runtime.
+#[cfg(test)]
+pub const EVENT_CAPABLE_KINDS: [WidgetKind; 9] = [
+    WidgetKind::Button,
+    WidgetKind::TextInput,
+    WidgetKind::TextArea,
+    WidgetKind::Slider,
+    WidgetKind::SpinBox,
+    WidgetKind::Checkbox,
+    WidgetKind::ComboBox,
+    WidgetKind::FontComboBox,
+    WidgetKind::RadioButton,
+];
+
+impl WidgetKind {
+    /// The authoritative list of events this kind exposes in Properties.
+    ///
+    /// The match is exhaustive (no wildcard) on purpose: adding a new
+    /// `WidgetKind` will not compile until its event capability is declared
+    /// here, which is what keeps Properties and export from drifting.
+    pub fn supported_events(&self) -> &'static [WidgetEvent] {
+        use WidgetEvent::*;
+        match self {
+            WidgetKind::Button => &[Click, DoubleClick],
+            WidgetKind::TextInput | WidgetKind::TextArea => &[Change, LostFocus],
+            WidgetKind::Slider | WidgetKind::SpinBox => &[Change, DragStopped],
+            WidgetKind::Checkbox
+            | WidgetKind::ComboBox
+            | WidgetKind::FontComboBox
+            | WidgetKind::RadioButton => &[Change],
+            // Non-interactive / display / container / custom kinds expose no events.
+            WidgetKind::Label
+            | WidgetKind::Frame
+            | WidgetKind::ProgressBar
+            | WidgetKind::Image
+            | WidgetKind::Custom(_)
+            | WidgetKind::HorizontalSpacer
+            | WidgetKind::VerticalSpacer
+            | WidgetKind::GroupBox
+            | WidgetKind::VLayout
+            | WidgetKind::HLayout
+            | WidgetKind::ScrollArea
+            | WidgetKind::GridLayout
+            | WidgetKind::TabWidget
+            | WidgetKind::ToolButton
+            | WidgetKind::CommandLinkButton
+            | WidgetKind::DialogButtonBox
+            | WidgetKind::MathLabel
+            | WidgetKind::FilePicker
+            | WidgetKind::Chart
+            | WidgetKind::Table
+            | WidgetKind::ListView
+            | WidgetKind::TreeView
+            | WidgetKind::StackedWidget
+            | WidgetKind::ToolBox => &[],
+        }
+    }
+
+    /// The first event a kind exposes (`Click` for `Button`, `Change` for
+    /// value/selection widgets).  `None` when not event-capable.
+    ///
+    /// Test-only: export now wires **every** event from `supported_events`, not
+    /// just the first, so production no longer needs a "primary" notion.  Kept
+    /// for parity tests that assert per-kind classification.
+    #[cfg(test)]
+    pub fn primary_event(&self) -> Option<WidgetEvent> {
+        self.supported_events().first().copied()
+    }
+
+    /// Whether Properties exposes any event handler for this kind.
+    pub fn is_event_capable(&self) -> bool {
+        !self.supported_events().is_empty()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // New enums (Part 1 of schema audit)
 // ---------------------------------------------------------------------------
 
@@ -715,4 +815,79 @@ pub struct SvgImportMetadata {
     pub source_order: usize,
     pub transform_summary: String,
     pub warning_flags: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_capable_kinds_are_all_event_capable() {
+        for k in EVENT_CAPABLE_KINDS {
+            assert!(
+                k.is_event_capable(),
+                "{k:?} is in EVENT_CAPABLE_KINDS but reports no events"
+            );
+            assert!(
+                k.primary_event().is_some(),
+                "{k:?} must have a primary event"
+            );
+        }
+    }
+
+    #[test]
+    fn primary_event_is_click_for_button_change_for_value_widgets() {
+        assert_eq!(WidgetKind::Button.primary_event(), Some(WidgetEvent::Click));
+        for k in [
+            WidgetKind::TextInput,
+            WidgetKind::TextArea,
+            WidgetKind::Slider,
+            WidgetKind::SpinBox,
+            WidgetKind::Checkbox,
+            WidgetKind::ComboBox,
+            WidgetKind::FontComboBox,
+            WidgetKind::RadioButton,
+        ] {
+            assert_eq!(
+                k.primary_event(),
+                Some(WidgetEvent::Change),
+                "{k:?} primary event must be Change"
+            );
+        }
+    }
+
+    #[test]
+    fn previously_missed_kinds_are_event_capable() {
+        // Regression guard for the Properties/export drift bug: these three
+        // exposed On Change in Properties but were silently ignored by export.
+        for k in [
+            WidgetKind::TextArea,
+            WidgetKind::SpinBox,
+            WidgetKind::FontComboBox,
+        ] {
+            assert!(k.is_event_capable());
+            assert!(k.supported_events().contains(&WidgetEvent::Change));
+        }
+    }
+
+    #[test]
+    fn display_and_container_kinds_have_no_events() {
+        for k in [
+            WidgetKind::Label,
+            WidgetKind::Frame,
+            WidgetKind::ProgressBar,
+            WidgetKind::Image,
+            WidgetKind::GroupBox,
+            WidgetKind::Table,
+            WidgetKind::Chart,
+            WidgetKind::Custom("anything".to_owned()),
+        ] {
+            assert!(!k.is_event_capable(), "{k:?} should expose no events");
+            assert_eq!(k.primary_event(), None);
+        }
+    }
 }

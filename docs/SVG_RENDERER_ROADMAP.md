@@ -297,8 +297,8 @@ need all of it immediately, but this is the map.
 |---|---|---|---|---|
 | Secure parse budgets | Comprehensive limits across parse/render/filter/reference work | Basic importer + rasterizer limits | Add unified limit config/report for rasterizer too | P0 |
 | XML model | Namespace-aware XML tree with source spans | Simple custom parser | Add spans, namespaces, better recovery | P1 |
-| Render IR | Scene/display-list separate from XML | First internal `SvgSceneItem` flattening boundary | Add full source-span/reference/display-list IR | P0 |
-| Diagnostics | Structured per-node render/import diagnostics | Importer rich; rasterizer only `SvgRasterError` | Add `SvgRenderReport` | P0 |
+| Render IR | Scene/display-list separate from XML | `SvgSceneItem` flattening plus `DisplayList`/`DrawCommand` split | Add source spans, reference table, and reusable node ids | P0 |
+| Diagnostics | Structured per-node render/import diagnostics | Importer rich; rasterizer has `SvgRenderReport` with warnings, unsupported buckets, counts, and fidelity | Add source node ids/spans and UI surfacing | P0 |
 | ViewBox/preserveAspectRatio | Full modes and nested viewport behavior | Basic meet-style mapping | Implement full `preserveAspectRatio`, nested SVG | P1 |
 | CSS cascade | Specificity/order/inheritance subset | Importer simple classes; rasterizer inline/presentation | Shared style engine with selector tiers | P1 |
 | Basic shapes | Full geometry and transforms | Mostly supported | Add exact bounds and tests | P0 |
@@ -329,19 +329,22 @@ Tasks:
   `SvgRenderUnsupportedFeature`.
 - [x] Add `SvgRenderOutput { image, report }`.
 - [x] Preserve `rasterize()` and `rasterize_or_fallback()` wrappers.
-- Add `SvgScene` IR:
-  document metadata, viewBox, nodes, resolved styles, transforms, source spans,
-  reference table, diagnostics.
+- [x] Add first `SvgScene` IR:
+  viewBox, parsed nodes, flattened scene items, resolved inherited styles, and
+  accumulated transforms. Source spans, reference table, stable node ids, and
+  richer diagnostic provenance remain follow-up work.
 - [x] Add first internal `SvgSceneItem` flattening boundary with resolved
   inherited style, accumulated transforms, and unsupported-subtree flags.
-- Split renderer into:
+- [x] Split renderer into:
   parser -> scene builder -> render backend.
 - [x] Add first report tests for rendered/skipped counts, unsupported buckets,
   determinism, and raster-size clamping.
 - [x] Move known unsupported element/attribute diagnostics from raw source scans
   to parsed node/attribute reporting.
-- Add one fixture per known supported and unsupported feature bucket.
-- Add golden tests for currently supported primitives.
+- [x] Add first fixture per known supported and unsupported feature bucket:
+  rect/circle-equivalent fills, path fill, stroke, transform, opacity,
+  unsupported gradient, unsupported clip, unsafe external reference.
+- [x] Add golden tests for currently supported primitives.
 
 Acceptance:
 
@@ -535,17 +538,20 @@ Acceptance:
   - Extract remaining shared microsyntax parsing candidates:
     lengths.
 - `tests/fixtures/svg_render/`
-  - Add one golden fixture each for rect, circle, path fill, stroke, transform,
-    opacity, unsupported gradient, unsupported clip, unsafe external ref.
+  - [x] Add one golden fixture each for rect/basic fill, path fill, stroke,
+    transform, opacity, unsupported gradient, unsupported clip, unsafe external
+    reference. Current harness stores these inline in `src/canvas/svg_golden.rs`
+    as dependency-free ASCII signatures rather than PNG files.
 - `scripts/validate-svg-import.ps1`
-  - Add renderer roadmap/golden test command when tests exist.
+  - [x] Add renderer roadmap/golden test command.
 
 ### Near Tasks
 
 - [x] Add `src/svg_core.rs` module to avoid importer/rasterizer drift.
 - [x] Move shared color, numeric-list, affine-transform, and path-token parsing
   into `src/svg_core.rs`.
-- Add `SvgScene`, `SvgStyle`, `SvgPaint`, `SvgPath`, `SvgNodeId`.
+- Add source-spanned `SvgNodeId` and reference-table metadata on top of the
+  current `SvgScene` / `SvgSceneItem` / `DisplayList` split.
 - Replace direct XML-to-render traversal with scene traversal.
 - Add explicit unsupported-feature enum instead of stringly diagnostics.
 - Add antialiasing strategy doc and prototype.

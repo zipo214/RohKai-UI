@@ -7,6 +7,183 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-04 — Codex Pre-Release Reliability + SVG Maturity
+
+On `dev`, I moved the roadmap toward depth-first release closure and verified the
+all-built-in-widget export fixture instead of trusting string-level tests. The
+real ignored generated-crate `cargo check` exposed and fixed an SVG Image export
+bug: generated apps now embed both `svg_core` and `rohkai_svg`, use
+`rohkai_svg::rasterize_or_fallback()`, and compile with every built-in widget
+plus FilePicker/rfd and SVG Image in one project. SVG validation now runs the
+golden renderer harness, and `src/canvas/svg_golden.rs` covers supported buckets
+plus unsupported gradient, unsupported clip, opacity, stroke/path, and unsafe
+external href behavior. Roadmap truth was reconciled so display-list split and
+golden harness are not listed as both done and undone; source spans/reference
+tables/text/layout remain future SVG work, not complete.
+
+## 2026-06-03 — Codex Lazare/QoL Release Hardening
+
+On `dev`, fixed the visible code-panel/Lazare QoL issues and then corrected the
+first pass after user feedback. Selected-widget code highlighting is now native
+to the editable TextEdit layouter as a subtle span background, not underline and
+not a hand-painted overlay rectangle; do not reintroduce estimated
+char-width/line-height geometry because it drifts from egui wrapping/spacing.
+Highlight ranges still exclude the `CentralPanel` preamble and follow the full
+canvas selection set, so multi-select highlights every selected widget block and
+deselecting clears them. Canvas rubber-band selection now previews candidate
+widgets while dragging and requests repaint after release so multi-selection is
+visible immediately. Deleting all code clears canvas widgets through
+`UiTree::clear_widgets()` and resyncs to canonical empty generated code.
+Paste is more editor-like:
+orphan widget constructor lines create widgets, and duplicate pasted generated
+blocks with the same `widget_<uuid>` create fresh-offset instances with new UUIDs,
+then the buffer canonicalizes immediately so it stays instant/stable. The left
+panel keeps tabs + stable scrolling, the unnecessary hard width cap was relaxed
+back so users can widen it, and a new `Stack` toggle lets Palette/Properties/
+Layers/Components/Templates appear together as collapsible sections in the same
+left panel. Layers is currently an outline/draw-order panel, not a separate
+Photoshop-like layer creation system; UI copy now says "Layers / Outline" and
+points users to Palette/Templates to add items. The roadmap now explicitly says
+VLayout/HLayout/GridLayout are layout-intent MVPs, not true Qt/Lazarus-style
+layout managers, and lists the real closure criteria: child ownership, canvas
+reflow, spacing/alignment/stretch properties, layout-aware spacers, hierarchy-aware
+hit testing/outline/delete, and nested codegen/export/parser parity. I also
+expanded the generated-export cargo check
+fixture to cover FilePicker/rfd, channels, iterator method export, simple local
+trait binding, and state bindings; this uncovered and fixed the invalid
+`fn name(&self) -> Vec<_>` iterator signature. Verified: fmt, check, 164 tests +
+1 ignored, clippy, launch smoke, ignored compile fixture previously, encoding.
+Did not touch SVG/renderer.
+
+## 2026-06-03 — Claude Generated-Export Compile Proof
+
+On `dev`, closed the long-standing "string-level proof only" gap for event/async
+export. Added a real `cargo check` fixture in `codegen/export.rs` tests:
+`export_compile_fixture_cargo_check` (`#[ignore]`, ~30s with cached deps) writes a
+generated project to a unique std-only temp dir (`env::temp_dir()` + pid/nanos),
+runs `std::process::Command` `cargo check` with a shared `CARGO_TARGET_DIR`, and
+panics with stderr on non-zero exit. The fixture tree covers the full surface:
+top-level Button Click + DoubleClick, two async buttons (Plain + Result), and a
+Frame with TextInput (LostFocus) + Slider (DragStopped) children, plus `name: String`
+and `vol: f32` bindings. A fast always-run smoke
+(`export_compile_fixture_generates_required_files_and_matrix`) proves generatability
++ matrix markers without compiling. Verified the ignored test actually PASSES
+(generated crate compiles in 29.87s). Also added
+`button_click_and_double_click_both_emitted_no_suppression` to lock the ordering
+decision (both fire, egui-native; Click not suppressed). No new crates (pure std +
+the cargo toolchain). 159 tests + 1 ignored, gate clippy clean, fmt + encoding clean.
+Updated `docs/PROMPT_CONTRACT.md` with a "compile proof vs string proof" section.
+Did not touch SVG/WASM/DB/renderer/widget-maker.
+
+## 2026-06-03 — Claude Nested/Frame-Child Event Export Parity
+
+On `dev`, closed the last event-export path: nested/frame children. `export_child_line`
+previously rendered Frame children with NO event handlers (Button child emitted an
+empty `.clicked() {}`; combos were dead `Label` placeholders). Now it routes every
+`supported_events()` event through `rust_wiring::handler_call()` + the central
+registry, via new `export_child_event_dispatch` (binds `let child_response = ui.put(…)`
+then `if child_response.<method>() { … }` per wired event) and `export_child_combo`
+(renders a REAL interactive `egui::ComboBox` via `allocate_ui_at_rect`, gated on
+`child_combo.inner == Some(true)`). Threaded `handler_registry` into `export_child_line`
++ its Frame call site. Handler collection already iterated all `tree.widgets` (children
+included), so registry/conflict/async-fields already covered children — only the call
+site was missing; a nested conflict test proves top-level↔child detection. Event
+ordering decided + documented: Button Click+DoubleClick both fire (egui native; Click
+not suppressed). Tests +9: nested invariant over every `(kind,event)` pair, 6 focused
+nested (Button Click/DoubleClick, TextInput LostFocus, Slider/SpinBox DragStopped,
+Checkbox Change), interactive-combo-child, top-level↔nested conflict. 157 tests, gate
+`cargo clippy -- -D warnings` clean, fmt + encoding clean. Both top-level and nested
+export now have full parity — no Properties event row is ignored. Remaining proof gap:
+no `cargo build` fixture (string-level only). Did not touch SVG/WASM/DB/renderer/widget-maker.
+
+## 2026-06-03 — Codex Prompt Contract Standard
+
+On `dev`, added `docs/PROMPT_CONTRACT.md` as the standard skeleton for Codex-to-Claude
+and Claude-to-Codex implementation goals. This came from the async/event parity
+misses: prompts that said "full parity" still let agents stop at top-level or
+primary-event paths. The new contract requires deriving the source-of-truth set,
+enumerating all runtime/export/nested/custom paths before edits, stopping if any
+required path is excluded, and adding invariant tests so hidden output paths cannot
+drift quietly. `AGENTS.md`, `CLAUDE.md`, and `CODE_INDEX.md` now point at it.
+
+## 2026-06-02 — Claude FULL Event Export Parity (primary + secondary)
+
+On `dev`, completed event export parity: the prior patch wired only PRIMARY events
+(Click/Change); secondary events (Button DoubleClick, TextInput/TextArea LostFocus,
+Slider/SpinBox DragStopped) were still exposed in Properties but dropped by export.
+Now export collects a handler from EVERY event field per widget and emits, per
+widget, one bound `let evt_response = …;` plus an `if evt_response.<method>() { … }`
+for each wired event — all routed through `rust_wiring::handler_call()` + the
+central registry. New `event_field_handler`/`event_egui_method`/`event_dispatch_block`
+in `codegen/export.rs`; Button/TextInput/TextArea/Slider/SpinBox/Checkbox/RadioButton
+arms now call the shared dispatcher (ComboBox/FontComboBox keep bespoke combo gates,
+Change-only). Handler collection loop iterates `kind.supported_events()` so conflict
+detection covers all event fields. egui 0.29 methods `double_clicked`/`lost_focus`/
+`drag_stopped` verified against the live `egui_emitter` path. `primary_event` is now
+`#[cfg(test)]` (export no longer needs a "primary" notion). Tests: invariant rewritten
+to iterate every `(kind, event)` pair (Result-mode `if let Err` proof + per-event gate
+method); +5 focused secondary tests; +1 primary+secondary-on-one-widget; +1
+across-event-field conflict test. 148 tests, zero warnings (gate `cargo clippy -- -D
+warnings` clean; the 3 `--all-targets` lints are pre-existing: hello_button,
+field_collector, templates.rs). Honest remaining gap: container-child export
+(`export_child_line`) wires no events — separate pre-existing path. Did not touch
+SVG/WASM/DB/renderer/widget-maker.
+
+## 2026-06-02 — Claude Properties/Export Event Parity (Codex Review)
+
+On `dev`, closed the Codex-flagged parity gap: Properties exposed `On Change` for
+TextArea, SpinBox, and FontComboBox but export silently ignored those handlers.
+Root cause was two independent `match w.kind` statements (Properties vs export)
+that drifted. Fix introduces a single source of truth — `WidgetKind::supported_events()`
+in `project::schema` (exhaustive, wildcard-free match; new kinds won't compile
+until classified) plus `primary_event()`/`is_event_capable()`. Properties'
+`show_event_handler` now derives its row list from it via `event_ui_meta`; export's
+handler collection uses `primary_event()` to pick Click vs Change and to skip
+non-event kinds. Wired the three missing export arms (TextArea/SpinBox mirror
+TextInput's `.changed()` + registry `handler_call()`; FontComboBox gates on a new
+inner `changed` bool → `font_combo.inner == Some(true)`). Added a top-of-`app.rs`
+`!! HANDLER CONFLICTS DETECTED` summary block (in addition to the near-handler
+comment). Tests: +9 (4 schema capability, 1 export invariant over all event-capable
+kinds proving Result-mode routing, 3 focused TextArea/SpinBox/FontComboBox, 1
+FontComboBox no-handler no-dangling-binding). 141 tests, zero warnings, fmt + encoding
+clean. Known remaining gap: secondary events (double-click/lost-focus/drag-stopped)
+exposed in Properties but not yet exported; no cargo compile fixture. Did not touch
+SVG/WASM/DB/renderer/widget-maker.
+
+## 2026-06-02 — Claude Async Wiring Gap Fixes (Codex Review)
+
+On `dev`, fixed four async-wiring gaps from the Codex review. (1) **Repaint gap**:
+`rust_wiring::async_repaint_block` now emits `ctx.request_repaint_after(16ms)`
+after the drain block whenever any task is in flight, so exported apps repaint
+without user input. (2) **Handler contract consistency**: TextInput, Slider,
+Checkbox, ComboBox, and RadioButton call sites now route through
+`rust_wiring::handler_call()` (previously emitted bare `self.h()` bypassing
+async/result semantics). (3) **Conflict detection**: handler collection upgraded
+from `HashSet` to `HashMap<name→index>`; if multiple widgets share a handler name
+with different async/result modes, the generated code emits a `// CODEGEN CONFLICT`
+comment and all call sites are normalized to the first-registered mode. (4) **Test
+suite**: 7 new tests (3 in `rust_wiring`, 4 in `export`): repaint block shape, non-button
+async launcher routing, conflict warning + call-site normalization, combined 3-widget
+async coherence fixture. 132 tests, zero warnings, encoding clean. Remaining gap:
+no full `cargo build` compile fixture on generated output (documented in eval doc).
+
+## 2026-06-02 — Claude Async Task Wiring: Overclaim Resolved
+
+On `dev`, replaced the Stage 11 async placeholder (a `thread::spawn` body that was
+TODO-only) with a real std-only generated task contract in `codegen/rust_wiring.rs`
++ `codegen/export.rs`. Per async handler the export now emits: `{h}_rx:
+Option<Receiver<MSG>>` / `{h}_running: bool` / `{h}_error: Option<String>` (Result)
+fields + Default init; a launcher `fn {h}(&mut self)` that guards double-launch,
+spawns a thread, and `mpsc::send`s `{h}_worker()`; a free-fn `{h}_worker() -> MSG`
+with NO `&mut self` (honest UI/worker split); and a borrow-safe `try_recv` drain at
+the top of `update()` that records running/error. MSG = `()`/`Result<(),String>`/
+`Option<()>`. Handler collection moved above the ExportedApp struct so async fields
+land in struct + Default. 9 new tests (rust_wiring + export). Reclassified async to
+Functional MVP in the eval doc + ROADMAP — NOT top-class (worker body is a user
+stub; no status-widget binding/cancellation/compile-fixture yet). 125 tests, zero
+warnings, encoding clean. Preserved all uncommitted Codex work (e.g. FilePicker rfd
+dep, Chart painter upgrade) — did not touch SVG/WASM/DB/renderer/widget-maker.
+
 ## 2026-06-02 — Codex Remaining Roadmap Evaluation
 
 On `dev`, I added `docs/feature-evaluation/remaining-roadmap-items.md` to cover

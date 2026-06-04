@@ -107,6 +107,9 @@ Core features implemented:
     `-IncludeDevlog` when you need it.
 - At the start of a meaningful planning or coding session, append a 3-4 sentence
   newest-first `docs/CODE_COOP.md` note for the next agent.
+- When writing a goal/prompt for another agent, use `docs/PROMPT_CONTRACT.md`
+  so the task derives source-of-truth sets, enumerates all output paths, and
+  requires invariant tests instead of fixing only the obvious surface.
 - For SVG/Image work, `svg-zero-dep` is a relevant skill and must be read.
 - Record meaningful sessions in `docs/DEVLOG.md`: time, docs reviewed, changes,
   verification, risks, and follow-ups.

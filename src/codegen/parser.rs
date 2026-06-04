@@ -1,5 +1,6 @@
 use crate::project::schema::WidgetKind;
 use crate::project::ui_tree::UiTree;
+use std::collections::HashSet;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -56,6 +57,11 @@ pub struct ParsedWidget {
     pub binding: Option<Option<String>>,
     pub min: Option<f32>,
     pub max: Option<f32>,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ApplyOutcome {
+    pub created_widgets: usize,
 }
 
 impl ParsedWidget {
@@ -157,11 +163,17 @@ pub fn parse_egui_output(code: &str) -> ParseReport {
                 parse_widget_line(widget, t, line_no, &mut report);
             }
         } else if looks_like_widget_edit(t) {
-            report.diagnostics.push(ParseDiagnostic {
-                severity: ParseSeverity::Warning,
-                line: line_no,
-                message: "ignored widget code outside a RohKai widget block".to_owned(),
-            });
+            let mut orphan = ParsedWidget::new(Uuid::new_v4());
+            parse_widget_line(&mut orphan, t, line_no, &mut report);
+            if orphan.has_any_edit() {
+                report.widgets.push(orphan);
+            } else {
+                report.diagnostics.push(ParseDiagnostic {
+                    severity: ParseSeverity::Warning,
+                    line: line_no,
+                    message: "ignored widget code outside a RohKai widget block".to_owned(),
+                });
+            }
         }
     }
 
@@ -462,44 +474,84 @@ fn nth_after<'a>(line: &'a str, pat: &str, n: usize) -> Option<&'a str> {
     None
 }
 
-pub fn apply_parsed(tree: &mut UiTree, widgets: &[ParsedWidget]) {
+pub fn apply_parsed(tree: &mut UiTree, widgets: &[ParsedWidget]) -> ApplyOutcome {
+    let mut outcome = ApplyOutcome::default();
+    let mut seen = HashSet::new();
     for pw in widgets {
-        if let Some(w) = tree.widgets.iter_mut().find(|w| w.id == pw.id) {
-            if let Some(x) = pw.x {
-                w.rect.x = x;
+        let duplicate_block = !seen.insert(pw.id);
+        if !duplicate_block {
+            if let Some(w) = tree.get_mut(pw.id) {
+                apply_fields(w, pw, false);
+                continue;
             }
-            if let Some(y) = pw.y {
-                w.rect.y = y;
-            }
-            if let Some(width) = pw.w {
-                w.rect.w = width;
-            }
-            if let Some(height) = pw.h {
-                w.rect.h = height;
-            }
-            if let Some(kind) = &pw.kind {
-                // Never overwrite a Custom kind with a parser-inferred built-in.
-                // Descriptor templates may contain egui-like patterns that would
-                // otherwise be misidentified as a built-in widget kind.
-                if !matches!(w.kind, WidgetKind::Custom(_)) {
-                    w.kind = kind.clone();
-                }
-            }
-            if let Some(label) = &pw.label {
-                w.props.label = label.clone();
-            }
-            if let Some(binding) = &pw.binding {
-                w.state_binding = binding.clone();
-            }
-            if let Some(min) = pw.min {
-                w.props.min = min;
-            }
-            if let Some(max) = pw.max {
-                w.props.max = max;
-            }
+        }
+
+        if let Some(mut widget) = tree.widgets.iter().find(|w| w.id == pw.id).cloned() {
+            widget.id = Uuid::new_v4();
+            widget.children.clear();
+            apply_fields(&mut widget, pw, true);
+            tree.add(widget);
+            outcome.created_widgets += 1;
+        } else if let Some(mut widget) = instance_from_parsed(pw) {
+            apply_fields(&mut widget, pw, false);
+            tree.add(widget);
+            outcome.created_widgets += 1;
         }
     }
     tree.validate_and_repair();
+    outcome
+}
+
+fn apply_fields(
+    w: &mut crate::project::schema::WidgetInstance,
+    pw: &ParsedWidget,
+    offset_duplicate: bool,
+) {
+    if let Some(x) = pw.x {
+        w.rect.x = x;
+    }
+    if let Some(y) = pw.y {
+        w.rect.y = y;
+    }
+    if offset_duplicate && (pw.x.is_some() || pw.y.is_some()) {
+        w.rect.x += 16.0;
+        w.rect.y += 16.0;
+    }
+    if let Some(width) = pw.w {
+        w.rect.w = width;
+    }
+    if let Some(height) = pw.h {
+        w.rect.h = height;
+    }
+    if let Some(kind) = &pw.kind {
+        // Never overwrite a Custom kind with a parser-inferred built-in.
+        // Descriptor templates may contain egui-like patterns that would
+        // otherwise be misidentified as a built-in widget kind.
+        if !matches!(w.kind, WidgetKind::Custom(_)) {
+            w.kind = kind.clone();
+        }
+    }
+    if let Some(label) = &pw.label {
+        w.props.label = label.clone();
+    }
+    if let Some(binding) = &pw.binding {
+        w.state_binding = binding.clone();
+    }
+    if let Some(min) = pw.min {
+        w.props.min = min;
+    }
+    if let Some(max) = pw.max {
+        w.props.max = max;
+    }
+}
+
+fn instance_from_parsed(pw: &ParsedWidget) -> Option<crate::project::schema::WidgetInstance> {
+    let kind = pw.kind.clone()?;
+    Some(crate::project::schema::WidgetInstance {
+        id: pw.id,
+        kind,
+        ..Default::default()
+    })
 }
 
 #[cfg(test)]
@@ -547,6 +599,47 @@ mod tests {
         let edited = tree.widgets.iter().find(|w| w.id == id).unwrap();
         assert_eq!(edited.rect.x, 42.0);
         assert_eq!(edited.rect.y, 56.0);
+    }
+
+    #[test]
+    fn duplicate_pasted_widget_block_creates_new_instance_with_fresh_id() {
+        let button = widget(WidgetKind::Button, "Go");
+        let id = button.id;
+        let mut tree = UiTree::default();
+        tree.add(button);
+        let block = egui_emitter::emit_indexed(&tree)
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let code = format!("{block}\n{block}");
+
+        let report = parse_egui_output(&code);
+        assert_eq!(report.widgets.iter().filter(|w| w.id == id).count(), 2);
+        let outcome = apply_parsed(&mut tree, &report.widgets);
+
+        assert_eq!(outcome.created_widgets, 1);
+        assert_eq!(tree.widgets.len(), 2);
+        assert_eq!(tree.widgets.iter().filter(|w| w.id == id).count(), 1);
+        assert!(tree.widgets.iter().any(|w| w.id != id));
+    }
+
+    #[test]
+    fn pasted_orphan_button_line_creates_widget() {
+        let code = r#"ui.add_sized([100.0, 30.0], egui::Button::new("Paste Me"));"#;
+        let report = parse_egui_output(code);
+        assert!(!report.has_errors(), "{:?}", report.diagnostics);
+        assert_eq!(report.widgets.len(), 1);
+
+        let mut tree = UiTree::default();
+        let outcome = apply_parsed(&mut tree, &report.widgets);
+
+        assert_eq!(outcome.created_widgets, 1);
+        assert_eq!(tree.widgets.len(), 1);
+        assert_eq!(tree.widgets[0].kind, WidgetKind::Button);
+        assert_eq!(tree.widgets[0].props.label, "Paste Me");
+        assert_eq!(tree.widgets[0].rect.w, 100.0);
+        assert_eq!(tree.widgets[0].rect.h, 30.0);
     }
 
     #[test]

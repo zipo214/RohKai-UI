@@ -2,6 +2,529 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-04 — Pre-Release Reliability Gate + SVG Export/Golden Hardening
+
+### Docs Reviewed Before Editing
+- Preflight context (`scripts/preflight-context.ps1`)
+- `.agents/skills/codegen-rules/SKILL.md`
+- `.agents/skills/svg-zero-dep/SKILL.md`
+- `docs/ROADMAP.md`, `docs/SVG_IMPORT.md`, `docs/SVG_RENDERER_ROADMAP.md`
+- `src/codegen/export.rs`, `src/canvas/svg_rasterizer.rs`,
+  `src/canvas/svg_golden.rs`, `scripts/validate-svg-import.ps1`
+
+### Changes Made
+- Added a Pre-Release Depth Consolidation Gate to `docs/ROADMAP.md`, focused on
+  source-of-truth cleanup, reliability proofs, and depth-before-breadth work
+  before new feature families or Stage 15 renderer expansion.
+- Verified the all-built-in-widget generated-project fixture. The fast smoke
+  passed, but the ignored real generated-crate `cargo check` exposed a concrete
+  SVG Image export bug.
+- Fixed generated SVG Image export by embedding `svg_core` alongside the
+  embedded `rohkai_svg` rasterizer module, adapting the embedded rasterizer's
+  import path for generated `app.rs`, and calling
+  `rohkai_svg::rasterize_or_fallback()` so egui receives a `ColorImage`.
+- Added unit assertions so Image export requires `mod svg_core`,
+  `mod rohkai_svg`, `use super::svg_core::{self, Rgba};`, and
+  `rasterize_or_fallback()`.
+- Expanded the dependency-free SVG golden harness with path fill, stroke,
+  opacity, unsupported gradient, unsupported clip, and unsafe external href
+  buckets.
+- Wired `scripts/validate-svg-import.ps1` to run `cargo test svg_golden`.
+- Reconciled SVG roadmap/source-of-truth docs: display-list split and golden
+  harness are complete; source spans, reference tables, stable node ids, richer
+  diagnostic provenance, text, layout, gradients, clips, and masks remain future
+  SVG work.
+
+### Verification
+- `cargo test image_widget_export_embeds_svg_renderer -- --nocapture`: passed
+- `cargo test svg_golden -- --nocapture`: passed
+- `cargo test all_builtin_widgets_export_generates_required_files_and_matrix -- --nocapture`: passed
+- `cargo test all_builtin_widgets_export_cargo_check -- --ignored --nocapture`: passed
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\validate-svg-import.ps1`: passed
+- `cargo check`: clean
+- `cargo test`: 166 passed, 0 failed, 2 ignored
+
+### Remaining Gaps
+- SVG source spans, reference-table/node-id provenance, full `preserveAspectRatio`,
+  nonzero fill, stroke joins/caps/dashes, antialiasing, gradients, clips/masks,
+  embedded image decode, and robust SVG text remain future renderer/importer work.
+- Broader repo source-of-truth cleanup still needs a commit/PR hygiene pass.
+
+## 2026-06-03 — Lazare Code Panel QoL + Release Compile-Proof Expansion
+
+### Docs Reviewed Before Editing
+- Preflight context (`scripts/preflight-context.ps1`)
+- `.agents/skills/project-model/SKILL.md`
+- `docs/CODE_COOP.md`, `docs/PROMPT_CONTRACT.md`, `docs/ROADMAP.md`
+- `src/panels/code_preview.rs`, `src/codegen/parser.rs`,
+  `src/project/ui_tree.rs`, `src/app.rs`
+- `src/codegen/export.rs`, `src/codegen/rust_wiring.rs`
+
+### Changes Made
+- Replaced the selected-widget copied preview block in the code panel with an
+  inline `TextEdit` layouter highlight. The actual editable generated code now
+  receives a subtle teal background while preserving normal readable text.
+- Added `UiTree::clear_widgets()` and wired blank/deleted code-buffer edits to
+  clear canvas widgets, then resync the panel to canonical empty generated code.
+- Added focused tests for highlight range detection and `UiTree::clear_widgets`.
+- Tightened left panel usability: lower hard width cap, collapse only on cramped
+  widths, and one stable scroll region for Palette, Properties, Layers,
+  Components, and Templates.
+- Expanded the generated-export compile fixture to cover FilePicker/rfd, mpsc
+  channel fields, iterator methods, a simple local trait binding, and state
+  bindings in addition to top-level/nested event + async paths.
+- The expanded compile fixture exposed a real export bug: iterator pipelines
+  emitted invalid Rust item signatures (`fn name(&self) -> Vec<_>`). Fixed export
+  to emit `fn name(&self) -> impl IntoIterator + '_` and collect through
+  `Vec<_>` internally.
+- Simple trait bindings now emit a local trait declaration before the impl, so
+  standalone generated projects compile for local/simple trait names.
+- Updated `docs/PROMPT_CONTRACT.md`, `docs/ROADMAP.md`, and
+  `docs/feature-evaluation/rust-centric-visual-features.md` to reflect the
+  inline-highlight rule and expanded compile-proof coverage.
+
+### Verification
+- `cargo fmt --check`: clean
+- `cargo check`: clean
+- `cargo test`: 162 passed, 0 failed, 1 ignored
+- `cargo clippy -- -D warnings`: clean
+- `cargo test export_compile_fixture_cargo_check -- --ignored`: passed
+- `scripts/check-text-encoding.ps1`: OK
+- `cargo run` smoke: launched and was stopped after 8 seconds
+
+### Remaining Gaps
+- Exact TextEdit scroll-to-line/cursor positioning remains a future enhancement;
+  the selected block is now highlighted inline, but scrolling is still best-effort.
+- The compile fixture remains opt-in because it invokes Cargo on a generated
+  eframe/egui project.
+- Stage 15 renderer/high-risk work intentionally untouched.
+
+### Follow-up Correction (same session)
+- User feedback clarified that the left panel did not need a strict width cap;
+  the problem was content organization. Restored a much wider resizable cap while
+  preserving tabs and stable scroll.
+- Replaced the first inline highlight implementation's per-line background fill
+  with a TextEdit layouter-native subtle span background. A later hand-painted
+  outlined rectangle was rejected because it estimated character width and row
+  height, producing offset highlights under egui's real line spacing/wrapping.
+  An underline-only variant was also rejected as too visually noisy. Future
+  code-panel highlights should stay layout-native unless RohKai gets a dedicated
+  code editor widget with true glyph/block rect APIs.
+- Tightened the highlighted code range so it starts at the selected widget's
+  `egui::Area::new(...)` line and stops at that block's closing `});`; it no
+  longer includes the `egui::CentralPanel::default()` preamble.
+- Code highlight state now follows the full canvas selection set: multi-select
+  highlights every selected widget block, and deselecting clears the code
+  highlight.
+- Rubber-band selection now previews candidate widgets while dragging and
+  requests a repaint after release so multi-selection appears immediately on the
+  canvas.
+- Added a left-panel `Stack` toggle: tabs remain, but users can show Palette,
+  Properties, Layers/Outline, Components, and Templates together as collapsible
+  sections in the same scrolling left panel.
+- Renamed/helped the Layers view as "Layers / Outline" in UI copy. Current
+  behavior is draw-order outline of existing canvas widgets; adding items still
+  happens through Palette/Templates.
+- Improved Lazare paste semantics:
+  - pasted orphan known-widget lines (for example an `egui::Button::new(...)`
+    line) now create a widget immediately;
+  - pasted duplicate generated blocks with the same `widget_<uuid>` now create a
+    fresh duplicate widget instead of mutating the original twice;
+  - newly-created paste results canonicalize the code buffer immediately so the
+    next frame has stable fresh UUIDs.
+- Added parser regression tests for duplicate pasted blocks and orphan pasted
+  button lines.
+- Verification after correction: `cargo fmt --check`, `cargo check`,
+  `cargo test` (164 passed, 1 ignored), `cargo clippy -- -D warnings`, and
+  `scripts/check-text-encoding.ps1` all clean. `cargo run` smoke launched and was
+  stopped after 8 seconds.
+
+---
+
+## 2026-06-03 — Generated-Export Compile Proof (cargo check fixture)
+
+### Docs Reviewed Before Editing
+- `docs/PROMPT_CONTRACT.md`, `docs/CODE_COOP.md`,
+  `docs/feature-evaluation/rust-centric-visual-features.md`, `docs/ROADMAP.md`
+- `src/codegen/export.rs`, `src/codegen/rust_wiring.rs`,
+  `src/codegen/field_collector.rs`, `src/project/schema.rs`
+
+### Derivation (before coding)
+- Export fn writing files: `export::write_project(tree, dest)` → `project_files(tree)`.
+- Files required for `cargo check`: `Cargo.toml`, `src/main.rs`, `src/app.rs`.
+- External deps: always `eframe`/`egui` 0.29 (cached in rohkai's lockfile); `rfd`
+  only for FilePicker; Custom descriptor deps. Fixture uses eframe+egui only.
+- Temp dir without crates: `std::env::temp_dir()` + pid/nanos, `std::process::Command`
+  `cargo check`, shared `CARGO_TARGET_DIR`, `std::fs::remove_dir_all` cleanup.
+- Feature matrix: top Button Click + DoubleClick, nested TextInput LostFocus,
+  nested Slider DragStopped, async Plain, async Result, ≥1 binding.
+- Feasibility: real `cargo check` fixture IS implementable with std only → proceeded.
+
+### Changes Made (`src/codegen/export.rs` tests)
+- `compile_fixture_tree()` — fixture UiTree covering the full matrix (6 widgets:
+  Button[Click+DoubleClick], async-Plain Button, async-Result Button, Frame with
+  TextInput[LostFocus] + Slider[DragStopped] children; bindings `name: String`,
+  `vol: f32`).
+- `unique_temp_dir(tag)` — std-only unique temp path (pid + nanos).
+- `export_compile_fixture_cargo_check` (`#[ignore]`) — `write_project` to temp,
+  `cargo check --quiet` via `std::process::Command` with shared `CARGO_TARGET_DIR`;
+  panics with stderr on failure; cleans up on success.
+- `export_compile_fixture_generates_required_files_and_matrix` (always-run smoke) —
+  asserts the three files exist + every matrix marker present, no compilation.
+- `button_click_and_double_click_both_emitted_no_suppression` — locks the ordering
+  decision: both gates emitted off one response, Click not suppressed (egui-native).
+
+### Verification
+- `cargo fmt --check`: clean
+- `cargo check`: clean
+- `cargo test`: 159 passed, 0 failed, 1 ignored
+- **Ignored compile fixture run manually**: `cargo test export_compile_fixture_cargo_check
+  -- --ignored` → **1 passed in 29.87s** (generated crate compiles against cached deps).
+- `cargo clippy -- -D warnings`: clean (project gate)
+- `scripts/check-text-encoding.ps1`: OK
+
+### Decision: ignored vs non-ignored
+Kept `#[ignore]` (30s vs the 0.02s default suite — too slow for every `cargo test`),
+paired with the fast always-run smoke, per the goal's item 6.
+
+### Remaining Gaps (honest)
+- Compile fixture is opt-in (`--ignored`); no CI wiring for it yet.
+- Fixture covers event/async; does not yet include channels / iterator pipelines /
+  trait impls.
+- Worker body is a user TODO stub; no status-widget binding, cancellation,
+  progress streaming, or typed task I/O.
+
+---
+
+## 2026-06-03 — Nested/Frame-Child Event Export Parity
+
+### Docs Reviewed Before Editing
+- `docs/PROMPT_CONTRACT.md`, `docs/CODE_COOP.md`,
+  `docs/feature-evaluation/rust-centric-visual-features.md`, `docs/ROADMAP.md`
+- `src/project/schema.rs`, `src/panels/properties.rs`, `src/codegen/export.rs`,
+  `src/codegen/rust_wiring.rs`
+
+### Derived event/export path matrix (before coding)
+- Source of truth: `WidgetKind::supported_events()` (exhaustive).
+- UI surface: `properties.rs::show_event_handler` (same for top-level or nested).
+- Top-level export: `gen_app_rs` arms → `event_dispatch_block` (already full parity).
+- Nested/frame-child export: `export_child_line` (from Frame arm) — **the gap**.
+- Custom/template: `Custom(_)` is not in `supported_events` (no events); templates
+  reuse the normal paths. Live `egui_emitter` is the canvas preview, not export.
+- Feasibility: every event-capable child kind CAN support its events via
+  `ui.put(...)`/`ui.radio_value(...)` Response or `allocate_ui_at_rect(combo)`.
+  No kind excluded → proceeded.
+
+### Problem
+`export_child_line` rendered Frame children with no event handlers: Button child
+emitted an empty `.clicked() {}`; TextInput/Slider/etc. emitted the widget with no
+handler; ComboBox/FontComboBox children were dead `Label` placeholders. A nested
+widget could show event rows in Properties that export silently ignored.
+
+### Changes Made (`src/codegen/export.rs`)
+- New `export_child_event_dispatch(child, resp_expr, registry)`: binds
+  `let child_response = <resp_expr>;` then one `if child_response.<method>() { <handler_call> }`
+  per wired event, routed through `rust_wiring::handler_call()` + registry.
+- New `export_child_combo(...)`: renders a real interactive `egui::ComboBox` at the
+  child rect via `allocate_ui_at_rect`, returns an inner `changed` bool, gates the
+  handler on `child_combo.inner == Some(true)`.
+- Rewrote child arms Button/TextInput/TextArea/Slider/SpinBox/Checkbox/RadioButton
+  to use the dispatcher; ComboBox/FontComboBox use `export_child_combo`.
+- Threaded `handler_registry` into `export_child_line` + its Frame call site.
+- Handler collection already iterates all `tree.widgets` (children included), so the
+  central registry, conflict detection, and async task contract already covered
+  child handlers — only the call site was missing.
+
+### Event ordering decision (documented)
+Button `Click` and `DoubleClick` are wired independently and both fire per egui's
+native semantics (single `clicked()` on first release, `double_clicked()` on the
+second click). Click is intentionally NOT suppressed — same as top-level.
+
+### Tests (+9 → 157)
+- `every_supported_event_is_exported_in_nested_child`: nested invariant over every
+  `(kind, event)` pair (Result-mode `if let Err` routing proof + per-event gate +
+  child-dispatch-path check).
+- 6 focused nested: Button Click, Button DoubleClick, TextInput LostFocus, Slider
+  DragStopped (async), SpinBox DragStopped, Checkbox Change.
+- `nested_combo_change_routes_through_interactive_combo`: proves the child renders a
+  real combo (not a dead label) and routes On Change.
+- `conflict_between_top_level_and_nested_child_is_detected_and_normalized`.
+
+### Verification
+- `cargo fmt --check`: clean
+- `cargo check`: clean (no warnings)
+- `cargo test`: 157 passed, 0 failed (+9 vs prior 148)
+- `cargo clippy -- -D warnings`: clean (project gate)
+- `scripts/check-text-encoding.ps1`: OK
+
+### Remaining Gaps (honest)
+- No full `cargo build` compile fixture on generated output — proof is in-process
+  generated-code string assertions only.
+- Worker body is a user TODO stub; no status-widget binding, cancellation,
+  progress streaming, or typed task I/O.
+
+---
+
+## 2026-06-03 — Prompt Contract Standard For Agent Goals
+
+### Docs Reviewed Before Editing
+- `AGENTS.md`, `CLAUDE.md`
+- `docs/CODE_INDEX.md`, `docs/CODE_COOP.md`, `docs/DEVLOG.md`
+
+### Problem
+Recent Claude goal prompts produced real work, but repeatedly stopped at a local
+surface: explicit widget lists instead of derived sets, primary events instead of
+all events, and top-level export instead of nested export. The missing ingredient
+was not just more words; it was a required pre-coding decomposition step.
+
+### Changes Made
+- Added `docs/PROMPT_CONTRACT.md`, a reusable skeleton for inter-agent goals.
+- The skeleton requires agents to derive the source-of-truth set from code,
+  enumerate UI/runtime/export/nested/custom paths, stop before editing if any
+  required path is excluded, and add invariant tests that fail on drift.
+- Added pointers to the contract in `AGENTS.md`, `CLAUDE.md`, and
+  `docs/CODE_INDEX.md`.
+- Added a `docs/CODE_COOP.md` handoff note for future agents.
+
+### Verification
+- `scripts/check-text-encoding.ps1`: OK
+- `cargo fmt --check`: clean
+
+### Follow-ups
+- Use this contract for the next Claude prompt, especially if closing the
+  remaining nested/frame child export event gap.
+
+---
+
+## 2026-06-02 — FULL Event Export Parity (primary + secondary)
+
+### Docs Reviewed Before Editing
+- `docs/CODE_COOP.md`, `docs/feature-evaluation/rust-centric-visual-features.md`,
+  `docs/ROADMAP.md`
+- `src/project/schema.rs`, `src/panels/properties.rs`, `src/codegen/export.rs`,
+  `src/codegen/rust_wiring.rs`, `src/codegen/egui_emitter.rs` (reference pattern)
+
+### Problem
+The prior patch fixed only PRIMARY event parity. Export wired `primary_event()`
+only, so secondary events stayed exposed in Properties but ignored by export:
+Button DoubleClick, TextInput/TextArea LostFocus, Slider/SpinBox DragStopped.
+
+### Complete (WidgetKind, WidgetEvent) → egui method matrix (now all exported)
+- Button: Click→`clicked()`, DoubleClick→`double_clicked()`
+- TextInput: Change→`changed()`, LostFocus→`lost_focus()`
+- TextArea: Change→`changed()`, LostFocus→`lost_focus()`
+- Slider: Change→`changed()`, DragStopped→`drag_stopped()`
+- SpinBox: Change→`changed()`, DragStopped→`drag_stopped()`
+- Checkbox: Change→`changed()`
+- RadioButton: Change→`changed()` (radio_value marks changed)
+- ComboBox: Change→inner `combo_changed`
+- FontComboBox: Change→inner `font_combo.inner == Some(true)`
+
+### Changes Made
+- `src/codegen/export.rs`:
+  - Handler collection loop now iterates `w.kind.supported_events()` and reads
+    each event's field via new `event_field_handler` — conflict detection covers
+    all event fields, not just primary.
+  - New `event_egui_method` (event→Response predicate) and `event_dispatch_block`
+    (binds the `Response` once, emits one `if evt_response.<method>() { <handler_call> }`
+    per wired event; plain statement when no handler). Button/TextInput/TextArea/
+    Slider/SpinBox/Checkbox/RadioButton arms delegate to it; ComboBox/FontComboBox
+    keep their bespoke combo gates (Change-only). Every call routes through
+    `rust_wiring::handler_call()` + the central registry — no raw `self.h();`
+    except inside `handler_call()` output.
+  - egui 0.29 `double_clicked()`/`lost_focus()`/`drag_stopped()` verified against
+    `egui_emitter.rs` (the live preview already emits them) and `interaction.rs`.
+- `src/project/schema.rs`: `primary_event()` is now `#[cfg(test)]` — production no
+  longer needs a "primary" notion since export wires every event.
+
+### Tests
+- Rewrote the invariant: iterates EVERY `(kind, event)` pair from
+  `supported_events()`, Result mode, asserts the `if let Err(e) = self.h_evt()`
+  routing proof AND the correct per-event gate method. Fails if any supported
+  event lacks routing.
+- +5 focused secondary tests (Button DoubleClick, TextInput LostFocus, TextArea
+  LostFocus, Slider DragStopped, SpinBox DragStopped) — each Result or async.
+- +1 primary+secondary on one widget (Slider Change + DragStopped both wired off
+  one `evt_response`).
+- +1 conflict across event fields (Button Click async/Plain vs Button DoubleClick
+  sync/Result, same name) → conflict header + normalized call sites.
+
+### Verification
+- `cargo fmt --check`: clean
+- `cargo check`: clean (no warnings)
+- `cargo test`: 148 passed, 0 failed (+7 vs prior 141)
+- `cargo clippy -- -D warnings`: clean (project gate)
+- `cargo clippy --all-targets`: 3 lints, all PRE-EXISTING and not in touched files
+  (examples/hello_button, codegen/field_collector test helper, panels/templates.rs)
+- `scripts/check-text-encoding.ps1`: OK
+
+### Remaining Gaps (honest)
+- Container-child export (`export_child_line`) wires no events for nested widgets —
+  separate, pre-existing path affecting all events (not a secondary-event deferral).
+- No full `cargo build` compile fixture on generated output.
+- Worker body is a user TODO stub; no status-widget binding, cancellation,
+  progress streaming, or typed task I/O.
+
+---
+
+## 2026-06-02 — Properties/Export Event Parity (Codex Review)
+
+### Docs Reviewed Before Editing
+- `docs/CODE_COOP.md`, `docs/feature-evaluation/rust-centric-visual-features.md`
+- `src/panels/properties.rs`, `src/codegen/export.rs`,
+  `src/codegen/rust_wiring.rs`, `src/project/schema.rs`
+
+### Problem
+Codex found a correctness gap: the Properties panel exposes `On Change` for
+TextArea, SpinBox, and FontComboBox, but export emitted those widgets without
+invoking their `on_change` handlers. A user could wire a handler in the UI and the
+exported app would silently ignore it. Root cause: Properties and export each had
+their own `match w.kind` event list, and the two drifted.
+
+### Authoritative event-capable widget list (derived from `show_event_handler`)
+- Button → Click (primary), Double-click
+- TextInput → Change (primary), Lost Focus
+- TextArea → Change (primary), Lost Focus
+- Slider → Change (primary), Drag Stopped
+- SpinBox → Change (primary), Drag Stopped
+- Checkbox → Change
+- ComboBox → Change
+- FontComboBox → Change
+- RadioButton → Change
+
+### Changes Made
+- `src/project/schema.rs`: new `WidgetEvent` enum and `WidgetKind::supported_events()`
+  (exhaustive, wildcard-free match — the single source of truth), plus
+  `primary_event()` / `is_event_capable()`, and a `#[cfg(test)] EVENT_CAPABLE_KINDS`
+  enumeration the parity test walks. 4 new schema tests.
+- `src/panels/properties.rs`: `show_event_handler` derives its applicable-event
+  rows from `kind.supported_events()` through a new `event_ui_meta` mapper instead
+  of a local hard-coded match. Behavior preserved exactly (same fields/labels/hints).
+- `src/codegen/export.rs`:
+  - Handler collection now uses `w.kind.primary_event()` to pick Click vs Change
+    and to skip non-event kinds entirely.
+  - TextArea and SpinBox arms now emit `if <resp>.changed() { <handler_call> }`
+    using the central registry (mirrors TextInput/Slider).
+  - FontComboBox arm returns an inner `changed` bool from its `show_ui` closure,
+    binds `let font_combo = …` only when a handler exists, and gates the call on
+    `font_combo.inner == Some(true)`.
+  - Added a top-of-`app.rs` `!! HANDLER CONFLICTS DETECTED` summary block listing
+    every conflicting handler (in addition to the existing near-handler comment).
+  - Tests: +5 — an invariant test iterating `EVENT_CAPABLE_KINDS` and proving each
+    routes through `handler_call()` (via Result-mode `if let Err` wrapper that a
+    bare `self.h();` bypass cannot produce); focused TextArea (async Plain), SpinBox
+    (Result), FontComboBox (Result); and a FontComboBox-without-handler test proving
+    no dangling `font_combo` binding (would be an unused-var warning in the export).
+
+### Verification
+- `cargo fmt --check`: clean
+- `cargo check`: clean (no warnings)
+- `cargo test`: 141 passed, 0 failed (+9 vs prior 132)
+- `cargo clippy -- -D warnings`: clean
+- `scripts/check-text-encoding.ps1`: OK
+
+### Remaining Gaps (documented honestly in the eval doc)
+- Secondary events (double-click, lost-focus, drag-stopped) are exposed in
+  Properties but export wires only the primary event per kind.
+- No full `cargo build` compile fixture on generated output.
+- Worker body is a user TODO stub; no status-widget binding, cancellation,
+  progress streaming, or typed task I/O.
+
+---
+
+## 2026-06-02 — Async Wiring Gap Fixes (Codex Review)
+
+### Docs Reviewed Before Editing
+- `docs/CODE_COOP.md`, `docs/feature-evaluation/rust-centric-visual-features.md`
+- `src/codegen/rust_wiring.rs`, `src/codegen/export.rs`,
+  `src/panels/properties.rs`, `src/project/schema.rs`
+
+### Problem (four gaps from Codex review)
+1. No repaint scheduling while async tasks are in flight — exported apps stall waiting for user input.
+2. TextInput/Slider/Checkbox/ComboBox/RadioButton handler call sites bypassed `handler_call()`, losing async-launcher and Result/Option wrapping.
+3. Duplicate handler names silently used "first wins" with no conflict signal or call-site normalization.
+4. No combined test proving all three gap fixes work together.
+
+### Changes Made
+- `src/codegen/rust_wiring.rs`: added `async_repaint_block()` — emits a
+  `ctx.request_repaint_after(Duration::from_millis(16))` guard conditioned on
+  any `{h}_running` field being true. 3 new tests.
+- `src/codegen/export.rs`:
+  - Handler collection changed from `HashSet` + 3-tuple to `HashMap<name→usize>` +
+    4-tuple `(name, result, is_async, has_conflict)`. Conflict flag set when a
+    later widget shares the name with a different async/result mode.
+  - `handler_registry: HashMap<String, (HandlerResult, bool)>` built from first
+    definitions. All call sites — Button, TextInput, Slider, Checkbox, ComboBox,
+    RadioButton — look up their handler's mode from the registry rather than the
+    widget's own fields. This normalizes conflicting call sites to the registered mode.
+  - `// CODEGEN CONFLICT` comment emitted before a conflicted handler's stub.
+  - Repaint block inserted after drain blocks in `update()`.
+  - 4 new tests: repaint guard, non-button async launcher routing, conflict
+    warning + call-site normalization (2 call sites both normalize), combined
+    3-widget coherence fixture.
+
+### Verification
+- `cargo fmt --check`: clean
+- `cargo check`: clean
+- `cargo test`: 132 passed, 0 failed
+- `cargo clippy -- -D warnings`: clean
+- `scripts/check-text-encoding.ps1`: OK
+
+### Remaining Gaps (documented in eval doc)
+- Worker body is still a user TODO stub.
+- No full `cargo build` compile fixture on generated output.
+- `{h}_running`/`{h}_error` not auto-bound to a spinner/error label widget.
+- No cancellation or progress streaming.
+
+---
+
+## 2026-06-02 — Stage 11 Async Task Wiring: Resolve Overclaim
+
+### Docs Reviewed Before Editing
+- `docs/feature-evaluation/depth-model.md`
+- `docs/feature-evaluation/rust-centric-visual-features.md`
+- `docs/CODE_COOP.md`
+- `src/codegen/rust_wiring.rs`, `src/codegen/export.rs`,
+  `src/panels/properties.rs`, `src/project/schema.rs`
+
+### Problem
+Async task wiring was an overclaim: `async_handler` only generated a
+`std::thread::spawn` block with TODO comments — no real work call, no completion
+send, no receiver drain, no status/error.
+
+### Changes Made
+- `src/codegen/rust_wiring.rs`: new emitters `async_msg_type`,
+  `async_struct_fields`, `async_default_fields`, `async_launcher_method`,
+  `async_worker_fn`, `async_drain_block`; `handler_call` async branch now calls
+  the launcher (`self.{h}();`).
+- `src/codegen/export.rs`: moved handler collection above the `ExportedApp`
+  struct; emits async fields into struct + `Default`; emits the drain block at
+  the top of `update()`; emits launcher methods (async) vs plain stubs
+  (non-async) in `impl ExportedApp`; emits module-level worker fns.
+- Generated contract per async handler: `{h}_rx`/`{h}_running`/`{h}_error`
+  fields, launcher `fn {h}(&mut self)` (guards double-launch, spawns, sends
+  `{h}_worker()` over mpsc), free-fn worker (no `&mut self`), borrow-safe
+  `try_recv` drain recording status/error. MSG = `()` / `Result<(), String>` /
+  `Option<()>`.
+
+### Verification
+- `cargo fmt --check`, `cargo check`, `cargo clippy -- -D warnings` clean.
+- `cargo test` — 125 passing (9 new: rust_wiring async emitters + export async
+  paths + non-async regression).
+- `scripts/check-text-encoding.ps1` — OK.
+
+### Honesty / Risks
+- Reclassified to **Functional MVP**, not top-class. Worker body is a
+  user-filled stub; no status-widget auto-binding, cancellation, progress, or
+  generated-project compile fixture yet (token tests only).
+- Std-only (no tokio/new crates), preserving architecture rules.
+- Preserved all uncommitted Codex changes; did not touch SVG/WASM/DB/own
+  renderer/visual widget maker.
+
+### Follow-ups
+- Add a generated-project compile fixture for async Plain + Result.
+- Auto-bind `{h}_running`/`{h}_error` to a spinner/label widget.
+
 ## 2026-06-02 — Remaining Roadmap Item Evaluation
 
 ### Docs Reviewed Before Editing

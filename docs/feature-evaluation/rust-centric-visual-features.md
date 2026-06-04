@@ -17,7 +17,7 @@ programming systems.
 |---|---:|---|
 | Ownership visualization | 3 | Usable read-only overlay derived from `field_collector`. |
 | Error-flow visualization | 2-3 | Useful handler-contract badges, not control-flow analysis. |
-| Async task wiring | 1-2 | UI/schema/codegen surface exists, but generated async body is a TODO spawn stub. |
+| Async task wiring | 2 | Functional MVP: generated code launches a worker thread, sends completion over mpsc, drains via try_recv, records running/error. Worker body is a user-filled stub. |
 | Channel connections | 2 | Exported mpsc fields/init exist; no visual connection graph or send/receive wiring. |
 | Iterator pipeline builder | 2 | Generates method text from ordered map/filter ops; no type validation or execution. |
 | Trait binding | 1-2 | Emits user-authored impl text; no validation beyond simple non-empty checks. |
@@ -109,46 +109,123 @@ Closure Criteria:
 
 ### Async Task Wiring
 
-Status: Surface / Design-Time MVP
+Status: Functional MVP
 
 Current Implementation Contract:
 
 - `WidgetInstance.async_handler: bool` persists per widget.
 - Properties panel shows "Run async (background thread)" when a handler exists.
-- `rust_wiring::handler_call` emits a `std::thread::spawn(move || { ... })`
-  block when async is enabled.
-- The generated async block contains TODO comments and does **not** call the
-  handler or send a result back to the app.
+- Export generates a **real** std-only task contract (no tokio), via
+  `codegen::rust_wiring`:
+  - Per-handler `ExportedApp` fields: `{h}_rx: Option<Receiver<MSG>>`,
+    `{h}_running: bool`, and (Result mode) `{h}_error: Option<String>`, all
+    initialized in `Default`.
+  - A launcher method `fn {h}(&mut self)` that guards double-launch, clears the
+    error, creates an `mpsc::channel::<MSG>()`, `std::thread::spawn`s a closure
+    that `tx.send({h}_worker())`, and stores the receiver.
+  - A module-level free fn `fn {h}_worker() -> MSG` that runs off the UI thread
+    and takes **no** `&mut self` (honest UI/worker split).
+  - A drain block at the top of `update()` that `try_recv`s completion,
+    borrow-safely sets `{h}_running = false`, records `{h}_error` for `Err`, and
+    clears the receiver.
+  - A `ctx.request_repaint_after(Duration::from_millis(16))` guard emitted after
+    drain blocks: the exported app repaints promptly while any task is in flight,
+    then returns to event-driven repainting once all tasks complete.
+  - `MSG` is `()` (Plain), `Result<(), String>` (Result), or `Option<()>`
+    (Option).
+- **Full Properties/export event parity is enforced — every supported event is
+  exported.** The event set is a single source of truth —
+  `WidgetKind::supported_events()` in `project::schema` (an exhaustive,
+  wildcard-free match, so a new kind will not compile until its events are
+  declared). Both the Properties panel and export derive from it. Export now
+  collects a handler from **every** event field (not just the primary) and emits,
+  per widget, a single bound `Response` with one `if evt_response.<method>() { … }`
+  per event that has a handler — every call routed through
+  `rust_wiring::handler_call()` via the central registry, so async/plain/result/
+  option semantics are consistent. Complete `(WidgetKind, WidgetEvent) → egui
+  method)` matrix:
+  - Button: Click → `clicked()`, DoubleClick → `double_clicked()`
+  - TextInput: Change → `changed()`, LostFocus → `lost_focus()`
+  - TextArea: Change → `changed()`, LostFocus → `lost_focus()`
+  - Slider: Change → `changed()`, DragStopped → `drag_stopped()`
+  - SpinBox: Change → `changed()`, DragStopped → `drag_stopped()`
+  - Checkbox: Change → `changed()`
+  - RadioButton: Change → `changed()` (radio_value marks the response changed)
+  - ComboBox: Change → inner `combo_changed` flag
+  - FontComboBox: Change → inner `font_combo.inner == Some(true)` flag
+  No event row visible in Properties is ignored by export. `drag_stopped()`,
+  `double_clicked()`, and `lost_focus()` are the exact egui 0.29 `Response`
+  methods used (verified against the live `egui_emitter` preview path).
+- **Parity holds in the nested/frame-child export path too.** `export_child_line`
+  now binds a `child_response` (or `child_combo` for combos) and emits the same
+  per-event `if child_response.<method>() { … }` dispatch through
+  `rust_wiring::handler_call()` + the registry. The same `(kind, event) → method`
+  matrix applies to children. ComboBox/FontComboBox children — previously dead
+  `Label` placeholders that could not fire `On Change` — now render a real
+  interactive `egui::ComboBox` (via `allocate_ui_at_rect`) gated on
+  `child_combo.inner == Some(true)`. Handler collection already iterates all
+  `tree.widgets` (children included), so the central registry, conflict detection,
+  and async task contract cover child handlers; a top-level↔child conflict is
+  detected and normalized. **Both top-level and nested/frame-child export reach
+  full event parity** — no Properties event row is ignored by either path.
+  Event ordering: Button `Click` and `DoubleClick` are wired independently and
+  both fire per egui's native semantics (single `clicked()` on first release,
+  `double_clicked()` on the second click); Click is intentionally not suppressed.
+- Duplicate handler names detected across **all** event fields (not just primary):
+  first definition wins; all call sites normalized to that definition's mode; a
+  `// CODEGEN CONFLICT` comment is emitted near the handler **and** a
+  `!! HANDLER CONFLICTS DETECTED` summary block at the top of generated `app.rs`
+  lists every conflicting handler.
+- Tests assert: receiver field, spawn+send+try_recv, Result error storage, no
+  TODO-only placeholder, non-async Plain/Result/Option, repaint guard present,
+  non-button async launcher routing, conflict detection + call-site normalization,
+  combined three-widget async fixture coherence, **two invariants — over every
+  `(kind, event)` pair from `supported_events()` for BOTH the top-level and the
+  nested/frame-child export paths** (each fails if any supported event lacks
+  `handler_call()` routing or the correct gate method), focused secondary events
+  (Button DoubleClick, TextInput/TextArea LostFocus, Slider/SpinBox DragStopped),
+  focused nested-child events (Button Click/DoubleClick, TextInput LostFocus,
+  Slider/SpinBox DragStopped, Checkbox Change, interactive ComboBox child),
+  primary+secondary on one widget, an across-event-field conflict, and a
+  top-level↔nested-child conflict case.
 
-Insufficient Existing Surface:
+Insufficient Existing Surface (remaining gaps to top-class):
 
-- The presence of `async_handler` does not satisfy "async task wiring".
-- The generated code is a compilable placeholder pattern, not a working
-  background task pipeline.
-- No captured state, channel result, completion handling, cancellation, or error
-  propagation is implemented.
+- The `{h}_worker()` body is still a user-filled TODO stub — RohKai generates the
+  plumbing, not the work.
+- No cancellation, no progress streaming, no typed task input model.
+- `{h}_running`/`{h}_error` are not yet auto-bound to a UI widget (spinner,
+  error label); the user reads them manually.
+
+Closed proof gap — generated-export compile fixture:
+
+- A real `cargo check` now runs against a generated export crate
+  (`export_compile_fixture_cargo_check`, `#[ignore]`, run via
+  `cargo test export_compile_fixture_cargo_check -- --ignored`). The fixture
+  exercises the release-critical export surface: top-level Button Click +
+  DoubleClick, async Plain + Result, Frame child TextInput LostFocus + Slider
+  DragStopped, FilePicker/rfd, mpsc channel fields, iterator pipeline method,
+  simple local trait binding, and `String`/`f32` state bindings. An always-run
+  smoke (`export_compile_fixture_generates_required_files_and_matrix`) proves the
+  project is generatable and every matrix marker is present without compiling.
+  This replaces the prior "string-level proof only" caveat for those paths:
+  generated export code is now proven to compile, not just to contain the right
+  substrings. Remaining: the fixture is opt-in (deps make it too slow for the
+  default suite); no automated CI wiring for the `--ignored` run yet.
 
 Desired Closure Contract:
 
-- Define an explicit async task model: inputs, output type, channel, status
-  field, error field, cancellation policy.
-- Generate code that moves owned data into the thread, performs work, sends a
-  typed result, and drains the receiver in `update()`.
-- Expose task state in Properties/preview: idle, running, succeeded, failed.
-
-Acceptance Delta:
-
-- Replace comment-only spawn body with a generated task runner contract.
-- Connect task completion to `AppState` or a generated task-status field.
-- Validate that user-selected handlers are compatible with async execution.
+- Auto-bind `{h}_running`/`{h}_error` to chosen widgets (spinner/label) so status
+  is visible without manual code.
+- Add a typed task input/output model and optional progress channel.
+- Add cancellation policy and runtime behavior tests beyond compile proof.
 
 Closure Criteria:
 
-- Exported app with an async button compiles and updates state when the worker
-  sends a result.
-- UI cannot enable async without either a generated result destination or an
-  explicit "fire and forget" mode.
-- Tests prove async Plain and async Result paths emit complete code, not TODOs.
+- Exported app with an async button compiles and updates a bound status widget
+  when the worker sends a result.
+- A generated-project compile fixture covers async Plain + async Result.
+- Cancellation and progress are expressible from the UI.
 
 ### Channel Connections
 
@@ -192,14 +269,18 @@ Current Implementation Contract:
 - `AppProps.rust_wiring.iterators` stores named pipelines with source expression
   and ordered `Map`/`Filter` ops.
 - Rust Wiring window edits pipeline name/source/op expressions.
-- Export emits an `impl ExportedApp` method returning `Vec<_>`.
-- Tests assert operation order and emitted method strings.
+- Export emits a compile-valid `impl ExportedApp` method returning
+  `impl IntoIterator + '_` and collecting through `Vec<_>` internally. This
+  replaced the previous invalid `fn name(&self) -> Vec<_>` item signature.
+- Tests assert operation order, emitted method strings, and generated-project
+  compile proof covers one pipeline method.
 
 Insufficient Existing Surface:
 
 - This is string-based code assembly, not a type-aware pipeline builder.
 - It does not validate source existence, item type, expression syntax, borrow
-  mode, return type, or whether the method compiles.
+  mode, or semantic return type. The compile fixture proves the representative
+  generated method compiles, not that arbitrary user expressions are type-safe.
 - The generated method is not automatically used by widgets or previews.
 
 Desired Closure Contract:
@@ -224,14 +305,17 @@ Current Implementation Contract:
 - `AppProps.rust_wiring.trait_impls` stores trait name, method signature, and
   method body strings.
 - Rust Wiring window edits these strings.
-- Export appends `impl Trait for ExportedApp { ... }` blocks.
-- Tests assert the block text is formed.
+- Export appends a local `trait TraitName { method; }` declaration for simple
+  trait names, then `impl TraitName for ExportedApp { ... }`. Path-like external
+  traits remain user-authored/external.
+- Tests assert the block text is formed, and the generated-project compile
+  fixture covers one simple local trait binding.
 
 Insufficient Existing Surface:
 
 - This is raw Rust text insertion, not visual trait binding.
-- RohKai does not know whether the trait exists, whether the method signature
-  matches, whether the body compiles, or whether widgets use the trait.
+- RohKai does not deeply validate method signatures, body semantics, external
+  trait existence, or whether widgets use the trait.
 
 Desired Closure Contract:
 
@@ -281,7 +365,7 @@ Closure Criteria:
 
 | Gap | Why It Matters |
 |---|---|
-| No generated-project compile fixture for full Stage 11 | String tests do not prove exported apps compile with combined async/channel/trait/pipeline features. |
+| ~~No generated-project compile fixture~~ **Closed for key release export paths** — a real `cargo check` runs on a generated crate covering top-level + nested events, async Plain/Result, FilePicker/rfd, channels, one iterator pipeline, one simple local trait binding, and state bindings. | Proves generated export code compiles across those paths, not just matches substrings. |
 | Raw Rust strings are mostly unvalidated | Trait impls, iterator expressions, channel types, and handler names can create invalid Rust. |
 | No runtime simulation | Users cannot see channels, tasks, iterator outputs, or errors run in preview. |
 | No visual connection graph | Stage 11 is mostly forms + overlays, not yet node/edge visual programming. |
@@ -289,15 +373,32 @@ Closure Criteria:
 
 ## Recommended Next Work
 
-1. Add a Stage 11 generated-project compile fixture that combines one widget
-   handler, Result mode, one channel, one iterator, and one trait impl.
-2. Reclassify async task wiring in the roadmap as MVP until it actually calls
-   work and returns results through a channel.
-3. Add validation helpers for Rust identifiers and simple type strings used by
+1. ~~Add a Stage 11 cargo compile fixture~~ **Done for key release paths** — a
+   real `cargo check` runs on a generated crate (top-level Button
+   Click+DoubleClick, nested TextInput LostFocus + Slider DragStopped, async
+   Plain + Result, FilePicker/rfd, mpsc channel fields, iterator method, simple
+   local trait binding, and state bindings) via
+   `export_compile_fixture_cargo_check` (`#[ignore]`) plus a fast always-run
+   smoke. Extend later to project-tree/assets, SVG image export permutations, and
+   data widgets.
+2. ~~Handler contract consistency~~ **Done** — all event-capable widgets route
+   through `handler_call()`; async call sites invoke the launcher; duplicate
+   handler conflict is detected and call sites are normalized.
+3. ~~Repaint gap~~ **Done** — `ctx.request_repaint_after(16ms)` guard emitted
+   while any async task is in flight.
+3a. ~~Properties/export event parity~~ **Done (full, all paths)** — export collects
+   handlers from every event field and emits one bound-`Response` gate per event;
+   all primary AND secondary events (DoubleClick, LostFocus, DragStopped) route
+   through `handler_call()` in BOTH the top-level and the nested/frame-child
+   (`export_child_line`) export paths. ComboBox/FontComboBox children upgraded
+   from dead labels to real interactive combos. Two invariants (top-level +
+   nested) over every `(kind, event)` pair fail on any future drift. No event row
+   in Properties is ignored by any export path.
+4. Add validation helpers for Rust identifiers and simple type strings used by
    channels, pipelines, traits, and handlers.
-4. Add a visual Rust Flow panel showing widgets, handlers, channels, tasks,
+5. Add a visual Rust Flow panel showing widgets, handlers, channels, tasks,
    results, and AppState fields as nodes/edges.
-5. Make Macro Palette insertion target-aware, starting with "insert into active
+6. Make Macro Palette insertion target-aware, starting with "insert into active
    handler" rather than append-to-buffer.
 
 ## Evaluation Summary
@@ -306,7 +407,11 @@ Claude's Stage 11 implementation is not hollow overall: it added real schema,
 menus, panels, overlays, and codegen/export paths. But the depth varies sharply.
 Ownership overlay and error-mode signatures are the strongest. Channels and
 iterator pipelines are useful MVP code-generation helpers. Trait binding and
-macro palette are power-user text surfaces. Async task wiring is the clearest
-overclaim: the current generated spawn block is a placeholder pattern, not a
-working async task pipeline.
+macro palette are power-user text surfaces.
 
+Async task wiring — previously the clearest overclaim — was resolved: export now
+generates a working std-only task pipeline (launcher → `thread::spawn` → `mpsc`
+send → `try_recv` drain → running/error status), with an honest UI/worker split
+(the worker is a free fn with no `&mut self`). It is now a genuine Functional MVP;
+the remaining gaps are auto-binding status to a widget, cancellation/progress, and
+a generated-project compile fixture.

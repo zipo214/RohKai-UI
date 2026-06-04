@@ -197,6 +197,7 @@ That runs:
 - text encoding policy checks
 - SVG importer tests
 - SVG rasterizer tests
+- SVG golden renderer fixtures
 - shared SVG core microsyntax tests
 - SVG source-preservation tests
 - deterministic output tests

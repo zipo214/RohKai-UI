@@ -73,6 +73,8 @@ pub struct SessionState {
     pub selected_component: Option<Uuid>,
     /// Active section in the compact left rail.
     pub left_panel_tab: LeftPanelTab,
+    /// Show multiple left-panel sections together instead of one active tab.
+    pub left_panel_stack: bool,
     /// Whether preview mode is active (F5 toggle).
     pub preview_mode: bool,
     /// Live runtime values for preview mode widgets.
@@ -108,6 +110,7 @@ impl Default for SessionState {
             selected_project_file: None,
             selected_component: None,
             left_panel_tab: LeftPanelTab::Palette,
+            left_panel_stack: false,
             preview_mode: false,
             preview_state: crate::canvas::preview::PreviewState::default(),
             show_ownership: false,
@@ -1970,11 +1973,17 @@ impl eframe::App for RohKaiApp {
         // Right panel: generated code (hidden in preview mode)
         // ---------------------------------------------------------------
         if !self.session.preview_mode {
+            let mut highlighted_ids = self.session.selected.clone();
+            if let Some(id) = self.session.highlighted_code_id {
+                if !highlighted_ids.contains(&id) {
+                    highlighted_ids.push(id);
+                }
+            }
             crate::panels::code_preview::show(
                 ctx,
                 &mut self.project.ui_tree,
                 CodePreviewArgs {
-                    highlighted_id: self.session.highlighted_code_id,
+                    highlighted_ids: &highlighted_ids,
                     scroll_to: &mut self.session.scroll_to_code,
                     scroll_to_handler: &mut self.session.scroll_to_handler,
                     code_buffer: &mut self.code.buffer,
@@ -1999,9 +2008,10 @@ impl eframe::App for RohKaiApp {
 
         let (palette_click, palette_drag, tmpl_action, props_action) =
             egui::SidePanel::left("left_panel")
+                .resizable(left_full)
                 .min_width(if left_full { 160.0 } else { 28.0 })
                 .default_width(if left_full { 280.0 } else { 28.0 })
-                .max_width(if left_full { 340.0 } else { 28.0 })
+                .max_width(if left_full { 520.0 } else { 28.0 })
                 .show(ctx, |ui| {
                     if !left_full {
                         ui.centered_and_justified(|ui| {
@@ -2070,6 +2080,9 @@ impl eframe::App for RohKaiApp {
                             LeftPanelTab::Templates,
                             "Templates",
                         );
+                        ui.separator();
+                        ui.toggle_value(&mut self.session.left_panel_stack, "Stack")
+                            .on_hover_text("Show multiple sections together in this left panel");
                     });
                     ui.separator();
 
@@ -2078,85 +2091,190 @@ impl eframe::App for RohKaiApp {
                     let mut props_action = crate::panels::properties::PropertiesAction::None;
                     let mut tmpl_action = crate::panels::templates::TemplateAction::None;
 
-                    match self.session.left_panel_tab {
-                        LeftPanelTab::Palette => {
-                            ui.label(egui::RichText::new("Palette").strong());
-                            ui.add_space(2.0);
-                            (palette_click, palette_drag) =
-                                crate::panels::palette::show_content(ui, &self.descriptors.widgets);
-                        }
-                        LeftPanelTab::Properties => {
-                            let shift_held = ui.input(|i| i.modifiers.shift);
-                            let code_pending = matches!(
-                                self.code.status,
-                                crate::panels::code_preview::CodeStatus::Pending
-                            );
-                            if code_pending {
-                                ui.label(
-                                    egui::RichText::new(
-                                        "Code has pending edits - property changes will reset",
-                                    )
-                                    .small()
-                                    .color(egui::Color32::from_rgb(234, 179, 8)),
-                                );
-                                ui.separator();
-                            }
-                            props_action = crate::panels::properties::show_content(
-                                ui,
-                                &mut self.project.ui_tree,
-                                &mut self.session.selected,
-                                shift_held,
-                                &self.descriptors.widgets,
-                            );
-                        }
-                        LeftPanelTab::Layers => {
-                            ui.label(egui::RichText::new("Layers").strong());
-                            ui.add_space(2.0);
-                            outline_action = crate::panels::outline::show_content(
-                                ui,
-                                &self.project.ui_tree,
-                                &self.session.selected,
-                                ctrl_held_inner,
-                                false,
-                            );
-                        }
-                        LeftPanelTab::Components => {
-                            ui.label(egui::RichText::new("Components").strong());
-                            if self.project.ui_tree.app_props.components.is_empty() {
-                                ui.label(
-                                    egui::RichText::new("No components yet. Add one below.")
-                                        .small()
-                                        .weak(),
-                                );
-                            }
-                            tray_action = crate::panels::component_tray::show_tray(
-                                ui,
-                                &self.project.ui_tree.app_props.components,
-                                selected_component,
-                            );
-                            if let Some(sel) = selected_component {
-                                if let Some(comp) = self
-                                    .project
-                                    .ui_tree
-                                    .app_props
-                                    .components
-                                    .iter_mut()
-                                    .find(|c| c.id == sel)
-                                {
-                                    ui.separator();
-                                    crate::panels::component_tray::show_config(ui, comp);
+                    egui::ScrollArea::vertical()
+                        .id_salt("left_panel_tab_scroll")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.set_max_width(ui.available_width());
+                            let show_palette = |ui: &mut egui::Ui,
+                                                palette_click: &mut Option<WidgetInstance>,
+                                                palette_drag: &mut Option<WidgetInstance>| {
+                                ui.label(egui::RichText::new("Palette").strong());
+                                ui.add_space(2.0);
+                                (*palette_click, *palette_drag) =
+                                    crate::panels::palette::show_content(
+                                        ui,
+                                        &self.descriptors.widgets,
+                                    );
+                            };
+
+                            if self.session.left_panel_stack {
+                                egui::CollapsingHeader::new("Palette")
+                                    .default_open(true)
+                                    .show(ui, |ui| {
+                                        (palette_click, palette_drag) =
+                                            crate::panels::palette::show_content(
+                                                ui,
+                                                &self.descriptors.widgets,
+                                            );
+                                    });
+                                egui::CollapsingHeader::new("Properties")
+                                    .default_open(!self.session.selected.is_empty())
+                                    .show(ui, |ui| {
+                                        let shift_held = ui.input(|i| i.modifiers.shift);
+                                        props_action = crate::panels::properties::show_content(
+                                            ui,
+                                            &mut self.project.ui_tree,
+                                            &mut self.session.selected,
+                                            shift_held,
+                                            &self.descriptors.widgets,
+                                        );
+                                    });
+                                egui::CollapsingHeader::new("Layers / Outline")
+                                    .default_open(true)
+                                    .show(ui, |ui| {
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "Shows canvas widgets in draw order. Add items from Palette or Templates.",
+                                            )
+                                            .small()
+                                            .weak(),
+                                        );
+                                        outline_action = crate::panels::outline::show_content(
+                                            ui,
+                                            &self.project.ui_tree,
+                                            &self.session.selected,
+                                            ctrl_held_inner,
+                                            false,
+                                        );
+                                    });
+                                egui::CollapsingHeader::new("Components")
+                                    .default_open(false)
+                                    .show(ui, |ui| {
+                                        if self.project.ui_tree.app_props.components.is_empty() {
+                                            ui.label(
+                                                egui::RichText::new("No components yet.")
+                                                    .small()
+                                                    .weak(),
+                                            );
+                                        }
+                                        tray_action = crate::panels::component_tray::show_tray(
+                                            ui,
+                                            &self.project.ui_tree.app_props.components,
+                                            selected_component,
+                                        );
+                                        if let Some(sel) = selected_component {
+                                            if let Some(comp) = self
+                                                .project
+                                                .ui_tree
+                                                .app_props
+                                                .components
+                                                .iter_mut()
+                                                .find(|c| c.id == sel)
+                                            {
+                                                ui.separator();
+                                                crate::panels::component_tray::show_config(
+                                                    ui, comp,
+                                                );
+                                            }
+                                        }
+                                    });
+                                egui::CollapsingHeader::new("Templates")
+                                    .default_open(false)
+                                    .show(ui, |ui| {
+                                        tmpl_action = crate::panels::templates::show(
+                                            ui,
+                                            &mut self.messages.template_message,
+                                        );
+                                    });
+                            } else {
+                                match self.session.left_panel_tab {
+                                    LeftPanelTab::Palette => {
+                                        show_palette(ui, &mut palette_click, &mut palette_drag);
+                                    }
+                                    LeftPanelTab::Properties => {
+                                        let shift_held = ui.input(|i| i.modifiers.shift);
+                                        let code_pending = matches!(
+                                            self.code.status,
+                                            crate::panels::code_preview::CodeStatus::Pending
+                                        );
+                                        if code_pending {
+                                            ui.label(
+                                                egui::RichText::new(
+                                                    "Code edits pending; Properties will resync code",
+                                                )
+                                                .small()
+                                                .color(egui::Color32::from_rgb(234, 179, 8)),
+                                            );
+                                            ui.separator();
+                                        }
+                                        props_action = crate::panels::properties::show_content(
+                                            ui,
+                                            &mut self.project.ui_tree,
+                                            &mut self.session.selected,
+                                            shift_held,
+                                            &self.descriptors.widgets,
+                                        );
+                                    }
+                                    LeftPanelTab::Layers => {
+                                        ui.label(egui::RichText::new("Layers / Outline").strong());
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "Canvas widgets in draw order. Add from Palette/Templates.",
+                                            )
+                                            .small()
+                                            .weak(),
+                                        );
+                                        ui.add_space(2.0);
+                                        outline_action = crate::panels::outline::show_content(
+                                            ui,
+                                            &self.project.ui_tree,
+                                            &self.session.selected,
+                                            ctrl_held_inner,
+                                            false,
+                                        );
+                                    }
+                                    LeftPanelTab::Components => {
+                                        ui.label(egui::RichText::new("Components").strong());
+                                        if self.project.ui_tree.app_props.components.is_empty() {
+                                            ui.label(
+                                                egui::RichText::new("No components yet.")
+                                                    .small()
+                                                    .weak(),
+                                            );
+                                        }
+                                        tray_action = crate::panels::component_tray::show_tray(
+                                            ui,
+                                            &self.project.ui_tree.app_props.components,
+                                            selected_component,
+                                        );
+                                        if let Some(sel) = selected_component {
+                                            if let Some(comp) = self
+                                                .project
+                                                .ui_tree
+                                                .app_props
+                                                .components
+                                                .iter_mut()
+                                                .find(|c| c.id == sel)
+                                            {
+                                                ui.separator();
+                                                crate::panels::component_tray::show_config(
+                                                    ui, comp,
+                                                );
+                                            }
+                                        }
+                                    }
+                                    LeftPanelTab::Templates => {
+                                        ui.label(egui::RichText::new("Templates").strong());
+                                        ui.add_space(2.0);
+                                        tmpl_action = crate::panels::templates::show(
+                                            ui,
+                                            &mut self.messages.template_message,
+                                        );
+                                    }
                                 }
                             }
-                        }
-                        LeftPanelTab::Templates => {
-                            ui.label(egui::RichText::new("Templates").strong());
-                            ui.add_space(2.0);
-                            tmpl_action = crate::panels::templates::show(
-                                ui,
-                                &mut self.messages.template_message,
-                            );
-                        }
-                    }
+                        });
 
                     (palette_click, palette_drag, tmpl_action, props_action)
                 })
@@ -2426,6 +2544,11 @@ impl eframe::App for RohKaiApp {
             for id in ids {
                 self.project.ui_tree.remove(id);
             }
+        }
+
+        let primary_selection = self.session.selected.last().copied();
+        if self.session.highlighted_code_id != primary_selection {
+            self.session.highlighted_code_id = primary_selection;
         }
 
         self.show_pending_command_dialog(ctx);

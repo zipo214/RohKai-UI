@@ -54,6 +54,12 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+Write-Host "Running SVG golden renderer fixtures..."
+cargo test svg_golden
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
 Write-Host "Running SVG template preservation tests..."
 cargo test imported_svg_preserves_original_source_next_to_template
 if ($LASTEXITCODE -ne 0) {

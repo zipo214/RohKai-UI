@@ -12,7 +12,7 @@ pub enum CodeStatus {
 }
 
 pub struct CodePreviewArgs<'a> {
-    pub highlighted_id: Option<Uuid>,
+    pub highlighted_ids: &'a [Uuid],
     pub scroll_to: &'a mut bool,
     /// Tracé: if Some(name), insert handler stub and clear after consuming.
     pub scroll_to_handler: &'a mut Option<String>,
@@ -23,22 +23,114 @@ pub struct CodePreviewArgs<'a> {
     pub code_font_size: f32,
 }
 
-fn highlighted_block(code: &str, id: Uuid) -> Option<(usize, String)> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HighlightRange {
+    line: usize,
+    start: usize,
+    end: usize,
+}
+
+fn line_spans(code: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut start = 0;
+    for line in code.split_inclusive('\n') {
+        let end = start + line.len();
+        spans.push((start, end));
+        start = end;
+    }
+    spans
+}
+
+fn highlighted_range(code: &str, id: Uuid) -> Option<HighlightRange> {
     let needle = format!("widget_{id}");
-    let line_index = code.lines().position(|line| line.contains(&needle))?;
-    let start = line_index.saturating_sub(1);
-    let block = code
-        .lines()
-        .skip(start)
-        .take(8)
-        .collect::<Vec<_>>()
-        .join("\n");
-    Some((line_index + 1, block))
+    let spans = line_spans(code);
+    let line_index = spans
+        .iter()
+        .position(|(start, end)| code[*start..*end].contains(&needle))?;
+    let start_line = line_index;
+    let mut end_line = line_index;
+    for (idx, (start, end)) in spans.iter().enumerate().skip(line_index) {
+        end_line = idx;
+        if code[*start..*end].trim() == "});" {
+            break;
+        }
+        if idx > line_index
+            && (code[*start..*end].contains("egui::Area::new(")
+                || code[*start..*end].trim_start().starts_with("// widget_"))
+        {
+            end_line = idx.saturating_sub(1);
+            break;
+        }
+    }
+    Some(HighlightRange {
+        line: line_index + 1,
+        start: spans[start_line].0,
+        end: spans[end_line].1,
+    })
+}
+
+fn highlighted_ranges(code: &str, ids: &[Uuid]) -> Vec<HighlightRange> {
+    let mut ranges: Vec<HighlightRange> = ids
+        .iter()
+        .filter_map(|&id| highlighted_range(code, id))
+        .collect();
+    ranges.sort_by_key(|range| (range.start, range.end));
+    ranges.dedup_by_key(|range| (range.start, range.end));
+    ranges
+}
+
+fn code_layout_job(
+    ui: &egui::Ui,
+    text: &str,
+    font_size: f32,
+    highlights: &[HighlightRange],
+    wrap_width: f32,
+) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = wrap_width;
+
+    let base = egui::TextFormat {
+        font_id: egui::FontId::monospace(font_size),
+        color: ui.visuals().text_color(),
+        ..Default::default()
+    };
+    let mut selected = base.clone();
+    selected.color = ui.visuals().text_color();
+    selected.background = egui::Color32::from_rgba_unmultiplied(52, 211, 153, 32);
+
+    let mut valid_ranges: Vec<HighlightRange> = highlights
+        .iter()
+        .copied()
+        .filter(|range| range.start < range.end && range.end <= text.len())
+        .collect();
+    valid_ranges.sort_by_key(|range| (range.start, range.end));
+
+    if valid_ranges.is_empty() {
+        job.append(text, 0.0, base);
+        return job;
+    }
+
+    let mut cursor = 0;
+    for range in valid_ranges {
+        if range.start < cursor {
+            continue;
+        }
+        if cursor < range.start {
+            job.append(&text[cursor..range.start], 0.0, base.clone());
+        }
+        job.append(&text[range.start..range.end], 0.0, selected.clone());
+        cursor = range.end;
+    }
+    if cursor < text.len() {
+        job.append(&text[cursor..], 0.0, base);
+    }
+
+    job
 }
 
 pub fn show(ctx: &egui::Context, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
     let CodePreviewArgs {
-        highlighted_id,
+        highlighted_ids,
         scroll_to,
         scroll_to_handler,
         code_buffer,
@@ -112,30 +204,44 @@ pub fn show(ctx: &egui::Context, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
                 );
             }
 
-            if let Some(id) = highlighted_id {
-                if let Some((line, block)) = highlighted_block(code_buffer, id) {
-                    egui::Frame::none()
-                        .fill(egui::Color32::from_rgba_unmultiplied(52, 211, 153, 60))
-                        .stroke(egui::Stroke::new(
-                            1.0,
-                            egui::Color32::from_rgb(52, 211, 153),
+            let inline_highlights = highlighted_ranges(code_buffer, highlighted_ids);
+            match inline_highlights.as_slice() {
+                [range] => {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Selected widget block near line {}",
+                            range.line
                         ))
-                        .inner_margin(egui::Margin::same(6.0))
-                        .show(ui, |ui| {
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "Selected widget block near line {line}"
-                                ))
-                                .small()
-                                .color(egui::Color32::from_rgb(52, 211, 153)),
-                            );
-                            ui.label(
-                                egui::RichText::new(block)
-                                    .monospace()
-                                    .size((code_font_size - 1.0).max(10.0)),
-                            );
-                        });
+                        .small()
+                        .color(egui::Color32::from_rgb(52, 211, 153)),
+                    );
                 }
+                [] => {}
+                ranges => {
+                    let first_line = ranges.first().map(|range| range.line).unwrap_or_default();
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} selected widget blocks highlighted from line {}",
+                            ranges.len(),
+                            first_line
+                        ))
+                        .small()
+                        .color(egui::Color32::from_rgb(52, 211, 153)),
+                    );
+                }
+            }
+
+            let mut layouter = |ui: &egui::Ui, text: &str, wrap_width: f32| {
+                let job = code_layout_job(ui, text, code_font_size, &inline_highlights, wrap_width);
+                ui.fonts(|fonts| fonts.layout_job(job))
+            };
+
+            if inline_highlights.is_empty() && !highlighted_ids.is_empty() {
+                ui.label(
+                    egui::RichText::new("Selected widgets are not present in editable code")
+                        .small()
+                        .color(egui::Color32::from_rgb(234, 179, 8)),
+                );
             }
 
             // ---- always-editable code panel + draggable vertical split ----
@@ -150,28 +256,44 @@ pub fn show(ctx: &egui::Context, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
                 egui::TextEdit::multiline(code_buffer)
                     .font(egui::FontId::monospace(code_font_size))
                     .desired_width(f32::INFINITY)
+                    .code_editor()
+                    .layouter(&mut layouter)
                     .frame(false),
             );
 
             if te_resp.changed() {
-                let report = parser::parse_egui_output(code_buffer);
-                if report.has_errors() {
-                    *code_status = CodeStatus::Error(report.summary());
-                } else if !report.widgets.is_empty() {
-                    parser::apply_parsed(tree, &report.widgets);
-                    // Update last_generated so canvas-change detection
-                    // doesn't clobber the buffer next frame.
+                if code_buffer.trim().is_empty() {
+                    tree.clear_widgets();
                     *last_generated = egui_emitter::emit_indexed(tree)
                         .iter()
                         .map(|(_, l)| l.as_str())
                         .collect::<Vec<_>>()
                         .join("\n");
-                    if !matches!(code_status, CodeStatus::Pending) {
-                        *code_status = CodeStatus::Pending;
+                    *code_buffer = last_generated.clone();
+                    *code_status = CodeStatus::Live;
+                } else {
+                    let report = parser::parse_egui_output(code_buffer);
+                    if report.has_errors() {
+                        *code_status = CodeStatus::Error(report.summary());
+                    } else if !report.widgets.is_empty() {
+                        let outcome = parser::apply_parsed(tree, &report.widgets);
+                        // Update last_generated so canvas-change detection
+                        // doesn't clobber the buffer next frame.
+                        *last_generated = egui_emitter::emit_indexed(tree)
+                            .iter()
+                            .map(|(_, l)| l.as_str())
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        if outcome.created_widgets > 0 {
+                            *code_buffer = last_generated.clone();
+                        }
+                        if !matches!(code_status, CodeStatus::Pending) {
+                            *code_status = CodeStatus::Pending;
+                        }
+                    } else if code_buffer.contains("widget_") || code_buffer.contains("egui::") {
+                        *code_status =
+                            CodeStatus::Error("no supported RohKai widget edits found".to_owned());
                     }
-                } else if code_buffer.contains("widget_") || code_buffer.contains("egui::") {
-                    *code_status =
-                        CodeStatus::Error("no supported RohKai widget edits found".to_owned());
                 }
             }
 
@@ -222,4 +344,59 @@ pub fn show(ctx: &egui::Context, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
                     ui.label(egui::RichText::new(&state).monospace().size(code_font_size));
                 });
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn highlighted_range_finds_widget_block_without_copying_text() {
+        let id = Uuid::from_u128(0xAB);
+        let code = format!(
+            "egui::CentralPanel::default().show(ctx, |_ui| {{}});\n\
+             egui::Area::new(egui::Id::new(\"widget_{id}\"))\n\
+             \x20   .fixed_pos(egui::pos2(10.0, 20.0))\n\
+             \x20   .show(ctx, |ui| {{\n\
+             \x20       ui.set_min_size(egui::vec2(100.0, 30.0));\n\
+             \x20       ui.button(\"Button\");\n\
+             \x20   }});\n\
+             trailing\n"
+        );
+
+        let range = highlighted_range(&code, id).expect("range");
+        assert_eq!(range.line, 2);
+        let highlighted = &code[range.start..range.end];
+        assert!(highlighted.contains("widget_"));
+        assert!(highlighted.contains("ui.button"));
+        assert!(!highlighted.contains("CentralPanel"));
+        assert!(!highlighted.contains("trailing"));
+    }
+
+    #[test]
+    fn highlighted_range_is_none_for_missing_widget() {
+        assert_eq!(highlighted_range("ui.label(\"none\");", Uuid::nil()), None);
+    }
+
+    #[test]
+    fn highlighted_ranges_finds_multiple_widget_blocks() {
+        let first = Uuid::from_u128(0xA1);
+        let second = Uuid::from_u128(0xB2);
+        let code = format!(
+            "egui::CentralPanel::default().show(ctx, |_ui| {{}});\n\
+             egui::Area::new(egui::Id::new(\"widget_{first}\"))\n\
+             \x20   .show(ctx, |ui| {{\n\
+             \x20       ui.button(\"One\");\n\
+             \x20   }});\n\
+             egui::Area::new(egui::Id::new(\"widget_{second}\"))\n\
+             \x20   .show(ctx, |ui| {{\n\
+             \x20       ui.button(\"Two\");\n\
+             \x20   }});\n"
+        );
+
+        let ranges = highlighted_ranges(&code, &[first, second]);
+        assert_eq!(ranges.len(), 2);
+        assert!(code[ranges[0].start..ranges[0].end].contains("One"));
+        assert!(code[ranges[1].start..ranges[1].end].contains("Two"));
+    }
 }

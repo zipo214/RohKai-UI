@@ -1736,6 +1736,22 @@ pub fn handle(
         .flat_map(|w| w.children.iter().copied())
         .collect();
 
+    let rubber_preview: HashSet<Uuid> =
+        if let (Some(band_start), Some(pos), true) = (state.rubber_band, pointer, is_down) {
+            let band_rect = egui::Rect::from_two_pos(band_start, pos);
+            if band_rect.width() > 4.0 || band_rect.height() > 4.0 {
+                tree.widgets
+                    .iter()
+                    .filter(|widget| band_rect.intersects(crect(widget, origin, zoom)))
+                    .map(|widget| widget.id)
+                    .collect()
+            } else {
+                HashSet::new()
+            }
+        } else {
+            HashSet::new()
+        };
+
     // -------------------------------------------------------------------
     // Draw widgets (parents first, then their children as sub-pass)
     // -------------------------------------------------------------------
@@ -1744,8 +1760,11 @@ pub fn handle(
             continue; // drawn inside parent Frame below
         }
         let rect = crect(widget, origin, zoom);
-        let is_sel = selected.contains(&widget.id);
-        let has_sel_child = widget.children.iter().any(|&cid| selected.contains(&cid));
+        let is_sel = selected.contains(&widget.id) || rubber_preview.contains(&widget.id);
+        let has_sel_child = widget
+            .children
+            .iter()
+            .any(|&cid| selected.contains(&cid) || rubber_preview.contains(&cid));
         draw_widget(
             &painter,
             widget,
@@ -1765,7 +1784,7 @@ pub fn handle(
         for &child_id in &widget.children {
             if let Some(child) = tree.widgets.iter().find(|w| w.id == child_id) {
                 let child_rect = crect(child, origin, zoom);
-                let child_sel = selected.contains(&child.id);
+                let child_sel = selected.contains(&child.id) || rubber_preview.contains(&child.id);
                 draw_widget(
                     &painter,
                     child,
@@ -2499,12 +2518,16 @@ pub fn handle(
         if let (Some(band_start), Some(pos)) = (state.rubber_band, pointer) {
             let band_rect = egui::Rect::from_two_pos(band_start, pos);
             if band_rect.width() > 4.0 || band_rect.height() > 4.0 {
+                let before_len = selected.len();
                 for widget in &tree.widgets {
                     if band_rect.intersects(crect(widget, origin, zoom))
                         && !selected.contains(&widget.id)
                     {
                         selected.push(widget.id);
                     }
+                }
+                if selected.len() != before_len {
+                    ui.ctx().request_repaint();
                 }
             }
         }

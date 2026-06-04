@@ -53,7 +53,10 @@
 - [x] Use `/new-widget` slash command to scaffold adding new widget types to Rohkai
 
 ### The Lazare Features
-- [x] Double-click widget on canvas → code panel scrolls to and highlights that widget's handler, cursor ready
+- [x] Double-click widget on canvas → code panel highlights the selected widget
+      block inline inside the editable code panel; Tracé handler jump inserts the
+      stub if absent. Blank/deleted code now clears canvas widgets and resyncs to
+      the canonical empty generated output.
 - [x] App Properties: window title, width, height, icon — stored in project, used in export
 
 ### Menu Bar Ribbon
@@ -248,8 +251,8 @@
       unsupported elements and attributes
 - [x] Initial internal SVG scene-item flattening boundary with accumulated
       transforms and resolved inherited style
-- [ ] SVG renderer scene/display-list IR split
-- [ ] Golden renderer fixture harness for supported raster output
+- [x] SVG renderer scene/display-list IR split
+- [x] Golden renderer fixture harness for supported raster output
 - [x] Shared SVG microsyntax module for importer/rasterizer parity
 
 ## Stage 8 Addendum — Rulers, Presets, Theming ✅
@@ -373,7 +376,8 @@ requiring schema changes.
       execute() rasterizes; pixel output unchanged
 - [x] Golden renderer fixture harness for supported raster output —
       `src/canvas/svg_golden.rs` (#[cfg(test)]); deterministic ASCII-grid
-      signatures, 5 fixtures, drift-detecting tests; zero new dependencies
+      signatures, supported + unsupported buckets, drift-detecting tests; zero
+      new dependencies
 
 ### New Widget Kinds — Layouts & Spacers
 - [x] Vertical Layout (`VLayout`) — canvas box with ↕ indicator
@@ -382,6 +386,28 @@ requiring schema changes.
 - [ ] Form Layout (deferred — egui has no distinct form primitive; Grid covers it)
 - [x] Horizontal Spacer — dashed horizontal bar
 - [x] Vertical Spacer — dashed vertical bar
+
+### Real Layout Manager Behavior — Not Yet Complete
+Current `VLayout`, `HLayout`, and `GridLayout` are **layout-intent containers**:
+they show the user's intended structure on the canvas and emit the matching egui
+layout call, but they do not yet manage child placement like Qt/Lazarus layout
+managers. Do not treat the existing MVP surface as closing the real layout gap.
+
+- [ ] Layout containers own/drop child widgets as explicit children, not merely
+      nearby absolute-position widgets.
+- [ ] Canvas preview reflows children inside `VLayout`, `HLayout`, and
+      `GridLayout` when the container resizes.
+- [ ] Properties expose spacing, padding/margins, alignment, fill/stretch rules,
+      and per-child stretch/fixed-size behavior.
+- [ ] Spacers become layout-aware flexible/fixed spacer items inside layout
+      containers, not only standalone dashed markers.
+- [ ] Hit testing, rubber-band selection, outline/layers, group/ungroup, and
+      delete semantics respect layout-child ownership.
+- [ ] Lazare parser/codegen/export preserve the same hierarchy: generated code
+      places child widgets inside the layout closure in the same order shown on
+      the canvas.
+- [ ] Add tests proving canvas child order, resize reflow, generated code nesting,
+      export output, and round-trip parser behavior stay consistent.
 
 ### New Widget Kinds — Containers
 - [x] Scroll Area — canvas box with simulated scrollbar indicator
@@ -454,9 +480,38 @@ See `docs/STAGE11_PLAN.md` for the full design (function, depth, UX, impact).
 - [x] Ownership visualization — `canvas/overlays.rs::draw_ownership`; View → Show
       Ownership Overlay; per-widget `→ field: Type` badges + AppState legend,
       driven by `field_collector` (never diverges from codegen)
-- [x] Async task wiring — `WidgetInstance.async_handler`; Properties → "Run async";
-      export wraps the handler call in `std::thread::spawn` (std-only, no tokio —
-      the "or similar" honoring the no-new-crate rule)
+- [x] Async task wiring — `WidgetInstance.async_handler`; Properties → "Run async".
+      Functional MVP: export generates a real std-only task contract (no tokio) —
+      per-handler `{h}_rx`/`{h}_running`/`{h}_error` fields, a launcher
+      `fn {h}(&mut self)` that `thread::spawn`s + `mpsc::send`s `{h}_worker()`, a
+      free-fn worker with no `&mut self`, a `try_recv` drain in `update()` that
+      records status/error, and a `ctx.request_repaint_after(16ms)` guard so the UI
+      repaints promptly while tasks are in flight without user input. Handler call
+      sites for **every** event (primary AND secondary) on every event-capable
+      widget route through `handler_call()` so async/plain/result/option semantics
+      are consistent. The event set is a single source of truth
+      (`WidgetKind::supported_events`, exhaustive match) that both Properties and
+      export derive from: Button (Click/DoubleClick); TextInput/TextArea
+      (Change/LostFocus); Slider/SpinBox (Change/DragStopped); Checkbox, ComboBox,
+      FontComboBox, RadioButton (Change). Export binds the widget `Response` once
+      and emits one `if evt_response.<method>() { … }` per wired event
+      (`clicked`/`double_clicked`/`changed`/`lost_focus`/`drag_stopped`). Parity
+      holds in BOTH the top-level and the nested/frame-child (`export_child_line`)
+      export paths — children bind `child_response`/`child_combo` and route the
+      same way; ComboBox/FontComboBox children render real interactive combos.
+      Enforced by two invariant tests (top-level + nested) over every `(kind, event)`
+      pair — no Properties event row is ignored by any export path. Duplicate handler
+      names across any event fields (including top-level↔child) are detected: first
+      definition wins, a near-handler `// CODEGEN CONFLICT` comment plus a
+      top-of-`app.rs` conflict summary block. Button Click+DoubleClick fire
+      independently per egui semantics (Click not suppressed). A real `cargo check`
+      compile fixture (`export_compile_fixture_cargo_check`, `#[ignore]`) +
+      always-run smoke now prove the generated crate compiles across top + nested
+      events, async Plain/Result, FilePicker/rfd, channel fields, iterator methods,
+      simple local trait binding, and state bindings. Remaining (not top-class):
+      auto-bind status to a widget, cancellation/progress, typed task I/O, and
+      deeper runtime simulation. See
+      `codegen/rust_wiring.rs`, `codegen/export.rs`.
 - [x] Channel connections — `RustWiring.channels`; Rust Wiring window; export emits
       `std::sync::mpsc` Sender/Receiver fields + init on `ExportedApp`
 - [x] Error propagation — `WidgetInstance.handler_result` (Plain/Result/Option);
@@ -464,8 +519,10 @@ See `docs/STAGE11_PLAN.md` for the full design (function, depth, UX, impact).
       signature + call site reflect the contract
 - [x] Iterator pipeline builder — `RustWiring.iterators` (source + ordered
       Map/Filter ops); Rust Wiring window with live preview; export emits a
-      `fn name(&self) -> Vec<_> { .iter()….collect() }` method
+      compile-valid `fn name(&self) -> impl IntoIterator + '_` method that
+      collects through `Vec<_>` internally
 - [x] Trait binding — `RustWiring.trait_impls`; Rust Wiring window; export emits
+      a local trait declaration for simple trait names plus
       `impl Trait for ExportedApp { method { body } }`
 - [x] Macro palette — `panels/macro_palette.rs`; View → Macro Palette…; clicking a
       macro (vec!/format!/println!/dbg!/assert!/todo!/matches!) appends its snippet
@@ -514,6 +571,56 @@ See `docs/STAGE11_PLAN.md` for the full design (function, depth, UX, impact).
       commit boundaries
 - [x] Widget hierarchy/layers panel — done in Stage 8.5 (`src/panels/outline.rs`,
       Ctrl+L, click-select, drag-reorder z-order)
+
+---
+
+## Pre-Release Depth Consolidation Gate
+
+Before starting broad new feature families or Stage 15 renderer work, RohKai
+should become a brutally reliable Rust/egui designer. This gate consolidates
+the current dirty/in-flight truth, separates MVP surfaces from closure criteria,
+and prioritizes depth over more palette breadth.
+
+### Source-Of-Truth Consolidation
+- [ ] Resolve the current dirty worktree into intentional commits/PRs so current
+      truth is not spread across uncommitted code and docs.
+- [ ] Reconcile duplicated or stale roadmap lines against
+      `docs/feature-evaluation/*`, especially SVG renderer maturity and
+      Stage 10/11 depth claims.
+- [ ] Keep `docs/ROADMAP.md` strategic, `docs/DEVLOG.md` chronological, and
+      `docs/CODE_COOP.md` as short agent handoff only.
+
+### Reliability Proofs
+- [x] Add an all-built-in-widget generated-project compile fixture covering every
+      palette kind plus Image/SVG. `src/codegen/export.rs` now has a fast smoke
+      plus ignored real generated-crate `cargo check`; the proof caught and fixed
+      SVG Image export module embedding.
+- [ ] Add export compile fixtures for assets, custom descriptors, SVG Image, and
+      mixed event/async/data widgets where not already covered.
+- [ ] Add release smoke checklist: save/load, export, preview mode, code paste,
+      multi-select, templates, preferences, theme, and SVG import.
+
+### Depth Before Breadth
+- [ ] True layout ownership: `VLayout`, `HLayout`, and `GridLayout` own/reflow
+      children with spacing, padding, alignment, stretch/fill rules, and matching
+      nested codegen/export/parser behavior.
+- [ ] Lazare/code editor depth: structured widget/code spans, robust code
+      navigation, symbol list, editable diagnostics, paste repair, diff view, and
+      decorations that follow actual text layout.
+- [ ] Data model groundwork: typed data source model, binding model for
+      Table/List/Tree, and explicit separation of static option widgets from
+      model-backed views.
+- [ ] Runtime component semantics: Timer, StateMachine, HttpRequest, Lifecycle,
+      and DataSource either execute real generated behavior or remain clearly
+      labeled design-time/documented stubs.
+- [ ] Formula and chart depth: keep `MathLabel` and current `Chart` as MVPs while
+      planning separate formula parser/evaluator and chart series/axes/legend
+      systems.
+- [ ] Visual Widget Maker: build the real primitive mini-canvas tool separately
+      from the Guided Descriptor Builder and Advanced Descriptor Editor.
+- [ ] Object Inspector/component tray depth: improve discoverability, contextual
+      property grouping, component runtime status, and parity with mature
+      designer workflows.
 
 ---
 

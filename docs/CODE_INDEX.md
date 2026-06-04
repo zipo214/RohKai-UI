@@ -109,6 +109,9 @@ being comfortable.
 - `docs/ROADMAP.md` - strategic stage plan.
 - `docs/CODE_COOP.md` - short newest-first agent handoff diary; this is the
   default context-sharing doc.
+- `docs/PROMPT_CONTRACT.md` - reusable Codex/Claude goal skeleton for tasks that
+  must derive source-of-truth sets, enumerate every output path, and add
+  invariant tests before claiming parity.
 - `docs/DEVLOG.md` - chronological session record; read for history,
   regression investigation, or when preflight is run with `-IncludeDevlog`.
 - `docs/ARCHITECTURE.md` - structural truth.

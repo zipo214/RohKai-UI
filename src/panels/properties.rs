@@ -1,6 +1,7 @@
 use crate::codegen::widget_descriptor::{DescriptorPropType, WidgetDescriptor};
 use crate::project::schema::{
-    CustomProp, CustomPropType, HandlerResult, Orientation, TextAlign, WidgetInstance, WidgetKind,
+    CustomProp, CustomPropType, HandlerResult, Orientation, TextAlign, WidgetEvent, WidgetInstance,
+    WidgetKind,
 };
 use crate::project::ui_tree::UiTree;
 use uuid::Uuid;
@@ -879,6 +880,27 @@ enum EventField {
     DragStopped,
 }
 
+/// Map a schema [`WidgetEvent`] to its Properties row metadata:
+/// `(field, label, placeholder-hint)`.  This is the only place that turns the
+/// schema event vocabulary into editor labels.
+fn event_ui_meta(ev: WidgetEvent) -> (EventField, &'static str, &'static str) {
+    match ev {
+        WidgetEvent::Click => (EventField::Click, "On Click", "handle_click"),
+        WidgetEvent::DoubleClick => (
+            EventField::DoubleClick,
+            "On Double-click",
+            "handle_double_click",
+        ),
+        WidgetEvent::Change => (EventField::Change, "On Change", "handle_change"),
+        WidgetEvent::LostFocus => (EventField::LostFocus, "On Lost Focus", "handle_lost_focus"),
+        WidgetEvent::DragStopped => (
+            EventField::DragStopped,
+            "On Drag Stopped",
+            "handle_drag_stopped",
+        ),
+    }
+}
+
 fn show_event_handler(
     ui: &mut egui::Ui,
     tree: &mut UiTree,
@@ -900,33 +922,17 @@ fn show_event_handler(
             }
         }
 
-        match &w.kind {
-            WidgetKind::Button => vec![
-                (EventField::Click, "On Click", "handle_click"),
-                (
-                    EventField::DoubleClick,
-                    "On Double-click",
-                    "handle_double_click",
-                ),
-            ],
-            WidgetKind::TextInput | WidgetKind::TextArea => vec![
-                (EventField::Change, "On Change", "handle_change"),
-                (EventField::LostFocus, "On Lost Focus", "handle_lost_focus"),
-            ],
-            WidgetKind::Slider | WidgetKind::SpinBox => vec![
-                (EventField::Change, "On Change", "handle_change"),
-                (
-                    EventField::DragStopped,
-                    "On Drag Stopped",
-                    "handle_drag_stopped",
-                ),
-            ],
-            WidgetKind::Checkbox
-            | WidgetKind::ComboBox
-            | WidgetKind::FontComboBox
-            | WidgetKind::RadioButton => vec![(EventField::Change, "On Change", "handle_change")],
-            _ => return,
+        // Derive the applicable event rows from the schema's single source of
+        // truth (`WidgetKind::supported_events`).  Export reads the same source,
+        // so the Properties UI and generated code cannot drift.
+        if !w.kind.is_event_capable() {
+            return;
         }
+        w.kind
+            .supported_events()
+            .iter()
+            .map(|ev| event_ui_meta(*ev))
+            .collect()
     }; // tree borrow released here
 
     ui.separator();

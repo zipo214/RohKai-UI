@@ -138,6 +138,11 @@ impl UiTree {
         self.widgets.iter_mut().find(|w| w.id == id)
     }
 
+    /// Remove every canvas widget while preserving app-level project properties.
+    pub fn clear_widgets(&mut self) {
+        self.widgets.clear();
+    }
+
     pub fn validate_and_repair(&mut self) {
         let mut seen_ids = HashSet::new();
         let mut seen_bindings = HashSet::new();
@@ -322,5 +327,19 @@ mod tests {
             tree.widgets.iter().map(|w| w.id).collect::<Vec<_>>(),
             vec![a, b]
         );
+    }
+
+    #[test]
+    fn clear_widgets_preserves_app_props() {
+        let mut tree = UiTree {
+            widgets: vec![widget(Uuid::from_u128(1)), widget(Uuid::from_u128(2))],
+            ..Default::default()
+        };
+        tree.app_props.title = "Keep Me".to_owned();
+
+        tree.clear_widgets();
+
+        assert!(tree.widgets.is_empty());
+        assert_eq!(tree.app_props.title, "Keep Me");
     }
 }
