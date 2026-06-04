@@ -2,6 +2,55 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-04 — HLayout Stack Ownership Slice
+
+### Docs Reviewed Before Editing
+- Preflight context (`scripts/preflight-context.ps1`)
+- `.agents/skills/project-model/SKILL.md`
+- `.agents/skills/canvas-patterns/SKILL.md`
+- `.agents/skills/codegen-rules/SKILL.md`
+- `docs/ROADMAP.md`
+- `src/project/ui_tree.rs`, `src/canvas/interaction.rs`,
+  `src/codegen/egui_emitter.rs`, `src/codegen/export.rs`
+
+### Changes Made
+- Generalized the VLayout source-of-truth path into
+  `UiTree::attach_to_stack_layout_at()` and `UiTree::reflow_stack_layouts()`.
+- HLayout now owns direct child widgets when dropped/released inside the
+  container, detaches them when dragged outside, and reflows them horizontally
+  with equal widths inside the container's margin.
+- Palette click, palette drag, template add/drop, drag release, resize, and
+  validation/repair now use the shared stack-layout reflow path.
+- Live codegen emits HLayout children inside `ui.horizontal(|ui| { ... })`.
+- Export emits HLayout children inside `ui.horizontal(|ui| { ... })`, preserves
+  child handler dispatch, and the generated-project compile fixture now covers a
+  HLayout-owned child with a `Result` handler.
+- Updated `docs/ROADMAP.md` and `docs/CODE_COOP.md` to mark only the
+  VLayout/HLayout stack-layout slice complete.
+
+### Verification
+- `cargo check`: clean
+- `cargo test attach_to_hlayout_reflows_children_horizontally -- --nocapture`:
+  passed
+- `cargo test hlayout -- --nocapture`: 3 passed
+- `cargo test export_compile_fixture_generates_required_files_and_matrix -- --nocapture`:
+  passed
+- `cargo test export_compile_fixture_cargo_check -- --ignored --nocapture`:
+  passed
+- `cargo fmt --check`: clean
+- `cargo test`: 173 passed, 2 ignored
+- `cargo clippy -- -D warnings`: clean
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1`:
+  clean
+- `cargo run --quiet` smoke: launched and stopped after 8 seconds
+
+### Remaining Gaps
+- GridLayout does not yet own/reflow children into cells.
+- Spacing, padding, alignment, stretch/fill, and per-child layout policies remain
+  default/implicit.
+- Layout-aware spacers, Lazare parser round-trip, and richer Layers/Outline
+  hierarchy operations remain open.
+
 ## 2026-06-04 — VLayout Real Ownership Vertical Slice
 
 ### Docs Reviewed Before Editing

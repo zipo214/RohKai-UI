@@ -667,7 +667,14 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 code
             }
             WidgetKind::HLayout => {
-                "                ui.horizontal(|_ui| {});\n".to_string()
+                let mut code = "                ui.horizontal(|ui| {\n".to_owned();
+                for &child_id in &w.children {
+                    if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
+                        code.push_str(&export_layout_child_line(child, &handler_registry));
+                    }
+                }
+                code.push_str("                });\n");
+                code
             }
             WidgetKind::ScrollArea => {
                 "                egui::ScrollArea::vertical().show(ui, |_ui| {});\n".to_string()
@@ -1667,6 +1674,46 @@ mod tests {
         assert!(generated.contains("child_response.clicked()"));
         assert!(generated.contains("if let Err(e) = self.layout_child_clicked()"));
         assert!(generated.contains("fn layout_child_clicked(&mut self) -> Result<(), String>"));
+    }
+
+    #[test]
+    fn hlayout_exports_owned_children_sequentially_with_events() {
+        let parent_id = Uuid::from_u128(0x93);
+        let child_id = Uuid::from_u128(0x94);
+        let tree = UiTree {
+            widgets: vec![
+                WidgetInstance {
+                    id: parent_id,
+                    kind: WidgetKind::HLayout,
+                    children: vec![child_id],
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: child_id,
+                    kind: WidgetKind::Button,
+                    rect: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        w: 90.0,
+                        h: 28.0,
+                    },
+                    on_click: "horizontal_child_clicked".to_owned(),
+                    handler_result: crate::project::schema::HandlerResult::Result,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let generated = gen_app_rs(&tree);
+
+        assert_eq!(generated.matches("egui::Area::new").count(), 1);
+        assert!(generated.contains("ui.horizontal(|ui| {"));
+        assert!(generated.contains(&format!("// widget_{child_id}")));
+        assert!(generated.contains("let child_response = ui.add_sized"));
+        assert!(generated.contains("child_response.clicked()"));
+        assert!(generated.contains("if let Err(e) = self.horizontal_child_clicked()"));
+        assert!(generated.contains("fn horizontal_child_clicked(&mut self) -> Result<(), String>"));
     }
 
     fn async_button(handler: &str, result: crate::project::schema::HandlerResult) -> UiTree {
@@ -2746,8 +2793,9 @@ mod tests {
 
     /// The compile-proof fixture: top-level Button Click + DoubleClick, two async
     /// buttons (Plain + Result), a Frame with a TextInput (LostFocus) and a Slider
-    /// (DragStopped) child, FilePicker/rfd dependency, Rust wiring, and three
-    /// state bindings (`name: String`, `vol: f32`, `picked_path: String`).
+    /// (DragStopped) child, VLayout/HLayout owned children, FilePicker/rfd
+    /// dependency, Rust wiring, and three state bindings (`name: String`,
+    /// `vol: f32`, `picked_path: String`).
     fn compile_fixture_tree() -> UiTree {
         use crate::project::schema::{
             ChannelDef, HandlerResult, IterOp, IteratorPipeline, RustWiring, TraitImpl,
@@ -2757,6 +2805,8 @@ mod tests {
         let sl_id = Uuid::from_u128(0x51);
         let layout_id = Uuid::from_u128(0xD0);
         let layout_child_id = Uuid::from_u128(0xD1);
+        let horizontal_layout_id = Uuid::from_u128(0xD2);
+        let horizontal_layout_child_id = Uuid::from_u128(0xD3);
 
         let btn_events = WidgetInstance {
             id: Uuid::from_u128(0x01),
@@ -2904,6 +2954,35 @@ mod tests {
             children: vec![layout_child_id],
             ..Default::default()
         };
+        let horizontal_layout_child = WidgetInstance {
+            id: horizontal_layout_child_id,
+            kind: WidgetKind::Button,
+            rect: Rect {
+                x: 420.0,
+                y: 128.0,
+                w: 150.0,
+                h: 30.0,
+            },
+            on_click: "horizontal_layout_child_clicked".to_owned(),
+            handler_result: HandlerResult::Result,
+            props: crate::project::schema::WidgetProps {
+                label: "HLayout Child".to_owned(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let hlayout = WidgetInstance {
+            id: horizontal_layout_id,
+            kind: WidgetKind::HLayout,
+            rect: Rect {
+                x: 420.0,
+                y: 120.0,
+                w: 220.0,
+                h: 70.0,
+            },
+            children: vec![horizontal_layout_child_id],
+            ..Default::default()
+        };
 
         let mut tree = UiTree {
             widgets: vec![
@@ -2915,6 +2994,8 @@ mod tests {
                 sl_child,
                 vlayout,
                 layout_child,
+                hlayout,
+                horizontal_layout_child,
                 file_picker,
             ],
             ..Default::default()
@@ -3019,6 +3100,14 @@ mod tests {
             "VLayout child handler"
         );
         assert!(app.contains("ui.vertical(|ui| {"), "VLayout child nesting");
+        assert!(
+            app.contains("horizontal_layout_child_clicked"),
+            "HLayout child handler"
+        );
+        assert!(
+            app.contains("ui.horizontal(|ui| {"),
+            "HLayout child nesting"
+        );
         assert!(app.contains("fn load_async_worker()"), "async Plain worker");
         assert!(
             app.contains("fn save_async_worker() -> Result<(), String>"),

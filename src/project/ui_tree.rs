@@ -143,12 +143,12 @@ impl UiTree {
         self.widgets.clear();
     }
 
-    /// Attach a widget to the topmost VLayout whose rect contains `canvas_point`.
+    /// Attach a widget to the topmost stack layout whose rect contains `canvas_point`.
     ///
-    /// If no VLayout contains the point, the widget is detached from any VLayout
+    /// If no stack layout contains the point, the widget is detached from any stack
     /// parent. The widget itself remains in `widgets`; `children` is an ownership
     /// relation used by canvas/codegen/export, not nested storage.
-    pub fn attach_to_vlayout_at(
+    pub fn attach_to_stack_layout_at(
         &mut self,
         child_id: Uuid,
         canvas_point: (f32, f32),
@@ -159,13 +159,13 @@ impl UiTree {
             .rev()
             .find(|w| {
                 w.id != child_id
-                    && w.kind == WidgetKind::VLayout
+                    && is_stack_layout(&w.kind)
                     && rect_contains_point(&w.rect, canvas_point)
             })
             .map(|w| w.id);
 
         for w in &mut self.widgets {
-            if w.kind == WidgetKind::VLayout {
+            if is_stack_layout(&w.kind) {
                 w.children.retain(|&id| id != child_id);
             }
         }
@@ -176,22 +176,22 @@ impl UiTree {
             }
         }
 
-        self.reflow_vlayouts();
+        self.reflow_stack_layouts();
         parent_id
     }
 
-    /// Reflow direct children inside each VLayout using absolute canvas rects.
+    /// Reflow direct children inside each stack layout using absolute canvas rects.
     ///
     /// This intentionally keeps child `Rect`s absolute so existing hit testing,
     /// selection, save/load, and child codegen can share one coordinate model.
-    pub fn reflow_vlayouts(&mut self) {
-        let parents: Vec<(Uuid, Rect, f32, Vec<Uuid>)> = self
+    pub fn reflow_stack_layouts(&mut self) {
+        let parents: Vec<(WidgetKind, Rect, f32, Vec<Uuid>)> = self
             .widgets
             .iter()
-            .filter(|w| w.kind == WidgetKind::VLayout)
+            .filter(|w| is_stack_layout(&w.kind))
             .map(|w| {
                 (
-                    w.id,
+                    w.kind.clone(),
                     w.rect.clone(),
                     w.props.inner_margin.max(0.0),
                     w.children.clone(),
@@ -199,21 +199,55 @@ impl UiTree {
             })
             .collect();
 
-        for (_parent_id, parent_rect, padding, child_ids) in parents {
-            let spacing = 6.0;
-            let mut y = parent_rect.y + padding;
-            let child_x = parent_rect.x + padding;
-            let child_w = (parent_rect.w - padding * 2.0).max(MIN_WIDGET_SIZE);
-            let max_bottom = parent_rect.y + parent_rect.h - padding;
-
-            for child_id in child_ids {
-                if let Some(child) = self.get_mut(child_id) {
-                    child.rect.x = child_x;
-                    child.rect.y = y.min(max_bottom);
-                    child.rect.w = child_w;
-                    child.rect.h = child.rect.h.max(MIN_WIDGET_SIZE);
-                    y += child.rect.h + spacing;
+        for (kind, parent_rect, padding, child_ids) in parents {
+            match kind {
+                WidgetKind::VLayout => {
+                    self.reflow_vlayout_children(&parent_rect, padding, &child_ids)
                 }
+                WidgetKind::HLayout => {
+                    self.reflow_hlayout_children(&parent_rect, padding, &child_ids)
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn reflow_vlayout_children(&mut self, parent_rect: &Rect, padding: f32, child_ids: &[Uuid]) {
+        let spacing = 6.0;
+        let mut y = parent_rect.y + padding;
+        let child_x = parent_rect.x + padding;
+        let child_w = (parent_rect.w - padding * 2.0).max(MIN_WIDGET_SIZE);
+        let max_bottom = parent_rect.y + parent_rect.h - padding;
+
+        for child_id in child_ids {
+            if let Some(child) = self.get_mut(*child_id) {
+                child.rect.x = child_x;
+                child.rect.y = y.min(max_bottom);
+                child.rect.w = child_w;
+                child.rect.h = child.rect.h.max(MIN_WIDGET_SIZE);
+                y += child.rect.h + spacing;
+            }
+        }
+    }
+
+    fn reflow_hlayout_children(&mut self, parent_rect: &Rect, padding: f32, child_ids: &[Uuid]) {
+        let spacing = 6.0;
+        let count = child_ids.len().max(1) as f32;
+        let total_spacing = spacing * (count - 1.0);
+        let available_w = (parent_rect.w - padding * 2.0 - total_spacing).max(MIN_WIDGET_SIZE);
+        let child_w = (available_w / count).max(MIN_WIDGET_SIZE);
+        let child_y = parent_rect.y + padding;
+        let child_h = (parent_rect.h - padding * 2.0).max(MIN_WIDGET_SIZE);
+        let max_right = parent_rect.x + parent_rect.w - padding;
+        let mut x = parent_rect.x + padding;
+
+        for child_id in child_ids {
+            if let Some(child) = self.get_mut(*child_id) {
+                child.rect.x = x.min(max_right);
+                child.rect.y = child_y;
+                child.rect.w = child_w;
+                child.rect.h = child_h;
+                x += child_w + spacing;
             }
         }
     }
@@ -238,7 +272,7 @@ impl UiTree {
             widget.children.retain(|id| all_ids.contains(id));
         }
 
-        self.reflow_vlayouts();
+        self.reflow_stack_layouts();
     }
 
     fn repair_widget(widget: &mut WidgetInstance) {
@@ -359,6 +393,10 @@ fn rect_contains_point(rect: &Rect, (x, y): (f32, f32)) -> bool {
     x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h
 }
 
+fn is_stack_layout(kind: &WidgetKind) -> bool {
+    matches!(kind, WidgetKind::VLayout | WidgetKind::HLayout)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -457,7 +495,7 @@ mod tests {
         };
 
         assert_eq!(
-            tree.attach_to_vlayout_at(child_id, (140.0, 100.0)),
+            tree.attach_to_stack_layout_at(child_id, (140.0, 100.0)),
             Some(parent_id)
         );
 
@@ -470,7 +508,7 @@ mod tests {
     }
 
     #[test]
-    fn attach_to_vlayout_detaches_when_dropped_outside() {
+    fn attach_to_stack_layout_detaches_when_dropped_outside() {
         let parent_id = Uuid::from_u128(20);
         let child_id = Uuid::from_u128(21);
         let mut tree = UiTree {
@@ -496,9 +534,79 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(tree.attach_to_vlayout_at(child_id, (300.0, 300.0)), None);
+        assert_eq!(
+            tree.attach_to_stack_layout_at(child_id, (300.0, 300.0)),
+            None
+        );
 
         let parent = tree.widgets.iter().find(|w| w.id == parent_id).unwrap();
         assert!(parent.children.is_empty());
+    }
+
+    #[test]
+    fn attach_to_hlayout_reflows_children_horizontally() {
+        let parent_id = Uuid::from_u128(30);
+        let left_id = Uuid::from_u128(31);
+        let right_id = Uuid::from_u128(32);
+        let mut tree = UiTree {
+            widgets: vec![
+                WidgetInstance {
+                    id: parent_id,
+                    kind: WidgetKind::HLayout,
+                    rect: Rect {
+                        x: 50.0,
+                        y: 40.0,
+                        w: 240.0,
+                        h: 60.0,
+                    },
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: left_id,
+                    kind: WidgetKind::Button,
+                    rect: Rect {
+                        x: 60.0,
+                        y: 50.0,
+                        w: 80.0,
+                        h: 30.0,
+                    },
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: right_id,
+                    kind: WidgetKind::Button,
+                    rect: Rect {
+                        x: 180.0,
+                        y: 50.0,
+                        w: 80.0,
+                        h: 30.0,
+                    },
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            tree.attach_to_stack_layout_at(left_id, (80.0, 60.0)),
+            Some(parent_id)
+        );
+        assert_eq!(
+            tree.attach_to_stack_layout_at(right_id, (210.0, 60.0)),
+            Some(parent_id)
+        );
+
+        let parent = tree.widgets.iter().find(|w| w.id == parent_id).unwrap();
+        assert_eq!(parent.children, vec![left_id, right_id]);
+        let left = tree.widgets.iter().find(|w| w.id == left_id).unwrap();
+        let right = tree.widgets.iter().find(|w| w.id == right_id).unwrap();
+        assert_eq!(left.rect.x, 58.0);
+        assert_eq!(left.rect.y, 48.0);
+        assert_eq!(left.rect.w, 109.0);
+        assert_eq!(left.rect.h, 44.0);
+        assert_eq!(right.rect.x, 173.0);
+        assert_eq!(right.rect.y, 48.0);
+        assert_eq!(right.rect.w, 109.0);
+        assert_eq!(right.rect.h, 44.0);
     }
 }

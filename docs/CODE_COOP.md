@@ -7,6 +7,18 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-04 — Codex HLayout Ownership Slice
+
+On `dev`, I extended the VLayout ownership work into a shared stack-layout path
+for both `VLayout` and `HLayout`. `UiTree::attach_to_stack_layout_at()` and
+`UiTree::reflow_stack_layouts()` now own the model behavior; VLayout stacks
+children vertically and HLayout divides direct children horizontally with the
+same default margin/spacing assumptions. Canvas drop/release/resize, live
+codegen, export, unit tests, and the generated-project compile fixture now cover
+HLayout-owned children too. Still open: GridLayout cell ownership, layout
+policies/properties, layout-aware spacers, parser round-trip, and richer
+Layers/Outline operations.
+
 ## 2026-06-04 — Codex VLayout Ownership Slice
 
 On `dev`, I started the layout-depth pass with only `VLayout`, using the existing

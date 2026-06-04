@@ -446,7 +446,13 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                 lines.push((Some(w.id), "        });".to_owned()));
             }
             WidgetKind::HLayout => {
-                lines.push((Some(w.id), "        ui.horizontal(|_ui| {});".to_owned()));
+                lines.push((Some(w.id), "        ui.horizontal(|ui| {".to_owned()));
+                for &child_id in &w.children {
+                    if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
+                        emit_layout_child_lines(child, &mut lines);
+                    }
+                }
+                lines.push((Some(w.id), "        });".to_owned()));
             }
             WidgetKind::ScrollArea => {
                 lines.push((
@@ -1123,6 +1129,41 @@ mod tests {
         assert!(generated.contains(&format!("// widget_{child_id}")));
         assert!(generated.contains("egui::Button::new"));
         assert!(generated.contains("self.handle_child();"));
+    }
+
+    #[test]
+    fn hlayout_emits_owned_children_sequentially() {
+        let parent_id = Uuid::from_u128(3);
+        let child_id = Uuid::from_u128(4);
+        let tree = UiTree {
+            widgets: vec![
+                WidgetInstance {
+                    id: parent_id,
+                    kind: WidgetKind::HLayout,
+                    children: vec![child_id],
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: child_id,
+                    kind: WidgetKind::Button,
+                    on_click: "handle_horizontal".to_owned(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let generated = emit_indexed(&tree)
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_eq!(generated.matches("egui::Area::new").count(), 1);
+        assert!(generated.contains("ui.horizontal(|ui| {"));
+        assert!(generated.contains(&format!("// widget_{child_id}")));
+        assert!(generated.contains("egui::Button::new"));
+        assert!(generated.contains("self.handle_horizontal();"));
     }
 
     fn emit_joined(kind: WidgetKind, setup: impl FnOnce(&mut WidgetInstance)) -> String {
