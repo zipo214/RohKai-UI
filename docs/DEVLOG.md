@@ -14,6 +14,10 @@ Chronological session record. The roadmap stays strategic; this file records wha
 - Replaced the generated-code selection highlight from TextEdit span
   background coloring with a foreground outline drawn from
   `TextEditOutput.galley` rows.
+- Follow-up after visual inspection: the outline now uses row glyph mesh bounds
+  instead of full row allocation bounds, so it hugs actual code width instead of
+  spanning the editor row. The translucent fill was removed; selection is an
+  outline-only decoration.
 - The outline is clipped to `TextEditOutput.text_clip_rect` before painting and
   uses `ui.painter_at(output.text_clip_rect)`, so selected-code decoration
   cannot spill outside the visible code editor area.

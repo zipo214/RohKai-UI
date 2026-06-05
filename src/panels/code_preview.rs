@@ -104,8 +104,29 @@ fn byte_to_char_index(text: &str, byte_index: usize) -> usize {
 }
 
 fn clipped_outline_rect(rect: egui::Rect, clip_rect: egui::Rect) -> Option<egui::Rect> {
-    let clipped = rect.expand(2.0).intersect(clip_rect);
+    let clipped = rect.expand(3.0).intersect(clip_rect);
     clipped.is_positive().then_some(clipped)
+}
+
+fn highlighted_row_rect(
+    row: &egui::epaint::text::Row,
+    galley_pos: egui::Pos2,
+    clip_rect: egui::Rect,
+) -> Option<egui::Rect> {
+    let mesh = row.visuals.mesh_bounds;
+    let code_rect = if mesh.is_positive() {
+        let row_rect = row.rect;
+        egui::Rect::from_min_max(
+            egui::pos2(mesh.left(), row_rect.top()),
+            egui::pos2(mesh.right(), row_rect.bottom()),
+        )
+    } else {
+        row.rect
+    };
+    let visible = code_rect
+        .translate(galley_pos.to_vec2())
+        .intersect(clip_rect);
+    visible.is_positive().then_some(visible)
 }
 
 fn paint_highlight_outlines(
@@ -133,7 +154,6 @@ fn paint_highlight_outlines(
 
     let painter = ui.painter_at(output.text_clip_rect);
     let stroke = egui::Stroke::new(1.25, egui::Color32::from_rgb(52, 211, 153));
-    let fill = egui::Color32::from_rgba_unmultiplied(52, 211, 153, 10);
 
     for char_range in char_ranges {
         let mut row_start = 0usize;
@@ -145,9 +165,9 @@ fn paint_highlight_outlines(
             let intersects = char_range.start < row_end && char_range.end > row_start;
 
             if intersects {
-                let row_rect = row.rect.translate(output.galley_pos.to_vec2());
-                let visible = row_rect.intersect(output.text_clip_rect);
-                if visible.is_positive() {
+                if let Some(visible) =
+                    highlighted_row_rect(row, output.galley_pos, output.text_clip_rect)
+                {
                     outline = Some(match outline {
                         Some(accumulated) => accumulated.union(visible),
                         None => visible,
@@ -161,7 +181,6 @@ fn paint_highlight_outlines(
         if let Some(rect) =
             outline.and_then(|rect| clipped_outline_rect(rect, output.text_clip_rect))
         {
-            painter.rect_filled(rect, 3.0, fill);
             painter.rect_stroke(rect, 3.0, stroke);
         }
     }
