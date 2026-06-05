@@ -248,6 +248,31 @@ impl RohKaiApp {
         }
     }
 
+    fn set_preview_mode(&mut self, enabled: bool) {
+        if self.session.preview_mode == enabled {
+            return;
+        }
+        self.session.preview_mode = enabled;
+        if enabled {
+            self.session.preview_state =
+                crate::canvas::preview::PreviewState::init_from_tree(&self.project.ui_tree);
+        }
+    }
+
+    fn canvas_input_blocked(&self) -> bool {
+        self.session.shortcuts_open
+            || self.session.rust_wiring_open
+            || self.session.macro_palette_open
+            || self.session.project_tree_open
+            || self.session.theme_open
+            || self.prefs.open
+            || self.pending_command.is_some()
+            || self.pending_svg_import.is_some()
+            || self.session.svg_viewer_id.is_some()
+            || self.descriptors.editor.is_some()
+            || self.descriptors.builder.is_some()
+    }
+
     fn cached_dirty(&mut self, ctx: &egui::Context) -> bool {
         let now = ctx.input(|i| i.time);
         if now - self.dirty_cache_checked_at > 0.25 {
@@ -1428,11 +1453,7 @@ impl eframe::App for RohKaiApp {
             self.session.show_outline = true;
         }
         if f5 {
-            self.session.preview_mode = !self.session.preview_mode;
-            if self.session.preview_mode {
-                self.session.preview_state =
-                    crate::canvas::preview::PreviewState::init_from_tree(&self.project.ui_tree);
-            }
+            self.set_preview_mode(!self.session.preview_mode);
         }
         if f1 {
             self.session.shortcuts_open = !self.session.shortcuts_open;
@@ -1706,6 +1727,16 @@ impl eframe::App for RohKaiApp {
 
                 // View menu
                 ui.menu_button("View", |ui| {
+                    let preview_label = if self.session.preview_mode {
+                        "Exit Preview Mode  [F5]"
+                    } else {
+                        "Enter Preview Mode  [F5]"
+                    };
+                    if ui.button(preview_label).clicked() {
+                        self.set_preview_mode(!self.session.preview_mode);
+                        ui.close_menu();
+                    }
+                    ui.separator();
                     let ruler_label = if self.session.canvas_settings.show_rulers {
                         "Hide Rulers  [Ctrl+R]"
                     } else {
@@ -2438,7 +2469,9 @@ impl eframe::App for RohKaiApp {
         // ---------------------------------------------------------------
         // Canvas
         // ---------------------------------------------------------------
-        let delete_pressed = ctx.input(|i| i.key_pressed(egui::Key::Delete));
+        let canvas_input_blocked = self.canvas_input_blocked();
+        let delete_pressed =
+            !canvas_input_blocked && ctx.input(|i| i.key_pressed(egui::Key::Delete));
         let has_hovered_guide = self.session.hovered_guide.is_some();
         egui::CentralPanel::default().show(ctx, |ui| {
             self.session.last_canvas_rect = ui.max_rect();
@@ -2453,7 +2486,7 @@ impl eframe::App for RohKaiApp {
                     panel_rect,
                 );
                 if exited {
-                    self.session.preview_mode = false;
+                    self.set_preview_mode(false);
                 }
                 return;
             }
@@ -2474,16 +2507,22 @@ impl eframe::App for RohKaiApp {
                 canvas_size,
                 panel_rect,
             };
-            crate::canvas::rulers::handle_interaction(
-                ui,
-                &mut self.project.ui_tree.app_props.guides,
-                &mut self.session.hovered_guide,
-                &mut self.session.dragging_guide,
-                &ruler_ctx,
-                delete_pressed && has_hovered_guide,
-            );
+            if canvas_input_blocked {
+                self.session.hovered_guide = None;
+                self.session.dragging_guide = None;
+            } else {
+                crate::canvas::rulers::handle_interaction(
+                    ui,
+                    &mut self.project.ui_tree.app_props.guides,
+                    &mut self.session.hovered_guide,
+                    &mut self.session.dragging_guide,
+                    &ruler_ctx,
+                    delete_pressed && has_hovered_guide,
+                );
+            }
 
             self.session.canvas_settings.guide_drag_active = self.session.dragging_guide.is_some();
+            self.session.canvas_settings.input_blocked = canvas_input_blocked;
             crate::canvas::interaction::handle(
                 ui,
                 &mut self.project.ui_tree,

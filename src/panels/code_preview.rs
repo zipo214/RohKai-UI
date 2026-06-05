@@ -2,6 +2,11 @@ use crate::codegen::{egui_emitter, parser, state_emitter};
 use crate::project::ui_tree::UiTree;
 use uuid::Uuid;
 
+const CODE_EDITOR_PAD_X: f32 = 9.0;
+const CODE_EDITOR_PAD_Y: f32 = 6.0;
+const CODE_HIGHLIGHT_PADDING: f32 = 6.0;
+const CODE_HIGHLIGHT_STROKE_WIDTH: f32 = 1.25;
+
 #[derive(Default, PartialEq)]
 pub enum CodeStatus {
     #[default]
@@ -104,7 +109,7 @@ fn byte_to_char_index(text: &str, byte_index: usize) -> usize {
 }
 
 fn outline_clip_rect(clip_rect: egui::Rect) -> egui::Rect {
-    let inset = clip_rect.shrink(2.0);
+    let inset = clip_rect.shrink(CODE_HIGHLIGHT_STROKE_WIDTH + 1.0);
     if inset.is_positive() {
         inset
     } else {
@@ -113,7 +118,9 @@ fn outline_clip_rect(clip_rect: egui::Rect) -> egui::Rect {
 }
 
 fn clipped_outline_rect(rect: egui::Rect, clip_rect: egui::Rect) -> Option<egui::Rect> {
-    let clipped = rect.expand(3.0).intersect(outline_clip_rect(clip_rect));
+    let clipped = rect
+        .expand(CODE_HIGHLIGHT_PADDING)
+        .intersect(outline_clip_rect(clip_rect));
     clipped.is_positive().then_some(clipped)
 }
 
@@ -163,7 +170,10 @@ fn paint_highlight_outlines(
 
     let painter = ui.painter_at(output.text_clip_rect);
     let outline_clip = outline_clip_rect(output.text_clip_rect);
-    let stroke = egui::Stroke::new(1.25, egui::Color32::from_rgb(52, 211, 153));
+    let stroke = egui::Stroke::new(
+        CODE_HIGHLIGHT_STROKE_WIDTH,
+        egui::Color32::from_rgb(52, 211, 153),
+    );
 
     for char_range in char_ranges {
         let mut row_start = 0usize;
@@ -321,15 +331,25 @@ pub fn show(ctx: &egui::Context, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
             let code_h = (total_h * *split_ratio).max(80.0);
             let state_h = (total_h - code_h - divider_h).max(60.0);
 
-            let text_edit = egui::TextEdit::multiline(code_buffer)
-                .font(egui::FontId::monospace(code_font_size))
-                .desired_width(ui.available_width())
-                .desired_rows(code_rows_for_height(code_h, code_font_size))
-                .min_size(egui::vec2(ui.available_width(), code_h))
-                .code_editor()
-                .layouter(&mut layouter)
-                .frame(false);
-            let te_output = text_edit.show(ui);
+            let te_output = egui::Frame::none()
+                .inner_margin(egui::Margin::symmetric(
+                    CODE_EDITOR_PAD_X,
+                    CODE_EDITOR_PAD_Y,
+                ))
+                .show(ui, |ui| {
+                    let inner_width = ui.available_width();
+                    let inner_height = (code_h - CODE_EDITOR_PAD_Y * 2.0).max(60.0);
+                    egui::TextEdit::multiline(code_buffer)
+                        .font(egui::FontId::monospace(code_font_size))
+                        .desired_width(inner_width)
+                        .desired_rows(code_rows_for_height(inner_height, code_font_size))
+                        .min_size(egui::vec2(inner_width, inner_height))
+                        .code_editor()
+                        .layouter(&mut layouter)
+                        .frame(false)
+                        .show(ui)
+                })
+                .inner;
             paint_highlight_outlines(ui, &te_output, code_buffer, &inline_highlights);
             let te_resp = te_output.response;
 
@@ -478,7 +498,7 @@ mod tests {
         let raw = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(150.0, 200.0));
 
         let clipped = clipped_outline_rect(raw, clip).expect("visible outline");
-        let expected = clip.shrink(2.0);
+        let expected = outline_clip_rect(clip);
 
         assert!(clip.contains(clipped.min));
         assert!(clip.contains(clipped.max));

@@ -21,6 +21,13 @@ Chronological session record. The roadmap stays strategic; this file records wha
 - Follow-up after right-edge clipping inspection: outline geometry is inset from
   the raw TextEdit clip rect before painting so the full perimeter remains
   visible at the right/bottom panel boundary.
+- Follow-up after text-clipping inspection: the code editor now has real inner
+  padding, the outline expands outside glyph mesh bounds, and the border remains
+  outline-only so selected code stays readable.
+- Floating utility windows now block canvas input while open, preventing shortcut
+  window scroll from zooming the canvas and Rust Wiring drag from starting
+  rubber-band selection behind the window.
+- View menu now exposes Preview Mode directly in addition to the F5 shortcut.
 - The outline is clipped to `TextEditOutput.text_clip_rect` before painting and
   uses `ui.painter_at(output.text_clip_rect)`, so selected-code decoration
   cannot spill outside the visible code editor area.

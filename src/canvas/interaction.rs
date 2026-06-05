@@ -43,6 +43,9 @@ pub struct CanvasSettings {
     /// Set each frame by the caller when a ruler guide is being dragged;
     /// suppresses rubber-band and widget drag so they don't co-fire.
     pub guide_drag_active: bool,
+    /// Set each frame by the caller while a floating window/modal owns pointer
+    /// input; suppresses canvas zoom, rubber-band, drag, and key nudges.
+    pub input_blocked: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -69,6 +72,7 @@ impl Default for CanvasSettings {
             pan: egui::Vec2::ZERO,
             show_rulers: false,
             guide_drag_active: false,
+            input_blocked: false,
         }
     }
 }
@@ -1611,25 +1615,39 @@ pub fn handle(
     // Clear per-frame signals
     state.double_clicked_widget = None;
     settings.snap_step = settings.snap_step.max(MIN_SNAP_STEP);
+    let input_blocked = settings.input_blocked;
 
     let (resp, painter) = ui.allocate_painter(ui.available_size(), egui::Sense::click_and_drag());
 
     // -------------------------------------------------------------------
     // Input collection
     // -------------------------------------------------------------------
-    let pointer = ui.input(|i| i.pointer.interact_pos());
-    let just_pressed = ui.input(|i| i.pointer.primary_pressed());
-    let primary_released = ui.input(|i| i.pointer.primary_released());
-    let is_down = ui.input(|i| i.pointer.primary_down());
-    let shift_held = ui.input(|i| i.modifiers.shift);
-    let ctrl_held = ui.input(|i| i.modifiers.ctrl);
-    let right_clicked = ui.input(|i| i.pointer.secondary_clicked());
-    let middle_down = ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
-    let mouse_delta = ui.input(|i| i.pointer.delta());
-    let scroll_y = ui.input(|i| i.raw_scroll_delta.y);
-    let key_g = ui.input(|i| i.key_pressed(egui::Key::G));
-    let key_0 = ui.input(|i| ctrl_held && i.key_pressed(egui::Key::Num0));
-    let double_clicked = resp.double_clicked();
+    let pointer = if input_blocked {
+        None
+    } else {
+        ui.input(|i| i.pointer.interact_pos())
+    };
+    let just_pressed = !input_blocked && ui.input(|i| i.pointer.primary_pressed());
+    let primary_released = !input_blocked && ui.input(|i| i.pointer.primary_released());
+    let is_down = !input_blocked && ui.input(|i| i.pointer.primary_down());
+    let shift_held = !input_blocked && ui.input(|i| i.modifiers.shift);
+    let ctrl_held = !input_blocked && ui.input(|i| i.modifiers.ctrl);
+    let right_clicked = !input_blocked && ui.input(|i| i.pointer.secondary_clicked());
+    let middle_down =
+        !input_blocked && ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
+    let mouse_delta = if input_blocked {
+        egui::Vec2::ZERO
+    } else {
+        ui.input(|i| i.pointer.delta())
+    };
+    let scroll_y = if input_blocked {
+        0.0
+    } else {
+        ui.input(|i| i.raw_scroll_delta.y)
+    };
+    let key_g = !input_blocked && ui.input(|i| i.key_pressed(egui::Key::G));
+    let key_0 = !input_blocked && ui.input(|i| ctrl_held && i.key_pressed(egui::Key::Num0));
+    let double_clicked = !input_blocked && resp.double_clicked();
 
     // -------------------------------------------------------------------
     // Shortcuts
@@ -1805,50 +1823,52 @@ pub fn handle(
     // -------------------------------------------------------------------
     // Inline label edit overlay
     // -------------------------------------------------------------------
-    if let Some((edit_id, ref mut edit_buf)) = state.inline_edit {
-        if let Some(widget) = tree.widgets.iter().find(|w| w.id == edit_id) {
-            let rect = crect(widget, origin, zoom);
-            let accent = kind_accent(&widget.kind);
-            // Frosted overlay behind the text edit
-            painter.rect_filled(
-                rect,
-                3.0,
-                egui::Color32::from_rgba_unmultiplied(20, 20, 20, 220),
-            );
-            painter.rect_stroke(rect, 3.0, egui::Stroke::new(1.5, accent));
+    if !input_blocked {
+        if let Some((edit_id, ref mut edit_buf)) = state.inline_edit {
+            if let Some(widget) = tree.widgets.iter().find(|w| w.id == edit_id) {
+                let rect = crect(widget, origin, zoom);
+                let accent = kind_accent(&widget.kind);
+                // Frosted overlay behind the text edit
+                painter.rect_filled(
+                    rect,
+                    3.0,
+                    egui::Color32::from_rgba_unmultiplied(20, 20, 20, 220),
+                );
+                painter.rect_stroke(rect, 3.0, egui::Stroke::new(1.5, accent));
 
-            // Place a TextEdit widget at the widget rect
-            let te_resp = ui.put(
-                rect,
-                egui::TextEdit::singleline(edit_buf)
-                    .font(egui::FontId::proportional(
-                        (12.0 * zoom * text_settings.label_scale).clamp(8.0, 24.0),
-                    ))
-                    .frame(false)
-                    .text_color(egui::Color32::WHITE),
-            );
-            te_resp.request_focus();
+                // Place a TextEdit widget at the widget rect
+                let te_resp = ui.put(
+                    rect,
+                    egui::TextEdit::singleline(edit_buf)
+                        .font(egui::FontId::proportional(
+                            (12.0 * zoom * text_settings.label_scale).clamp(8.0, 24.0),
+                        ))
+                        .frame(false)
+                        .text_color(egui::Color32::WHITE),
+                );
+                te_resp.request_focus();
 
-            // Commit on Enter or focus loss; Escape cancels
-            let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
-            let escape_pressed = ui.input(|i| i.key_pressed(egui::Key::Escape));
-            let focus_lost = !te_resp.has_focus() && !te_resp.gained_focus();
+                // Commit on Enter or focus loss; Escape cancels
+                let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let escape_pressed = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                let focus_lost = !te_resp.has_focus() && !te_resp.gained_focus();
 
-            if enter_pressed || (focus_lost && !escape_pressed) {
-                // Commit: update label in tree
-                if let Some(w) = tree.get_mut(edit_id) {
-                    if !edit_buf.is_empty() {
-                        w.props.label = edit_buf.clone();
+                if enter_pressed || (focus_lost && !escape_pressed) {
+                    // Commit: update label in tree
+                    if let Some(w) = tree.get_mut(edit_id) {
+                        if !edit_buf.is_empty() {
+                            w.props.label = edit_buf.clone();
+                        }
                     }
+                    state.inline_edit = None;
+                } else if escape_pressed {
+                    // Cancel: discard
+                    state.inline_edit = None;
                 }
-                state.inline_edit = None;
-            } else if escape_pressed {
-                // Cancel: discard
+            } else {
+                // Widget was removed while editing
                 state.inline_edit = None;
             }
-        } else {
-            // Widget was removed while editing
-            state.inline_edit = None;
         }
     }
 
@@ -2585,7 +2605,7 @@ pub fn handle(
     // -------------------------------------------------------------------
     // Keyboard nudge
     // -------------------------------------------------------------------
-    if !selected.is_empty() {
+    if !input_blocked && !selected.is_empty() {
         let nudge = if settings.snap_enabled {
             settings.snap_step.max(MIN_SNAP_STEP)
         } else {

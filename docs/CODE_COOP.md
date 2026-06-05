@@ -7,6 +7,17 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-05 — Codex Code Highlight Polish + Window Input Isolation
+
+On `dev`, I am tightening the generated-code selection outline after visual
+inspection showed the border either clipping at the panel edge or crossing the
+selected code text. The next fix is to add real editor padding and draw a
+subtle IDE-style outline outside the glyph bounds, while keeping the selected
+code readable. I am also checking modal/window input isolation because the
+shortcut window scroll wheel and Rust Wiring drag are leaking events to the
+canvas behind them; View also needs a direct Preview Mode menu item in addition
+to F5.
+
 ## 2026-06-05 — Codex Code Highlight Outline + Launcher Trace
 
 On `dev`, I am fixing the generated-code selection highlight so it no longer
