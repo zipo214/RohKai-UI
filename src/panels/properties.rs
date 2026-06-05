@@ -1444,6 +1444,48 @@ fn show_group_box(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut boo
 
 fn show_layout_container(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
     field_text(ui, "Label", &mut w.props.label);
+    if matches!(
+        w.kind,
+        WidgetKind::VLayout | WidgetKind::HLayout | WidgetKind::GridLayout
+    ) {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Children").small().weak());
+            ui.label(format!("{}", w.children.len()));
+        });
+        egui::Grid::new(("layout_props", w.id))
+            .num_columns(4)
+            .spacing([4.0, 2.0])
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Margin").small());
+                ui.add(
+                    egui::DragValue::new(&mut w.props.inner_margin)
+                        .range(0.0..=128.0_f32)
+                        .speed(0.5)
+                        .suffix(" px"),
+                );
+                ui.label(egui::RichText::new("Gap").small());
+                ui.add(
+                    egui::DragValue::new(&mut w.props.layout_spacing)
+                        .range(0.0..=128.0_f32)
+                        .speed(0.5)
+                        .suffix(" px"),
+                );
+                ui.end_row();
+                if matches!(w.kind, WidgetKind::GridLayout) {
+                    ui.label(egui::RichText::new("Columns").small());
+                    ui.add(egui::DragValue::new(&mut w.props.grid_columns).range(1..=12));
+                    ui.label(egui::RichText::new("Rows").small());
+                    let rows = w
+                        .children
+                        .len()
+                        .div_ceil(w.props.grid_columns.clamp(1, 12))
+                        .max(1);
+                    ui.label(rows.to_string());
+                    ui.end_row();
+                }
+            });
+        ui.separator();
+    }
     show_geometry(ui, w);
     ui.separator();
     show_custom_props(ui, w);

@@ -7,6 +7,18 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-04 — Codex Layout Properties + Outline Hierarchy
+
+On `dev`, I am adding the first real layout-ergonomics pass after the V/H/Grid
+ownership slices. The intended scope is concrete and source-of-truth-driven:
+`WidgetProps` gains layout spacing and GridLayout column count, `UiTree` reflow
+uses those values, live/export codegen mirror the same grid column boundaries,
+and the canvas grid preview reflects the selected column count. I am also
+changing Layers/Outline from "flat list with indented children wherever they
+happen to be in draw order" to an explicit parent/child row model so owned
+layout children read as hierarchy; deeper slot editing and parser round-trip
+remain future work.
+
 ## 2026-06-04 — Codex GridLayout Ownership Slice
 
 On `dev`, I am continuing the layout-depth pass by extending the shared

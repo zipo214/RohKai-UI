@@ -515,6 +515,18 @@ pub struct WidgetProps {
     )]
     pub stroke_width: f32,
 
+    // Layout containers
+    #[serde(
+        default = "default_layout_spacing",
+        skip_serializing_if = "is_default_layout_spacing"
+    )]
+    pub layout_spacing: f32,
+    #[serde(
+        default = "default_grid_columns",
+        skip_serializing_if = "is_default_grid_columns"
+    )]
+    pub grid_columns: usize,
+
     // Stage 9 schema audit
     /// Wrap text at widget boundary (Label, TextArea). None = egui default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -561,6 +573,18 @@ fn default_stroke_width() -> f32 {
 fn is_default_stroke_width(v: &f32) -> bool {
     (*v - 1.0).abs() < 0.001
 }
+fn default_layout_spacing() -> f32 {
+    6.0
+}
+fn is_default_layout_spacing(v: &f32) -> bool {
+    (*v - 6.0).abs() < 0.001
+}
+fn default_grid_columns() -> usize {
+    3
+}
+fn is_default_grid_columns(v: &usize) -> bool {
+    *v == 3
+}
 
 impl Default for WidgetProps {
     fn default() -> Self {
@@ -583,6 +607,8 @@ impl Default for WidgetProps {
             inner_margin: 8.0,
             stroke_color: None,
             stroke_width: 1.0,
+            layout_spacing: 6.0,
+            grid_columns: 3,
             text_wrap: None,
         }
     }

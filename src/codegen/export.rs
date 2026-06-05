@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 const SVG_RASTERIZER_SOURCE: &str = include_str!("../canvas/svg_rasterizer.rs");
 const SVG_CORE_SOURCE: &str = include_str!("../svg_core.rs");
-const DEFAULT_GRID_COLUMNS: usize = 3;
+const MAX_GRID_COLUMNS: usize = 12;
 
 /// Write a complete compilable Rust project to `dest` folder.
 pub fn write_project(tree: &UiTree, dest: &Path) -> Result<(), String> {
@@ -681,6 +681,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 "                egui::ScrollArea::vertical().show(ui, |_ui| {});\n".to_string()
             }
             WidgetKind::GridLayout => {
+                let columns = w.props.grid_columns.clamp(1, MAX_GRID_COLUMNS);
                 let mut code = format!(
                     "                egui::Grid::new(\"{}\").show(ui, |ui| {{\n",
                     w.id.as_simple()
@@ -688,12 +689,12 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 for (idx, &child_id) in w.children.iter().enumerate() {
                     if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
                         code.push_str(&export_layout_child_line(child, &handler_registry));
-                        if (idx + 1) % DEFAULT_GRID_COLUMNS == 0 {
+                        if (idx + 1) % columns == 0 {
                             code.push_str("                    ui.end_row();\n");
                         }
                     }
                 }
-                if !w.children.is_empty() && w.children.len() % DEFAULT_GRID_COLUMNS != 0 {
+                if !w.children.is_empty() && w.children.len() % columns != 0 {
                     code.push_str("                    ui.end_row();\n");
                 }
                 code.push_str("                });\n");
@@ -1742,6 +1743,10 @@ mod tests {
             id: parent_id,
             kind: WidgetKind::GridLayout,
             children: child_ids.to_vec(),
+            props: crate::project::schema::WidgetProps {
+                grid_columns: 2,
+                ..Default::default()
+            },
             ..Default::default()
         }];
         widgets.extend(
@@ -1771,7 +1776,7 @@ mod tests {
 
         assert_eq!(generated.matches("egui::Area::new").count(), 1);
         assert!(generated.contains("egui::Grid::new"));
-        assert!(generated.contains("ui.end_row();"));
+        assert_eq!(generated.matches("ui.end_row();").count(), 2);
         assert!(generated.contains("let child_response = ui.add_sized"));
         assert!(generated.contains("if let Err(e) = self.grid_child_0_clicked()"));
         assert!(generated.contains("fn grid_child_0_clicked(&mut self) -> Result<(), String>"));

@@ -2,6 +2,61 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-04 — Layout Properties And Outline Hierarchy Slice
+
+### Docs Reviewed Before Editing
+- Preflight context (`scripts/preflight-context.ps1`)
+- `.agents/skills/project-model/SKILL.md`
+- `.agents/skills/canvas-patterns/SKILL.md`
+- `.agents/skills/codegen-rules/SKILL.md`
+- `docs/ROADMAP.md`
+- `src/project/schema.rs`, `src/project/ui_tree.rs`,
+  `src/panels/properties.rs`, `src/panels/outline.rs`,
+  `src/canvas/interaction.rs`, `src/codegen/egui_emitter.rs`,
+  `src/codegen/export.rs`
+
+### Changes Made
+- Added persisted layout properties on `WidgetProps`:
+  `layout_spacing: f32` and `grid_columns: usize`.
+- `UiTree::reflow_layouts()` now uses `inner_margin`, `layout_spacing`, and
+  `grid_columns` instead of hardcoded spacing/column values.
+- `validate_and_repair()` clamps layout margins, gaps, and grid columns to safe
+  values.
+- Properties panel now exposes child count, margin, gap, and GridLayout columns
+  for layout containers; edits reflow immediately through the existing
+  validate/repair path.
+- Canvas GridLayout preview now draws vertical grid guides from
+  `props.grid_columns` and row guides from owned-child count.
+- Live codegen and export now use each GridLayout's `grid_columns` value for
+  `ui.end_row()` boundaries.
+- Layers/Outline now builds an explicit hierarchy row model: owned children are
+  displayed directly under their parent instead of appearing in flat draw order
+  with incidental indentation.
+- Updated architecture, code index, feature evaluation, roadmap, Code CoOp, and
+  mirrored project-model skills for Codex/Claude.
+
+### Verification
+- `cargo check`: clean
+- `cargo test layout -- --nocapture`: 10 passed
+- `cargo test outline -- --nocapture`: 1 passed
+- `cargo test export_compile_fixture_cargo_check -- --ignored --nocapture`:
+  passed
+- `cargo fmt --check`: clean
+- `cargo test`: 177 passed, 2 ignored
+- `cargo clippy -- -D warnings`: clean
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1`:
+  clean
+- `cargo test all_builtin_widgets_export_cargo_check -- --ignored --nocapture`:
+  passed
+- `cargo run --quiet` smoke: launched and stopped after 8 seconds
+
+### Remaining Gaps
+- Layout alignment, fill/stretch, per-child policies, layout-aware spacers, and
+  GridLayout row policies remain open.
+- Outline drag-reorder still changes draw order, not parent/slot membership.
+- Lazare parser still does not round-trip layout-owned hierarchy from edited
+  code.
+
 ## 2026-06-04 — GridLayout Direct-Child Ownership Slice
 
 ### Docs Reviewed Before Editing

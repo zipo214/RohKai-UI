@@ -30,7 +30,7 @@ inspector depth. RohKai's differentiator should be truthful Rust/egui codegen.
 | Text/input | TextInput, TextArea, SpinBox, Slider | 3 | Bindings, min/max/defaults, codegen/export. | Validation rules, formatting, input masks, preview state tools. |
 | Choice | Checkbox, RadioButton, ComboBox, FontComboBox | 3 | Bindings/options, canvas visuals, codegen/export. | Option models, keyboard behavior, searchable combo, enum binding. |
 | Display | ProgressBar, MathLabel | 2-3 | ProgressBar real; MathLabel computed f32 label MVP. | Rich formatting, formula expressions, diagnostics, units. |
-| Layout | Frame, GroupBox, VLayout, HLayout, GridLayout, ScrollArea, TabWidget | 2-3 | Visual boxes and basic export forms. | True child layout semantics, constraints, slot editing, container-specific inspector. |
+| Layout | Frame, GroupBox, VLayout, HLayout, GridLayout, ScrollArea, TabWidget | 3 | V/H/Grid own direct children, reflow them, expose first-slice margins/gaps/grid columns, and generate nested layout code. | Full constraints, slot editing, alignment/stretch policies, layout-aware spacers, parser round-trip. |
 | Spacers | HorizontalSpacer, VerticalSpacer | 2 | Canvas markers and simple export space. | Layout-aware flexible/fixed spacer behavior. |
 | Buttons | ToolButton, CommandLinkButton, DialogButtonBox | 2-3 | Basic egui output from labels/options. | Icons, roles, standard actions, keyboard/default/cancel semantics. |
 | Containers | StackedWidget, ToolBox | 2 | Visual/container MVPs with option sections. | Active-page editing, child ownership, page management UI. |
@@ -45,6 +45,7 @@ inspector depth. RohKai's differentiator should be truthful Rust/egui codegen.
 | MathLabel | It formats one bound `f32`; it does not parse formulas. |
 | Chart | It renders bars from `Vec<f32>`; no axes, labels, multiple series, legends, or interactions. |
 | Table/ListView/TreeView | Static options, not model/view or data-bound widgets. |
+| VLayout/HLayout/GridLayout | Direct-child ownership is real, but there are no alignment/stretch policies, layout-aware spacers, slot editor, or parser round-trip yet. |
 | Timer | Comment stub, not a scheduler. |
 | StateMachine | State field and comment, not a transition engine. |
 | HttpRequest | Response field and comment, not network execution. |
@@ -77,4 +78,3 @@ inspector depth. RohKai's differentiator should be truthful Rust/egui codegen.
 3. Build Formula Widget as a separate feature, not by stretching MathLabel.
 4. Build Chart v2: axes, labels, series model, and generated painter helpers.
 5. Add model-bound Table/List/Tree lane under Stage 13.
-

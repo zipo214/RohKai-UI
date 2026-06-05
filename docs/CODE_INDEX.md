@@ -71,6 +71,9 @@ being comfortable.
 - **Functional MVP:** MathLabel is a safe computed `f32` label; Chart is a
   minimal `Vec<f32>` bar painter; Table/ListView/TreeView are static
   option-backed widgets.
+- **Direct-child layout slice:** VLayout/HLayout/GridLayout own and reflow direct
+  children with first-slice margins/gaps/grid columns; slot policies and parser
+  round-trip are still planned.
 - **Design-time MVP / documented stubs:** Timer, StateMachine, and HttpRequest
   components expose state/config and generated comments, not full runtime
   schedulers, transition engines, or HTTP clients.

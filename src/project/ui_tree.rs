@@ -185,7 +185,7 @@ impl UiTree {
     /// This intentionally keeps child `Rect`s absolute so existing hit testing,
     /// selection, save/load, and child codegen can share one coordinate model.
     pub fn reflow_layouts(&mut self) {
-        let parents: Vec<(WidgetKind, Rect, f32, Vec<Uuid>)> = self
+        let parents: Vec<(WidgetKind, Rect, f32, f32, usize, Vec<Uuid>)> = self
             .widgets
             .iter()
             .filter(|w| is_layout_container(&w.kind))
@@ -194,29 +194,40 @@ impl UiTree {
                     w.kind.clone(),
                     w.rect.clone(),
                     w.props.inner_margin.max(0.0),
+                    w.props.layout_spacing.max(0.0),
+                    w.props.grid_columns.clamp(1, GRID_LAYOUT_MAX_COLUMNS),
                     w.children.clone(),
                 )
             })
             .collect();
 
-        for (kind, parent_rect, padding, child_ids) in parents {
+        for (kind, parent_rect, padding, spacing, grid_columns, child_ids) in parents {
             match kind {
                 WidgetKind::VLayout => {
-                    self.reflow_vlayout_children(&parent_rect, padding, &child_ids)
+                    self.reflow_vlayout_children(&parent_rect, padding, spacing, &child_ids)
                 }
                 WidgetKind::HLayout => {
-                    self.reflow_hlayout_children(&parent_rect, padding, &child_ids)
+                    self.reflow_hlayout_children(&parent_rect, padding, spacing, &child_ids)
                 }
-                WidgetKind::GridLayout => {
-                    self.reflow_gridlayout_children(&parent_rect, padding, &child_ids)
-                }
+                WidgetKind::GridLayout => self.reflow_gridlayout_children(
+                    &parent_rect,
+                    padding,
+                    spacing,
+                    grid_columns,
+                    &child_ids,
+                ),
                 _ => {}
             }
         }
     }
 
-    fn reflow_vlayout_children(&mut self, parent_rect: &Rect, padding: f32, child_ids: &[Uuid]) {
-        let spacing = 6.0;
+    fn reflow_vlayout_children(
+        &mut self,
+        parent_rect: &Rect,
+        padding: f32,
+        spacing: f32,
+        child_ids: &[Uuid],
+    ) {
         let mut y = parent_rect.y + padding;
         let child_x = parent_rect.x + padding;
         let child_w = (parent_rect.w - padding * 2.0).max(MIN_WIDGET_SIZE);
@@ -233,8 +244,13 @@ impl UiTree {
         }
     }
 
-    fn reflow_hlayout_children(&mut self, parent_rect: &Rect, padding: f32, child_ids: &[Uuid]) {
-        let spacing = 6.0;
+    fn reflow_hlayout_children(
+        &mut self,
+        parent_rect: &Rect,
+        padding: f32,
+        spacing: f32,
+        child_ids: &[Uuid],
+    ) {
         let count = child_ids.len().max(1) as f32;
         let total_spacing = spacing * (count - 1.0);
         let available_w = (parent_rect.w - padding * 2.0 - total_spacing).max(MIN_WIDGET_SIZE);
@@ -255,9 +271,17 @@ impl UiTree {
         }
     }
 
-    fn reflow_gridlayout_children(&mut self, parent_rect: &Rect, padding: f32, child_ids: &[Uuid]) {
-        let spacing = 6.0;
-        let columns = GRID_LAYOUT_DEFAULT_COLUMNS.min(child_ids.len().max(1));
+    fn reflow_gridlayout_children(
+        &mut self,
+        parent_rect: &Rect,
+        padding: f32,
+        spacing: f32,
+        grid_columns: usize,
+        child_ids: &[Uuid],
+    ) {
+        let columns = grid_columns
+            .clamp(1, GRID_LAYOUT_MAX_COLUMNS)
+            .min(child_ids.len().max(1));
         let rows = child_ids.len().div_ceil(columns).max(1);
         let columns_f = columns as f32;
         let rows_f = rows as f32;
@@ -314,6 +338,17 @@ impl UiTree {
         if widget.props.min > widget.props.max {
             std::mem::swap(&mut widget.props.min, &mut widget.props.max);
         }
+
+        if !widget.props.inner_margin.is_finite() {
+            widget.props.inner_margin = 8.0;
+        }
+        widget.props.inner_margin = widget.props.inner_margin.clamp(0.0, 128.0);
+
+        if !widget.props.layout_spacing.is_finite() {
+            widget.props.layout_spacing = 6.0;
+        }
+        widget.props.layout_spacing = widget.props.layout_spacing.clamp(0.0, 128.0);
+        widget.props.grid_columns = widget.props.grid_columns.clamp(1, GRID_LAYOUT_MAX_COLUMNS);
 
         if !widget.props.default_value.is_finite() {
             widget.props.default_value = 0.5;
@@ -423,7 +458,7 @@ fn rect_contains_point(rect: &Rect, (x, y): (f32, f32)) -> bool {
     x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h
 }
 
-const GRID_LAYOUT_DEFAULT_COLUMNS: usize = 3;
+const GRID_LAYOUT_MAX_COLUMNS: usize = 12;
 
 fn is_layout_container(kind: &WidgetKind) -> bool {
     matches!(
@@ -660,6 +695,11 @@ mod tests {
                 w: 328.0,
                 h: 230.0,
             },
+            props: WidgetProps {
+                layout_spacing: 10.0,
+                grid_columns: 2,
+                ..Default::default()
+            },
             ..Default::default()
         }];
         widgets.extend(ids.iter().map(|id| WidgetInstance {
@@ -684,13 +724,13 @@ mod tests {
 
         let parent = tree.widgets.iter().find(|w| w.id == parent_id).unwrap();
         assert_eq!(parent.children, ids);
-        let expected = [(58.0, 48.0), (164.0, 48.0), (270.0, 48.0), (58.0, 158.0)];
+        let expected = [(58.0, 48.0), (219.0, 48.0), (58.0, 160.0), (219.0, 160.0)];
         for (id, (x, y)) in ids.iter().zip(expected) {
             let child = tree.widgets.iter().find(|w| w.id == *id).unwrap();
             assert_eq!(child.rect.x, x);
             assert_eq!(child.rect.y, y);
-            assert_eq!(child.rect.w, 100.0);
-            assert_eq!(child.rect.h, 104.0);
+            assert_eq!(child.rect.w, 151.0);
+            assert_eq!(child.rect.h, 102.0);
         }
     }
 }

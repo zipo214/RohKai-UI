@@ -4,7 +4,7 @@ use crate::project::ui_tree::UiTree;
 use std::collections::HashSet;
 use uuid::Uuid;
 
-const DEFAULT_GRID_COLUMNS: usize = 3;
+const MAX_GRID_COLUMNS: usize = 12;
 
 /// Returns (widget_id_or_none, code_line) for every line in the generated body.
 /// Preamble/closing lines have `None` as the id.
@@ -463,6 +463,7 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                 ));
             }
             WidgetKind::GridLayout => {
+                let columns = w.props.grid_columns.clamp(1, MAX_GRID_COLUMNS);
                 lines.push((
                     Some(w.id),
                     format!(
@@ -473,12 +474,12 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                 for (idx, &child_id) in w.children.iter().enumerate() {
                     if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
                         emit_layout_child_lines(child, &mut lines);
-                        if (idx + 1) % DEFAULT_GRID_COLUMNS == 0 {
+                        if (idx + 1) % columns == 0 {
                             lines.push((Some(w.id), "            ui.end_row();".to_owned()));
                         }
                     }
                 }
-                if !w.children.is_empty() && w.children.len() % DEFAULT_GRID_COLUMNS != 0 {
+                if !w.children.is_empty() && w.children.len() % columns != 0 {
                     lines.push((Some(w.id), "            ui.end_row();".to_owned()));
                 }
                 lines.push((Some(w.id), "        });".to_owned()));
@@ -1071,7 +1072,7 @@ fn emit_layout_child_lines(child: &WidgetInstance, lines: &mut Vec<(Option<Uuid>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::schema::{Rect, WidgetInstance};
+    use crate::project::schema::{Rect, WidgetInstance, WidgetProps};
 
     #[test]
     fn image_widget_emits_svg_preview_call() {
@@ -1188,6 +1189,10 @@ mod tests {
             id: parent_id,
             kind: WidgetKind::GridLayout,
             children: child_ids.to_vec(),
+            props: WidgetProps {
+                grid_columns: 2,
+                ..Default::default()
+            },
             ..Default::default()
         }];
         widgets.extend(child_ids.iter().map(|id| WidgetInstance {
@@ -1209,7 +1214,7 @@ mod tests {
 
         assert_eq!(generated.matches("egui::Area::new").count(), 1);
         assert!(generated.contains("egui::Grid::new"));
-        assert!(generated.contains("ui.end_row();"));
+        assert_eq!(generated.matches("ui.end_row();").count(), 2);
         for child_id in child_ids {
             assert!(generated.contains(&format!("// widget_{child_id}")));
         }

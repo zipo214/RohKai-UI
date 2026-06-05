@@ -404,12 +404,16 @@ not treat the first-slice ownership surface as closing the real layout gap.
       into a default 3-column grid.
 - [x] GridLayout first slice: live codegen/export emit direct children inside
       `egui::Grid::new(...).show(ui, |ui| { ... })` with row boundaries.
-- [ ] Properties expose spacing, padding/margins, alignment, fill/stretch rules,
-      grid columns/rows, and per-child stretch/fixed-size behavior.
+- [x] Properties expose first-slice layout knobs: margins, spacing/gap, and
+      GridLayout columns; these drive canvas reflow and generated row breaks.
+- [ ] Properties expose alignment, fill/stretch rules, grid row policies, and
+      per-child stretch/fixed-size behavior.
 - [ ] Spacers become layout-aware flexible/fixed spacer items inside layout
       containers, not only standalone dashed markers.
-- [ ] Hit testing, rubber-band selection, outline/layers, group/ungroup, and
-      delete semantics respect layout-child ownership.
+- [x] Layers/Outline displays owned layout children directly under their parent
+      instead of as a flat draw-order row with incidental indentation.
+- [ ] Hit testing, rubber-band selection, group/ungroup, delete, and drag-reorder
+      semantics fully respect layout-child ownership.
 - [x] Stack layout slice: live codegen and export place direct
       `VLayout`/`HLayout` children inside `ui.vertical(|ui| { ... })` or
       `ui.horizontal(|ui| { ... })` closures in child order.

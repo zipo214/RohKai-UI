@@ -990,9 +990,8 @@ fn draw_widget(
                     stroke_color,
                 ),
             );
-            // Draw simple 3×3 grid lines
-            let cols = 3_i32;
-            let rows = 3_i32;
+            let cols = widget.props.grid_columns.clamp(1, 12);
+            let rows = widget.children.len().div_ceil(cols).max(1);
             for c in 1..cols {
                 let x = rect.min.x + (rect.width() * c as f32) / cols as f32;
                 painter.line_segment(
