@@ -83,7 +83,7 @@ fn code_layout_job(
     ui: &egui::Ui,
     text: &str,
     font_size: f32,
-    highlights: &[HighlightRange],
+    _highlights: &[HighlightRange],
     wrap_width: f32,
 ) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
@@ -94,10 +94,26 @@ fn code_layout_job(
         color: ui.visuals().text_color(),
         ..Default::default()
     };
-    let mut selected = base.clone();
-    selected.color = ui.visuals().text_color();
-    selected.background = egui::Color32::from_rgba_unmultiplied(52, 211, 153, 32);
 
+    job.append(text, 0.0, base);
+    job
+}
+
+fn byte_to_char_index(text: &str, byte_index: usize) -> usize {
+    text[..byte_index.min(text.len())].chars().count()
+}
+
+fn clipped_outline_rect(rect: egui::Rect, clip_rect: egui::Rect) -> Option<egui::Rect> {
+    let clipped = rect.expand(2.0).intersect(clip_rect);
+    clipped.is_positive().then_some(clipped)
+}
+
+fn paint_highlight_outlines(
+    ui: &egui::Ui,
+    output: &egui::widgets::text_edit::TextEditOutput,
+    text: &str,
+    highlights: &[HighlightRange],
+) {
     let mut valid_ranges: Vec<HighlightRange> = highlights
         .iter()
         .copied()
@@ -106,26 +122,53 @@ fn code_layout_job(
     valid_ranges.sort_by_key(|range| (range.start, range.end));
 
     if valid_ranges.is_empty() {
-        job.append(text, 0.0, base);
-        return job;
+        return;
     }
 
-    let mut cursor = 0;
-    for range in valid_ranges {
-        if range.start < cursor {
-            continue;
-        }
-        if cursor < range.start {
-            job.append(&text[cursor..range.start], 0.0, base.clone());
-        }
-        job.append(&text[range.start..range.end], 0.0, selected.clone());
-        cursor = range.end;
-    }
-    if cursor < text.len() {
-        job.append(&text[cursor..], 0.0, base);
-    }
+    let mut char_ranges: Vec<std::ops::Range<usize>> = valid_ranges
+        .iter()
+        .map(|range| byte_to_char_index(text, range.start)..byte_to_char_index(text, range.end))
+        .collect();
+    char_ranges.sort_by_key(|range| (range.start, range.end));
 
-    job
+    let painter = ui.painter_at(output.text_clip_rect);
+    let stroke = egui::Stroke::new(1.25, egui::Color32::from_rgb(52, 211, 153));
+    let fill = egui::Color32::from_rgba_unmultiplied(52, 211, 153, 10);
+
+    for char_range in char_ranges {
+        let mut row_start = 0usize;
+        let mut outline: Option<egui::Rect> = None;
+
+        for row in &output.galley.rows {
+            let row_text_end = row_start + row.glyphs.len();
+            let row_end = row_text_end + usize::from(row.ends_with_newline);
+            let intersects = char_range.start < row_end && char_range.end > row_start;
+
+            if intersects {
+                let row_rect = row.rect.translate(output.galley_pos.to_vec2());
+                let visible = row_rect.intersect(output.text_clip_rect);
+                if visible.is_positive() {
+                    outline = Some(match outline {
+                        Some(accumulated) => accumulated.union(visible),
+                        None => visible,
+                    });
+                }
+            }
+
+            row_start = row_end;
+        }
+
+        if let Some(rect) =
+            outline.and_then(|rect| clipped_outline_rect(rect, output.text_clip_rect))
+        {
+            painter.rect_filled(rect, 3.0, fill);
+            painter.rect_stroke(rect, 3.0, stroke);
+        }
+    }
+}
+
+fn code_rows_for_height(height: f32, font_size: f32) -> usize {
+    ((height / (font_size * 1.35)).floor() as usize).max(4)
 }
 
 pub fn show(ctx: &egui::Context, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
@@ -251,15 +294,17 @@ pub fn show(ctx: &egui::Context, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
             let code_h = (total_h * *split_ratio).max(80.0);
             let state_h = (total_h - code_h - divider_h).max(60.0);
 
-            let te_resp = ui.add_sized(
-                [ui.available_width(), code_h],
-                egui::TextEdit::multiline(code_buffer)
-                    .font(egui::FontId::monospace(code_font_size))
-                    .desired_width(f32::INFINITY)
-                    .code_editor()
-                    .layouter(&mut layouter)
-                    .frame(false),
-            );
+            let text_edit = egui::TextEdit::multiline(code_buffer)
+                .font(egui::FontId::monospace(code_font_size))
+                .desired_width(ui.available_width())
+                .desired_rows(code_rows_for_height(code_h, code_font_size))
+                .min_size(egui::vec2(ui.available_width(), code_h))
+                .code_editor()
+                .layouter(&mut layouter)
+                .frame(false);
+            let te_output = text_edit.show(ui);
+            paint_highlight_outlines(ui, &te_output, code_buffer, &inline_highlights);
+            let te_resp = te_output.response;
 
             if te_resp.changed() {
                 if code_buffer.trim().is_empty() {
@@ -398,5 +443,17 @@ mod tests {
         assert_eq!(ranges.len(), 2);
         assert!(code[ranges[0].start..ranges[0].end].contains("One"));
         assert!(code[ranges[1].start..ranges[1].end].contains("Two"));
+    }
+
+    #[test]
+    fn clipped_outline_rect_stays_inside_visible_text_clip() {
+        let clip = egui::Rect::from_min_max(egui::pos2(10.0, 20.0), egui::pos2(110.0, 120.0));
+        let raw = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(150.0, 200.0));
+
+        let clipped = clipped_outline_rect(raw, clip).expect("visible outline");
+
+        assert!(clip.contains(clipped.min));
+        assert!(clip.contains(clipped.max));
+        assert_eq!(clipped, clip);
     }
 }

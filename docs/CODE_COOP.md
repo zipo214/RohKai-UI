@@ -7,6 +7,16 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-05 — Codex Code Highlight Outline + Launcher Trace
+
+On `dev`, I am fixing the generated-code selection highlight so it no longer
+uses green TextEdit span backgrounds or copied preview blocks. The new approach
+draws a foreground outline from `TextEditOutput` galley rows, so it maps to the
+actual wrapped/scrolled text layout. I also confirmed the user's `rohkai`
+PowerShell 7 shortcut currently runs `cargo run` from `D:\dev\rohkai`, and I am
+making `scripts/run.ps1` print branch/commit/dirty-state so future launches prove
+which source version is running.
+
 ## 2026-06-05 — Codex Layout-Aware Spacers
 
 On `dev`, I reviewed the recent layout passes and am implementing the next

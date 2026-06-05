@@ -2,6 +2,44 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-05 — Code Highlight Outline And Launcher Trace
+
+### Docs Reviewed Before Editing
+- Preflight context (`scripts/preflight-context.ps1`)
+- `docs/CODE_COOP.md`
+- `src/panels/code_preview.rs`
+- egui 0.29.1 `TextEditOutput` and `Galley` source in the local Cargo cache
+
+### Changes
+- Replaced the generated-code selection highlight from TextEdit span
+  background coloring with a foreground outline drawn from
+  `TextEditOutput.galley` rows.
+- The outline is clipped to `TextEditOutput.text_clip_rect` before painting and
+  uses `ui.painter_at(output.text_clip_rect)`, so selected-code decoration
+  cannot spill outside the visible code editor area.
+- Added a regression test proving expanded outline geometry is clipped to the
+  visible TextEdit clip rect.
+- Updated `scripts/run.ps1` to print source path, branch, commit, and dirty
+  state before launching, plus `-CheckOnly` for verifying the launcher path
+  without opening the app.
+
+### Verification
+- `cargo fmt --check`: clean
+- `cargo test code_preview -- --nocapture`: 4 passed
+- `cargo check`: clean
+- `cargo test`: 187 passed, 2 ignored
+- `cargo clippy -- -D warnings`: clean
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1`:
+  OK
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\run.ps1 -CheckOnly`:
+  reports `D:\dev\rohkai`, branch `dev`, and current commit.
+
+### Risks / Follow-ups
+- The outline now follows TextEdit's real visible layout, but it is still one
+  rectangular outline around each selected block. A future dedicated code editor
+  can add true token/range decorations, minimap markers, and precise scroll-to
+  cursor behavior.
+
 ## 2026-06-05 — Layout Depth Follow-Up: Spacers, Ownership, Parser, Stretch
 
 ### Docs Reviewed Before Editing
