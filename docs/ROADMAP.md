@@ -391,9 +391,10 @@ requiring schema changes.
 Current `VLayout`, `HLayout`, and `GridLayout` now have a **first-slice
 direct-child ownership model**: they can own/reflow direct children through
 `WidgetInstance.children` and emit matching egui layout calls. They are still
-not full Qt/Lazarus layout managers because editable policies, slot controls,
-stretch/fill rules, layout-aware spacers, and parser round-trip remain open. Do
-not treat the first-slice ownership surface as closing the real layout gap.
+not full Qt/Lazarus layout managers because full alignment controls, per-child
+policies, richer slot editing, and runtime-style constraint behavior remain
+open. Do not treat the first-slice ownership surface as closing the real layout
+gap.
 
 - [x] Stack layout slice: `VLayout` and `HLayout` can own/drop child widgets as
       explicit `WidgetInstance.children`, detach them when dragged outside, and
@@ -406,20 +407,29 @@ not treat the first-slice ownership surface as closing the real layout gap.
       `egui::Grid::new(...).show(ui, |ui| { ... })` with row boundaries.
 - [x] Properties expose first-slice layout knobs: margins, spacing/gap, and
       GridLayout columns; these drive canvas reflow and generated row breaks.
-- [ ] Properties expose alignment, fill/stretch rules, grid row policies, and
-      per-child stretch/fixed-size behavior.
-- [ ] Spacers become layout-aware flexible/fixed spacer items inside layout
-      containers, not only standalone dashed markers.
+- [x] Properties expose first-slice stretch/fill behavior through
+      `layout_stretch`; container reflow preserves child size hints when
+      stretch is disabled.
+- [ ] Properties expose alignment, grid row policies, and per-child
+      stretch/fixed-size behavior.
+- [x] Spacers are layout-aware first-slice items: `VerticalSpacer` flexes inside
+      `VLayout`, `HorizontalSpacer` flexes inside `HLayout`, and generated code
+      emits matching `ui.add_space(...)`.
 - [x] Layers/Outline displays owned layout children directly under their parent
       instead of as a flat draw-order row with incidental indentation.
-- [ ] Hit testing, rubber-band selection, group/ungroup, delete, and drag-reorder
-      semantics fully respect layout-child ownership.
+- [x] Delete, group, ungroup, and first-slice child reorder semantics respect
+      layout-child ownership and reflow through `UiTree`.
+- [ ] Hit testing, rubber-band selection, and richer drag-reorder semantics need
+      more layout-aware polish.
 - [x] Stack layout slice: live codegen and export place direct
       `VLayout`/`HLayout` children inside `ui.vertical(|ui| { ... })` or
       `ui.horizontal(|ui| { ... })` closures in child order.
-- [ ] Lazare parser round-trips layout-owned hierarchy from edited code.
-- [ ] Add tests proving canvas child order, resize reflow, generated code nesting,
-      export output, and round-trip parser behavior stay consistent.
+- [x] Lazare parser first-slice round-trips one-level layout-owned hierarchy
+      from generated/edited layout closures.
+- [x] Add tests proving canvas child order, resize reflow, generated code
+      nesting, export output, and first-slice parser behavior stay consistent.
+- [ ] Add richer cell/slot editor, named slots, drag-to-slot behavior, and
+      multi-level layout hierarchy round-trip tests.
 
 ### New Widget Kinds — Containers
 - [x] Scroll Area — canvas box with simulated scrollbar indicator

@@ -52,6 +52,7 @@ All panels read from it; the canvas mutates it in-place through `tree.get_mut(id
 | `stroke_color` | `Option<[u8; 3]>` | Frame |
 | `stroke_width` | `f32` | Frame |
 | `layout_spacing` | `f32` | VLayout, HLayout, GridLayout |
+| `layout_stretch` | `bool` | VLayout, HLayout, GridLayout |
 | `grid_columns` | `usize` | GridLayout |
 
 #### WidgetInstance fields (beyond id/kind/rect/props)

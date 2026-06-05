@@ -521,6 +521,8 @@ pub struct WidgetProps {
         skip_serializing_if = "is_default_layout_spacing"
     )]
     pub layout_spacing: f32,
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub layout_stretch: bool,
     #[serde(
         default = "default_grid_columns",
         skip_serializing_if = "is_default_grid_columns"
@@ -608,6 +610,7 @@ impl Default for WidgetProps {
             stroke_color: None,
             stroke_width: 1.0,
             layout_spacing: 6.0,
+            layout_stretch: true,
             grid_columns: 3,
             text_wrap: None,
         }

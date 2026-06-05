@@ -1220,6 +1220,68 @@ mod tests {
         }
     }
 
+    #[test]
+    fn hlayout_emits_reflowed_horizontal_spacer_space() {
+        let parent_id = Uuid::from_u128(9);
+        let left_id = Uuid::from_u128(10);
+        let spacer_id = Uuid::from_u128(11);
+        let right_id = Uuid::from_u128(12);
+        let mut tree = UiTree {
+            widgets: vec![
+                WidgetInstance {
+                    id: parent_id,
+                    kind: WidgetKind::HLayout,
+                    rect: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        w: 300.0,
+                        h: 60.0,
+                    },
+                    children: vec![left_id, spacer_id, right_id],
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: left_id,
+                    kind: WidgetKind::Button,
+                    rect: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        w: 50.0,
+                        h: 30.0,
+                    },
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: spacer_id,
+                    kind: WidgetKind::HorizontalSpacer,
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: right_id,
+                    kind: WidgetKind::Button,
+                    rect: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        w: 70.0,
+                        h: 30.0,
+                    },
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        tree.reflow_layouts();
+
+        let generated = emit_indexed(&tree)
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(generated.contains("ui.horizontal(|ui| {"));
+        assert!(generated.contains("ui.add_space(152.0);"));
+    }
+
     fn emit_joined(kind: WidgetKind, setup: impl FnOnce(&mut WidgetInstance)) -> String {
         let mut w = WidgetInstance {
             id: Uuid::nil(),

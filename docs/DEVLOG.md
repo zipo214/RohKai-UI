@@ -2,6 +2,55 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-05 — Layout Depth Follow-Up: Spacers, Ownership, Parser, Stretch
+
+### Docs Reviewed Before Editing
+- Preflight context (`scripts/preflight-context.ps1 -IncludeDevlog`)
+- `.agents/skills/project-model/SKILL.md`
+- `.agents/skills/canvas-patterns/SKILL.md`
+- `.agents/skills/codegen-rules/SKILL.md`
+- `docs/ROADMAP.md`
+- `docs/CODE_COOP.md`
+- Recent layout entries in `docs/DEVLOG.md`
+
+### Changes
+- Added layout-aware spacer behavior in `UiTree::reflow_layouts()`:
+  `VerticalSpacer` flexes inside `VLayout`, `HorizontalSpacer` flexes inside
+  `HLayout`, and generated live/export code emits matching `ui.add_space(...)`.
+- Added `WidgetProps.layout_stretch` as a first-slice container fill/stretch
+  policy. When disabled, stack/grid layouts preserve child size hints while
+  still assigning deterministic canvas rects.
+- Fixed group/ungroup behavior for layout-owned children so Frames replace or
+  expand in the parent `children` list instead of orphaning layout ownership.
+- Added `UiTree::move_child_within_parent()` and a first-slice GridLayout slot
+  reorder UI in Properties.
+- Extended Lazare parser output to preserve one-level layout hierarchy from
+  generated `ui.vertical`, `ui.horizontal`, and `egui::Grid::new(...).show(...)`
+  closures.
+- Updated roadmap, architecture, code index, feature evaluation, Code CoOp, and
+  agent project-model skills to reflect the new source-of-truth fields and
+  first-slice completion status.
+
+### Verification
+- `cargo check`: clean
+- `cargo test layout -- --nocapture`: 18 passed
+- Focused spacer/parser/grid-reorder/live-export tests: passed
+- `cargo test export_compile_fixture_cargo_check -- --ignored --nocapture`: passed
+- `cargo test all_builtin_widgets_export_cargo_check -- --ignored --nocapture`: passed
+- `cargo fmt --check`: clean
+- `cargo test`: 186 passed, 2 ignored
+- `cargo clippy -- -D warnings`: clean
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1`:
+  OK
+- `cargo run` smoke: launched and stopped after 8 seconds
+
+### Risks / Follow-ups
+- Layouts are still not Qt/Lazarus parity: per-child policies, alignment,
+  named grid slots, drag-to-slot editing, and multi-level hierarchy round-trip
+  remain open.
+- Grid slot UI currently shows row/column plus short UUID controls; it is a
+  functional reorder slice, not the final visual slot editor.
+
 ## 2026-06-04 — Layout Properties And Outline Hierarchy Slice
 
 ### Docs Reviewed Before Editing

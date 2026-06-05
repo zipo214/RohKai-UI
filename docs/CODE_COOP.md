@@ -7,6 +7,19 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-05 — Codex Layout-Aware Spacers
+
+On `dev`, I reviewed the recent layout passes and am implementing the next
+depth step: spacers that behave as layout items instead of only standalone
+markers. The intended source-of-truth rule is conservative: `VerticalSpacer`
+flexes inside `VLayout`, `HorizontalSpacer` flexes inside `HLayout`, and other
+widgets keep their current fixed size while layouts assign absolute canvas rects.
+This updated canvas reflow, layout properties, parser/codegen/export tests, and
+docs without adding a separate layout model. First-slice parser hierarchy
+round-trip, container-level stretch, group/ungroup ownership, and grid child
+reorder are included; still open are per-child policies, richer slot editing,
+and multi-level layout semantics.
+
 ## 2026-06-04 — Codex Layout Properties + Outline Hierarchy
 
 On `dev`, I am adding the first real layout-ergonomics pass after the V/H/Grid

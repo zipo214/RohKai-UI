@@ -72,8 +72,10 @@ being comfortable.
   minimal `Vec<f32>` bar painter; Table/ListView/TreeView are static
   option-backed widgets.
 - **Direct-child layout slice:** VLayout/HLayout/GridLayout own and reflow direct
-  children with first-slice margins/gaps/grid columns; slot policies and parser
-  round-trip are still planned.
+  children with first-slice margins/gaps/grid columns, layout-aware spacers,
+  container stretch, grid child reorder controls, and one-level Lazare parser
+  hierarchy round-trip. Rich alignment, per-child policies, slot editor, and
+  multi-level layout semantics are still planned.
 - **Design-time MVP / documented stubs:** Timer, StateMachine, and HttpRequest
   components expose state/config and generated comments, not full runtime
   schedulers, transition engines, or HTTP clients.

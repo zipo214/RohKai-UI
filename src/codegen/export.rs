@@ -1785,6 +1785,64 @@ mod tests {
         }
     }
 
+    #[test]
+    fn hlayout_export_emits_reflowed_horizontal_spacer_space() {
+        let parent_id = Uuid::from_u128(0x99);
+        let left_id = Uuid::from_u128(0x9A);
+        let spacer_id = Uuid::from_u128(0x9B);
+        let right_id = Uuid::from_u128(0x9C);
+        let mut tree = UiTree {
+            widgets: vec![
+                WidgetInstance {
+                    id: parent_id,
+                    kind: WidgetKind::HLayout,
+                    rect: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        w: 300.0,
+                        h: 60.0,
+                    },
+                    children: vec![left_id, spacer_id, right_id],
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: left_id,
+                    kind: WidgetKind::Button,
+                    rect: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        w: 50.0,
+                        h: 30.0,
+                    },
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: spacer_id,
+                    kind: WidgetKind::HorizontalSpacer,
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: right_id,
+                    kind: WidgetKind::Button,
+                    rect: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        w: 70.0,
+                        h: 30.0,
+                    },
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        tree.reflow_layouts();
+
+        let generated = gen_app_rs(&tree);
+
+        assert!(generated.contains("ui.horizontal(|ui| {"));
+        assert!(generated.contains("ui.add_space(152.0); // HorizontalSpacer"));
+    }
+
     fn async_button(handler: &str, result: crate::project::schema::HandlerResult) -> UiTree {
         UiTree {
             widgets: vec![WidgetInstance {

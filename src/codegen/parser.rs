@@ -57,6 +57,7 @@ pub struct ParsedWidget {
     pub binding: Option<Option<String>>,
     pub min: Option<f32>,
     pub max: Option<f32>,
+    pub children: Vec<Uuid>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -77,6 +78,7 @@ impl ParsedWidget {
             binding: None,
             min: None,
             max: None,
+            children: Vec::new(),
         }
     }
 
@@ -91,6 +93,7 @@ impl ParsedWidget {
             || self.binding.is_some()
             || self.min.is_some()
             || self.max.is_some()
+            || !self.children.is_empty()
     }
 }
 
@@ -120,6 +123,11 @@ pub fn parse_egui_output(code: &str) -> ParseReport {
 
         if let Some(id) = extract_widget_uuid(t) {
             if t.starts_with("// widget_") {
+                if let Some(parent) = builder.as_mut().and_then(|b| b.widget.as_mut()) {
+                    if !parent.children.contains(&id) {
+                        parent.children.push(id);
+                    }
+                }
                 flush_pending_child(&mut pending_child, &mut report);
                 pending_child = Some(ParsedWidget::new(id));
                 continue;
@@ -266,6 +274,12 @@ fn parse_widget_line(
         parse_add_sized(widget, line, line_no, report);
     } else if line.starts_with("egui::Frame::group(") {
         widget.kind = Some(WidgetKind::Frame);
+    } else if line.starts_with("ui.vertical(|ui|") {
+        widget.kind = Some(WidgetKind::VLayout);
+    } else if line.starts_with("ui.horizontal(|ui|") {
+        widget.kind = Some(WidgetKind::HLayout);
+    } else if line.starts_with("egui::Grid::new(") {
+        widget.kind = Some(WidgetKind::GridLayout);
     } else {
         // Fallback for custom widget template lines.  Kind is intentionally
         // not set so apply_parsed cannot overwrite a Custom kind.  Each field
@@ -543,6 +557,9 @@ fn apply_fields(
     if let Some(max) = pw.max {
         w.props.max = max;
     }
+    if !offset_duplicate && !pw.children.is_empty() {
+        w.children = pw.children.clone();
+    }
 }
 
 fn instance_from_parsed(pw: &ParsedWidget) -> Option<crate::project::schema::WidgetInstance> {
@@ -737,5 +754,60 @@ mod tests {
         let report = parse_egui_output(&code);
         assert!(!report.has_errors(), "{:?}", report.diagnostics);
         assert!(report.widgets.iter().any(|w| w.id == child_id));
+    }
+
+    #[test]
+    fn parses_layout_owned_hierarchy_from_generated_code() {
+        for kind in [
+            WidgetKind::VLayout,
+            WidgetKind::HLayout,
+            WidgetKind::GridLayout,
+        ] {
+            let mut parent = widget(kind.clone(), "Layout");
+            parent.state_binding = None;
+            let parent_id = parent.id;
+            let mut child = widget(WidgetKind::Button, "Child");
+            child.state_binding = None;
+            let child_id = child.id;
+            parent.children.push(child_id);
+            let source_tree = UiTree {
+                widgets: vec![parent, child.clone()],
+                ..Default::default()
+            };
+            let code = egui_emitter::emit_indexed(&source_tree)
+                .into_iter()
+                .map(|(_, line)| line)
+                .collect::<Vec<_>>()
+                .join("\n");
+            let report = parse_egui_output(&code);
+            assert!(
+                !report.has_errors(),
+                "{kind:?} diagnostics: {:?}",
+                report.diagnostics
+            );
+            let parsed_parent = report.widgets.iter().find(|w| w.id == parent_id).unwrap();
+            assert_eq!(parsed_parent.kind.as_ref(), Some(&kind));
+            assert_eq!(parsed_parent.children, vec![child_id]);
+
+            let mut target_tree = UiTree {
+                widgets: vec![
+                    WidgetInstance {
+                        id: parent_id,
+                        kind,
+                        children: Vec::new(),
+                        ..Default::default()
+                    },
+                    child,
+                ],
+                ..Default::default()
+            };
+            apply_parsed(&mut target_tree, &report.widgets);
+            let restored = target_tree
+                .widgets
+                .iter()
+                .find(|w| w.id == parent_id)
+                .unwrap();
+            assert_eq!(restored.children, vec![child_id]);
+        }
     }
 }

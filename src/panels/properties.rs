@@ -73,6 +73,7 @@ fn show_content_inner(
 
     let mut do_delete = false;
     let mut props_action = PropertiesAction::None;
+    let mut child_move: Option<(Uuid, Uuid, usize)> = None;
 
     {
         let Some(w) = tree.get_mut(id) else {
@@ -100,17 +101,17 @@ fn show_content_inner(
             }
             WidgetKind::GroupBox => show_group_box(ui, w, &mut do_delete),
             WidgetKind::VLayout | WidgetKind::HLayout => {
-                show_layout_container(ui, w, &mut do_delete)
+                show_layout_container(ui, w, &mut do_delete, &mut child_move)
             }
             WidgetKind::ScrollArea => show_scroll_area(ui, w, &mut do_delete),
-            WidgetKind::GridLayout => show_layout_container(ui, w, &mut do_delete),
+            WidgetKind::GridLayout => show_layout_container(ui, w, &mut do_delete, &mut child_move),
             WidgetKind::TabWidget => show_tab_widget(ui, w, &mut do_delete),
             WidgetKind::ToolButton => show_button(ui, w, &mut do_delete),
             WidgetKind::CommandLinkButton => show_command_link(ui, w, &mut do_delete),
             WidgetKind::DialogButtonBox => show_options_widget(ui, w, &mut do_delete, "Buttons"),
             WidgetKind::MathLabel => show_math_label(ui, w, &mut do_delete),
             WidgetKind::FilePicker => show_file_picker(ui, w, &mut do_delete),
-            WidgetKind::Chart => show_layout_container(ui, w, &mut do_delete),
+            WidgetKind::Chart => show_layout_container(ui, w, &mut do_delete, &mut child_move),
             WidgetKind::Table => show_options_widget(ui, w, &mut do_delete, "Columns"),
             WidgetKind::ListView => show_options_widget(ui, w, &mut do_delete, "Items"),
             WidgetKind::TreeView => show_options_widget(ui, w, &mut do_delete, "Nodes"),
@@ -136,6 +137,9 @@ fn show_content_inner(
         tree.remove(id);
         selected.retain(|&x| x != id);
     } else {
+        if let Some((parent_id, child_id, to_idx)) = child_move {
+            tree.move_child_within_parent(parent_id, child_id, to_idx);
+        }
         tree.validate_and_repair();
     }
 
@@ -1442,7 +1446,12 @@ fn show_group_box(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut boo
     show_delete_button(ui, do_delete);
 }
 
-fn show_layout_container(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
+fn show_layout_container(
+    ui: &mut egui::Ui,
+    w: &mut WidgetInstance,
+    do_delete: &mut bool,
+    child_move: &mut Option<(Uuid, Uuid, usize)>,
+) {
     field_text(ui, "Label", &mut w.props.label);
     if matches!(
         w.kind,
@@ -1451,6 +1460,10 @@ fn show_layout_container(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Children").small().weak());
             ui.label(format!("{}", w.children.len()));
+            ui.checkbox(&mut w.props.layout_stretch, "Stretch children")
+                .on_hover_text(
+                    "Fill the layout cross-axis/cell size. Disable to preserve child size hints.",
+                );
         });
         egui::Grid::new(("layout_props", w.id))
             .num_columns(4)
@@ -1484,12 +1497,47 @@ fn show_layout_container(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &
                     ui.end_row();
                 }
             });
+        if matches!(w.kind, WidgetKind::GridLayout) && !w.children.is_empty() {
+            ui.separator();
+            ui.label(egui::RichText::new("Grid slots").small().weak());
+            let columns = w.props.grid_columns.clamp(1, 12);
+            for (idx, child_id) in w.children.iter().copied().enumerate() {
+                ui.horizontal(|ui| {
+                    let row = idx / columns + 1;
+                    let col = idx % columns + 1;
+                    ui.label(
+                        egui::RichText::new(format!("R{row} C{col}"))
+                            .small()
+                            .monospace(),
+                    );
+                    ui.label(short_uuid(child_id));
+                    if ui
+                        .add_enabled(idx > 0, egui::Button::new("↑"))
+                        .on_hover_text("Move child to previous grid slot")
+                        .clicked()
+                    {
+                        *child_move = Some((w.id, child_id, idx - 1));
+                    }
+                    if ui
+                        .add_enabled(idx + 1 < w.children.len(), egui::Button::new("↓"))
+                        .on_hover_text("Move child to next grid slot")
+                        .clicked()
+                    {
+                        *child_move = Some((w.id, child_id, idx + 1));
+                    }
+                });
+            }
+        }
         ui.separator();
     }
     show_geometry(ui, w);
     ui.separator();
     show_custom_props(ui, w);
     show_delete_button(ui, do_delete);
+}
+
+fn short_uuid(id: Uuid) -> String {
+    id.as_simple().to_string().chars().take(8).collect()
 }
 
 fn show_scroll_area(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {

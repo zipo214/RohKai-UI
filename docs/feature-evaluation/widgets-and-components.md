@@ -30,8 +30,8 @@ inspector depth. RohKai's differentiator should be truthful Rust/egui codegen.
 | Text/input | TextInput, TextArea, SpinBox, Slider | 3 | Bindings, min/max/defaults, codegen/export. | Validation rules, formatting, input masks, preview state tools. |
 | Choice | Checkbox, RadioButton, ComboBox, FontComboBox | 3 | Bindings/options, canvas visuals, codegen/export. | Option models, keyboard behavior, searchable combo, enum binding. |
 | Display | ProgressBar, MathLabel | 2-3 | ProgressBar real; MathLabel computed f32 label MVP. | Rich formatting, formula expressions, diagnostics, units. |
-| Layout | Frame, GroupBox, VLayout, HLayout, GridLayout, ScrollArea, TabWidget | 3 | V/H/Grid own direct children, reflow them, expose first-slice margins/gaps/grid columns, and generate nested layout code. | Full constraints, slot editing, alignment/stretch policies, layout-aware spacers, parser round-trip. |
-| Spacers | HorizontalSpacer, VerticalSpacer | 2 | Canvas markers and simple export space. | Layout-aware flexible/fixed spacer behavior. |
+| Layout | Frame, GroupBox, VLayout, HLayout, GridLayout, ScrollArea, TabWidget | 3 | V/H/Grid own direct children, reflow them, expose first-slice margins/gaps/grid columns/stretch, grid reorder controls, and generate nested layout code. Lazare can round-trip one-level layout hierarchy. | Full constraints, named slots, alignment policies, per-child stretch/fixed rules, multi-level parser round-trip. |
+| Spacers | HorizontalSpacer, VerticalSpacer | 3 | Standalone canvas markers plus first-slice layout-aware flex behavior in matching stack layouts. | Full size policies, min/max stretch factors, and per-layout spacer constraints. |
 | Buttons | ToolButton, CommandLinkButton, DialogButtonBox | 2-3 | Basic egui output from labels/options. | Icons, roles, standard actions, keyboard/default/cancel semantics. |
 | Containers | StackedWidget, ToolBox | 2 | Visual/container MVPs with option sections. | Active-page editing, child ownership, page management UI. |
 | Data views | Table, ListView, TreeView | 2 | Static option-backed display. | Model-bound views, selection, editing, sorting, filtering, large data virtualization. |
@@ -45,7 +45,7 @@ inspector depth. RohKai's differentiator should be truthful Rust/egui codegen.
 | MathLabel | It formats one bound `f32`; it does not parse formulas. |
 | Chart | It renders bars from `Vec<f32>`; no axes, labels, multiple series, legends, or interactions. |
 | Table/ListView/TreeView | Static options, not model/view or data-bound widgets. |
-| VLayout/HLayout/GridLayout | Direct-child ownership is real, but there are no alignment/stretch policies, layout-aware spacers, slot editor, or parser round-trip yet. |
+| VLayout/HLayout/GridLayout | Direct-child ownership, layout-aware spacers, container stretch, grid reorder controls, and one-level parser round-trip are real. Still missing: alignment policies, per-child stretch/fixed rules, named grid slots, richer drag-to-slot editing, and multi-level layout hierarchy semantics. |
 | Timer | Comment stub, not a scheduler. |
 | StateMachine | State field and comment, not a transition engine. |
 | HttpRequest | Response field and comment, not network execution. |
