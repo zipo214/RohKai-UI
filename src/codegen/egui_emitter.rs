@@ -4,6 +4,8 @@ use crate::project::ui_tree::UiTree;
 use std::collections::HashSet;
 use uuid::Uuid;
 
+const DEFAULT_GRID_COLUMNS: usize = 3;
+
 /// Returns (widget_id_or_none, code_line) for every line in the generated body.
 /// Preamble/closing lines have `None` as the id.
 pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
@@ -464,10 +466,22 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                 lines.push((
                     Some(w.id),
                     format!(
-                        "        egui::Grid::new(\"{}\").show(ui, |_ui| {{}});",
+                        "        egui::Grid::new(\"{}\").show(ui, |ui| {{",
                         w.id.as_simple()
                     ),
                 ));
+                for (idx, &child_id) in w.children.iter().enumerate() {
+                    if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
+                        emit_layout_child_lines(child, &mut lines);
+                        if (idx + 1) % DEFAULT_GRID_COLUMNS == 0 {
+                            lines.push((Some(w.id), "            ui.end_row();".to_owned()));
+                        }
+                    }
+                }
+                if !w.children.is_empty() && w.children.len() % DEFAULT_GRID_COLUMNS != 0 {
+                    lines.push((Some(w.id), "            ui.end_row();".to_owned()));
+                }
+                lines.push((Some(w.id), "        });".to_owned()));
             }
             WidgetKind::TabWidget => {
                 let tabs = w.props.options.to_vec();
@@ -1164,6 +1178,41 @@ mod tests {
         assert!(generated.contains(&format!("// widget_{child_id}")));
         assert!(generated.contains("egui::Button::new"));
         assert!(generated.contains("self.handle_horizontal();"));
+    }
+
+    #[test]
+    fn gridlayout_emits_owned_children_row_major() {
+        let parent_id = Uuid::from_u128(5);
+        let child_ids = [Uuid::from_u128(6), Uuid::from_u128(7), Uuid::from_u128(8)];
+        let mut widgets = vec![WidgetInstance {
+            id: parent_id,
+            kind: WidgetKind::GridLayout,
+            children: child_ids.to_vec(),
+            ..Default::default()
+        }];
+        widgets.extend(child_ids.iter().map(|id| WidgetInstance {
+            id: *id,
+            kind: WidgetKind::Button,
+            on_click: format!("handle_{}", id.as_simple()),
+            ..Default::default()
+        }));
+        let tree = UiTree {
+            widgets,
+            ..Default::default()
+        };
+
+        let generated = emit_indexed(&tree)
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert_eq!(generated.matches("egui::Area::new").count(), 1);
+        assert!(generated.contains("egui::Grid::new"));
+        assert!(generated.contains("ui.end_row();"));
+        for child_id in child_ids {
+            assert!(generated.contains(&format!("// widget_{child_id}")));
+        }
     }
 
     fn emit_joined(kind: WidgetKind, setup: impl FnOnce(&mut WidgetInstance)) -> String {

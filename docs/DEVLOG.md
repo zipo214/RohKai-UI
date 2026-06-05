@@ -2,6 +2,56 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-04 — GridLayout Direct-Child Ownership Slice
+
+### Docs Reviewed Before Editing
+- Preflight context (`scripts/preflight-context.ps1`)
+- `.agents/skills/project-model/SKILL.md`
+- `.agents/skills/canvas-patterns/SKILL.md`
+- `.agents/skills/codegen-rules/SKILL.md`
+- `docs/ROADMAP.md`
+- `src/project/ui_tree.rs`, `src/canvas/interaction.rs`,
+  `src/codegen/egui_emitter.rs`, `src/codegen/export.rs`
+
+### Changes Made
+- Generalized layout attachment/reflow from stack layouts to direct layout
+  containers: `VLayout`, `HLayout`, and `GridLayout`.
+- GridLayout now owns direct child widgets when dropped/released inside the
+  container, detaches them when dragged outside, and reflows them row-major into
+  a default 3-column grid.
+- Palette click, template add/drop, drag release, resize, and validation/repair
+  now use the shared layout reflow path.
+- Live codegen emits GridLayout children inside `egui::Grid::new(...).show(...)`
+  with `ui.end_row()` boundaries.
+- Export emits GridLayout children through the existing layout-child handler
+  machinery, and the generated-project compile fixture now covers a
+  GridLayout-owned child with a `Result` handler.
+- Updated `docs/ROADMAP.md` and `docs/CODE_COOP.md` to mark only the direct-child
+  GridLayout slice complete.
+
+### Verification
+- `cargo check`: clean
+- `cargo test gridlayout -- --nocapture`: 3 passed
+- `cargo test layout -- --nocapture`: 10 passed
+- `cargo test export_compile_fixture_generates_required_files_and_matrix -- --nocapture`:
+  passed
+- `cargo test export_compile_fixture_cargo_check -- --ignored --nocapture`:
+  passed
+- `cargo fmt --check`: clean
+- `cargo test`: 176 passed, 2 ignored
+- `cargo clippy -- -D warnings`: clean
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1`:
+  clean
+- `cargo run --quiet` smoke: launched and stopped after 8 seconds
+
+### Remaining Gaps
+- Grid columns/rows are not user-configurable yet; this slice uses a default
+  3-column row-major grid.
+- Spacing, padding, alignment, stretch/fill, layout-aware spacers, per-child
+  policies, and cell/slot inspector controls remain open.
+- Lazare parser round-trip and richer Layers/Outline hierarchy operations remain
+  open.
+
 ## 2026-06-04 — HLayout Stack Ownership Slice
 
 ### Docs Reviewed Before Editing

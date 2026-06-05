@@ -2017,9 +2017,11 @@ pub fn handle(
                         tree.add(w);
                         if !matches!(
                             tree.widgets.iter().find(|w| w.id == id).map(|w| &w.kind),
-                            Some(WidgetKind::VLayout | WidgetKind::HLayout)
+                            Some(
+                                WidgetKind::VLayout | WidgetKind::HLayout | WidgetKind::GridLayout
+                            )
                         ) {
-                            tree.attach_to_stack_layout_at(id, center);
+                            tree.attach_to_layout_at(id, center);
                         }
                     }
                 }
@@ -2279,7 +2281,7 @@ pub fn handle(
             if let Some(w) = tree.get_mut(resize_id) {
                 w.rect = new_rect;
             }
-            tree.reflow_stack_layouts();
+            tree.reflow_layouts();
             ui.ctx().set_cursor_icon(cursor);
         }
     }
@@ -2530,14 +2532,17 @@ pub fn handle(
                 let Some(widget) = tree.widgets.iter().find(|w| w.id == id) else {
                     continue;
                 };
-                if matches!(widget.kind, WidgetKind::VLayout | WidgetKind::HLayout) {
+                if matches!(
+                    widget.kind,
+                    WidgetKind::VLayout | WidgetKind::HLayout | WidgetKind::GridLayout
+                ) {
                     continue;
                 }
                 let center = (
                     widget.rect.x + widget.rect.w * 0.5,
                     widget.rect.y + widget.rect.h * 0.5,
                 );
-                tree.attach_to_stack_layout_at(id, center);
+                tree.attach_to_layout_at(id, center);
             }
         }
         if let (Some(band_start), Some(pos)) = (state.rubber_band, pointer) {

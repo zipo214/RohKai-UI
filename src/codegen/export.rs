@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 const SVG_RASTERIZER_SOURCE: &str = include_str!("../canvas/svg_rasterizer.rs");
 const SVG_CORE_SOURCE: &str = include_str!("../svg_core.rs");
+const DEFAULT_GRID_COLUMNS: usize = 3;
 
 /// Write a complete compilable Rust project to `dest` folder.
 pub fn write_project(tree: &UiTree, dest: &Path) -> Result<(), String> {
@@ -680,10 +681,23 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 "                egui::ScrollArea::vertical().show(ui, |_ui| {});\n".to_string()
             }
             WidgetKind::GridLayout => {
-                format!(
-                    "                egui::Grid::new(\"{}\").show(ui, |_ui| {{}});\n",
+                let mut code = format!(
+                    "                egui::Grid::new(\"{}\").show(ui, |ui| {{\n",
                     w.id.as_simple()
-                )
+                );
+                for (idx, &child_id) in w.children.iter().enumerate() {
+                    if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
+                        code.push_str(&export_layout_child_line(child, &handler_registry));
+                        if (idx + 1) % DEFAULT_GRID_COLUMNS == 0 {
+                            code.push_str("                    ui.end_row();\n");
+                        }
+                    }
+                }
+                if !w.children.is_empty() && w.children.len() % DEFAULT_GRID_COLUMNS != 0 {
+                    code.push_str("                    ui.end_row();\n");
+                }
+                code.push_str("                });\n");
+                code
             }
             WidgetKind::TabWidget => {
                 let mut s = format!(
@@ -1714,6 +1728,56 @@ mod tests {
         assert!(generated.contains("child_response.clicked()"));
         assert!(generated.contains("if let Err(e) = self.horizontal_child_clicked()"));
         assert!(generated.contains("fn horizontal_child_clicked(&mut self) -> Result<(), String>"));
+    }
+
+    #[test]
+    fn gridlayout_exports_owned_children_row_major_with_events() {
+        let parent_id = Uuid::from_u128(0x95);
+        let child_ids = [
+            Uuid::from_u128(0x96),
+            Uuid::from_u128(0x97),
+            Uuid::from_u128(0x98),
+        ];
+        let mut widgets = vec![WidgetInstance {
+            id: parent_id,
+            kind: WidgetKind::GridLayout,
+            children: child_ids.to_vec(),
+            ..Default::default()
+        }];
+        widgets.extend(
+            child_ids
+                .iter()
+                .enumerate()
+                .map(|(idx, id)| WidgetInstance {
+                    id: *id,
+                    kind: WidgetKind::Button,
+                    rect: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        w: 90.0,
+                        h: 28.0,
+                    },
+                    on_click: format!("grid_child_{idx}_clicked"),
+                    handler_result: crate::project::schema::HandlerResult::Result,
+                    ..Default::default()
+                }),
+        );
+        let tree = UiTree {
+            widgets,
+            ..Default::default()
+        };
+
+        let generated = gen_app_rs(&tree);
+
+        assert_eq!(generated.matches("egui::Area::new").count(), 1);
+        assert!(generated.contains("egui::Grid::new"));
+        assert!(generated.contains("ui.end_row();"));
+        assert!(generated.contains("let child_response = ui.add_sized"));
+        assert!(generated.contains("if let Err(e) = self.grid_child_0_clicked()"));
+        assert!(generated.contains("fn grid_child_0_clicked(&mut self) -> Result<(), String>"));
+        for child_id in child_ids {
+            assert!(generated.contains(&format!("// widget_{child_id}")));
+        }
     }
 
     fn async_button(handler: &str, result: crate::project::schema::HandlerResult) -> UiTree {
@@ -2793,7 +2857,7 @@ mod tests {
 
     /// The compile-proof fixture: top-level Button Click + DoubleClick, two async
     /// buttons (Plain + Result), a Frame with a TextInput (LostFocus) and a Slider
-    /// (DragStopped) child, VLayout/HLayout owned children, FilePicker/rfd
+    /// (DragStopped) child, VLayout/HLayout/GridLayout owned children, FilePicker/rfd
     /// dependency, Rust wiring, and three state bindings (`name: String`,
     /// `vol: f32`, `picked_path: String`).
     fn compile_fixture_tree() -> UiTree {
@@ -2807,6 +2871,8 @@ mod tests {
         let layout_child_id = Uuid::from_u128(0xD1);
         let horizontal_layout_id = Uuid::from_u128(0xD2);
         let horizontal_layout_child_id = Uuid::from_u128(0xD3);
+        let grid_layout_id = Uuid::from_u128(0xD4);
+        let grid_layout_child_id = Uuid::from_u128(0xD5);
 
         let btn_events = WidgetInstance {
             id: Uuid::from_u128(0x01),
@@ -2983,6 +3049,35 @@ mod tests {
             children: vec![horizontal_layout_child_id],
             ..Default::default()
         };
+        let grid_layout_child = WidgetInstance {
+            id: grid_layout_child_id,
+            kind: WidgetKind::Button,
+            rect: Rect {
+                x: 660.0,
+                y: 128.0,
+                w: 120.0,
+                h: 30.0,
+            },
+            on_click: "grid_layout_child_clicked".to_owned(),
+            handler_result: HandlerResult::Result,
+            props: crate::project::schema::WidgetProps {
+                label: "Grid Child".to_owned(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let grid_layout = WidgetInstance {
+            id: grid_layout_id,
+            kind: WidgetKind::GridLayout,
+            rect: Rect {
+                x: 660.0,
+                y: 120.0,
+                w: 240.0,
+                h: 120.0,
+            },
+            children: vec![grid_layout_child_id],
+            ..Default::default()
+        };
 
         let mut tree = UiTree {
             widgets: vec![
@@ -2996,6 +3091,8 @@ mod tests {
                 layout_child,
                 hlayout,
                 horizontal_layout_child,
+                grid_layout,
+                grid_layout_child,
                 file_picker,
             ],
             ..Default::default()
@@ -3108,6 +3205,12 @@ mod tests {
             app.contains("ui.horizontal(|ui| {"),
             "HLayout child nesting"
         );
+        assert!(
+            app.contains("grid_layout_child_clicked"),
+            "GridLayout child handler"
+        );
+        assert!(app.contains("egui::Grid::new"), "GridLayout child nesting");
+        assert!(app.contains("ui.end_row();"), "GridLayout row boundary");
         assert!(app.contains("fn load_async_worker()"), "async Plain worker");
         assert!(
             app.contains("fn save_async_worker() -> Result<(), String>"),

@@ -388,19 +388,24 @@ requiring schema changes.
 - [x] Vertical Spacer — dashed vertical bar
 
 ### Real Layout Manager Behavior — Not Yet Complete
-Current `VLayout`, `HLayout`, and `GridLayout` are **layout-intent containers**:
-they show the user's intended structure on the canvas and emit the matching egui
-layout call, but they do not yet manage child placement like Qt/Lazarus layout
-managers. Do not treat the existing MVP surface as closing the real layout gap.
+Current `VLayout`, `HLayout`, and `GridLayout` now have a **first-slice
+direct-child ownership model**: they can own/reflow direct children through
+`WidgetInstance.children` and emit matching egui layout calls. They are still
+not full Qt/Lazarus layout managers because editable policies, slot controls,
+stretch/fill rules, layout-aware spacers, and parser round-trip remain open. Do
+not treat the first-slice ownership surface as closing the real layout gap.
 
 - [x] Stack layout slice: `VLayout` and `HLayout` can own/drop child widgets as
       explicit `WidgetInstance.children`, detach them when dragged outside, and
       reflow direct children in source-of-truth `UiTree` coordinates.
 - [x] Stack layout slice: canvas preview reflows direct `VLayout`/`HLayout`
       children when the container resizes.
-- [ ] Extend true ownership/drop/reflow behavior to `GridLayout`.
+- [x] GridLayout first slice: direct children attach/detach and reflow row-major
+      into a default 3-column grid.
+- [x] GridLayout first slice: live codegen/export emit direct children inside
+      `egui::Grid::new(...).show(ui, |ui| { ... })` with row boundaries.
 - [ ] Properties expose spacing, padding/margins, alignment, fill/stretch rules,
-      and per-child stretch/fixed-size behavior.
+      grid columns/rows, and per-child stretch/fixed-size behavior.
 - [ ] Spacers become layout-aware flexible/fixed spacer items inside layout
       containers, not only standalone dashed markers.
 - [ ] Hit testing, rubber-band selection, outline/layers, group/ungroup, and

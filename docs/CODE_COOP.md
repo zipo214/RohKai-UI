@@ -7,6 +7,16 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-04 — Codex GridLayout Ownership Slice
+
+On `dev`, I am continuing the layout-depth pass by extending the shared
+layout-ownership path from VLayout/HLayout to GridLayout. The bounded target is
+a real first slice: GridLayout owns direct children, reflows them row-major into
+a default 3-column grid, and live/export codegen nests them inside an
+`egui::Grid` with `ui.end_row()` boundaries. This does not add editable
+row/column/stretch properties yet; those remain a follow-up once the ownership
+semantics are proven by tests and the generated-project compile fixture.
+
 ## 2026-06-04 — Codex HLayout Ownership Slice
 
 On `dev`, I extended the VLayout ownership work into a shared stack-layout path

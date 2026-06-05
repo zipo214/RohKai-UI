@@ -143,12 +143,12 @@ impl UiTree {
         self.widgets.clear();
     }
 
-    /// Attach a widget to the topmost stack layout whose rect contains `canvas_point`.
+    /// Attach a widget to the topmost layout container whose rect contains `canvas_point`.
     ///
-    /// If no stack layout contains the point, the widget is detached from any stack
+    /// If no layout contains the point, the widget is detached from any layout
     /// parent. The widget itself remains in `widgets`; `children` is an ownership
     /// relation used by canvas/codegen/export, not nested storage.
-    pub fn attach_to_stack_layout_at(
+    pub fn attach_to_layout_at(
         &mut self,
         child_id: Uuid,
         canvas_point: (f32, f32),
@@ -159,13 +159,13 @@ impl UiTree {
             .rev()
             .find(|w| {
                 w.id != child_id
-                    && is_stack_layout(&w.kind)
+                    && is_layout_container(&w.kind)
                     && rect_contains_point(&w.rect, canvas_point)
             })
             .map(|w| w.id);
 
         for w in &mut self.widgets {
-            if is_stack_layout(&w.kind) {
+            if is_layout_container(&w.kind) {
                 w.children.retain(|&id| id != child_id);
             }
         }
@@ -176,19 +176,19 @@ impl UiTree {
             }
         }
 
-        self.reflow_stack_layouts();
+        self.reflow_layouts();
         parent_id
     }
 
-    /// Reflow direct children inside each stack layout using absolute canvas rects.
+    /// Reflow direct children inside each layout container using absolute canvas rects.
     ///
     /// This intentionally keeps child `Rect`s absolute so existing hit testing,
     /// selection, save/load, and child codegen can share one coordinate model.
-    pub fn reflow_stack_layouts(&mut self) {
+    pub fn reflow_layouts(&mut self) {
         let parents: Vec<(WidgetKind, Rect, f32, Vec<Uuid>)> = self
             .widgets
             .iter()
-            .filter(|w| is_stack_layout(&w.kind))
+            .filter(|w| is_layout_container(&w.kind))
             .map(|w| {
                 (
                     w.kind.clone(),
@@ -206,6 +206,9 @@ impl UiTree {
                 }
                 WidgetKind::HLayout => {
                     self.reflow_hlayout_children(&parent_rect, padding, &child_ids)
+                }
+                WidgetKind::GridLayout => {
+                    self.reflow_gridlayout_children(&parent_rect, padding, &child_ids)
                 }
                 _ => {}
             }
@@ -252,6 +255,33 @@ impl UiTree {
         }
     }
 
+    fn reflow_gridlayout_children(&mut self, parent_rect: &Rect, padding: f32, child_ids: &[Uuid]) {
+        let spacing = 6.0;
+        let columns = GRID_LAYOUT_DEFAULT_COLUMNS.min(child_ids.len().max(1));
+        let rows = child_ids.len().div_ceil(columns).max(1);
+        let columns_f = columns as f32;
+        let rows_f = rows as f32;
+        let total_x_spacing = spacing * (columns_f - 1.0);
+        let total_y_spacing = spacing * (rows_f - 1.0);
+        let available_w = (parent_rect.w - padding * 2.0 - total_x_spacing).max(MIN_WIDGET_SIZE);
+        let available_h = (parent_rect.h - padding * 2.0 - total_y_spacing).max(MIN_WIDGET_SIZE);
+        let child_w = (available_w / columns_f).max(MIN_WIDGET_SIZE);
+        let child_h = (available_h / rows_f).max(MIN_WIDGET_SIZE);
+        let start_x = parent_rect.x + padding;
+        let start_y = parent_rect.y + padding;
+
+        for (idx, child_id) in child_ids.iter().enumerate() {
+            if let Some(child) = self.get_mut(*child_id) {
+                let col = idx % columns;
+                let row = idx / columns;
+                child.rect.x = start_x + col as f32 * (child_w + spacing);
+                child.rect.y = start_y + row as f32 * (child_h + spacing);
+                child.rect.w = child_w;
+                child.rect.h = child_h;
+            }
+        }
+    }
+
     pub fn validate_and_repair(&mut self) {
         let mut seen_ids = HashSet::new();
         let mut seen_bindings = HashSet::new();
@@ -272,7 +302,7 @@ impl UiTree {
             widget.children.retain(|id| all_ids.contains(id));
         }
 
-        self.reflow_stack_layouts();
+        self.reflow_layouts();
     }
 
     fn repair_widget(widget: &mut WidgetInstance) {
@@ -393,8 +423,13 @@ fn rect_contains_point(rect: &Rect, (x, y): (f32, f32)) -> bool {
     x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h
 }
 
-fn is_stack_layout(kind: &WidgetKind) -> bool {
-    matches!(kind, WidgetKind::VLayout | WidgetKind::HLayout)
+const GRID_LAYOUT_DEFAULT_COLUMNS: usize = 3;
+
+fn is_layout_container(kind: &WidgetKind) -> bool {
+    matches!(
+        kind,
+        WidgetKind::VLayout | WidgetKind::HLayout | WidgetKind::GridLayout
+    )
 }
 
 #[cfg(test)]
@@ -495,7 +530,7 @@ mod tests {
         };
 
         assert_eq!(
-            tree.attach_to_stack_layout_at(child_id, (140.0, 100.0)),
+            tree.attach_to_layout_at(child_id, (140.0, 100.0)),
             Some(parent_id)
         );
 
@@ -534,10 +569,7 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(
-            tree.attach_to_stack_layout_at(child_id, (300.0, 300.0)),
-            None
-        );
+        assert_eq!(tree.attach_to_layout_at(child_id, (300.0, 300.0)), None);
 
         let parent = tree.widgets.iter().find(|w| w.id == parent_id).unwrap();
         assert!(parent.children.is_empty());
@@ -588,11 +620,11 @@ mod tests {
         };
 
         assert_eq!(
-            tree.attach_to_stack_layout_at(left_id, (80.0, 60.0)),
+            tree.attach_to_layout_at(left_id, (80.0, 60.0)),
             Some(parent_id)
         );
         assert_eq!(
-            tree.attach_to_stack_layout_at(right_id, (210.0, 60.0)),
+            tree.attach_to_layout_at(right_id, (210.0, 60.0)),
             Some(parent_id)
         );
 
@@ -608,5 +640,57 @@ mod tests {
         assert_eq!(right.rect.y, 48.0);
         assert_eq!(right.rect.w, 109.0);
         assert_eq!(right.rect.h, 44.0);
+    }
+
+    #[test]
+    fn attach_to_gridlayout_reflows_children_row_major() {
+        let parent_id = Uuid::from_u128(40);
+        let ids = [
+            Uuid::from_u128(41),
+            Uuid::from_u128(42),
+            Uuid::from_u128(43),
+            Uuid::from_u128(44),
+        ];
+        let mut widgets = vec![WidgetInstance {
+            id: parent_id,
+            kind: WidgetKind::GridLayout,
+            rect: Rect {
+                x: 50.0,
+                y: 40.0,
+                w: 328.0,
+                h: 230.0,
+            },
+            ..Default::default()
+        }];
+        widgets.extend(ids.iter().map(|id| WidgetInstance {
+            id: *id,
+            kind: WidgetKind::Button,
+            rect: Rect {
+                x: 60.0,
+                y: 50.0,
+                w: 80.0,
+                h: 30.0,
+            },
+            ..Default::default()
+        }));
+        let mut tree = UiTree {
+            widgets,
+            ..Default::default()
+        };
+
+        for id in ids {
+            assert_eq!(tree.attach_to_layout_at(id, (80.0, 60.0)), Some(parent_id));
+        }
+
+        let parent = tree.widgets.iter().find(|w| w.id == parent_id).unwrap();
+        assert_eq!(parent.children, ids);
+        let expected = [(58.0, 48.0), (164.0, 48.0), (270.0, 48.0), (58.0, 158.0)];
+        for (id, (x, y)) in ids.iter().zip(expected) {
+            let child = tree.widgets.iter().find(|w| w.id == *id).unwrap();
+            assert_eq!(child.rect.x, x);
+            assert_eq!(child.rect.y, y);
+            assert_eq!(child.rect.w, 100.0);
+            assert_eq!(child.rect.h, 104.0);
+        }
     }
 }

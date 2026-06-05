@@ -2386,14 +2386,15 @@ impl eframe::App for RohKaiApp {
                 instance.rect.x + instance.rect.w * 0.5,
                 instance.rect.y + instance.rect.h * 0.5,
             );
-            let is_stack_layout = matches!(
+            let is_layout_container = matches!(
                 instance.kind,
                 crate::project::schema::WidgetKind::VLayout
                     | crate::project::schema::WidgetKind::HLayout
+                    | crate::project::schema::WidgetKind::GridLayout
             );
             self.project.ui_tree.add(instance);
-            if !is_stack_layout {
-                self.project.ui_tree.attach_to_stack_layout_at(id, center);
+            if !is_layout_container {
+                self.project.ui_tree.attach_to_layout_at(id, center);
             }
         }
 
@@ -2416,14 +2417,15 @@ impl eframe::App for RohKaiApp {
                     w.rect.y = (w.rect.y - min_y + cy).max(0.0);
                     let id = w.id;
                     let center = (w.rect.x + w.rect.w * 0.5, w.rect.y + w.rect.h * 0.5);
-                    let is_stack_layout = matches!(
+                    let is_layout_container = matches!(
                         w.kind,
                         crate::project::schema::WidgetKind::VLayout
                             | crate::project::schema::WidgetKind::HLayout
+                            | crate::project::schema::WidgetKind::GridLayout
                     );
                     self.project.ui_tree.add(w);
-                    if !is_stack_layout {
-                        self.project.ui_tree.attach_to_stack_layout_at(id, center);
+                    if !is_layout_container {
+                        self.project.ui_tree.attach_to_layout_at(id, center);
                     }
                 }
             }
