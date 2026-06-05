@@ -103,8 +103,17 @@ fn byte_to_char_index(text: &str, byte_index: usize) -> usize {
     text[..byte_index.min(text.len())].chars().count()
 }
 
+fn outline_clip_rect(clip_rect: egui::Rect) -> egui::Rect {
+    let inset = clip_rect.shrink(2.0);
+    if inset.is_positive() {
+        inset
+    } else {
+        clip_rect
+    }
+}
+
 fn clipped_outline_rect(rect: egui::Rect, clip_rect: egui::Rect) -> Option<egui::Rect> {
-    let clipped = rect.expand(3.0).intersect(clip_rect);
+    let clipped = rect.expand(3.0).intersect(outline_clip_rect(clip_rect));
     clipped.is_positive().then_some(clipped)
 }
 
@@ -153,6 +162,7 @@ fn paint_highlight_outlines(
     char_ranges.sort_by_key(|range| (range.start, range.end));
 
     let painter = ui.painter_at(output.text_clip_rect);
+    let outline_clip = outline_clip_rect(output.text_clip_rect);
     let stroke = egui::Stroke::new(1.25, egui::Color32::from_rgb(52, 211, 153));
 
     for char_range in char_ranges {
@@ -165,9 +175,7 @@ fn paint_highlight_outlines(
             let intersects = char_range.start < row_end && char_range.end > row_start;
 
             if intersects {
-                if let Some(visible) =
-                    highlighted_row_rect(row, output.galley_pos, output.text_clip_rect)
-                {
+                if let Some(visible) = highlighted_row_rect(row, output.galley_pos, outline_clip) {
                     outline = Some(match outline {
                         Some(accumulated) => accumulated.union(visible),
                         None => visible,
@@ -470,9 +478,10 @@ mod tests {
         let raw = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(150.0, 200.0));
 
         let clipped = clipped_outline_rect(raw, clip).expect("visible outline");
+        let expected = clip.shrink(2.0);
 
         assert!(clip.contains(clipped.min));
         assert!(clip.contains(clipped.max));
-        assert_eq!(clipped, clip);
+        assert_eq!(clipped, expected);
     }
 }

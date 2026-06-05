@@ -18,6 +18,9 @@ Chronological session record. The roadmap stays strategic; this file records wha
   instead of full row allocation bounds, so it hugs actual code width instead of
   spanning the editor row. The translucent fill was removed; selection is an
   outline-only decoration.
+- Follow-up after right-edge clipping inspection: outline geometry is inset from
+  the raw TextEdit clip rect before painting so the full perimeter remains
+  visible at the right/bottom panel boundary.
 - The outline is clipped to `TextEditOutput.text_clip_rect` before painting and
   uses `ui.painter_at(output.text_clip_rect)`, so selected-code decoration
   cannot spill outside the visible code editor area.
