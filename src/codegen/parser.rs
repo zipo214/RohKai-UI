@@ -1,3 +1,4 @@
+use crate::codegen::source_map::{line_byte_spans, SourceSpan, WidgetSourceSpan};
 use crate::project::schema::WidgetKind;
 use crate::project::ui_tree::UiTree;
 use std::collections::HashSet;
@@ -42,6 +43,18 @@ impl ParseReport {
             format!("{} widget edits applied", self.widgets.len())
         }
     }
+
+    pub fn widget_spans(&self) -> Vec<WidgetSourceSpan> {
+        self.widgets
+            .iter()
+            .filter_map(|widget| {
+                widget.source_span.clone().map(|span| WidgetSourceSpan {
+                    widget_id: widget.id,
+                    span,
+                })
+            })
+            .collect()
+    }
 }
 
 /// One parsed widget extracted from egui_emitter output.
@@ -58,11 +71,13 @@ pub struct ParsedWidget {
     pub min: Option<f32>,
     pub max: Option<f32>,
     pub children: Vec<Uuid>,
+    pub source_span: Option<SourceSpan>,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ApplyOutcome {
     pub created_widgets: usize,
+    pub created_widget_ids: Vec<Uuid>,
 }
 
 impl ParsedWidget {
@@ -79,6 +94,15 @@ impl ParsedWidget {
             min: None,
             max: None,
             children: Vec::new(),
+            source_span: None,
+        }
+    }
+
+    fn touch_source(&mut self, byte_start: usize, byte_end: usize, line: usize) {
+        if let Some(span) = &mut self.source_span {
+            span.extend_to(byte_end, line);
+        } else {
+            self.source_span = Some(SourceSpan::new(byte_start..byte_end, line..=line));
         }
     }
 
@@ -114,8 +138,9 @@ pub fn parse_egui_output(code: &str) -> ParseReport {
     let mut builder: Option<AreaBuilder> = None;
     let mut pending_child: Option<ParsedWidget> = None;
 
-    for (idx, line) in code.lines().enumerate() {
+    for (idx, byte_span) in line_byte_spans(code).into_iter().enumerate() {
         let line_no = idx + 1;
+        let line = &code[byte_span.clone()];
         let t = line.trim();
         if t.is_empty() {
             continue;
@@ -127,31 +152,42 @@ pub fn parse_egui_output(code: &str) -> ParseReport {
                     if !parent.children.contains(&id) {
                         parent.children.push(id);
                     }
+                    parent.touch_source(byte_span.start, byte_span.end, line_no);
                 }
                 flush_pending_child(&mut pending_child, &mut report);
-                pending_child = Some(ParsedWidget::new(id));
+                let mut child = ParsedWidget::new(id);
+                child.touch_source(byte_span.start, byte_span.end, line_no);
+                pending_child = Some(child);
                 continue;
             }
 
             if t.starts_with("egui::Area::new(egui::Id::new(") {
+                flush_pending_child(&mut pending_child, &mut report);
+                if builder.is_some() {
+                    report.diagnostics.push(ParseDiagnostic {
+                        severity: ParseSeverity::Error,
+                        line: line_no,
+                        message: "previous widget block was not closed".to_owned(),
+                    });
+                }
                 if let Some(done) = builder.take().and_then(AreaBuilder::emit) {
                     report.widgets.push(done);
                 }
+                let mut widget = ParsedWidget::new(id);
+                widget.touch_source(byte_span.start, byte_span.end, line_no);
                 builder = Some(AreaBuilder {
-                    widget: Some(ParsedWidget::new(id)),
+                    widget: Some(widget),
                     depth: 0,
                 });
                 continue;
             }
         }
 
-        if let Some(child) = pending_child.as_mut() {
-            parse_widget_line(child, t, line_no, &mut report);
-            flush_pending_child(&mut pending_child, &mut report);
-            continue;
-        }
-
         if let Some(b) = builder.as_mut() {
+            if let Some(widget) = b.widget.as_mut() {
+                widget.touch_source(byte_span.start, byte_span.end, line_no);
+            }
+
             if t.ends_with('{') && (t.contains(".show(") || t.contains("|ui|")) {
                 b.depth += 1;
             }
@@ -160,6 +196,7 @@ pub fn parse_egui_output(code: &str) -> ParseReport {
                 if b.depth > 1 {
                     b.depth -= 1;
                 } else {
+                    flush_pending_child(&mut pending_child, &mut report);
                     if let Some(done) = builder.take().and_then(AreaBuilder::emit) {
                         report.widgets.push(done);
                     }
@@ -167,11 +204,15 @@ pub fn parse_egui_output(code: &str) -> ParseReport {
                 }
             }
 
-            if let Some(widget) = b.widget.as_mut() {
+            if let Some(child) = pending_child.as_mut() {
+                child.touch_source(byte_span.start, byte_span.end, line_no);
+                parse_widget_line(child, t, line_no, &mut report);
+            } else if let Some(widget) = b.widget.as_mut() {
                 parse_widget_line(widget, t, line_no, &mut report);
             }
         } else if looks_like_widget_edit(t) {
             let mut orphan = ParsedWidget::new(Uuid::new_v4());
+            orphan.touch_source(byte_span.start, byte_span.end, line_no);
             parse_widget_line(&mut orphan, t, line_no, &mut report);
             if orphan.has_any_edit() {
                 report.widgets.push(orphan);
@@ -186,6 +227,13 @@ pub fn parse_egui_output(code: &str) -> ParseReport {
     }
 
     flush_pending_child(&mut pending_child, &mut report);
+    if builder.is_some() {
+        report.diagnostics.push(ParseDiagnostic {
+            severity: ParseSeverity::Error,
+            line: code.lines().count().max(1),
+            message: "widget block is missing its closing `});`".to_owned(),
+        });
+    }
     if let Some(done) = builder.take().and_then(AreaBuilder::emit) {
         report.widgets.push(done);
     }
@@ -504,12 +552,16 @@ pub fn apply_parsed(tree: &mut UiTree, widgets: &[ParsedWidget]) -> ApplyOutcome
             widget.id = Uuid::new_v4();
             widget.children.clear();
             apply_fields(&mut widget, pw, true);
+            let id = widget.id;
             tree.add(widget);
             outcome.created_widgets += 1;
+            outcome.created_widget_ids.push(id);
         } else if let Some(mut widget) = instance_from_parsed(pw) {
             apply_fields(&mut widget, pw, false);
+            let id = widget.id;
             tree.add(widget);
             outcome.created_widgets += 1;
+            outcome.created_widget_ids.push(id);
         }
     }
     tree.validate_and_repair();
@@ -576,6 +628,7 @@ mod tests {
     use super::*;
     use crate::codegen::egui_emitter;
     use crate::project::schema::{Rect, WidgetInstance, WidgetProps};
+    use crate::widgets;
 
     fn widget(kind: WidgetKind, label: &str) -> WidgetInstance {
         WidgetInstance {
@@ -611,11 +664,32 @@ mod tests {
 
         let report = parse_egui_output(&code);
         assert!(!report.has_errors(), "{:?}", report.diagnostics);
+        let parsed = report.widgets.iter().find(|w| w.id == id).unwrap();
+        let span = parsed.source_span.as_ref().expect("source span");
+        assert!(code[span.bytes.clone()].starts_with("egui::Area::new"));
+        assert!(!code[span.bytes.clone()].contains("CentralPanel"));
         apply_parsed(&mut tree, &report.widgets);
 
         let edited = tree.widgets.iter().find(|w| w.id == id).unwrap();
         assert_eq!(edited.rect.x, 42.0);
         assert_eq!(edited.rect.y, 56.0);
+    }
+
+    #[test]
+    fn every_generated_builtin_block_is_a_complete_parse() {
+        for kind in widgets::ALL_KINDS {
+            let mut tree = UiTree::default();
+            tree.add(widget(kind.clone(), &format!("{kind:?}")));
+            let document = egui_emitter::emit_document(&tree);
+            let report = parse_egui_output(&document.text);
+
+            assert!(
+                !report.has_errors(),
+                "{kind:?} canonical output must parse without structural errors: {:?}\n{}",
+                report.diagnostics,
+                document.text
+            );
+        }
     }
 
     #[test]
@@ -636,6 +710,8 @@ mod tests {
         let outcome = apply_parsed(&mut tree, &report.widgets);
 
         assert_eq!(outcome.created_widgets, 1);
+        assert_eq!(outcome.created_widget_ids.len(), 1);
+        assert_ne!(outcome.created_widget_ids[0], id);
         assert_eq!(tree.widgets.len(), 2);
         assert_eq!(tree.widgets.iter().filter(|w| w.id == id).count(), 1);
         assert!(tree.widgets.iter().any(|w| w.id != id));
@@ -652,6 +728,7 @@ mod tests {
         let outcome = apply_parsed(&mut tree, &report.widgets);
 
         assert_eq!(outcome.created_widgets, 1);
+        assert_eq!(outcome.created_widget_ids, vec![report.widgets[0].id]);
         assert_eq!(tree.widgets.len(), 1);
         assert_eq!(tree.widgets[0].kind, WidgetKind::Button);
         assert_eq!(tree.widgets[0].props.label, "Paste Me");
@@ -669,6 +746,18 @@ mod tests {
         let report = parse_egui_output(&code);
         assert!(report.has_errors());
         assert!(report.summary().contains("dimensions"));
+    }
+
+    #[test]
+    fn reports_unclosed_widget_block_as_incomplete_parse() {
+        let id = Uuid::new_v4();
+        let code = format!(
+            "egui::Area::new(egui::Id::new(\"widget_{id}\"))\n    .show(ctx, |ui| {{\n        ui.button(\"Broken\");"
+        );
+
+        let report = parse_egui_output(&code);
+        assert!(report.has_errors());
+        assert!(report.summary().contains("closing"));
     }
 
     #[test]

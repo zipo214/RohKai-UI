@@ -7,6 +7,17 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-06 — Codex Lazare Editor Stabilization
+
+On `dev`, the Lazare stabilization pass now replaces heuristic UUID searches
+with exact generated/parser source ranges and paints canvas-authoritative
+selection outlines in a dedicated editor gutter. Invalid edits remain visible
+without mutating `UiTree`; empty code clears widgets; duplicate paste repairs
+UUIDs, offsets placement, regenerates canonical code, and selects the new
+widgets. Canvas input now derives from response/layer/focus ownership instead
+of an expanding utility-window list; remaining IDE-depth work is search,
+symbols, diagnostic navigation, diff view, and generated/user-region ownership.
+
 ## 2026-06-05 — Codex Code Highlight Polish + Window Input Isolation
 
 On `dev`, I am tightening the generated-code selection outline after visual

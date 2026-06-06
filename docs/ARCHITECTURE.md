@@ -141,6 +141,7 @@ src/codegen/
   field_collector.rs   — shared AppState field collection for live preview,
                          export, and descriptor state fields (single source of truth)
   parser.rs            — Lazare reverse path: parses edited code back into UiTree
+  source_map.rs        — byte/line spans for generated and parsed code ownership
   kind_table.rs        — field types and widget metadata for codegen (binding types,
                          event applicability, state field rules per WidgetKind)
   widget_descriptor.rs — .rkwd descriptor types, loader, template engine, validation
@@ -162,7 +163,15 @@ AppState fields, their Rust types, and their default expressions. Both
 
 `parser.rs` performs the reverse Lazare path for supported generated-code edits:
 it parses widget markers and selected egui calls back into `UiTree`, reporting
-diagnostics without mutating the canvas on invalid edits.
+diagnostics without mutating the canvas on invalid edits. Successful parsed
+widgets retain byte/line source ranges so code decorations remain mapped after
+valid manual edits.
+
+`source_map.rs` defines the generated-code document contract. `emit_document`
+returns complete text plus exact widget spans derived while emitting, rather
+than searching the finished string for UUIDs. `panels::code_preview` uses those
+spans, or parser spans for edited text, to paint selection decorations in a
+separate viewport gutter outside TextEdit's glyph clip.
 
 ### `egui_emitter::emit`
 
@@ -214,7 +223,7 @@ Only widgets with a non-`None` `state_binding` appear in the struct.
 | `SessionState` | `interaction`, `selected`, `canvas_settings`, `dragging_guide`, `hovered_guide`, `lock_aspect_ratio` | Per-session canvas interaction and view state (not persisted) |
 | `MessageState` | `last_error`, `export_message`, `template_message` | One-frame status messages for the status bar |
 | `PreferencesState` | `user_settings`, `draft`, `settings_path` | Live + draft user preferences, persistence path |
-| `CodePanelState` | `buffer`, `status`, `last_generated`, `split_ratio` | Lazare code panel — editable buffer and live/pending/error status |
+| `CodePanelState` | `buffer`, `status`, `last_generated`, `split_ratio`, `wrap_code`, `editor_has_focus` | Lazare code panel — editable buffer, generated/valid/invalid state, wrapping preference, and focus ownership |
 | `DescriptorState` | `widgets`, `errors`, `editor`, `builder` | Loaded `.rkwd` descriptors, load errors, in-app editor state, beginner builder state |
 
 Layout per frame:

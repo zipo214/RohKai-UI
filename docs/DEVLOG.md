@@ -2,7 +2,74 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-06 — Lazare Structured Ranges And Editor Viewport
+
+### Docs Reviewed Before Editing
+- `AGENTS.md` and preflight context with `-IncludeDevlog`
+- `.agents/skills/project-model/SKILL.md`
+- `.agents/skills/codegen-rules/SKILL.md`
+- `.agents/skills/canvas-patterns/SKILL.md`
+- `docs/ROADMAP.md`, `docs/CODE_COOP.md`, `docs/ARCHITECTURE.md`,
+  `docs/CODE_INDEX.md`, and the Lazare feature evaluation
+
+### Architectural Correction
+- The June 5 padding/clip-rect approach was not a complete clipping fix.
+  TextEdit's glyph clip cannot simultaneously provide readable glyph spacing
+  and a fully visible border at panel edges. That earlier claim is superseded
+  by a separate editor viewport and decoration gutter backed by exact source
+  ranges.
+
+### Changes
+- Added `codegen/source_map.rs` and `egui_emitter::emit_document()`: generated
+  code now carries exact byte and line ranges for every widget. Widget ranges
+  exclude the `CentralPanel` preamble and neighboring blocks.
+- Extended Lazare parser results with source ranges for valid edited code and
+  structural incomplete-block diagnostics.
+- Rebuilt the code surface around a no-wrap-by-default TextEdit with horizontal
+  and vertical scrolling, an optional Wrap toggle, inset text, and decoration
+  painting clipped to the outer viewport rather than the glyph clip.
+- Canvas `selected` is the only highlight set. Multi-selection produces
+  independent outlines; deselection clears them. Ctrl+double-click/Tracé uses
+  a one-frame navigation target instead of duplicated highlight state.
+- Added explicit generated, valid-edit, and invalid-edit states. Invalid edits
+  stay visible and never partially mutate `UiTree`; empty code clears widgets;
+  deleting every widget block while retaining the canonical project preamble
+  also clears widgets; duplicate pasted blocks receive fresh UUIDs, placement
+  offsets, canonical regeneration, and active selection.
+- Replaced utility-window input block lists with canvas response, top-layer,
+  focus, and keyboard-ownership checks. Floating windows no longer leak pointer
+  or keyboard actions into the canvas.
+- Added visual separation before generated top-level widget blocks so selection
+  outlines do not crowd the preamble or adjacent blocks.
+
+### Verification
+- Focused generated/parser source-range tests: passed
+- Every built-in canonical widget block parses without structural errors
+- Focused code-editor geometry/multi-selection tests: passed
+- Focused canvas input-ownership tests: passed
+- Fresh rebuilt-binary visual check: generated state remained valid; selected
+  Button mapped to line 3; preamble remained outside the outline; all four
+  perimeter edges remained visible in the narrow right panel
+- `cargo fmt --check`: clean
+- `cargo check`: clean
+- `cargo test`: 195 passed, 2 ignored
+- `cargo clippy -- -D warnings`: clean
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1`:
+  OK
+
+### Risks / Follow-ups
+- TextEdit remains the editing engine. Search, symbols, precise cursor
+  placement, clickable diagnostic navigation, diff view, and explicit
+  generated/user-region ownership remain IDE-depth work.
+- Handler range storage exists as a future-ready type; handler indexing is not
+  yet produced by the live emitter.
+
 ## 2026-06-05 — Code Highlight Outline And Launcher Trace
+
+> Superseded on June 6: padding and painting inside TextEdit's clip improved the
+> symptom but did not solve the architectural clipping conflict. The current
+> implementation uses structured source ranges and a separate decoration
+> viewport/gutter.
 
 ### Docs Reviewed Before Editing
 - Preflight context (`scripts/preflight-context.ps1`)

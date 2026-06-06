@@ -19,10 +19,10 @@ safe to export, and honest about what cannot round-trip.
 | Live codegen | 4 | Emits egui code from `UiTree`, with widget markers and AppState. | Needs memoization/perf and generated-code formatting polish. |
 | AppState generation | 4 | Shared field collection, binding validation, defaults. | Needs richer typed models and user-defined structs. |
 | Export | 4 | Writes compilable eframe project for supported widgets/assets/images. | Needs generated-project compile fixtures and platform profiles. |
-| Lazare parser | 3 | Parses supported generated code back into `UiTree`; partial apply. | Needs structured edit ranges, richer syntax support, conflict UI. |
+| Lazare parser | 3-4 | Parses supported generated code back into `UiTree`, returns exact source ranges, and applies only complete successful parses. Empty code clears widgets; duplicate paste repairs identity. | Needs richer Rust syntax support, conflict UI, and explicit generated/user-region ownership. |
 | Handler wiring | 3 | Properties write event names; codegen/export stubs/calls. | Needs event catalog depth, refactor/rename support, duplicate detection. |
 | Rust wiring | 2-3 | mpsc channels, iterator pipelines, trait impls, async thread wrapper. | Needs data-flow validation, preview execution, and richer editing UX. |
-| Code navigation | 2-3 | Highlight and scroll-to-handler/widget support. | Needs robust cursor placement, search, symbol list, diff view. |
+| Code navigation | 3 | Generated and edited widget blocks have structured ranges; canvas multi-selection paints independent gutter outlines; Tracé uses a one-frame scroll target. | Needs precise cursor placement, search, symbol list, clickable diagnostics, handler indexing, and diff view. |
 
 ## Utility
 
@@ -56,8 +56,8 @@ safe to export, and honest about what cannot round-trip.
 
 1. Add generated project compile tests for "all widgets", "events", "assets",
    "custom descriptor", and "SVG image" fixtures.
-2. Add structured code spans around widgets and handlers for robust navigation.
+2. Extend the existing widget source-span foundation to indexed handler ranges,
+   precise cursor placement, symbols, and clickable diagnostics.
 3. Add binding/handler rename operations as first-class commands.
 4. Add export preview diff and generated-file health panel.
 5. Add platform profile abstraction before WASM work.
-

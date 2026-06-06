@@ -73,13 +73,14 @@ pub fn handle_interaction(
         *hovered = None;
         return;
     };
+    let pointer_owned = ui.rect_contains_pointer(panel_rect);
 
     let just_pressed = ui.input(|i| i.pointer.primary_pressed());
     let is_down = ui.input(|i| i.pointer.primary_down());
 
     // --- Continue dragging an existing guide ---
     if let Some(drag_id) = *dragging {
-        if is_down {
+        if is_down && pointer_owned {
             if let Some(g) = guides.iter_mut().find(|g| g.id == drag_id) {
                 match g.orientation {
                     GuideOrientation::Horizontal => {
@@ -93,6 +94,11 @@ pub fn handle_interaction(
             return;
         }
         *dragging = None;
+    }
+
+    if !pointer_owned {
+        *hovered = None;
+        return;
     }
 
     // --- Hover detection (only within canvas area, not ruler strips) ---

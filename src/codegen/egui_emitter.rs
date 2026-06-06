@@ -1,7 +1,8 @@
 use crate::codegen::rust::{field_binding, string_literal};
+use crate::codegen::source_map::{GeneratedCodeDocument, SourceSpan, WidgetSourceSpan};
 use crate::project::schema::{Orientation, WidgetInstance, WidgetKind};
 use crate::project::ui_tree::UiTree;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 const MAX_GRID_COLUMNS: usize = 12;
@@ -669,6 +670,58 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
     lines
 }
 
+pub fn emit_document(tree: &UiTree) -> GeneratedCodeDocument {
+    document_from_indexed(emit_indexed(tree))
+}
+
+fn document_from_indexed(lines: Vec<(Option<Uuid>, String)>) -> GeneratedCodeDocument {
+    let mut document = GeneratedCodeDocument::default();
+    let mut widget_indices: HashMap<Uuid, usize> = HashMap::new();
+    let mut byte_cursor = 0usize;
+    let mut line_cursor = 1usize;
+
+    for (index, (widget_id, fragment)) in lines.into_iter().enumerate() {
+        if index > 0 {
+            document.text.push('\n');
+            byte_cursor += 1;
+            line_cursor += 1;
+            if fragment
+                .trim_start()
+                .starts_with("egui::Area::new(egui::Id::new(")
+            {
+                document.text.push('\n');
+                byte_cursor += 1;
+                line_cursor += 1;
+            }
+        }
+
+        let byte_start = byte_cursor;
+        let line_start = line_cursor;
+        document.text.push_str(&fragment);
+        byte_cursor += fragment.len();
+        let embedded_newlines = fragment.bytes().filter(|byte| *byte == b'\n').count();
+        let line_end = line_start + embedded_newlines;
+        line_cursor = line_end;
+
+        if let Some(widget_id) = widget_id {
+            if let Some(existing) = widget_indices.get(&widget_id).copied() {
+                document.widget_spans[existing]
+                    .span
+                    .extend_to(byte_cursor, line_end);
+            } else {
+                let entry_index = document.widget_spans.len();
+                widget_indices.insert(widget_id, entry_index);
+                document.widget_spans.push(WidgetSourceSpan {
+                    widget_id,
+                    span: SourceSpan::new(byte_start..byte_cursor, line_start..=line_end),
+                });
+            }
+        }
+    }
+
+    document
+}
+
 // ---------------------------------------------------------------------------
 // Handler resolution — new fields with legacy fallback
 // ---------------------------------------------------------------------------
@@ -1073,6 +1126,56 @@ fn emit_layout_child_lines(child: &WidgetInstance, lines: &mut Vec<(Option<Uuid>
 mod tests {
     use super::*;
     use crate::project::schema::{Rect, WidgetInstance, WidgetProps};
+
+    #[test]
+    fn generated_document_maps_every_widget_and_nested_child() {
+        let parent_id = Uuid::from_u128(0xA1);
+        let child_id = Uuid::from_u128(0xB2);
+        let parent = WidgetInstance {
+            id: parent_id,
+            kind: WidgetKind::VLayout,
+            rect: Rect {
+                x: 10.0,
+                y: 20.0,
+                w: 200.0,
+                h: 180.0,
+            },
+            children: vec![child_id],
+            ..Default::default()
+        };
+        let child = WidgetInstance {
+            id: child_id,
+            kind: WidgetKind::Button,
+            rect: Rect {
+                x: 20.0,
+                y: 30.0,
+                w: 100.0,
+                h: 30.0,
+            },
+            props: WidgetProps {
+                label: "Nested".to_owned(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let tree = UiTree {
+            widgets: vec![parent, child],
+            ..Default::default()
+        };
+
+        let document = emit_document(&tree);
+        assert_eq!(document.widget_spans.len(), 2);
+        for id in [parent_id, child_id] {
+            let entry = document
+                .widget_spans
+                .iter()
+                .find(|entry| entry.widget_id == id)
+                .expect("source span");
+            let source = &document.text[entry.span.bytes.clone()];
+            assert!(!source.contains("CentralPanel"));
+            assert!(source.contains(&id.to_string()));
+        }
+    }
 
     #[test]
     fn image_widget_emits_svg_preview_call() {

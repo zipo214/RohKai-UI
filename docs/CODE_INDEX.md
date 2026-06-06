@@ -45,7 +45,9 @@ being comfortable.
 
 - `src/panels/palette.rs` - widget palette interactions.
 - `src/panels/properties.rs` - selected widget inspector.
-- `src/panels/code_preview.rs` - live/editable generated code panel.
+- `src/panels/code_preview.rs` - live/editable generated code panel. Owns the
+  no-wrap/wrap editor viewport, decoration gutter, source-span outlines,
+  navigation scrolling, and generated/valid/invalid edit states.
 - `src/panels/templates.rs` - template file interactions and SVG import path.
 - `src/panels/descriptor_editor.rs` - full power-user `.rkwd` editor (all
   template/schema fields). Entry: File → New Widget Descriptor… or Widgets menu.
@@ -85,11 +87,14 @@ being comfortable.
 ## Codegen
 
 - `src/codegen/egui_emitter.rs` - live egui preview code.
+- `src/codegen/source_map.rs` - exact byte/line ranges for generated widget and
+  future handler blocks; shared line-span utility used by Lazare parsing.
 - `src/codegen/export.rs` - generated standalone eframe project output.
 - `src/codegen/field_collector.rs` - shared AppState field collection for live
   preview, export, and descriptor state fields.
 - `src/codegen/state_emitter.rs` - generated `AppState`.
-- `src/codegen/parser.rs` - Lazare/bidirectional code parsing.
+- `src/codegen/parser.rs` - Lazare/bidirectional code parsing, diagnostics, and
+  source ranges for valid manually edited widget blocks.
 - `src/codegen/kind_table.rs` - field types and widget metadata for codegen.
 - `src/codegen/rust.rs` - Rust string/binding helpers.
 - `src/codegen/rust_wiring.rs` - Stage 11 Rust-centric emitters: mpsc channel

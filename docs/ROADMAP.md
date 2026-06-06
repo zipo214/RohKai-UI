@@ -54,9 +54,20 @@
 
 ### The Lazare Features
 - [x] Double-click widget on canvas → code panel highlights the selected widget
-      block inline inside the editable code panel; Tracé handler jump inserts the
-      stub if absent. Blank/deleted code now clears canvas widgets and resyncs to
-      the canonical empty generated output.
+      block inline inside the editable code panel. Generated output carries exact
+      widget byte/line ranges, edited output carries parser-derived ranges, and
+      the editor paints one complete outline per canvas selection in a dedicated
+      decoration gutter. The `CentralPanel` preamble is never part of a widget
+      range. Tracé handler jump inserts the stub if absent and scrolls through a
+      one-frame navigation target. Blank/deleted code clears canvas widgets and
+      resyncs to the canonical empty generated output.
+- [x] Lazare edit-state safety: generated, valid-edit, and invalid-edit states are
+      explicit; incomplete edits stay visible without partially mutating
+      `UiTree`; duplicate pasted widget blocks receive fresh UUIDs, placement
+      offsets, canonical regeneration, and active selection.
+- [x] Code editor surface defaults to no-wrap IDE-style horizontal/vertical
+      scrolling with an optional Wrap toggle. Selection decoration is painted
+      outside TextEdit's glyph clip and remains inside the visible panel.
 - [x] App Properties: window title, width, height, icon — stored in project, used in export
 
 ### Menu Bar Ribbon
@@ -626,9 +637,13 @@ and prioritizes depth over more palette breadth.
 - [ ] True layout ownership: `VLayout`, `HLayout`, and `GridLayout` own/reflow
       children with spacing, padding, alignment, stretch/fill rules, and matching
       nested codegen/export/parser behavior.
-- [ ] Lazare/code editor depth: structured widget/code spans, robust code
-      navigation, symbol list, editable diagnostics, paste repair, diff view, and
-      decorations that follow actual text layout.
+- [x] Lazare structured-range/editor-decoration foundation: generated and parsed
+      widget spans, canvas-authoritative multi-selection, no-wrap scrolling,
+      gutter-painted outlines, safe invalid edits, empty-code clearing, and
+      duplicate-paste repair.
+- [ ] Lazare IDE depth: precise cursor placement, search, symbol list, clickable
+      diagnostic navigation, diff view, generated/user-region ownership, and
+      handler-range indexing beyond the current navigation slice.
 - [ ] Data model groundwork: typed data source model, binding model for
       Table/List/Tree, and explicit separation of static option widgets from
       model-backed views.

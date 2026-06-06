@@ -43,10 +43,8 @@ pub struct SessionState {
     pub interaction: InteractionState,
     pub selected: Vec<Uuid>,
     pub canvas_settings: CanvasSettings,
-    /// Widget id highlighted in the code panel (Lazare double-click).
-    pub highlighted_code_id: Option<Uuid>,
-    /// When true, code panel scrolls to the highlighted line once.
-    pub scroll_to_code: bool,
+    /// One-shot widget navigation request from Ctrl+double-click/Tracé.
+    pub code_navigation_target: Option<Uuid>,
     /// Tracé: if Some(name), code panel scrolls to fn {name} and inserts a stub if absent.
     pub scroll_to_handler: Option<String>,
     /// Last known screen rect of the canvas panel — used for visible-centre placement.
@@ -95,8 +93,7 @@ impl Default for SessionState {
             interaction: InteractionState::default(),
             selected: Vec::new(),
             canvas_settings: CanvasSettings::default(),
-            highlighted_code_id: None,
-            scroll_to_code: false,
+            code_navigation_target: None,
             scroll_to_handler: None,
             last_canvas_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
             svg_viewer_id: None,
@@ -147,15 +144,19 @@ pub struct CodePanelState {
     pub status: CodeStatus,
     pub last_generated: String,
     pub split_ratio: f32,
+    pub wrap_code: bool,
+    pub editor_has_focus: bool,
 }
 
 impl Default for CodePanelState {
     fn default() -> Self {
         Self {
             buffer: String::new(),
-            status: CodeStatus::Live,
+            status: CodeStatus::Generated,
             last_generated: String::new(),
             split_ratio: 0.6,
+            wrap_code: false,
+            editor_has_focus: false,
         }
     }
 }
@@ -259,18 +260,8 @@ impl RohKaiApp {
         }
     }
 
-    fn canvas_input_blocked(&self) -> bool {
-        self.session.shortcuts_open
-            || self.session.rust_wiring_open
-            || self.session.macro_palette_open
-            || self.session.project_tree_open
-            || self.session.theme_open
-            || self.prefs.open
-            || self.pending_command.is_some()
-            || self.pending_svg_import.is_some()
-            || self.session.svg_viewer_id.is_some()
-            || self.descriptors.editor.is_some()
-            || self.descriptors.builder.is_some()
+    fn canvas_modal_blocked(&self) -> bool {
+        self.pending_command.is_some() || self.pending_svg_import.is_some()
     }
 
     fn cached_dirty(&mut self, ctx: &egui::Context) -> bool {
@@ -316,7 +307,7 @@ impl RohKaiApp {
         self.project.saved_json = None;
         self.session.selected.clear();
         self.messages.last_error = None;
-        self.session.highlighted_code_id = None;
+        self.session.code_navigation_target = None;
         self.dirty_cache = false;
         self.dirty_cache_checked_at = 0.0;
         self.reset_undo_baseline();
@@ -370,7 +361,7 @@ impl RohKaiApp {
                     self.project.current_file = Some(path);
                     self.session.selected.clear();
                     self.messages.last_error = None;
-                    self.session.highlighted_code_id = None;
+                    self.session.code_navigation_target = None;
                     self.dirty_cache = false;
                     self.dirty_cache_checked_at = 0.0;
                     self.reset_undo_baseline();
@@ -2004,23 +1995,19 @@ impl eframe::App for RohKaiApp {
         // Right panel: generated code (hidden in preview mode)
         // ---------------------------------------------------------------
         if !self.session.preview_mode {
-            let mut highlighted_ids = self.session.selected.clone();
-            if let Some(id) = self.session.highlighted_code_id {
-                if !highlighted_ids.contains(&id) {
-                    highlighted_ids.push(id);
-                }
-            }
             crate::panels::code_preview::show(
                 ctx,
                 &mut self.project.ui_tree,
                 CodePreviewArgs {
-                    highlighted_ids: &highlighted_ids,
-                    scroll_to: &mut self.session.scroll_to_code,
+                    selected_ids: &mut self.session.selected,
+                    navigation_target: &mut self.session.code_navigation_target,
                     scroll_to_handler: &mut self.session.scroll_to_handler,
                     code_buffer: &mut self.code.buffer,
                     code_status: &mut self.code.status,
                     last_generated: &mut self.code.last_generated,
                     split_ratio: &mut self.code.split_ratio,
+                    wrap_code: &mut self.code.wrap_code,
+                    editor_has_focus: &mut self.code.editor_has_focus,
                     code_font_size: self.prefs.user_settings.code_font_size,
                 },
             );
@@ -2227,7 +2214,8 @@ impl eframe::App for RohKaiApp {
                                         let shift_held = ui.input(|i| i.modifiers.shift);
                                         let code_pending = matches!(
                                             self.code.status,
-                                            crate::panels::code_preview::CodeStatus::Pending
+                                            crate::panels::code_preview::CodeStatus::ValidEdit
+                                                | crate::panels::code_preview::CodeStatus::InvalidEdit(_)
                                         );
                                         if code_pending {
                                             ui.label(
@@ -2469,9 +2457,12 @@ impl eframe::App for RohKaiApp {
         // ---------------------------------------------------------------
         // Canvas
         // ---------------------------------------------------------------
-        let canvas_input_blocked = self.canvas_input_blocked();
+        let canvas_modal_blocked = self.canvas_modal_blocked();
+        let canvas_keyboard_owned = !canvas_modal_blocked
+            && self.session.interaction.canvas_focused
+            && !ctx.wants_keyboard_input();
         let delete_pressed =
-            !canvas_input_blocked && ctx.input(|i| i.key_pressed(egui::Key::Delete));
+            canvas_keyboard_owned && ctx.input(|i| i.key_pressed(egui::Key::Delete));
         let has_hovered_guide = self.session.hovered_guide.is_some();
         egui::CentralPanel::default().show(ctx, |ui| {
             self.session.last_canvas_rect = ui.max_rect();
@@ -2507,7 +2498,7 @@ impl eframe::App for RohKaiApp {
                 canvas_size,
                 panel_rect,
             };
-            if canvas_input_blocked {
+            if canvas_modal_blocked {
                 self.session.hovered_guide = None;
                 self.session.dragging_guide = None;
             } else {
@@ -2522,7 +2513,7 @@ impl eframe::App for RohKaiApp {
             }
 
             self.session.canvas_settings.guide_drag_active = self.session.dragging_guide.is_some();
-            self.session.canvas_settings.input_blocked = canvas_input_blocked;
+            self.session.canvas_settings.input_blocked = canvas_modal_blocked;
             crate::canvas::interaction::handle(
                 ui,
                 &mut self.project.ui_tree,
@@ -2596,8 +2587,7 @@ impl eframe::App for RohKaiApp {
 
         // Lazare double-click → highlight code panel
         if let Some(id) = self.session.interaction.double_clicked_widget {
-            self.session.highlighted_code_id = Some(id);
-            self.session.scroll_to_code = true;
+            self.session.code_navigation_target = Some(id);
         }
 
         // ---------------------------------------------------------------
@@ -2608,11 +2598,6 @@ impl eframe::App for RohKaiApp {
             for id in ids {
                 self.project.ui_tree.remove(id);
             }
-        }
-
-        let primary_selection = self.session.selected.last().copied();
-        if self.session.highlighted_code_id != primary_selection {
-            self.session.highlighted_code_id = primary_selection;
         }
 
         self.show_pending_command_dialog(ctx);

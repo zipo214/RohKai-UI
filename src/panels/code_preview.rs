@@ -1,106 +1,155 @@
+use crate::codegen::source_map::{GeneratedCodeDocument, SourceSpan, WidgetSourceSpan};
 use crate::codegen::{egui_emitter, parser, state_emitter};
 use crate::project::ui_tree::UiTree;
 use uuid::Uuid;
 
-const CODE_EDITOR_PAD_X: f32 = 9.0;
-const CODE_EDITOR_PAD_Y: f32 = 6.0;
-const CODE_HIGHLIGHT_PADDING: f32 = 6.0;
+const CODE_EDITOR_GUTTER_X: f32 = 10.0;
+const CODE_EDITOR_GUTTER_Y: f32 = 8.0;
+const CODE_HIGHLIGHT_PADDING: f32 = 4.0;
 const CODE_HIGHLIGHT_STROKE_WIDTH: f32 = 1.25;
 
 #[derive(Default, PartialEq)]
 pub enum CodeStatus {
     #[default]
-    Live,
-    /// TextEdit has focus — user is editing
-    Pending,
-    Error(String),
+    Generated,
+    ValidEdit,
+    InvalidEdit(String),
 }
 
 pub struct CodePreviewArgs<'a> {
-    pub highlighted_ids: &'a [Uuid],
-    pub scroll_to: &'a mut bool,
+    pub selected_ids: &'a mut Vec<Uuid>,
+    pub navigation_target: &'a mut Option<Uuid>,
     /// Tracé: if Some(name), insert handler stub and clear after consuming.
     pub scroll_to_handler: &'a mut Option<String>,
     pub code_buffer: &'a mut String,
     pub code_status: &'a mut CodeStatus,
     pub last_generated: &'a mut String,
     pub split_ratio: &'a mut f32,
+    pub wrap_code: &'a mut bool,
+    pub editor_has_focus: &'a mut bool,
     pub code_font_size: f32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct HighlightRange {
-    line: usize,
-    start: usize,
-    end: usize,
+struct CodeEditorSurface<'a> {
+    text: &'a mut String,
+    font_size: f32,
+    height: f32,
+    wrap: bool,
+    highlights: &'a [SourceSpan],
+    navigation: Option<&'a SourceSpan>,
 }
 
-fn line_spans(code: &str) -> Vec<(usize, usize)> {
-    let mut spans = Vec::new();
-    let mut start = 0;
-    for line in code.split_inclusive('\n') {
-        let end = start + line.len();
-        spans.push((start, end));
-        start = end;
-    }
-    spans
+struct CodeEditorSurfaceOutput {
+    response: egui::Response,
+    outline_rects: Vec<egui::Rect>,
 }
 
-fn highlighted_range(code: &str, id: Uuid) -> Option<HighlightRange> {
-    let needle = format!("widget_{id}");
-    let spans = line_spans(code);
-    let line_index = spans
-        .iter()
-        .position(|(start, end)| code[*start..*end].contains(&needle))?;
-    let start_line = line_index;
-    let mut end_line = line_index;
-    for (idx, (start, end)) in spans.iter().enumerate().skip(line_index) {
-        end_line = idx;
-        if code[*start..*end].trim() == "});" {
-            break;
+impl CodeEditorSurface<'_> {
+    fn show(self, ui: &mut egui::Ui) -> CodeEditorSurfaceOutput {
+        let outer_size = egui::vec2(ui.available_width().max(80.0), self.height.max(60.0));
+        let (outer_rect, _) = ui.allocate_exact_size(outer_size, egui::Sense::hover());
+        let inner_rect = outer_rect.shrink2(egui::vec2(CODE_EDITOR_GUTTER_X, CODE_EDITOR_GUTTER_Y));
+        let parent_clip = ui.clip_rect();
+        let decoration_clip = outer_rect.intersect(parent_clip);
+
+        let mut editor_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(inner_rect)
+                .layout(egui::Layout::top_down(egui::Align::Min)),
+        );
+        editor_ui.set_clip_rect(inner_rect.intersect(parent_clip));
+
+        let scroll_output = egui::ScrollArea::new([!self.wrap, true])
+            .id_salt("lazare_code_editor_scroll")
+            .max_width(inner_rect.width())
+            .max_height(inner_rect.height())
+            .min_scrolled_width(inner_rect.width())
+            .min_scrolled_height(inner_rect.height())
+            .auto_shrink([false, false])
+            .show(&mut editor_ui, |ui| {
+                let wrap_width = inner_rect.width().max(24.0);
+                let mut layouter = |ui: &egui::Ui, text: &str, requested_width: f32| {
+                    let width = if self.wrap {
+                        requested_width.min(wrap_width)
+                    } else {
+                        f32::INFINITY
+                    };
+                    let job = code_layout_job(ui, text, self.font_size, width);
+                    ui.fonts(|fonts| fonts.layout_job(job))
+                };
+
+                let output = egui::TextEdit::multiline(self.text)
+                    .font(egui::FontId::monospace(self.font_size))
+                    .desired_width(wrap_width)
+                    .desired_rows(code_rows_for_height(inner_rect.height(), self.font_size))
+                    .min_size(egui::vec2(wrap_width, inner_rect.height()))
+                    .code_editor()
+                    .layouter(&mut layouter)
+                    .frame(false)
+                    .show(ui);
+
+                let block_rects: Vec<egui::Rect> = self
+                    .highlights
+                    .iter()
+                    .filter_map(|span| source_span_rect(&output, self.text, span))
+                    .collect();
+
+                if let Some(navigation) = self.navigation {
+                    if let Some(rect) = source_span_rect(&output, self.text, navigation) {
+                        let viewport = ui.clip_rect();
+                        let align = if rect.width() <= viewport.width()
+                            && rect.height() <= viewport.height()
+                        {
+                            egui::Align::Center
+                        } else {
+                            egui::Align::Min
+                        };
+                        ui.scroll_to_rect(rect.expand(2.0), Some(align));
+                    }
+                }
+
+                (output.response.clone(), block_rects)
+            });
+
+        let stroke = egui::Stroke::new(
+            CODE_HIGHLIGHT_STROKE_WIDTH,
+            egui::Color32::from_rgb(52, 211, 153),
+        );
+        let painter = ui.painter_at(decoration_clip);
+        let outline_rects: Vec<egui::Rect> = scroll_output
+            .inner
+            .1
+            .into_iter()
+            .filter_map(|rect| highlight_outline_rect(rect, inner_rect, decoration_clip))
+            .collect();
+        for rect in &outline_rects {
+            painter.rect_stroke(*rect, 3.0, stroke);
         }
-        if idx > line_index
-            && (code[*start..*end].contains("egui::Area::new(")
-                || code[*start..*end].trim_start().starts_with("// widget_"))
-        {
-            end_line = idx.saturating_sub(1);
-            break;
+
+        CodeEditorSurfaceOutput {
+            response: scroll_output.inner.0,
+            outline_rects,
         }
     }
-    Some(HighlightRange {
-        line: line_index + 1,
-        start: spans[start_line].0,
-        end: spans[end_line].1,
-    })
-}
-
-fn highlighted_ranges(code: &str, ids: &[Uuid]) -> Vec<HighlightRange> {
-    let mut ranges: Vec<HighlightRange> = ids
-        .iter()
-        .filter_map(|&id| highlighted_range(code, id))
-        .collect();
-    ranges.sort_by_key(|range| (range.start, range.end));
-    ranges.dedup_by_key(|range| (range.start, range.end));
-    ranges
 }
 
 fn code_layout_job(
     ui: &egui::Ui,
     text: &str,
     font_size: f32,
-    _highlights: &[HighlightRange],
     wrap_width: f32,
 ) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
     job.wrap.max_width = wrap_width;
-
-    let base = egui::TextFormat {
-        font_id: egui::FontId::monospace(font_size),
-        color: ui.visuals().text_color(),
-        ..Default::default()
-    };
-
-    job.append(text, 0.0, base);
+    job.append(
+        text,
+        0.0,
+        egui::TextFormat {
+            font_id: egui::FontId::monospace(font_size),
+            color: ui.visuals().text_color(),
+            ..Default::default()
+        },
+    );
     job
 }
 
@@ -108,144 +157,167 @@ fn byte_to_char_index(text: &str, byte_index: usize) -> usize {
     text[..byte_index.min(text.len())].chars().count()
 }
 
-fn outline_clip_rect(clip_rect: egui::Rect) -> egui::Rect {
-    let inset = clip_rect.shrink(CODE_HIGHLIGHT_STROKE_WIDTH + 1.0);
-    if inset.is_positive() {
-        inset
-    } else {
-        clip_rect
-    }
-}
-
-fn clipped_outline_rect(rect: egui::Rect, clip_rect: egui::Rect) -> Option<egui::Rect> {
-    let clipped = rect
-        .expand(CODE_HIGHLIGHT_PADDING)
-        .intersect(outline_clip_rect(clip_rect));
-    clipped.is_positive().then_some(clipped)
-}
-
-fn highlighted_row_rect(
-    row: &egui::epaint::text::Row,
-    galley_pos: egui::Pos2,
-    clip_rect: egui::Rect,
-) -> Option<egui::Rect> {
-    let mesh = row.visuals.mesh_bounds;
-    let code_rect = if mesh.is_positive() {
-        let row_rect = row.rect;
-        egui::Rect::from_min_max(
-            egui::pos2(mesh.left(), row_rect.top()),
-            egui::pos2(mesh.right(), row_rect.bottom()),
-        )
-    } else {
-        row.rect
-    };
-    let visible = code_rect
-        .translate(galley_pos.to_vec2())
-        .intersect(clip_rect);
-    visible.is_positive().then_some(visible)
-}
-
-fn paint_highlight_outlines(
-    ui: &egui::Ui,
+fn source_span_rect(
     output: &egui::widgets::text_edit::TextEditOutput,
     text: &str,
-    highlights: &[HighlightRange],
-) {
-    let mut valid_ranges: Vec<HighlightRange> = highlights
-        .iter()
-        .copied()
-        .filter(|range| range.start < range.end && range.end <= text.len())
-        .collect();
-    valid_ranges.sort_by_key(|range| (range.start, range.end));
-
-    if valid_ranges.is_empty() {
-        return;
+    span: &SourceSpan,
+) -> Option<egui::Rect> {
+    if span.bytes.start >= span.bytes.end || span.bytes.end > text.len() {
+        return None;
     }
 
-    let mut char_ranges: Vec<std::ops::Range<usize>> = valid_ranges
-        .iter()
-        .map(|range| byte_to_char_index(text, range.start)..byte_to_char_index(text, range.end))
-        .collect();
-    char_ranges.sort_by_key(|range| (range.start, range.end));
+    let char_range =
+        byte_to_char_index(text, span.bytes.start)..byte_to_char_index(text, span.bytes.end);
+    let mut row_start = 0usize;
+    let mut block_rect: Option<egui::Rect> = None;
 
-    let painter = ui.painter_at(output.text_clip_rect);
-    let outline_clip = outline_clip_rect(output.text_clip_rect);
-    let stroke = egui::Stroke::new(
-        CODE_HIGHLIGHT_STROKE_WIDTH,
-        egui::Color32::from_rgb(52, 211, 153),
-    );
-
-    for char_range in char_ranges {
-        let mut row_start = 0usize;
-        let mut outline: Option<egui::Rect> = None;
-
-        for row in &output.galley.rows {
-            let row_text_end = row_start + row.glyphs.len();
-            let row_end = row_text_end + usize::from(row.ends_with_newline);
-            let intersects = char_range.start < row_end && char_range.end > row_start;
-
-            if intersects {
-                if let Some(visible) = highlighted_row_rect(row, output.galley_pos, outline_clip) {
-                    outline = Some(match outline {
-                        Some(accumulated) => accumulated.union(visible),
-                        None => visible,
-                    });
-                }
-            }
-
-            row_start = row_end;
+    for row in &output.galley.rows {
+        let row_char_count = row.char_count_excluding_newline();
+        let row_end = row_start + row.char_count_including_newline();
+        if char_range.start < row_end && char_range.end > row_start {
+            let local_start = char_range
+                .start
+                .saturating_sub(row_start)
+                .min(row_char_count);
+            let local_end = char_range.end.saturating_sub(row_start).min(row_char_count);
+            let left = row.x_offset(local_start);
+            let right = row.x_offset(local_end.max(local_start));
+            let row_rect = egui::Rect::from_min_max(
+                egui::pos2(left.min(right), row.rect.top()),
+                egui::pos2(left.max(right), row.rect.bottom()),
+            )
+            .translate(output.galley_pos.to_vec2());
+            block_rect = Some(match block_rect {
+                Some(existing) => existing.union(row_rect),
+                None => row_rect,
+            });
         }
-
-        if let Some(rect) =
-            outline.and_then(|rect| clipped_outline_rect(rect, output.text_clip_rect))
-        {
-            painter.rect_stroke(rect, 3.0, stroke);
-        }
+        row_start = row_end;
     }
+
+    block_rect.filter(egui::Rect::is_positive)
+}
+
+fn highlight_outline_rect(
+    block_rect: egui::Rect,
+    text_viewport: egui::Rect,
+    decoration_clip: egui::Rect,
+) -> Option<egui::Rect> {
+    let visible_text = block_rect.intersect(text_viewport);
+    if !visible_text.is_positive() {
+        return None;
+    }
+
+    let stroke_inset = CODE_HIGHLIGHT_STROKE_WIDTH + 1.0;
+    let safe_clip = decoration_clip.shrink(stroke_inset);
+    let outlined = visible_text
+        .expand(CODE_HIGHLIGHT_PADDING)
+        .intersect(safe_clip);
+    outlined.is_positive().then_some(outlined)
+}
+
+fn selected_widget_spans(all_spans: &[WidgetSourceSpan], selected_ids: &[Uuid]) -> Vec<SourceSpan> {
+    selected_ids
+        .iter()
+        .flat_map(|selected| {
+            all_spans
+                .iter()
+                .filter(move |entry| entry.widget_id == *selected)
+                .map(|entry| entry.span.clone())
+        })
+        .collect()
+}
+
+fn source_spans_for_buffer(code: &str, generated: &GeneratedCodeDocument) -> Vec<WidgetSourceSpan> {
+    if code == generated.text {
+        generated.widget_spans.clone()
+    } else {
+        parser::parse_egui_output(code).widget_spans()
+    }
+}
+
+fn handler_source_span(code: &str, handler_name: &str) -> Option<SourceSpan> {
+    let needle = format!("fn {handler_name}(");
+    let start = code.find(&needle)?;
+    let line_start = code[..start].bytes().filter(|byte| *byte == b'\n').count() + 1;
+    let end = code[start..]
+        .find("\n}")
+        .map(|offset| start + offset + 2)
+        .unwrap_or(code.len());
+    let line_end = code[..end].bytes().filter(|byte| *byte == b'\n').count() + 1;
+    Some(SourceSpan::new(start..end, line_start..=line_end))
+}
+
+fn navigation_span(target: Option<Uuid>, spans: &[WidgetSourceSpan]) -> Option<SourceSpan> {
+    target.and_then(|id| {
+        spans
+            .iter()
+            .find(|entry| entry.widget_id == id)
+            .map(|entry| entry.span.clone())
+    })
+}
+
+fn first_selected_line(spans: &[SourceSpan]) -> Option<usize> {
+    spans.iter().map(|span| *span.lines.start()).min()
 }
 
 fn code_rows_for_height(height: f32, font_size: f32) -> usize {
     ((height / (font_size * 1.35)).floor() as usize).max(4)
 }
 
+fn canonical_widget_free_code(tree: &UiTree) -> String {
+    let mut widget_free = tree.clone();
+    widget_free.clear_widgets();
+    egui_emitter::emit_document(&widget_free).text
+}
+
+fn is_canonical_widget_free_edit(code: &str, tree: &UiTree, report: &parser::ParseReport) -> bool {
+    !report.has_errors()
+        && report.widgets.is_empty()
+        && code.trim() == canonical_widget_free_code(tree).trim()
+}
+
 pub fn show(ctx: &egui::Context, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
     let CodePreviewArgs {
-        highlighted_ids,
-        scroll_to,
+        selected_ids,
+        navigation_target,
         scroll_to_handler,
         code_buffer,
         code_status,
         last_generated,
         split_ratio,
+        wrap_code,
+        editor_has_focus,
         code_font_size,
     } = args;
 
-    // Tracé — insert handler stub if absent, then consume the signal
-    // Current canonical generated code
-    let generated: String = egui_emitter::emit_indexed(tree)
-        .iter()
-        .map(|(_, l)| l.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
+    let generated = egui_emitter::emit_document(tree);
 
-    // Canvas-change detection: tree changed externally → sync buffer, reset to Live
-    if generated != *last_generated {
-        *last_generated = generated.clone();
-        *code_buffer = generated.clone();
-        *code_status = CodeStatus::Live;
+    // External tree changes resync the editor only when the user is not
+    // actively typing. This preserves cursor/clipboard edits while keeping
+    // UiTree authoritative once focus leaves the editor.
+    if generated.text != *last_generated
+        && !*editor_has_focus
+        && !matches!(code_status, CodeStatus::InvalidEdit(_))
+    {
+        *last_generated = generated.text.clone();
+        *code_buffer = generated.text.clone();
+        *code_status = CodeStatus::Generated;
     }
+    let tree_changed_while_invalid =
+        generated.text != *last_generated && matches!(code_status, CodeStatus::InvalidEdit(_));
 
-    // Tracé: sync generated code first, then append the handler stub so the
-    // canvas-change reset above cannot erase it on the same frame.
+    let mut handler_navigation = None;
     if let Some(handler_name) = scroll_to_handler.take() {
         let needle = format!("fn {handler_name}(");
         if !code_buffer.contains(&needle) {
             let stub = format!("\nfn {handler_name}(&mut self) {{\n    // TODO: implement\n}}\n");
             code_buffer.push_str(&stub);
-            *code_status = CodeStatus::Live;
+            *code_status = CodeStatus::ValidEdit;
         }
-        *scroll_to = true;
+        handler_navigation = handler_source_span(code_buffer, &handler_name);
     }
+    let requested_navigation = navigation_target.take();
 
     egui::SidePanel::right("code_output")
         .min_width(220.0)
@@ -259,50 +331,64 @@ pub fn show(ctx: &egui::Context, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
                 ui.label(egui::RichText::new("egui output").strong());
 
                 let (dot_color, status_text) = match code_status {
-                    CodeStatus::Live => (egui::Color32::from_rgb(52, 211, 153), "live"),
-                    CodeStatus::Pending => (egui::Color32::from_rgb(234, 179, 8), "pending"),
-                    CodeStatus::Error(_) => (egui::Color32::RED, "error"),
+                    CodeStatus::Generated => (egui::Color32::from_rgb(52, 211, 153), "generated"),
+                    CodeStatus::ValidEdit => (egui::Color32::from_rgb(96, 165, 250), "valid edit"),
+                    CodeStatus::InvalidEdit(_) => (egui::Color32::RED, "invalid edit"),
                 };
                 ui.label(egui::RichText::new("●").color(dot_color).small());
                 ui.label(egui::RichText::new(status_text).small().color(dot_color));
+
+                ui.toggle_value(wrap_code, "Wrap")
+                    .on_hover_text("Wrap long code lines instead of horizontal scrolling");
 
                 if ui
                     .small_button("↺")
                     .on_hover_text("Reset to generated code")
                     .clicked()
                 {
-                    *code_buffer = generated.clone();
-                    *code_status = CodeStatus::Live;
+                    *code_buffer = generated.text.clone();
+                    *last_generated = generated.text.clone();
+                    *code_status = CodeStatus::Generated;
                 }
             });
 
-            if let CodeStatus::Error(msg) = code_status {
+            if let CodeStatus::InvalidEdit(msg) = code_status {
                 ui.label(
                     egui::RichText::new(msg.as_str())
                         .small()
                         .color(egui::Color32::RED),
                 );
+                if tree_changed_while_invalid {
+                    ui.label(
+                        egui::RichText::new(
+                            "Canvas changed while this edit is invalid; reset to generated code to resync",
+                        )
+                        .small()
+                        .color(egui::Color32::from_rgb(251, 191, 36)),
+                    );
+                }
             }
 
-            let inline_highlights = highlighted_ranges(code_buffer, highlighted_ids);
-            match inline_highlights.as_slice() {
-                [range] => {
+            let source_spans = source_spans_for_buffer(code_buffer, &generated);
+            let selected_spans = selected_widget_spans(&source_spans, selected_ids);
+            match selected_spans.as_slice() {
+                [span] => {
                     ui.label(
                         egui::RichText::new(format!(
                             "Selected widget block near line {}",
-                            range.line
+                            span.lines.start()
                         ))
                         .small()
                         .color(egui::Color32::from_rgb(52, 211, 153)),
                     );
                 }
                 [] => {}
-                ranges => {
-                    let first_line = ranges.first().map(|range| range.line).unwrap_or_default();
+                spans => {
+                    let first_line = first_selected_line(spans).unwrap_or_default();
                     ui.label(
                         egui::RichText::new(format!(
                             "{} selected widget blocks highlighted from line {}",
-                            ranges.len(),
+                            spans.len(),
                             first_line
                         ))
                         .small()
@@ -311,12 +397,7 @@ pub fn show(ctx: &egui::Context, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
                 }
             }
 
-            let mut layouter = |ui: &egui::Ui, text: &str, wrap_width: f32| {
-                let job = code_layout_job(ui, text, code_font_size, &inline_highlights, wrap_width);
-                ui.fonts(|fonts| fonts.layout_job(job))
-            };
-
-            if inline_highlights.is_empty() && !highlighted_ids.is_empty() {
+            if selected_spans.is_empty() && !selected_ids.is_empty() {
                 ui.label(
                     egui::RichText::new("Selected widgets are not present in editable code")
                         .small()
@@ -331,78 +412,60 @@ pub fn show(ctx: &egui::Context, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
             let code_h = (total_h * *split_ratio).max(80.0);
             let state_h = (total_h - code_h - divider_h).max(60.0);
 
-            let te_output = egui::Frame::none()
-                .inner_margin(egui::Margin::symmetric(
-                    CODE_EDITOR_PAD_X,
-                    CODE_EDITOR_PAD_Y,
-                ))
-                .show(ui, |ui| {
-                    let inner_width = ui.available_width();
-                    let inner_height = (code_h - CODE_EDITOR_PAD_Y * 2.0).max(60.0);
-                    egui::TextEdit::multiline(code_buffer)
-                        .font(egui::FontId::monospace(code_font_size))
-                        .desired_width(inner_width)
-                        .desired_rows(code_rows_for_height(inner_height, code_font_size))
-                        .min_size(egui::vec2(inner_width, inner_height))
-                        .code_editor()
-                        .layouter(&mut layouter)
-                        .frame(false)
-                        .show(ui)
-                })
-                .inner;
-            paint_highlight_outlines(ui, &te_output, code_buffer, &inline_highlights);
-            let te_resp = te_output.response;
+            let widget_navigation = navigation_span(requested_navigation, &source_spans);
+            let navigation = handler_navigation.as_ref().or(widget_navigation.as_ref());
+            let editor_output = CodeEditorSurface {
+                text: code_buffer,
+                font_size: code_font_size,
+                height: code_h,
+                wrap: *wrap_code,
+                highlights: &selected_spans,
+                navigation,
+            }
+            .show(ui);
+            let _outline_count = editor_output.outline_rects.len();
+            let te_resp = editor_output.response;
+            *editor_has_focus = te_resp.has_focus();
 
             if te_resp.changed() {
                 if code_buffer.trim().is_empty() {
                     tree.clear_widgets();
-                    *last_generated = egui_emitter::emit_indexed(tree)
-                        .iter()
-                        .map(|(_, l)| l.as_str())
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    *code_buffer = last_generated.clone();
-                    *code_status = CodeStatus::Live;
+                    selected_ids.clear();
+                    let canonical = egui_emitter::emit_document(tree);
+                    *last_generated = canonical.text.clone();
+                    *code_buffer = canonical.text;
+                    *code_status = CodeStatus::Generated;
                 } else {
                     let report = parser::parse_egui_output(code_buffer);
                     if report.has_errors() {
-                        *code_status = CodeStatus::Error(report.summary());
+                        *code_status = CodeStatus::InvalidEdit(report.summary());
+                    } else if is_canonical_widget_free_edit(code_buffer, tree, &report) {
+                        tree.clear_widgets();
+                        selected_ids.clear();
+                        let canonical = egui_emitter::emit_document(tree);
+                        *last_generated = canonical.text.clone();
+                        *code_buffer = canonical.text;
+                        *code_status = CodeStatus::Generated;
                     } else if !report.widgets.is_empty() {
                         let outcome = parser::apply_parsed(tree, &report.widgets);
-                        // Update last_generated so canvas-change detection
-                        // doesn't clobber the buffer next frame.
-                        *last_generated = egui_emitter::emit_indexed(tree)
-                            .iter()
-                            .map(|(_, l)| l.as_str())
-                            .collect::<Vec<_>>()
-                            .join("\n");
+                        let canonical = egui_emitter::emit_document(tree);
+                        *last_generated = canonical.text.clone();
                         if outcome.created_widgets > 0 {
-                            *code_buffer = last_generated.clone();
-                        }
-                        if !matches!(code_status, CodeStatus::Pending) {
-                            *code_status = CodeStatus::Pending;
+                            selected_ids.clear();
+                            selected_ids.extend(outcome.created_widget_ids);
+                            *code_buffer = canonical.text;
+                            *code_status = CodeStatus::Generated;
+                        } else {
+                            *code_status = CodeStatus::ValidEdit;
                         }
                     } else if code_buffer.contains("widget_") || code_buffer.contains("egui::") {
-                        *code_status =
-                            CodeStatus::Error("no supported RohKai widget edits found".to_owned());
+                        *code_status = CodeStatus::InvalidEdit(
+                            "no supported RohKai widget edits found".to_owned(),
+                        );
+                    } else {
+                        *code_status = CodeStatus::ValidEdit;
                     }
                 }
-            }
-
-            // Status tracks TextEdit focus.
-            if te_resp.has_focus() {
-                if !matches!(code_status, CodeStatus::Error(_)) {
-                    *code_status = CodeStatus::Pending;
-                }
-            } else if !matches!(code_status, CodeStatus::Error(_)) {
-                *code_status = CodeStatus::Live;
-            }
-
-            // Lazare scroll: consume signal. Exact TextEdit cursor control is
-            // brittle across egui versions, so the visible block above is the
-            // stable navigation fallback.
-            if *scroll_to {
-                *scroll_to = false;
             }
 
             let (divider_rect, divider_resp) = ui.allocate_exact_size(
@@ -441,67 +504,126 @@ pub fn show(ctx: &egui::Context, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::project::schema::{Rect, WidgetInstance, WidgetKind, WidgetProps};
 
-    #[test]
-    fn highlighted_range_finds_widget_block_without_copying_text() {
-        let id = Uuid::from_u128(0xAB);
-        let code = format!(
-            "egui::CentralPanel::default().show(ctx, |_ui| {{}});\n\
-             egui::Area::new(egui::Id::new(\"widget_{id}\"))\n\
-             \x20   .fixed_pos(egui::pos2(10.0, 20.0))\n\
-             \x20   .show(ctx, |ui| {{\n\
-             \x20       ui.set_min_size(egui::vec2(100.0, 30.0));\n\
-             \x20       ui.button(\"Button\");\n\
-             \x20   }});\n\
-             trailing\n"
-        );
-
-        let range = highlighted_range(&code, id).expect("range");
-        assert_eq!(range.line, 2);
-        let highlighted = &code[range.start..range.end];
-        assert!(highlighted.contains("widget_"));
-        assert!(highlighted.contains("ui.button"));
-        assert!(!highlighted.contains("CentralPanel"));
-        assert!(!highlighted.contains("trailing"));
+    fn button(id: Uuid, label: &str, x: f32) -> WidgetInstance {
+        WidgetInstance {
+            id,
+            kind: WidgetKind::Button,
+            rect: Rect {
+                x,
+                y: 20.0,
+                w: 100.0,
+                h: 30.0,
+            },
+            props: WidgetProps {
+                label: label.to_owned(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
     }
 
     #[test]
-    fn highlighted_range_is_none_for_missing_widget() {
-        assert_eq!(highlighted_range("ui.label(\"none\");", Uuid::nil()), None);
-    }
-
-    #[test]
-    fn highlighted_ranges_finds_multiple_widget_blocks() {
+    fn generated_source_span_excludes_preamble_and_neighbors() {
         let first = Uuid::from_u128(0xA1);
         let second = Uuid::from_u128(0xB2);
-        let code = format!(
-            "egui::CentralPanel::default().show(ctx, |_ui| {{}});\n\
-             egui::Area::new(egui::Id::new(\"widget_{first}\"))\n\
-             \x20   .show(ctx, |ui| {{\n\
-             \x20       ui.button(\"One\");\n\
-             \x20   }});\n\
-             egui::Area::new(egui::Id::new(\"widget_{second}\"))\n\
-             \x20   .show(ctx, |ui| {{\n\
-             \x20       ui.button(\"Two\");\n\
-             \x20   }});\n"
-        );
+        let mut tree = UiTree::default();
+        tree.add(button(first, "One", 10.0));
+        tree.add(button(second, "Two", 140.0));
 
-        let ranges = highlighted_ranges(&code, &[first, second]);
-        assert_eq!(ranges.len(), 2);
-        assert!(code[ranges[0].start..ranges[0].end].contains("One"));
-        assert!(code[ranges[1].start..ranges[1].end].contains("Two"));
+        let document = egui_emitter::emit_document(&tree);
+        let first_span = document
+            .widget_spans
+            .iter()
+            .find(|entry| entry.widget_id == first)
+            .expect("first span");
+        let selected = &document.text[first_span.span.bytes.clone()];
+
+        assert!(selected.starts_with("egui::Area::new"));
+        assert!(selected.contains("One"));
+        assert!(!selected.contains("CentralPanel"));
+        assert!(!selected.contains("Two"));
+        assert_eq!(*first_span.span.lines.start(), 3);
     }
 
     #[test]
-    fn clipped_outline_rect_stays_inside_visible_text_clip() {
-        let clip = egui::Rect::from_min_max(egui::pos2(10.0, 20.0), egui::pos2(110.0, 120.0));
-        let raw = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(150.0, 200.0));
+    fn selected_widget_spans_preserve_multi_selection() {
+        let first = Uuid::from_u128(0xA1);
+        let second = Uuid::from_u128(0xB2);
+        let mut tree = UiTree::default();
+        tree.add(button(first, "One", 10.0));
+        tree.add(button(second, "Two", 140.0));
+        let document = egui_emitter::emit_document(&tree);
 
-        let clipped = clipped_outline_rect(raw, clip).expect("visible outline");
-        let expected = outline_clip_rect(clip);
+        let spans = selected_widget_spans(&document.widget_spans, &[first, second]);
+        assert_eq!(spans.len(), 2);
+        assert!(document.text[spans[0].bytes.clone()].contains("One"));
+        assert!(document.text[spans[1].bytes.clone()].contains("Two"));
+    }
 
-        assert!(clip.contains(clipped.min));
-        assert!(clip.contains(clipped.max));
-        assert_eq!(clipped, expected);
+    #[test]
+    fn edited_code_uses_parser_source_spans() {
+        let id = Uuid::from_u128(0xAB);
+        let mut tree = UiTree::default();
+        tree.add(button(id, "Before", 10.0));
+        let generated = egui_emitter::emit_document(&tree);
+        let edited = generated.text.replace("\"Before\"", "\"After\"");
+
+        let spans = source_spans_for_buffer(&edited, &generated);
+        let span = spans
+            .iter()
+            .find(|entry| entry.widget_id == id)
+            .expect("edited span");
+        assert!(edited[span.span.bytes.clone()].contains("After"));
+        assert!(!edited[span.span.bytes.clone()].contains("CentralPanel"));
+    }
+
+    #[test]
+    fn canonical_preamble_only_code_represents_an_empty_canvas() {
+        let id = Uuid::from_u128(0xC3);
+        let mut tree = UiTree::default();
+        tree.app_props.title = "Preserved".to_owned();
+        tree.add(button(id, "Delete Me", 10.0));
+
+        let widget_free = canonical_widget_free_code(&tree);
+        let report = parser::parse_egui_output(&widget_free);
+
+        assert!(is_canonical_widget_free_edit(&widget_free, &tree, &report));
+        tree.clear_widgets();
+        assert!(tree.widgets.is_empty());
+        assert_eq!(tree.app_props.title, "Preserved");
+    }
+
+    #[test]
+    fn outline_uses_gutter_without_touching_visible_text() {
+        let decoration = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(120.0, 100.0));
+        let text_viewport =
+            egui::Rect::from_min_max(egui::pos2(10.0, 8.0), egui::pos2(110.0, 92.0));
+        let visible_text = egui::Rect::from_min_max(egui::pos2(20.0, 20.0), egui::pos2(90.0, 70.0));
+
+        let outline =
+            highlight_outline_rect(visible_text, text_viewport, decoration).expect("outline");
+        assert!(decoration.contains(outline.min));
+        assert!(decoration.contains(outline.max));
+        assert!(visible_text.left() - outline.left() >= CODE_HIGHLIGHT_PADDING);
+        assert!(outline.right() - visible_text.right() >= CODE_HIGHLIGHT_PADDING);
+        assert!(visible_text.top() - outline.top() >= CODE_HIGHLIGHT_PADDING);
+        assert!(outline.bottom() - visible_text.bottom() >= CODE_HIGHLIGHT_PADDING);
+    }
+
+    #[test]
+    fn clipped_wide_block_keeps_complete_perimeter_inside_editor() {
+        let decoration = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(100.0, 80.0));
+        let text_viewport = egui::Rect::from_min_max(egui::pos2(10.0, 8.0), egui::pos2(90.0, 72.0));
+        let wide_block = egui::Rect::from_min_max(egui::pos2(-80.0, 20.0), egui::pos2(240.0, 60.0));
+
+        let outline =
+            highlight_outline_rect(wide_block, text_viewport, decoration).expect("outline");
+        let safe = decoration.shrink(CODE_HIGHLIGHT_STROKE_WIDTH + 1.0);
+        assert!(safe.contains(outline.min));
+        assert!(safe.contains(outline.max));
+        assert!(outline.left() < text_viewport.left());
+        assert!(outline.right() > text_viewport.right());
     }
 }

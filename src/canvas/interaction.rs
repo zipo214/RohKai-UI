@@ -43,8 +43,8 @@ pub struct CanvasSettings {
     /// Set each frame by the caller when a ruler guide is being dragged;
     /// suppresses rubber-band and widget drag so they don't co-fire.
     pub guide_drag_active: bool,
-    /// Set each frame by the caller while a floating window/modal owns pointer
-    /// input; suppresses canvas zoom, rubber-band, drag, and key nudges.
+    /// Set each frame only while a true modal workflow blocks the entire canvas.
+    /// Floating windows are isolated through response/layer ownership instead.
     pub input_blocked: bool,
 }
 
@@ -229,6 +229,9 @@ pub struct InteractionState {
     /// Inline label editing: (widget_id, current text buffer).
     /// Double-clicking a label-bearing widget on canvas starts this.
     pub inline_edit: Option<(Uuid, String)>,
+    /// Keyboard shortcuts target the canvas only after the user interacts with
+    /// the visible canvas surface. Clicking another panel/window clears this.
+    pub canvas_focused: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -1603,6 +1606,18 @@ fn draw_svg_placeholder(
 // Main handler
 // ---------------------------------------------------------------------------
 
+fn canvas_owns_pointer(modal_blocked: bool, contains_pointer: bool, top_layer: bool) -> bool {
+    !modal_blocked && contains_pointer && top_layer
+}
+
+fn canvas_owns_keyboard(
+    modal_blocked: bool,
+    canvas_focused: bool,
+    wants_keyboard_input: bool,
+) -> bool {
+    !modal_blocked && canvas_focused && !wants_keyboard_input
+}
+
 pub fn handle(
     ui: &mut egui::Ui,
     tree: &mut UiTree,
@@ -1615,39 +1630,52 @@ pub fn handle(
     // Clear per-frame signals
     state.double_clicked_widget = None;
     settings.snap_step = settings.snap_step.max(MIN_SNAP_STEP);
-    let input_blocked = settings.input_blocked;
+    let modal_blocked = settings.input_blocked;
 
     let (resp, painter) = ui.allocate_painter(ui.available_size(), egui::Sense::click_and_drag());
 
     // -------------------------------------------------------------------
     // Input collection
     // -------------------------------------------------------------------
-    let pointer = if input_blocked {
-        None
-    } else {
-        ui.input(|i| i.pointer.interact_pos())
-    };
-    let just_pressed = !input_blocked && ui.input(|i| i.pointer.primary_pressed());
-    let primary_released = !input_blocked && ui.input(|i| i.pointer.primary_released());
-    let is_down = !input_blocked && ui.input(|i| i.pointer.primary_down());
-    let shift_held = !input_blocked && ui.input(|i| i.modifiers.shift);
-    let ctrl_held = !input_blocked && ui.input(|i| i.modifiers.ctrl);
-    let right_clicked = !input_blocked && ui.input(|i| i.pointer.secondary_clicked());
+    let raw_pointer = ui.input(|i| i.pointer.interact_pos());
+    let pointer_owned = raw_pointer.is_some_and(|pos| {
+        canvas_owns_pointer(
+            modal_blocked,
+            resp.contains_pointer(),
+            ui.ctx().layer_id_at(pos) == Some(resp.layer_id),
+        )
+    });
+    let any_pointer_pressed = ui.input(|i| i.pointer.any_pressed());
+    if any_pointer_pressed {
+        state.canvas_focused = pointer_owned;
+    }
+    let keyboard_owned = canvas_owns_keyboard(
+        modal_blocked,
+        state.canvas_focused,
+        ui.ctx().wants_keyboard_input(),
+    );
+    let pointer = pointer_owned.then_some(raw_pointer).flatten();
+    let just_pressed = pointer_owned && ui.input(|i| i.pointer.primary_pressed());
+    let primary_released = pointer_owned && ui.input(|i| i.pointer.primary_released());
+    let is_down = pointer_owned && ui.input(|i| i.pointer.primary_down());
+    let shift_held = ui.input(|i| i.modifiers.shift);
+    let ctrl_held = ui.input(|i| i.modifiers.ctrl);
+    let right_clicked = pointer_owned && ui.input(|i| i.pointer.secondary_clicked());
     let middle_down =
-        !input_blocked && ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
-    let mouse_delta = if input_blocked {
-        egui::Vec2::ZERO
-    } else {
+        pointer_owned && ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
+    let mouse_delta = if pointer_owned {
         ui.input(|i| i.pointer.delta())
-    };
-    let scroll_y = if input_blocked {
-        0.0
     } else {
-        ui.input(|i| i.raw_scroll_delta.y)
+        egui::Vec2::ZERO
     };
-    let key_g = !input_blocked && ui.input(|i| i.key_pressed(egui::Key::G));
-    let key_0 = !input_blocked && ui.input(|i| ctrl_held && i.key_pressed(egui::Key::Num0));
-    let double_clicked = !input_blocked && resp.double_clicked();
+    let scroll_y = if pointer_owned {
+        ui.input(|i| i.raw_scroll_delta.y)
+    } else {
+        0.0
+    };
+    let key_g = keyboard_owned && ui.input(|i| i.key_pressed(egui::Key::G));
+    let key_0 = keyboard_owned && ui.input(|i| ctrl_held && i.key_pressed(egui::Key::Num0));
+    let double_clicked = pointer_owned && resp.double_clicked();
 
     // -------------------------------------------------------------------
     // Shortcuts
@@ -1823,7 +1851,7 @@ pub fn handle(
     // -------------------------------------------------------------------
     // Inline label edit overlay
     // -------------------------------------------------------------------
-    if !input_blocked {
+    if pointer_owned {
         if let Some((edit_id, ref mut edit_buf)) = state.inline_edit {
             if let Some(widget) = tree.widgets.iter().find(|w| w.id == edit_id) {
                 let rect = crect(widget, origin, zoom);
@@ -2605,7 +2633,7 @@ pub fn handle(
     // -------------------------------------------------------------------
     // Keyboard nudge
     // -------------------------------------------------------------------
-    if !input_blocked && !selected.is_empty() {
+    if keyboard_owned && !selected.is_empty() {
         let nudge = if settings.snap_enabled {
             settings.snap_step.max(MIN_SNAP_STEP)
         } else {
@@ -2634,5 +2662,26 @@ pub fn handle(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod input_ownership_tests {
+    use super::{canvas_owns_keyboard, canvas_owns_pointer};
+
+    #[test]
+    fn floating_window_layer_blocks_canvas_pointer() {
+        assert!(canvas_owns_pointer(false, true, true));
+        assert!(!canvas_owns_pointer(false, true, false));
+        assert!(!canvas_owns_pointer(false, false, true));
+        assert!(!canvas_owns_pointer(true, true, true));
+    }
+
+    #[test]
+    fn text_focus_and_modals_block_canvas_keyboard() {
+        assert!(canvas_owns_keyboard(false, true, false));
+        assert!(!canvas_owns_keyboard(false, true, true));
+        assert!(!canvas_owns_keyboard(false, false, false));
+        assert!(!canvas_owns_keyboard(true, true, false));
     }
 }
