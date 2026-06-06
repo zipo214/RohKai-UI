@@ -56,6 +56,108 @@ pub fn parse_numbers(value: &str) -> Vec<f64> {
         .collect()
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SvgLengthUnit {
+    Number,
+    Px,
+    Percent,
+    In,
+    Cm,
+    Mm,
+    Q,
+    Pt,
+    Pc,
+    Em,
+    Ex,
+    Rem,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SvgLength {
+    pub value: f64,
+    pub unit: SvgLengthUnit,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SvgLengthContext {
+    pub percent_base: f64,
+    pub font_size: f64,
+    pub x_height: f64,
+    pub root_font_size: f64,
+    pub dpi: f64,
+}
+
+impl SvgLengthContext {
+    pub fn user_units(percent_base: f64) -> Self {
+        Self {
+            percent_base,
+            font_size: 16.0,
+            x_height: 8.0,
+            root_font_size: 16.0,
+            dpi: 96.0,
+        }
+    }
+}
+
+impl SvgLength {
+    pub fn resolve(self, context: SvgLengthContext) -> Option<f64> {
+        let value = match self.unit {
+            SvgLengthUnit::Number | SvgLengthUnit::Px => self.value,
+            SvgLengthUnit::Percent => self.value * context.percent_base / 100.0,
+            SvgLengthUnit::In => self.value * context.dpi,
+            SvgLengthUnit::Cm => self.value * context.dpi / 2.54,
+            SvgLengthUnit::Mm => self.value * context.dpi / 25.4,
+            SvgLengthUnit::Q => self.value * context.dpi / 101.6,
+            SvgLengthUnit::Pt => self.value * context.dpi / 72.0,
+            SvgLengthUnit::Pc => self.value * context.dpi / 6.0,
+            SvgLengthUnit::Em => self.value * context.font_size,
+            SvgLengthUnit::Ex => self.value * context.x_height,
+            SvgLengthUnit::Rem => self.value * context.root_font_size,
+        };
+        value.is_finite().then_some(value)
+    }
+}
+
+pub fn parse_length(value: &str) -> Option<SvgLength> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let number_end = scan_number_end(trimmed, 0);
+    if number_end == 0 {
+        return None;
+    }
+    let number = trimmed[..number_end].parse::<f64>().ok()?;
+    if !number.is_finite() {
+        return None;
+    }
+
+    let unit = match trimmed[number_end..].trim().to_ascii_lowercase().as_str() {
+        "" => SvgLengthUnit::Number,
+        "px" => SvgLengthUnit::Px,
+        "%" => SvgLengthUnit::Percent,
+        "in" => SvgLengthUnit::In,
+        "cm" => SvgLengthUnit::Cm,
+        "mm" => SvgLengthUnit::Mm,
+        "q" => SvgLengthUnit::Q,
+        "pt" => SvgLengthUnit::Pt,
+        "pc" => SvgLengthUnit::Pc,
+        "em" => SvgLengthUnit::Em,
+        "ex" => SvgLengthUnit::Ex,
+        "rem" => SvgLengthUnit::Rem,
+        _ => return None,
+    };
+    Some(SvgLength {
+        value: number,
+        unit,
+    })
+}
+
+pub fn resolve_length(value: &str, context: SvgLengthContext) -> Option<f64> {
+    parse_length(value)?.resolve(context)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SvgPathToken {
     Command(char),
@@ -450,6 +552,27 @@ mod tests {
     #[test]
     fn parses_compact_svg_number_lists() {
         assert_eq!(parse_numbers("M10-20L.5.6e2"), vec![10.0, -20.0, 0.5, 60.0]);
+    }
+
+    #[test]
+    fn parses_and_resolves_svg_lengths() {
+        let context = SvgLengthContext::user_units(200.0);
+        assert_eq!(resolve_length("25%", context), Some(50.0));
+        assert_eq!(resolve_length("2.54cm", context), Some(96.0));
+        assert_eq!(resolve_length("1Q", context), Some(96.0 / 101.6));
+        assert_eq!(resolve_length("2em", context), Some(32.0));
+        assert_eq!(resolve_length("2ex", context), Some(16.0));
+        assert_eq!(resolve_length("2rem", context), Some(32.0));
+    }
+
+    #[test]
+    fn rejects_unknown_or_malformed_svg_lengths() {
+        let context = SvgLengthContext::user_units(100.0);
+        assert_eq!(resolve_length("", context), None);
+        assert_eq!(resolve_length("12frobs", context), None);
+        assert_eq!(resolve_length("e3px", context), None);
+        assert_eq!(resolve_length("NaN", context), None);
+        assert_eq!(resolve_length("1e309px", context), None);
     }
 
     #[test]

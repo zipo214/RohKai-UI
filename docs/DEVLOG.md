@@ -2,6 +2,60 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-06 — SVG R0 Metadata, Lengths, And Owned Display List
+
+### Context Reviewed Before Editing
+- `AGENTS.md` and preflight context with devlog
+- `.agents/skills/svg-zero-dep/SKILL.md`
+- `.agents/skills/project-model/SKILL.md`
+- `.agents/skills/task-decomposition/SKILL.md`
+- `docs/SVG_RENDERER_ROADMAP.md`, `docs/SVG_IMPORT.md`,
+  `docs/CODE_COOP.md`, and current git status
+- `src/svg_core.rs`, `src/svg_import.rs`, and
+  `src/canvas/svg_rasterizer.rs`
+
+### Changes
+- Added shared strict SVG length parsing/resolution for unitless/px,
+  percentages, `in`, `cm`, `mm`, `Q`, `pt`, `pc`, `em`, `ex`, and `rem`.
+  Importer dimensions/geometry and rasterizer dimensions/geometry now use the
+  same `svg_core` implementation.
+- Added stable preorder `SvgNodeId` values and exact source byte spans to
+  represented rasterizer nodes.
+- Added independently bounded local-ID and reference-use tables with
+  deterministic first-ID-wins duplicate behavior, resolved/unresolved fragment
+  metadata, limit warnings, and structured rejection of non-local references.
+- Added node ID/source-span provenance to renderer warnings and unsupported
+  feature diagnostics.
+- Replaced borrowed XML-node display commands with an owned render-ready IR.
+  Display-list construction now lowers shape lengths, point/path geometry,
+  inherited style, transforms, diagnostics, and provenance; raster execution
+  does not inspect XML nodes or raw shape attributes.
+- Updated SVG roadmap, current-behavior docs, architecture, code index, and
+  agent handoff notes. R0 is complete; R1 geometry quality is next.
+
+### Verification
+- Focused shared-core tests: 9 passed.
+- Focused SVG importer tests: 17 passed.
+- Focused SVG rasterizer tests: 20 passed.
+- Full suite: 204 passed, 2 ignored.
+- `cargo fmt --check`: clean.
+- `cargo check`: clean.
+- `cargo clippy -- -D warnings`: clean.
+- `scripts/check-text-encoding.ps1`: clean.
+- `scripts/check-dependency-policy.ps1`: clean.
+- `scripts/validate-svg-import.ps1`: clean, including golden and source
+  preservation fixtures.
+- Launch smoke: debug RohKai process stayed alive for 5 seconds.
+
+### Risks / Follow-ups
+- The reference table is metadata and diagnostics infrastructure. Actual
+  raster `<use>`/`symbol` expansion, cycle handling during expansion, and paint
+  server resolution remain R2 work.
+- Font-relative units currently use the explicit default length context
+  (`16px` em/rem and `8px` ex) until R6 supplies real font metrics.
+- R1 should now improve fill rules, stroke geometry, curve tolerances, and
+  anti-aliasing without reopening XML traversal.
+
 ## 2026-06-06 — SVG Roadmap Authority Consolidation
 
 ### Docs Reviewed Before Editing

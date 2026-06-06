@@ -10,10 +10,13 @@
 
 use crate::svg_core::{self, Rgba};
 use egui::ColorImage;
+use std::collections::HashMap;
 
 const MAX_SVG_BYTES: usize = 5_000_000;
 const MAX_TAGS: usize = 10_000;
 const MAX_PATH_TOKENS: usize = 20_000;
+const MAX_LOCAL_IDS: usize = 4_096;
+const MAX_LOCAL_REFERENCE_USES: usize = 8_192;
 /// Maximum flattened points in a single sub-path.  A 20 000-cubic-command
 /// path at ~40 pts/command would otherwise allocate ~800 k (f32,f32) pairs.
 const MAX_FLAT_PTS: usize = 50_000;
@@ -68,12 +71,21 @@ pub enum SvgRenderFidelity {
 pub struct SvgRenderWarning {
     pub code: String,
     pub message: String,
+    pub source: Option<SvgRenderSource>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SvgRenderUnsupportedFeature {
     pub feature: String,
     pub message: String,
+    pub source: Option<SvgRenderSource>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SvgRenderSource {
+    pub node_id: u32,
+    pub byte_start: usize,
+    pub byte_end: usize,
 }
 
 impl SvgRenderReport {
@@ -99,16 +111,32 @@ impl SvgRenderReport {
     }
 
     fn warning(&mut self, code: impl Into<String>, message: impl Into<String>) {
+        self.warning_at(code, message, None);
+    }
+
+    fn warning_at(
+        &mut self,
+        code: impl Into<String>,
+        message: impl Into<String>,
+        source: Option<SvgRenderSource>,
+    ) {
         self.warnings.push(SvgRenderWarning {
             code: code.into(),
             message: message.into(),
+            source,
         });
     }
 
-    fn unsupported(&mut self, feature: impl Into<String>, message: impl Into<String>) {
+    fn unsupported_at(
+        &mut self,
+        feature: impl Into<String>,
+        message: impl Into<String>,
+        source: Option<SvgRenderSource>,
+    ) {
         self.unsupported_features.push(SvgRenderUnsupportedFeature {
             feature: feature.into(),
             message: message.into(),
+            source,
         });
     }
 
@@ -170,6 +198,10 @@ pub fn rasterize_with_report(
     }
 
     let scene = SvgScene::parse(svg_text).ok_or(SvgRasterError::ParseFailed)?;
+    if scene.references.external_reference_count > 0 {
+        return Err(SvgRasterError::ForbiddenContent);
+    }
+    scene.references.report_into(&mut report);
 
     let vb_xform = viewbox_to_pixel_transform(&scene, w, h);
     // Scene graph → display list IR (build phase: classify + resolve transforms),
@@ -247,45 +279,67 @@ fn svg_text_allowed(svg_text: &str) -> bool {
     true
 }
 
-fn diagnose_unsupported_attrs(attrs: &[(String, String)], report: &mut SvgRenderReport) {
+#[derive(Clone)]
+struct PendingDiagnostic {
+    feature: &'static str,
+    message: &'static str,
+}
+
+fn unsupported_attr_diagnostics(attrs: &[(String, String)]) -> Vec<PendingDiagnostic> {
+    let mut diagnostics = Vec::new();
     for (key, value) in attrs {
-        match key.as_str() {
-            "clip-path" => report.unsupported(
-                "clip-path attribute",
-                "clip-path attributes are diagnosed but not applied yet",
-            ),
-            "mask" => report.unsupported(
-                "mask attribute",
-                "mask attributes are diagnosed but not applied yet",
-            ),
-            "filter" => report.unsupported(
-                "filter attribute",
-                "filter attributes are diagnosed but not applied yet",
-            ),
-            "stroke-dasharray" => report.unsupported(
-                "stroke dasharray",
-                "stroke dash arrays are not rasterized yet",
-            ),
-            "stroke-linecap" => report.unsupported(
-                "stroke linecap",
-                "stroke line caps use the current simple stroke fallback",
-            ),
-            "stroke-linejoin" => report.unsupported(
-                "stroke linejoin",
-                "stroke line joins use the current simple stroke fallback",
-            ),
-            "fill-rule" => report.unsupported(
-                "fill-rule",
-                "fill-rule is diagnosed; current path fill uses even-odd behavior",
-            ),
-            _ => {}
+        let diagnostic = match key.as_str() {
+            "clip-path" => Some(PendingDiagnostic {
+                feature: "clip-path attribute",
+                message: "clip-path attributes are diagnosed but not applied yet",
+            }),
+            "mask" => Some(PendingDiagnostic {
+                feature: "mask attribute",
+                message: "mask attributes are diagnosed but not applied yet",
+            }),
+            "filter" => Some(PendingDiagnostic {
+                feature: "filter attribute",
+                message: "filter attributes are diagnosed but not applied yet",
+            }),
+            "stroke-dasharray" => Some(PendingDiagnostic {
+                feature: "stroke dasharray",
+                message: "stroke dash arrays are not rasterized yet",
+            }),
+            "stroke-linecap" => Some(PendingDiagnostic {
+                feature: "stroke linecap",
+                message: "stroke line caps use the current simple stroke fallback",
+            }),
+            "stroke-linejoin" => Some(PendingDiagnostic {
+                feature: "stroke linejoin",
+                message: "stroke line joins use the current simple stroke fallback",
+            }),
+            "fill-rule" => Some(PendingDiagnostic {
+                feature: "fill-rule",
+                message: "fill-rule is diagnosed; current path fill uses even-odd behavior",
+            }),
+            _ => None,
+        };
+        if let Some(diagnostic) = diagnostic {
+            diagnostics.push(diagnostic);
         }
         if value.to_ascii_lowercase().contains("url(#") {
-            report.unsupported(
-                "paint server reference",
-                "paint-server references are diagnosed; gradients/patterns are not rasterized yet",
-            );
+            diagnostics.push(PendingDiagnostic {
+                feature: "paint server reference",
+                message:
+                    "paint-server references are diagnosed; gradients/patterns are not rasterized yet",
+            });
         }
+    }
+    diagnostics
+}
+
+fn emit_diagnostics(
+    diagnostics: &[PendingDiagnostic],
+    source: SvgRenderSource,
+    report: &mut SvgRenderReport,
+) {
+    for diagnostic in diagnostics {
+        report.unsupported_at(diagnostic.feature, diagnostic.message, Some(source));
     }
 }
 
@@ -476,39 +530,78 @@ type Transform = svg_core::Affine2D;
 // SVG Document model
 // ---------------------------------------------------------------------------
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct SvgNodeId(u32);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SvgSourceSpan {
+    start: usize,
+    end: usize,
+}
+
+impl SvgSourceSpan {
+    fn render_source(self, node_id: SvgNodeId) -> SvgRenderSource {
+        SvgRenderSource {
+            node_id: node_id.0,
+            byte_start: self.start,
+            byte_end: self.end,
+        }
+    }
+}
+
 #[derive(Clone)]
 enum SvgNode {
     Group {
+        id: SvgNodeId,
+        span: SvgSourceSpan,
         attrs: Vec<(String, String)>,
         children: Vec<SvgNode>,
     },
     Rect {
+        id: SvgNodeId,
+        span: SvgSourceSpan,
         attrs: Vec<(String, String)>,
     },
     Circle {
+        id: SvgNodeId,
+        span: SvgSourceSpan,
         attrs: Vec<(String, String)>,
     },
     Ellipse {
+        id: SvgNodeId,
+        span: SvgSourceSpan,
         attrs: Vec<(String, String)>,
     },
     Line {
+        id: SvgNodeId,
+        span: SvgSourceSpan,
         attrs: Vec<(String, String)>,
     },
     Polyline {
+        id: SvgNodeId,
+        span: SvgSourceSpan,
         attrs: Vec<(String, String)>,
     },
     Polygon {
+        id: SvgNodeId,
+        span: SvgSourceSpan,
         attrs: Vec<(String, String)>,
     },
     Path {
+        id: SvgNodeId,
+        span: SvgSourceSpan,
         attrs: Vec<(String, String)>,
     },
     Text {
+        id: SvgNodeId,
+        span: SvgSourceSpan,
         // Skipped in rendering; kept for parse completeness
         #[allow(dead_code)]
         attrs: Vec<(String, String)>,
     },
     Unsupported {
+        id: SvgNodeId,
+        span: SvgSourceSpan,
         tag: String,
         attrs: Vec<(String, String)>,
         children: Vec<SvgNode>,
@@ -527,6 +620,7 @@ struct SvgScene {
     width: f32,
     height: f32,
     items: Vec<SvgSceneItem>,
+    references: SvgReferenceTable,
 }
 
 struct SvgSceneItem {
@@ -536,12 +630,62 @@ struct SvgSceneItem {
     skipped_by_unsupported_ancestor: bool,
 }
 
+#[derive(Clone, Copy)]
+struct SvgLengthBases {
+    horizontal: f64,
+    vertical: f64,
+    other: f64,
+}
+
+impl SvgScene {
+    fn length_bases(&self) -> SvgLengthBases {
+        let (width, height) = match self.viewbox {
+            Some([_, _, width, height]) if width > 0.0 && height > 0.0 => {
+                (width as f64, height as f64)
+            }
+            _ => (self.width.max(0.0) as f64, self.height.max(0.0) as f64),
+        };
+        SvgLengthBases {
+            horizontal: width,
+            vertical: height,
+            other: ((width * width + height * height) / 2.0).sqrt(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SvgLocalId {
+    xml_id: String,
+    node_id: SvgNodeId,
+    span: SvgSourceSpan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SvgReferenceUse {
+    source_id: SvgNodeId,
+    source_span: SvgSourceSpan,
+    target_id: String,
+    resolved: Option<SvgNodeId>,
+}
+
+#[derive(Default)]
+struct SvgReferenceTable {
+    by_xml_id: HashMap<String, SvgNodeId>,
+    ordered_ids: Vec<SvgLocalId>,
+    uses: Vec<SvgReferenceUse>,
+    duplicate_id_count: usize,
+    dropped_id_count: usize,
+    dropped_use_count: usize,
+    external_reference_count: usize,
+}
+
 impl SvgScene {
     fn parse(svg_text: &str) -> Option<Self> {
         SvgDoc::parse(svg_text).map(Self::from_doc)
     }
 
     fn from_doc(doc: SvgDoc) -> Self {
+        let references = SvgReferenceTable::build(&doc.nodes);
         let mut items = Vec::new();
         Self::build_items(
             &doc.nodes,
@@ -555,6 +699,7 @@ impl SvgScene {
             width: doc.width,
             height: doc.height,
             items,
+            references,
         }
     }
 
@@ -614,52 +759,123 @@ impl SvgScene {
 }
 
 impl SvgNode {
+    fn id(&self) -> SvgNodeId {
+        match self {
+            SvgNode::Group { id, .. }
+            | SvgNode::Rect { id, .. }
+            | SvgNode::Circle { id, .. }
+            | SvgNode::Ellipse { id, .. }
+            | SvgNode::Line { id, .. }
+            | SvgNode::Polyline { id, .. }
+            | SvgNode::Polygon { id, .. }
+            | SvgNode::Path { id, .. }
+            | SvgNode::Text { id, .. }
+            | SvgNode::Unsupported { id, .. } => *id,
+        }
+    }
+
+    fn span(&self) -> SvgSourceSpan {
+        match self {
+            SvgNode::Group { span, .. }
+            | SvgNode::Rect { span, .. }
+            | SvgNode::Circle { span, .. }
+            | SvgNode::Ellipse { span, .. }
+            | SvgNode::Line { span, .. }
+            | SvgNode::Polyline { span, .. }
+            | SvgNode::Polygon { span, .. }
+            | SvgNode::Path { span, .. }
+            | SvgNode::Text { span, .. }
+            | SvgNode::Unsupported { span, .. } => *span,
+        }
+    }
+
+    fn source(&self) -> SvgRenderSource {
+        self.span().render_source(self.id())
+    }
+
     fn attrs(&self) -> &[(String, String)] {
         match self {
             SvgNode::Group { attrs, .. }
-            | SvgNode::Rect { attrs }
-            | SvgNode::Circle { attrs }
-            | SvgNode::Ellipse { attrs }
-            | SvgNode::Line { attrs }
-            | SvgNode::Polyline { attrs }
-            | SvgNode::Polygon { attrs }
-            | SvgNode::Path { attrs }
-            | SvgNode::Text { attrs }
+            | SvgNode::Rect { attrs, .. }
+            | SvgNode::Circle { attrs, .. }
+            | SvgNode::Ellipse { attrs, .. }
+            | SvgNode::Line { attrs, .. }
+            | SvgNode::Polyline { attrs, .. }
+            | SvgNode::Polygon { attrs, .. }
+            | SvgNode::Path { attrs, .. }
+            | SvgNode::Text { attrs, .. }
             | SvgNode::Unsupported { attrs, .. } => attrs,
+        }
+    }
+
+    fn children(&self) -> Option<&[SvgNode]> {
+        match self {
+            SvgNode::Group { children, .. } | SvgNode::Unsupported { children, .. } => {
+                Some(children)
+            }
+            _ => None,
         }
     }
 
     fn shallow(&self) -> Self {
         match self {
-            SvgNode::Group { attrs, .. } => SvgNode::Group {
+            SvgNode::Group {
+                id, span, attrs, ..
+            } => SvgNode::Group {
+                id: *id,
+                span: *span,
                 attrs: attrs.clone(),
                 children: Vec::new(),
             },
-            SvgNode::Rect { attrs } => SvgNode::Rect {
+            SvgNode::Rect { id, span, attrs } => SvgNode::Rect {
+                id: *id,
+                span: *span,
                 attrs: attrs.clone(),
             },
-            SvgNode::Circle { attrs } => SvgNode::Circle {
+            SvgNode::Circle { id, span, attrs } => SvgNode::Circle {
+                id: *id,
+                span: *span,
                 attrs: attrs.clone(),
             },
-            SvgNode::Ellipse { attrs } => SvgNode::Ellipse {
+            SvgNode::Ellipse { id, span, attrs } => SvgNode::Ellipse {
+                id: *id,
+                span: *span,
                 attrs: attrs.clone(),
             },
-            SvgNode::Line { attrs } => SvgNode::Line {
+            SvgNode::Line { id, span, attrs } => SvgNode::Line {
+                id: *id,
+                span: *span,
                 attrs: attrs.clone(),
             },
-            SvgNode::Polyline { attrs } => SvgNode::Polyline {
+            SvgNode::Polyline { id, span, attrs } => SvgNode::Polyline {
+                id: *id,
+                span: *span,
                 attrs: attrs.clone(),
             },
-            SvgNode::Polygon { attrs } => SvgNode::Polygon {
+            SvgNode::Polygon { id, span, attrs } => SvgNode::Polygon {
+                id: *id,
+                span: *span,
                 attrs: attrs.clone(),
             },
-            SvgNode::Path { attrs } => SvgNode::Path {
+            SvgNode::Path { id, span, attrs } => SvgNode::Path {
+                id: *id,
+                span: *span,
                 attrs: attrs.clone(),
             },
-            SvgNode::Text { attrs } => SvgNode::Text {
+            SvgNode::Text { id, span, attrs } => SvgNode::Text {
+                id: *id,
+                span: *span,
                 attrs: attrs.clone(),
             },
-            SvgNode::Unsupported { tag, attrs, .. } => SvgNode::Unsupported {
+            SvgNode::Unsupported {
+                id,
+                span,
+                tag,
+                attrs,
+                ..
+            } => SvgNode::Unsupported {
+                id: *id,
+                span: *span,
                 tag: tag.clone(),
                 attrs: attrs.clone(),
                 children: Vec::new(),
@@ -668,17 +884,178 @@ impl SvgNode {
     }
 }
 
+impl SvgReferenceTable {
+    fn build(nodes: &[SvgNode]) -> Self {
+        let mut table = Self::default();
+        table.collect_ids(nodes);
+        table.collect_uses(nodes);
+        table
+    }
+
+    fn collect_ids(&mut self, nodes: &[SvgNode]) {
+        for node in nodes {
+            if let Some(xml_id) = attr_get(node.attrs(), "id").filter(|id| !id.is_empty()) {
+                if self.by_xml_id.contains_key(xml_id) {
+                    self.duplicate_id_count += 1;
+                } else if self.ordered_ids.len() >= MAX_LOCAL_IDS {
+                    self.dropped_id_count += 1;
+                } else {
+                    let local = SvgLocalId {
+                        xml_id: xml_id.to_owned(),
+                        node_id: node.id(),
+                        span: node.span(),
+                    };
+                    self.by_xml_id.insert(local.xml_id.clone(), local.node_id);
+                    self.ordered_ids.push(local);
+                }
+            }
+            if let Some(children) = node.children() {
+                self.collect_ids(children);
+            }
+        }
+    }
+
+    fn collect_uses(&mut self, nodes: &[SvgNode]) {
+        for node in nodes {
+            self.external_reference_count += external_reference_count(node.attrs());
+            for target_id in local_reference_targets(node.attrs()) {
+                if self.uses.len() >= MAX_LOCAL_REFERENCE_USES {
+                    self.dropped_use_count += 1;
+                    continue;
+                }
+                self.uses.push(SvgReferenceUse {
+                    source_id: node.id(),
+                    source_span: node.span(),
+                    resolved: self.by_xml_id.get(&target_id).copied(),
+                    target_id,
+                });
+            }
+            if let Some(children) = node.children() {
+                self.collect_uses(children);
+            }
+        }
+    }
+
+    fn report_into(&self, report: &mut SvgRenderReport) {
+        if self.duplicate_id_count > 0 {
+            report.warning(
+                "reference.duplicate_id",
+                format!(
+                    "{} duplicate SVG id value(s) ignored; first occurrence wins",
+                    self.duplicate_id_count
+                ),
+            );
+        }
+        if self.dropped_id_count > 0 {
+            report.warning(
+                "limit.reference_ids",
+                format!(
+                    "{} SVG id value(s) exceeded the bounded local-id table",
+                    self.dropped_id_count
+                ),
+            );
+        }
+        if self.dropped_use_count > 0 {
+            report.warning(
+                "limit.reference_uses",
+                format!(
+                    "{} local reference use(s) exceeded the bounded reference-use table",
+                    self.dropped_use_count
+                ),
+            );
+        }
+        for reference in self
+            .uses
+            .iter()
+            .filter(|reference| reference.resolved.is_none())
+        {
+            report.warning_at(
+                "reference.unresolved",
+                format!(
+                    "local SVG reference '#{}' did not resolve",
+                    reference.target_id
+                ),
+                Some(reference.source_span.render_source(reference.source_id)),
+            );
+        }
+    }
+}
+
+fn local_reference_targets(attrs: &[(String, String)]) -> Vec<String> {
+    let mut targets = Vec::new();
+    for (key, value) in attrs {
+        let value = value.trim();
+        if key == "href" {
+            if let Some(target) = value.strip_prefix('#').filter(|target| !target.is_empty()) {
+                targets.push(target.to_owned());
+            }
+        }
+
+        let lower = value.to_ascii_lowercase();
+        let mut offset = 0;
+        while let Some(start) = lower[offset..].find("url(#") {
+            let start = offset + start;
+            let rest = &value[start..];
+            let after = &rest[5..];
+            let Some(end) = after.find(')') else {
+                break;
+            };
+            let target = after[..end].trim().trim_matches(['"', '\'']);
+            if !target.is_empty() {
+                targets.push(target.to_owned());
+            }
+            offset = start + 5 + end + 1;
+        }
+    }
+    targets
+}
+
+fn external_reference_count(attrs: &[(String, String)]) -> usize {
+    let mut count = 0;
+    for (key, value) in attrs {
+        let value = value.trim();
+        if key == "href"
+            && !value.is_empty()
+            && !value.starts_with('#')
+            && !value.to_ascii_lowercase().starts_with("data:")
+        {
+            count += 1;
+        }
+
+        let lower = value.to_ascii_lowercase();
+        let mut offset = 0;
+        while let Some(start) = lower[offset..].find("url(") {
+            let start = offset + start;
+            let rest = &value[start..];
+            let after = &rest[4..];
+            let Some(end) = after.find(')') else {
+                break;
+            };
+            let target = after[..end].trim().trim_matches(['"', '\'']);
+            if !target.is_empty() && !target.starts_with('#') {
+                count += 1;
+            }
+            offset = start + 4 + end + 1;
+        }
+    }
+    count
+}
+
 impl SvgDoc {
     fn parse(svg_text: &str) -> Option<Self> {
         let mut parser = XmlParser {
             s: svg_text,
             pos: 0,
+            next_node_id: 0,
         };
         let all_nodes = parser.parse_nodes();
 
         // Find the SVG root node and extract its attributes
         let (root_attrs, root_children) = all_nodes.into_iter().find_map(|n| {
-            if let SvgNode::Group { attrs, children } = n {
+            if let SvgNode::Group {
+                attrs, children, ..
+            } = n
+            {
                 Some((attrs, children))
             } else {
                 None
@@ -693,26 +1070,24 @@ impl SvgDoc {
         };
 
         let viewbox = attr("viewbox").and_then(|s| {
-            let v: Vec<f32> = s
-                .split([' ', ','])
-                .filter(|t| !t.is_empty())
-                .filter_map(|t| t.parse().ok())
-                .collect();
+            let v = svg_core::parse_numbers(s);
             if v.len() >= 4 {
-                Some([v[0], v[1], v[2], v[3]])
+                Some([v[0] as f32, v[1] as f32, v[2] as f32, v[3] as f32])
             } else {
                 None
             }
         });
 
-        let parse_dim = |s: &str| -> f32 {
-            s.trim_end_matches(|c: char| c.is_alphabetic() || c == '%')
-                .parse()
-                .unwrap_or(0.0)
-        };
-
-        let width = attr("width").map(parse_dim).unwrap_or(0.0);
-        let height = attr("height").map(parse_dim).unwrap_or(0.0);
+        let width = attr("width")
+            .and_then(|value| {
+                svg_core::resolve_length(value, svg_core::SvgLengthContext::user_units(100.0))
+            })
+            .unwrap_or(0.0) as f32;
+        let height = attr("height")
+            .and_then(|value| {
+                svg_core::resolve_length(value, svg_core::SvgLengthContext::user_units(100.0))
+            })
+            .unwrap_or(0.0) as f32;
 
         Some(SvgDoc {
             viewbox,
@@ -730,6 +1105,7 @@ impl SvgDoc {
 struct XmlParser<'a> {
     s: &'a str,
     pos: usize,
+    next_node_id: u32,
 }
 
 impl<'a> XmlParser<'a> {
@@ -800,6 +1176,7 @@ impl<'a> XmlParser<'a> {
     }
 
     fn parse_element(&mut self) -> Option<SvgNode> {
+        let element_start = self.pos;
         self.consume(1); // '<'
         self.skip_ws();
 
@@ -853,6 +1230,8 @@ impl<'a> XmlParser<'a> {
 
         let is_container = is_container_tag(&tag);
         let is_text = tag == "text" || tag == "tspan";
+        let id = SvgNodeId(self.next_node_id);
+        self.next_node_id = self.next_node_id.saturating_add(1);
 
         let children = if !self_closing && is_container {
             let ch = self.parse_nodes();
@@ -894,7 +1273,11 @@ impl<'a> XmlParser<'a> {
             Vec::new()
         };
 
-        self.make_node(&tag, raw_attrs, children)
+        let span = SvgSourceSpan {
+            start: element_start,
+            end: self.pos,
+        };
+        self.make_node(id, span, &tag, raw_attrs, children)
     }
 
     fn parse_attr(&mut self) -> Option<(String, String)> {
@@ -951,21 +1334,30 @@ impl<'a> XmlParser<'a> {
 
     fn make_node(
         &self,
+        id: SvgNodeId,
+        span: SvgSourceSpan,
         tag: &str,
         attrs: Vec<(String, String)>,
         children: Vec<SvgNode>,
     ) -> Option<SvgNode> {
         match tag {
-            "svg" | "g" => Some(SvgNode::Group { attrs, children }),
-            "rect" => Some(SvgNode::Rect { attrs }),
-            "circle" => Some(SvgNode::Circle { attrs }),
-            "ellipse" => Some(SvgNode::Ellipse { attrs }),
-            "line" => Some(SvgNode::Line { attrs }),
-            "polyline" => Some(SvgNode::Polyline { attrs }),
-            "polygon" => Some(SvgNode::Polygon { attrs }),
-            "path" => Some(SvgNode::Path { attrs }),
-            "text" | "tspan" => Some(SvgNode::Text { attrs }),
+            "svg" | "g" => Some(SvgNode::Group {
+                id,
+                span,
+                attrs,
+                children,
+            }),
+            "rect" => Some(SvgNode::Rect { id, span, attrs }),
+            "circle" => Some(SvgNode::Circle { id, span, attrs }),
+            "ellipse" => Some(SvgNode::Ellipse { id, span, attrs }),
+            "line" => Some(SvgNode::Line { id, span, attrs }),
+            "polyline" => Some(SvgNode::Polyline { id, span, attrs }),
+            "polygon" => Some(SvgNode::Polygon { id, span, attrs }),
+            "path" => Some(SvgNode::Path { id, span, attrs }),
+            "text" | "tspan" => Some(SvgNode::Text { id, span, attrs }),
             tag if unsupported_tag_feature(tag).is_some() => Some(SvgNode::Unsupported {
+                id,
+                span,
                 tag: tag.to_owned(),
                 attrs,
                 children,
@@ -1069,9 +1461,12 @@ fn attr_get<'a>(attrs: &'a [(String, String)], key: &str) -> Option<&'a str> {
         .map(|(_, v)| v.as_str())
 }
 
-fn attr_f32(attrs: &[(String, String)], key: &str, default: f32) -> f32 {
+fn attr_f32(attrs: &[(String, String)], key: &str, percent_base: f64, default: f32) -> f32 {
     attr_get(attrs, key)
-        .and_then(|v| v.trim_end_matches(|c: char| c.is_alphabetic()).parse().ok())
+        .and_then(|value| {
+            svg_core::resolve_length(value, svg_core::SvgLengthContext::user_units(percent_base))
+        })
+        .map(|value| value as f32)
         .unwrap_or(default)
 }
 
@@ -1121,69 +1516,109 @@ fn viewbox_to_pixel_transform(scene: &SvgScene, pw: usize, ph: usize) -> Transfo
 // display list → raster) and makes the render-ready IR independently testable.
 // ---------------------------------------------------------------------------
 
-/// Shape primitive kinds carried by a draw command.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ShapeKind {
-    Rect,
-    Circle,
-    Ellipse,
-    Line,
-    Polyline,
-    Polygon,
-    Path,
+#[derive(Clone)]
+enum ShapeGeometry {
+    Rect {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        rx: f32,
+        ry: f32,
+    },
+    Ellipse {
+        cx: f32,
+        cy: f32,
+        rx: f32,
+        ry: f32,
+    },
+    Line {
+        from: (f32, f32),
+        to: (f32, f32),
+    },
+    Poly {
+        points: Vec<(f32, f32)>,
+        closed: bool,
+    },
+    Path {
+        sub_paths: Vec<Vec<(f32, f32)>>,
+    },
 }
 
 /// One render-ready command in the display list.
-enum DrawCommand<'a> {
+enum DrawCommand {
     /// A renderable shape with its final (view ∘ item) transform and resolved style.
     Shape {
-        kind: ShapeKind,
-        attrs: &'a [(String, String)],
+        geometry: Option<ShapeGeometry>,
         transform: Transform,
-        style: &'a Style,
+        style: Style,
+        diagnostics: Vec<PendingDiagnostic>,
+        source: SvgRenderSource,
     },
     /// A shape under an unsupported ancestor — counted as skipped, not drawn.
-    SkippedShape { attrs: &'a [(String, String)] },
+    SkippedShape {
+        diagnostics: Vec<PendingDiagnostic>,
+        source: SvgRenderSource,
+    },
     /// A group container — carried only so attribute diagnostics still fire.
-    GroupDiagnostics { attrs: &'a [(String, String)] },
+    GroupDiagnostics {
+        diagnostics: Vec<PendingDiagnostic>,
+        source: SvgRenderSource,
+    },
     /// Text — preserved in source but not rasterized.
-    UnsupportedText { attrs: &'a [(String, String)] },
+    UnsupportedText {
+        diagnostics: Vec<PendingDiagnostic>,
+        source: SvgRenderSource,
+    },
     /// Unsupported element — diagnostics + skip.
     UnsupportedNode {
-        tag: &'a str,
-        attrs: &'a [(String, String)],
+        tag: String,
+        diagnostics: Vec<PendingDiagnostic>,
+        source: SvgRenderSource,
     },
 }
 
-struct DisplayList<'a> {
-    commands: Vec<DrawCommand<'a>>,
+struct DisplayList {
+    commands: Vec<DrawCommand>,
 }
 
-impl<'a> DisplayList<'a> {
+impl DisplayList {
     /// Lowering pass: scene items → flat draw-command stream.
-    fn build(scene: &'a SvgScene, view_xform: &Transform) -> Self {
+    fn build(scene: &SvgScene, view_xform: &Transform) -> Self {
         let mut commands = Vec::with_capacity(scene.items.len());
+        let length_bases = scene.length_bases();
         for item in &scene.items {
             let node_xform = view_xform.concat(item.transform);
+            let source = item.node.source();
+            let diagnostics = unsupported_attr_diagnostics(item.node.attrs());
             let cmd = match &item.node {
-                SvgNode::Group { attrs, .. } => DrawCommand::GroupDiagnostics { attrs },
-                SvgNode::Text { attrs } => DrawCommand::UnsupportedText { attrs },
-                SvgNode::Unsupported { tag, attrs, .. } => {
-                    DrawCommand::UnsupportedNode { tag, attrs }
-                }
+                SvgNode::Group { .. } => DrawCommand::GroupDiagnostics {
+                    diagnostics,
+                    source,
+                },
+                SvgNode::Text { .. } => DrawCommand::UnsupportedText {
+                    diagnostics,
+                    source,
+                },
+                SvgNode::Unsupported { tag, .. } => DrawCommand::UnsupportedNode {
+                    tag: tag.clone(),
+                    diagnostics,
+                    source,
+                },
                 shape_node => {
-                    let attrs = shape_node.attrs();
                     if item.skipped_by_unsupported_ancestor {
-                        DrawCommand::SkippedShape { attrs }
-                    } else if let Some(kind) = shape_kind_of(shape_node) {
-                        DrawCommand::Shape {
-                            kind,
-                            attrs,
-                            transform: node_xform,
-                            style: &item.style,
+                        DrawCommand::SkippedShape {
+                            diagnostics,
+                            source,
                         }
                     } else {
-                        DrawCommand::SkippedShape { attrs }
+                        DrawCommand::Shape {
+                            geometry: lower_shape_geometry(shape_node, length_bases),
+                            transform: node_xform,
+                            style: item.style.clone(),
+                            diagnostics,
+                            source,
+                        }
                     }
                 }
             };
@@ -1196,69 +1631,61 @@ impl<'a> DisplayList<'a> {
     fn execute(&self, buf: &mut [u8], w: usize, h: usize, report: &mut SvgRenderReport) {
         for cmd in &self.commands {
             match cmd {
-                DrawCommand::GroupDiagnostics { attrs } => {
-                    diagnose_unsupported_attrs(attrs, report);
+                DrawCommand::GroupDiagnostics {
+                    diagnostics,
+                    source,
+                } => {
+                    emit_diagnostics(diagnostics, *source, report);
                 }
                 DrawCommand::Shape {
-                    kind,
-                    attrs,
+                    geometry,
                     transform,
                     style,
+                    diagnostics,
+                    source,
                 } => {
-                    diagnose_unsupported_attrs(attrs, report);
-                    let drawn = match kind {
-                        ShapeKind::Rect => render_rect(attrs, transform, style, buf, w, h),
-                        ShapeKind::Circle => render_circle(attrs, transform, style, buf, w, h),
-                        ShapeKind::Ellipse => render_ellipse(attrs, transform, style, buf, w, h),
-                        ShapeKind::Line => render_line(attrs, transform, style, buf, w, h),
-                        ShapeKind::Polyline => {
-                            render_poly(attrs, transform, style, buf, w, h, false)
-                        }
-                        ShapeKind::Polygon => render_poly(attrs, transform, style, buf, w, h, true),
-                        ShapeKind::Path => render_path(attrs, transform, style, buf, w, h),
-                    };
+                    emit_diagnostics(diagnostics, *source, report);
+                    let drawn = geometry.as_ref().is_some_and(|geometry| {
+                        render_shape(geometry, transform, style, buf, w, h)
+                    });
                     if drawn {
                         report.rendered();
                     } else {
                         report.skipped();
                     }
                 }
-                DrawCommand::SkippedShape { attrs } => {
-                    diagnose_unsupported_attrs(attrs, report);
+                DrawCommand::SkippedShape {
+                    diagnostics,
+                    source,
+                } => {
+                    emit_diagnostics(diagnostics, *source, report);
                     report.skipped();
                 }
-                DrawCommand::UnsupportedText { attrs } => {
-                    diagnose_unsupported_attrs(attrs, report);
-                    report.unsupported(
+                DrawCommand::UnsupportedText {
+                    diagnostics,
+                    source,
+                } => {
+                    emit_diagnostics(diagnostics, *source, report);
+                    report.unsupported_at(
                         "text",
                         "text elements are preserved in source but not rasterized yet",
+                        Some(*source),
                     );
                     report.skipped();
                 }
-                DrawCommand::UnsupportedNode { tag, attrs } => {
-                    diagnose_unsupported_attrs(attrs, report);
+                DrawCommand::UnsupportedNode {
+                    tag,
+                    diagnostics,
+                    source,
+                } => {
+                    emit_diagnostics(diagnostics, *source, report);
                     if let Some((feature, message)) = unsupported_tag_feature(tag) {
-                        report.unsupported(feature, message);
+                        report.unsupported_at(feature, message, Some(*source));
                     }
                     report.skipped();
                 }
             }
         }
-    }
-}
-
-/// Map a shape `SvgNode` to its `ShapeKind`.  Returns `None` for non-shapes
-/// (Group/Text/Unsupported), which are handled by dedicated commands.
-fn shape_kind_of(node: &SvgNode) -> Option<ShapeKind> {
-    match node {
-        SvgNode::Rect { .. } => Some(ShapeKind::Rect),
-        SvgNode::Circle { .. } => Some(ShapeKind::Circle),
-        SvgNode::Ellipse { .. } => Some(ShapeKind::Ellipse),
-        SvgNode::Line { .. } => Some(ShapeKind::Line),
-        SvgNode::Polyline { .. } => Some(ShapeKind::Polyline),
-        SvgNode::Polygon { .. } => Some(ShapeKind::Polygon),
-        SvgNode::Path { .. } => Some(ShapeKind::Path),
-        _ => None,
     }
 }
 
@@ -1266,247 +1693,170 @@ fn shape_kind_of(node: &SvgNode) -> Option<ShapeKind> {
 // Shape renderers
 // ---------------------------------------------------------------------------
 
-fn render_rect(
-    attrs: &[(String, String)],
-    xform: &Transform,
-    parent_style: &Style,
-    buf: &mut [u8],
-    w: usize,
-    h: usize,
-) -> bool {
-    let attr_pairs: Vec<(&str, &str)> = attrs
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
-    let style = parent_style.inherit(&attr_pairs);
-
-    let x = attr_f32(attrs, "x", 0.0);
-    let y = attr_f32(attrs, "y", 0.0);
-    let rw = attr_f32(attrs, "width", 0.0);
-    let rh = attr_f32(attrs, "height", 0.0);
-    if rw <= 0.0 || rh <= 0.0 {
-        return false;
-    }
-    let mut rx = attr_f32(attrs, "rx", 0.0);
-    let mut ry = attr_f32(attrs, "ry", 0.0);
-    // SVG: if only rx or only ry is given, use the same for both
-    if rx > 0.0 && ry == 0.0 {
-        ry = rx;
-    }
-    if ry > 0.0 && rx == 0.0 {
-        rx = ry;
-    }
-
-    let pts = rounded_rect_pts(x, y, rw, rh, rx, ry);
-    let transformed: Vec<(f32, f32)> = pts
-        .iter()
-        .map(|&(px, py)| xform.apply_f32(px, py))
-        .collect();
-
-    let mut rendered = false;
-    if let Some(fill) = style.effective_fill() {
-        fill_polygon(buf, w, h, &transformed, fill);
-        rendered = true;
-    }
-    if let Some((stroke_color, stroke_w)) = style.effective_stroke() {
-        stroke_polyline(buf, w, h, &transformed, stroke_w, stroke_color, true);
-        rendered = true;
-    }
-    rendered
-}
-
-fn render_circle(
-    attrs: &[(String, String)],
-    xform: &Transform,
-    parent_style: &Style,
-    buf: &mut [u8],
-    w: usize,
-    h: usize,
-) -> bool {
-    let attr_pairs: Vec<(&str, &str)> = attrs
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
-    let style = parent_style.inherit(&attr_pairs);
-
-    let cx = attr_f32(attrs, "cx", 0.0);
-    let cy = attr_f32(attrs, "cy", 0.0);
-    let r = attr_f32(attrs, "r", 0.0);
-    if r <= 0.0 {
-        return false;
-    }
-
-    let pts = ellipse_pts(cx, cy, r, r);
-    let transformed: Vec<(f32, f32)> = pts
-        .iter()
-        .map(|&(px, py)| xform.apply_f32(px, py))
-        .collect();
-
-    let mut rendered = false;
-    if let Some(fill) = style.effective_fill() {
-        fill_polygon(buf, w, h, &transformed, fill);
-        rendered = true;
-    }
-    if let Some((stroke_color, stroke_w)) = style.effective_stroke() {
-        stroke_polyline(buf, w, h, &transformed, stroke_w, stroke_color, true);
-        rendered = true;
-    }
-    rendered
-}
-
-fn render_ellipse(
-    attrs: &[(String, String)],
-    xform: &Transform,
-    parent_style: &Style,
-    buf: &mut [u8],
-    w: usize,
-    h: usize,
-) -> bool {
-    let attr_pairs: Vec<(&str, &str)> = attrs
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
-    let style = parent_style.inherit(&attr_pairs);
-
-    let cx = attr_f32(attrs, "cx", 0.0);
-    let cy = attr_f32(attrs, "cy", 0.0);
-    let erx = attr_f32(attrs, "rx", 0.0);
-    let ery = attr_f32(attrs, "ry", 0.0);
-    if erx <= 0.0 || ery <= 0.0 {
-        return false;
-    }
-
-    let pts = ellipse_pts(cx, cy, erx, ery);
-    let transformed: Vec<(f32, f32)> = pts
-        .iter()
-        .map(|&(px, py)| xform.apply_f32(px, py))
-        .collect();
-
-    let mut rendered = false;
-    if let Some(fill) = style.effective_fill() {
-        fill_polygon(buf, w, h, &transformed, fill);
-        rendered = true;
-    }
-    if let Some((stroke_color, stroke_w)) = style.effective_stroke() {
-        stroke_polyline(buf, w, h, &transformed, stroke_w, stroke_color, true);
-        rendered = true;
-    }
-    rendered
-}
-
-fn render_line(
-    attrs: &[(String, String)],
-    xform: &Transform,
-    parent_style: &Style,
-    buf: &mut [u8],
-    w: usize,
-    h: usize,
-) -> bool {
-    let attr_pairs: Vec<(&str, &str)> = attrs
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
-    let style = parent_style.inherit(&attr_pairs);
-
-    let x1 = attr_f32(attrs, "x1", 0.0);
-    let y1 = attr_f32(attrs, "y1", 0.0);
-    let x2 = attr_f32(attrs, "x2", 0.0);
-    let y2 = attr_f32(attrs, "y2", 0.0);
-
-    let pts = vec![xform.apply_f32(x1, y1), xform.apply_f32(x2, y2)];
-    if let Some((stroke_color, stroke_w)) = style.effective_stroke() {
-        stroke_polyline(buf, w, h, &pts, stroke_w, stroke_color, false);
-        true
-    } else {
-        false
-    }
-}
-
-fn render_poly(
-    attrs: &[(String, String)],
-    xform: &Transform,
-    parent_style: &Style,
-    buf: &mut [u8],
-    w: usize,
-    h: usize,
-    closed: bool,
-) -> bool {
-    let attr_pairs: Vec<(&str, &str)> = attrs
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
-    let style = parent_style.inherit(&attr_pairs);
-
-    let pts_raw = attr_get(attrs, "points").unwrap_or("");
-    let local_pts = parse_point_list(pts_raw);
-    if local_pts.len() < 2 {
-        return false;
-    }
-
-    let pts: Vec<(f32, f32)> = local_pts
-        .iter()
-        .map(|&(px, py)| xform.apply_f32(px, py))
-        .collect();
-
-    let mut rendered = false;
-    if closed {
-        if let Some(fill) = style.effective_fill() {
-            fill_polygon(buf, w, h, &pts, fill);
-            rendered = true;
-        }
-    }
-    if let Some((stroke_color, stroke_w)) = style.effective_stroke() {
-        stroke_polyline(buf, w, h, &pts, stroke_w, stroke_color, closed);
-        rendered = true;
-    }
-    rendered
-}
-
-fn render_path(
-    attrs: &[(String, String)],
-    xform: &Transform,
-    parent_style: &Style,
-    buf: &mut [u8],
-    w: usize,
-    h: usize,
-) -> bool {
-    let attr_pairs: Vec<(&str, &str)> = attrs
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
-    let style = parent_style.inherit(&attr_pairs);
-
-    let d = attr_get(attrs, "d").unwrap_or("");
-    if d.is_empty() {
-        return false;
-    }
-
-    let sub_paths = parse_path_d(d);
-    if sub_paths.is_empty() {
-        return false;
-    }
-
-    // Fill: all sub-paths as a combined even-odd fill
-    let mut rendered = false;
-    if let Some(fill) = style.effective_fill() {
-        fill_path_subpaths(buf, w, h, &sub_paths, xform, fill);
-        rendered = true;
-    }
-
-    // Stroke: each sub-path individually
-    if let Some((stroke_color, stroke_w)) = style.effective_stroke() {
-        for sub in &sub_paths {
-            if sub.len() < 2 {
-                continue;
+fn lower_shape_geometry(node: &SvgNode, length_bases: SvgLengthBases) -> Option<ShapeGeometry> {
+    let attrs = node.attrs();
+    match node {
+        SvgNode::Rect { .. } => {
+            let x = attr_f32(attrs, "x", length_bases.horizontal, 0.0);
+            let y = attr_f32(attrs, "y", length_bases.vertical, 0.0);
+            let width = attr_f32(attrs, "width", length_bases.horizontal, 0.0);
+            let height = attr_f32(attrs, "height", length_bases.vertical, 0.0);
+            if width <= 0.0 || height <= 0.0 {
+                return None;
             }
-            let closed = sub.first() == sub.last() && sub.len() > 2;
-            let pts: Vec<(f32, f32)> = sub
-                .iter()
-                .map(|&(px, py)| xform.apply_f32(px, py))
-                .collect();
-            stroke_polyline(buf, w, h, &pts, stroke_w, stroke_color, closed);
-            rendered = true;
+            let mut rx = attr_f32(attrs, "rx", length_bases.horizontal, 0.0);
+            let mut ry = attr_f32(attrs, "ry", length_bases.vertical, 0.0);
+            if rx > 0.0 && ry == 0.0 {
+                ry = rx;
+            }
+            if ry > 0.0 && rx == 0.0 {
+                rx = ry;
+            }
+            Some(ShapeGeometry::Rect {
+                x,
+                y,
+                width,
+                height,
+                rx,
+                ry,
+            })
         }
+        SvgNode::Circle { .. } => {
+            let cx = attr_f32(attrs, "cx", length_bases.horizontal, 0.0);
+            let cy = attr_f32(attrs, "cy", length_bases.vertical, 0.0);
+            let radius = attr_f32(attrs, "r", length_bases.other, 0.0);
+            (radius > 0.0).then_some(ShapeGeometry::Ellipse {
+                cx,
+                cy,
+                rx: radius,
+                ry: radius,
+            })
+        }
+        SvgNode::Ellipse { .. } => {
+            let cx = attr_f32(attrs, "cx", length_bases.horizontal, 0.0);
+            let cy = attr_f32(attrs, "cy", length_bases.vertical, 0.0);
+            let rx = attr_f32(attrs, "rx", length_bases.horizontal, 0.0);
+            let ry = attr_f32(attrs, "ry", length_bases.vertical, 0.0);
+            (rx > 0.0 && ry > 0.0).then_some(ShapeGeometry::Ellipse { cx, cy, rx, ry })
+        }
+        SvgNode::Line { .. } => Some(ShapeGeometry::Line {
+            from: (
+                attr_f32(attrs, "x1", length_bases.horizontal, 0.0),
+                attr_f32(attrs, "y1", length_bases.vertical, 0.0),
+            ),
+            to: (
+                attr_f32(attrs, "x2", length_bases.horizontal, 0.0),
+                attr_f32(attrs, "y2", length_bases.vertical, 0.0),
+            ),
+        }),
+        SvgNode::Polyline { .. } | SvgNode::Polygon { .. } => {
+            let points = parse_point_list(attr_get(attrs, "points").unwrap_or(""));
+            (points.len() >= 2).then_some(ShapeGeometry::Poly {
+                points,
+                closed: matches!(node, SvgNode::Polygon { .. }),
+            })
+        }
+        SvgNode::Path { .. } => {
+            let sub_paths = parse_path_d(attr_get(attrs, "d").unwrap_or(""));
+            (!sub_paths.is_empty()).then_some(ShapeGeometry::Path { sub_paths })
+        }
+        _ => None,
+    }
+}
+
+fn render_shape(
+    geometry: &ShapeGeometry,
+    xform: &Transform,
+    style: &Style,
+    buf: &mut [u8],
+    w: usize,
+    h: usize,
+) -> bool {
+    match geometry {
+        ShapeGeometry::Rect {
+            x,
+            y,
+            width,
+            height,
+            rx,
+            ry,
+        } => render_closed_points(
+            &rounded_rect_pts(*x, *y, *width, *height, *rx, *ry),
+            xform,
+            style,
+            buf,
+            w,
+            h,
+        ),
+        ShapeGeometry::Ellipse { cx, cy, rx, ry } => {
+            render_closed_points(&ellipse_pts(*cx, *cy, *rx, *ry), xform, style, buf, w, h)
+        }
+        ShapeGeometry::Line { from, to } => {
+            let points = vec![xform.apply_f32(from.0, from.1), xform.apply_f32(to.0, to.1)];
+            if let Some((stroke_color, stroke_width)) = style.effective_stroke() {
+                stroke_polyline(buf, w, h, &points, stroke_width, stroke_color, false);
+                true
+            } else {
+                false
+            }
+        }
+        ShapeGeometry::Poly { points, closed } => {
+            let transformed: Vec<_> = points.iter().map(|&(x, y)| xform.apply_f32(x, y)).collect();
+            let mut rendered = false;
+            if *closed {
+                if let Some(fill) = style.effective_fill() {
+                    fill_polygon(buf, w, h, &transformed, fill);
+                    rendered = true;
+                }
+            }
+            if let Some((stroke_color, stroke_width)) = style.effective_stroke() {
+                stroke_polyline(buf, w, h, &transformed, stroke_width, stroke_color, *closed);
+                rendered = true;
+            }
+            rendered
+        }
+        ShapeGeometry::Path { sub_paths } => {
+            let mut rendered = false;
+            if let Some(fill) = style.effective_fill() {
+                fill_path_subpaths(buf, w, h, sub_paths, xform, fill);
+                rendered = true;
+            }
+            if let Some((stroke_color, stroke_width)) = style.effective_stroke() {
+                for sub_path in sub_paths {
+                    if sub_path.len() < 2 {
+                        continue;
+                    }
+                    let closed = sub_path.first() == sub_path.last() && sub_path.len() > 2;
+                    let points: Vec<_> = sub_path
+                        .iter()
+                        .map(|&(x, y)| xform.apply_f32(x, y))
+                        .collect();
+                    stroke_polyline(buf, w, h, &points, stroke_width, stroke_color, closed);
+                    rendered = true;
+                }
+            }
+            rendered
+        }
+    }
+}
+
+fn render_closed_points(
+    points: &[(f32, f32)],
+    xform: &Transform,
+    style: &Style,
+    buf: &mut [u8],
+    w: usize,
+    h: usize,
+) -> bool {
+    let transformed: Vec<_> = points.iter().map(|&(x, y)| xform.apply_f32(x, y)).collect();
+    let mut rendered = false;
+    if let Some(fill) = style.effective_fill() {
+        fill_polygon(buf, w, h, &transformed, fill);
+        rendered = true;
+    }
+    if let Some((stroke_color, stroke_w)) = style.effective_stroke() {
+        stroke_polyline(buf, w, h, &transformed, stroke_w, stroke_color, true);
+        rendered = true;
     }
     rendered
 }
@@ -2200,6 +2550,19 @@ mod tests {
     }
 
     #[test]
+    fn rejects_non_local_references_after_structured_parse() {
+        for svg in [
+            r#"<svg><use href="javascript:alert(1)"/></svg>"#,
+            r#"<svg><rect fill="url(//example.invalid/paint)"/></svg>"#,
+        ] {
+            assert_eq!(
+                rasterize(svg, 10, 10).unwrap_err(),
+                SvgRasterError::ForbiddenContent
+            );
+        }
+    }
+
+    #[test]
     fn defs_and_masks_do_not_render_as_visible_content() {
         let svg = r##"<svg viewBox="0 0 10 10">
 <defs><rect width="10" height="10" fill="#ff0000"/></defs>
@@ -2236,6 +2599,8 @@ mod tests {
         assert_eq!(output.report.warning_count, 0);
         assert_eq!(output.report.unsupported_feature_count, 1);
         assert_eq!(output.report.unsupported_features[0].feature, "text");
+        let source = output.report.unsupported_features[0].source.unwrap();
+        assert!(svg[source.byte_start..source.byte_end].starts_with("<text"));
         assert_eq!(output.report.fidelity, SvgRenderFidelity::Medium);
         assert_eq!(pixel(&output.image, 5, 5), [255, 0, 0, 255]);
     }
@@ -2307,6 +2672,145 @@ mod tests {
                 b: 0,
                 a: 255
             })
+        ));
+    }
+
+    #[test]
+    fn scene_node_ids_and_source_spans_are_stable_preorder_metadata() {
+        let svg = r##"<svg viewBox="0 0 20 10"><g id="group"><rect id="box" width="4" height="4"/></g><text>Hi</text></svg>"##;
+        let first = SvgScene::parse(svg).unwrap();
+        let second = SvgScene::parse(svg).unwrap();
+
+        let first_meta: Vec<_> = first
+            .items
+            .iter()
+            .map(|item| (item.node.id(), item.node.span()))
+            .collect();
+        let second_meta: Vec<_> = second
+            .items
+            .iter()
+            .map(|item| (item.node.id(), item.node.span()))
+            .collect();
+
+        assert_eq!(first_meta, second_meta);
+        assert_eq!(
+            first_meta.iter().map(|(id, _)| id.0).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        for (_, span) in first_meta {
+            let source = &svg[span.start..span.end];
+            assert!(source.starts_with('<'));
+            assert!(source.ends_with('>'));
+        }
+    }
+
+    #[test]
+    fn local_reference_table_is_deterministic_bounded_and_first_id_wins() {
+        let svg = r##"<svg>
+<defs><rect id="shape" width="2" height="2"/><circle id="shape" r="1"/></defs>
+<use href="#shape"/><rect fill="url(#missing)" width="2" height="2"/>
+</svg>"##;
+        let scene = SvgScene::parse(svg).unwrap();
+
+        assert_eq!(scene.references.ordered_ids.len(), 1);
+        assert_eq!(scene.references.ordered_ids[0].xml_id, "shape");
+        assert_eq!(scene.references.duplicate_id_count, 1);
+        assert_eq!(scene.references.uses.len(), 2);
+        assert!(scene.references.uses[0].resolved.is_some());
+        assert!(scene.references.uses[1].resolved.is_none());
+
+        let output = rasterize_with_report(svg, 10, 10).unwrap();
+        assert!(output
+            .report
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "reference.duplicate_id"));
+        let unresolved = output
+            .report
+            .warnings
+            .iter()
+            .find(|warning| warning.code == "reference.unresolved")
+            .unwrap();
+        assert!(unresolved.source.is_some());
+    }
+
+    #[test]
+    fn local_reference_tables_enforce_independent_caps() {
+        let mut ids = String::from("<svg>");
+        for index in 0..=MAX_LOCAL_IDS {
+            ids.push_str(&format!(r#"<rect id="id{index}"/>"#));
+        }
+        ids.push_str("</svg>");
+        let id_scene = SvgScene::parse(&ids).unwrap();
+        assert_eq!(id_scene.references.ordered_ids.len(), MAX_LOCAL_IDS);
+        assert_eq!(id_scene.references.dropped_id_count, 1);
+
+        let mut uses = String::from(r#"<svg><rect id="target"/>"#);
+        for _ in 0..=MAX_LOCAL_REFERENCE_USES {
+            uses.push_str(r##"<use href="#target"/>"##);
+        }
+        uses.push_str("</svg>");
+        let use_scene = SvgScene::parse(&uses).unwrap();
+        assert_eq!(use_scene.references.uses.len(), MAX_LOCAL_REFERENCE_USES);
+        assert_eq!(use_scene.references.dropped_use_count, 1);
+    }
+
+    #[test]
+    fn display_list_owns_render_data_after_scene_is_dropped() {
+        let svg =
+            r##"<svg viewBox="0 0 10 10"><rect width="10" height="10" fill="#ff0000"/></svg>"##;
+        let display_list = {
+            let scene = SvgScene::parse(svg).unwrap();
+            let view = viewbox_to_pixel_transform(&scene, 10, 10);
+            DisplayList::build(&scene, &view)
+        };
+        let mut pixels = vec![0; 10 * 10 * 4];
+        let mut report = SvgRenderReport::new(10, 10, 10, 10);
+
+        display_list.execute(&mut pixels, 10, 10, &mut report);
+
+        assert_eq!(
+            &pixels[(5 * 10 + 5) * 4..(5 * 10 + 5) * 4 + 4],
+            &[255, 0, 0, 255]
+        );
+        assert_eq!(report.rendered_element_count, 1);
+    }
+
+    #[test]
+    fn renderer_resolves_shared_absolute_and_percentage_lengths() {
+        let svg = r##"<svg viewBox="0 0 100 100">
+<rect width="50%" height="50%" fill="#ff0000"/>
+</svg>"##;
+        let image = rasterize(svg, 100, 100).unwrap();
+        let physical = SvgScene::parse(r#"<svg width="1in" height="2.54cm"/>"#).unwrap();
+
+        assert_eq!(pixel(&image, 25, 25), [255, 0, 0, 255]);
+        assert_eq!(pixel(&image, 75, 75), [0, 0, 0, 0]);
+        assert!((physical.width - 96.0).abs() < 0.001);
+        assert!((physical.height - 96.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn root_percentage_dimensions_keep_a_usable_viewport_fallback() {
+        let scene = SvgScene::parse(
+            r#"<svg width="100%" height="50%"><rect width="100%" height="100%"/></svg>"#,
+        )
+        .unwrap();
+
+        assert_eq!(scene.width, 100.0);
+        assert_eq!(scene.height, 50.0);
+        let geometry = scene
+            .items
+            .iter()
+            .find_map(|item| lower_shape_geometry(&item.node, scene.length_bases()))
+            .unwrap();
+        assert!(matches!(
+            geometry,
+            ShapeGeometry::Rect {
+                width: 100.0,
+                height: 50.0,
+                ..
+            }
         ));
     }
 

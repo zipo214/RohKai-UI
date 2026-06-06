@@ -1,10 +1,11 @@
 # RohKai Roadmap
 
-## Current Active Work — Pre-Release Depth And SVG R0 Closure
+## Current Active Work — Pre-Release Depth And SVG R1 Geometry
 
 - Keep RohKai on egui/eframe while closing reliability and feature-depth gaps.
-- SVG execution follows `docs/SVG_RENDERER_ROADMAP.md`: finish R0 metadata and
-  scene traversal, share length parsing, then proceed through R1 and R2.
+- SVG execution follows `docs/SVG_RENDERER_ROADMAP.md`: R0 metadata, shared
+  lengths, and the owned display-list boundary are complete; proceed through R1
+  geometry quality and R2 style/reference resolution.
 - Stage 15's general RohKai renderer is deferred and is not the current stage.
 
 ## Stage 0 — Bootstrap ✅
@@ -285,6 +286,10 @@ Historical foundation completed here:
 - [x] Initial internal SVG scene-item flattening boundary with accumulated
       transforms and resolved inherited style
 - [x] SVG renderer scene/display-list IR split
+- [x] Stable source-spanned SVG node IDs and bounded local reference metadata
+- [x] Owned render-ready display list; raster execution no longer traverses XML
+      nodes or parses raw shape attributes
+- [x] Shared SVG length/unit parsing and viewport-relative raster percentages
 - [x] Golden renderer fixture harness for supported raster output
 - [x] Shared SVG microsyntax module for importer/rasterizer parity
 
@@ -410,7 +415,11 @@ requiring schema changes.
 
 - [x] SVG renderer scene/display-list IR split — `DisplayList`/`DrawCommand` IR
       in `svg_rasterizer.rs`; build() lowers scene graph → flat command stream,
-      execute() rasterizes; pixel output unchanged
+      including geometry, diagnostics, source provenance, style, and transform;
+      execute() rasterizes without XML-node access
+- [x] SVG R0 metadata closure — stable preorder node IDs, exact byte spans,
+      bounded first-id-wins local references, structured non-local reference
+      rejection, and shared importer/rasterizer length parsing
 - [x] Golden renderer fixture harness for supported raster output —
       `src/canvas/svg_golden.rs` (#[cfg(test)]); deterministic ASCII-grid
       signatures, supported + unsupported buckets, drift-detecting tests; zero

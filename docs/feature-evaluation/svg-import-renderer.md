@@ -24,9 +24,10 @@ capabilities where required.
 |---|---:|---|---|
 | Security gate | 4 | Rejects DOCTYPE/entities and guards unsupported risky input. | Needs broader fuzz corpus and size/resource telemetry. |
 | Import parser | 3 | Handles common shapes, paths, groups, style subset, transforms, `use`, metadata. | Needs richer CSS, text/tspan, clipping/masking behavior, and report UI. |
-| Diagnostics | 3 | Structured warnings/errors/fidelity for many unsupported buckets. | Needs UI surfacing and per-element remediation suggestions. |
+| Diagnostics | 3-4 | Structured warnings/errors/fidelity for many unsupported buckets; raster node diagnostics carry stable node IDs and source byte spans. | Needs R8 UI surfacing and per-element remediation suggestions. |
 | Source preservation | 4 | Original SVG preserved beside imported template and in Image widgets. | Needs source diff/viewer integration polish. |
-| Shared microsyntax | 3 | Shared colors, numbers, transforms, path tokenization. | Needs more SVG grammar coverage and fuzz/property tests. |
+| Shared microsyntax | 3-4 | Shared colors, numbers, transforms, path tokenization, and length/unit resolution. | Needs shared style declarations plus broader fuzz/property tests. |
+| Raster IR | 3-4 | Stable source-spanned node IDs, bounded local references, flattened scene items, and owned lowered display commands. | R2 still needs actual reference expansion; later phases need reusable paint/compositing IR. |
 | Raster renderer | 2-3 | Own software rasterizer for supported subset; golden fixtures. | Far from full SVG 1.1/2, text, filters, gradients, masks, compositing. |
 | Text/tspan | 1-2 | Simple text import/flattening; text renderer planned. | Needs robust span model, bidi/shaping decisions, editable multi-span output. |
 
@@ -76,9 +77,8 @@ capabilities where required.
 
 Detailed sequencing is authoritative in `docs/SVG_RENDERER_ROADMAP.md`:
 
-1. Close R0 with stable source-spanned node IDs, reference metadata,
-   scene/display-list-only traversal, and shared length/unit parsing.
-2. Complete R1 geometry/stroke/antialiasing quality.
-3. Complete R2 shared styles and local references.
-4. Continue paint, clipping, images, text, effects, and conformance through
+1. Complete R1 geometry/stroke/antialiasing quality; R0 metadata and IR closure
+   are now complete.
+2. Complete R2 shared styles and local reference expansion.
+3. Continue paint, clipping, images, text, effects, and conformance through
    R3-R8. Robust `tspan` work belongs to R6; report UI belongs to R8.

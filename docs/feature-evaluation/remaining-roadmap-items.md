@@ -386,8 +386,9 @@ Closure Criteria:
 
 ## Recommended Ordering
 
-1. Close SVG R0 metadata/traversal and shared length parsing.
-2. Complete SVG R1 geometry quality, then R2 references/styles.
+1. Complete SVG R1 geometry quality; R0 metadata/traversal/shared lengths are
+   closed.
+2. Complete R2 reference expansion and shared style resolution.
 3. Close the small SVG inline expansion toggle under R8 when editor UX reaches
    that phase.
 4. Build Formula Widget or Visual Widget Maker next, depending on product focus.

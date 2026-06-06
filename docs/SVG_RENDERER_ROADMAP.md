@@ -22,12 +22,9 @@ and SVG-facing editor UX.
 
 ## Current Execution Order
 
-1. Close R0 metadata: stable `SvgNodeId`, source spans, reference table, and
-   scene/display-list-only traversal.
-2. Finish shared length/unit parsing in `svg_core`.
-3. Complete R1 geometry quality.
-4. Complete R2 style/reference resolution, including raster `<use>`.
-5. Continue R3-R8 in order, with R6 owning all `tspan`/text-plan execution and
+1. Complete R1 geometry quality now that the R0 IR boundary is closed.
+2. Complete R2 style/reference resolution, including raster `<use>`.
+3. Continue R3-R8 in order, with R6 owning all `tspan`/text-plan execution and
    R8 owning source/report UI.
 
 Unchecked derivative-backlog entries are implementation notes for these phases,
@@ -121,15 +118,23 @@ Current strengths:
   external href rejection, raster dimension/pixel caps.
 - Diagnostics:
   rendered/skipped counts, parsed-node/attribute unsupported feature list,
-  warnings, output raster dimensions, and conservative fidelity score.
+  warnings, output raster dimensions, conservative fidelity score, and
+  source-spanned node provenance on node-level diagnostics.
 - ViewBox-to-pixel mapping.
 - XML-ish parser for common SVG files.
 - Style inheritance:
   solid `fill`, `stroke`, `stroke-width`, opacity, display/visibility, inline
   `style=""`.
-- Internal scene boundary:
-  parsed nodes flatten into `SvgSceneItem`s with accumulated transforms,
-  resolved inherited style, and unsupported-subtree flags before raster output.
+- Closed scene/display-list boundary:
+  parsed nodes receive stable preorder `SvgNodeId` values and exact byte spans;
+  a bounded first-id-wins local reference table records resolved/unresolved
+  fragment uses; scene items accumulate transforms and resolved inherited
+  style; the owned display list lowers lengths, shape geometry, path geometry,
+  diagnostics, and provenance before raster execution.
+- Shared lengths:
+  importer and rasterizer use `svg_core` for unitless/px, percentages, absolute
+  physical units, and font-relative unit parsing. Raster geometry resolves
+  percentages against the active user viewport axes.
 - Colors:
   `#rgb`, `#rrggbb`, `rgb(...)`, and a small named-color table.
 - Geometry:
@@ -147,7 +152,8 @@ Current strengths:
 Current limits:
 
 - No real XML namespace model.
-- No full DOM/defs/id resolution for raster output.
+- No full DOM/defs expansion for raster output. R0 now has bounded local-id and
+  reference metadata, but R2 still owns actual reference expansion.
 - No `<use>` or `<symbol>` expansion in raster mode.
 - No `<image>` decoding.
 - No gradients, patterns, clips, masks, filters, markers, blend modes, or
@@ -324,9 +330,9 @@ need all of it immediately, but this is the map.
 | Capability | Mature renderer expectation | RohKai now | Gap | Priority |
 |---|---|---|---|---|
 | Secure parse budgets | Comprehensive limits across parse/render/filter/reference work | Basic importer + rasterizer limits | Add unified limit config/report for rasterizer too | P0 |
-| XML model | Namespace-aware XML tree with source spans | Simple custom parser | Add spans, namespaces, better recovery | P1 |
-| Render IR | Scene/display-list separate from XML | `SvgSceneItem` flattening plus `DisplayList`/`DrawCommand` split | Add source spans, reference table, and reusable node ids | P0 |
-| Diagnostics | Structured per-node render/import diagnostics | Importer rich; rasterizer has `SvgRenderReport` with warnings, unsupported buckets, counts, and fidelity | Add source node ids/spans and UI surfacing | P0 |
+| XML model | Namespace-aware XML tree with source spans | Simple custom parser with stable byte spans | Add namespaces and better recovery | P1 |
+| Render IR | Scene/display-list separate from XML | Stable source-spanned node IDs, bounded local references, flattened scene items, and an owned geometry/diagnostic display list | Add R2 reference expansion and later reusable paint/compositing IR | P0/P1 |
+| Diagnostics | Structured per-node render/import diagnostics | Importer rich; rasterizer reports warnings, unsupported buckets, counts, fidelity, and node ID/byte-span provenance | Add R8 report/source UI | P1 |
 | ViewBox/preserveAspectRatio | Full modes and nested viewport behavior | Basic meet-style mapping | Implement full `preserveAspectRatio`, nested SVG | P1 |
 | CSS cascade | Specificity/order/inheritance subset | Importer simple classes; rasterizer inline/presentation | Shared style engine with selector tiers | P1 |
 | Basic shapes | Full geometry and transforms | Mostly supported | Add exact bounds and tests | P0 |
@@ -373,11 +379,11 @@ Tasks:
   rect/circle-equivalent fills, path fill, stroke, transform, opacity,
   unsupported gradient, unsupported clip, unsafe external reference.
 - [x] Add golden tests for currently supported primitives.
-- [ ] Add stable source-spanned `SvgNodeId` values and a bounded local reference
+- [x] Add stable source-spanned `SvgNodeId` values and a bounded local reference
   table to `SvgScene`.
-- [ ] Make raster execution consume only scene/display-list IR; no direct
+- [x] Make raster execution consume only scene/display-list IR; no direct
   XML-node-to-pixel traversal may remain.
-- [ ] Move shared SVG length/unit parsing into `svg_core`.
+- [x] Move shared SVG length/unit parsing into `svg_core`.
 
 Acceptance:
 
@@ -568,8 +574,7 @@ Acceptance:
     `src/svg_core.rs`.
   - [x] Extract shared SVG path tokenization into `src/svg_core.rs` while
     preserving separate importer bounds logic and rasterizer flattening logic.
-  - Extract remaining shared microsyntax parsing candidates:
-    lengths.
+  - [x] Extract remaining shared microsyntax parsing candidate: lengths.
 - `tests/fixtures/svg_render/`
   - [x] Add one golden fixture each for rect/basic fill, path fill, stroke,
     transform, opacity, unsupported gradient, unsupported clip, unsafe external
@@ -583,9 +588,9 @@ Acceptance:
 - [x] Add `src/svg_core.rs` module to avoid importer/rasterizer drift.
 - [x] Move shared color, numeric-list, affine-transform, and path-token parsing
   into `src/svg_core.rs`.
-- Add source-spanned `SvgNodeId` and reference-table metadata on top of the
+- [x] Add source-spanned `SvgNodeId` and reference-table metadata on top of the
   current `SvgScene` / `SvgSceneItem` / `DisplayList` split.
-- Replace direct XML-to-render traversal with scene traversal.
+- [x] Replace direct XML-to-render traversal with owned display-list traversal.
 - [x] Add explicit unsupported-feature enum instead of stringly diagnostics.
 - Add antialiasing strategy doc and prototype.
 

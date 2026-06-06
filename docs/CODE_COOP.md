@@ -7,6 +7,16 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-06 — Codex SVG R0 Closure
+
+On `dev`, SVG R0 is now closed: importer and rasterizer share strict
+length/unit parsing; raster nodes have stable preorder IDs and exact byte spans;
+local IDs/reference uses have independent caps and first-id-wins behavior; and
+non-local structured references are rejected. `DisplayList` now owns lowered
+shape/path geometry, resolved style/transform state, diagnostics, and
+provenance, so the scene can be dropped before raster execution. The next SVG
+work is R1 geometry quality, not more metadata or another parser split.
+
 ## 2026-06-06 — Codex SVG Roadmap Consolidation
 
 On `dev`, I consolidated the scattered Stage 7.x, Stage 9, renderer R0-R8, and

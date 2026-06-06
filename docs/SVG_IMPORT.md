@@ -9,8 +9,9 @@ The parser is pure Rust and adds no crates.
 Importer and rasterizer share `src/svg_core.rs` for dependency-free SVG
 microsyntax helpers. The shared module currently owns color parsing and
 numeric-list scanning, affine transform math and transform-list parsing, and
-path data tokenization, so those behaviors do not drift between editable
-placeholder import and image-mode rasterization.
+path data tokenization plus SVG length/unit parsing and resolution, so those
+behaviors do not drift between editable placeholder import and image-mode
+rasterization.
 
 ## Public API
 
@@ -47,14 +48,16 @@ The rasterizer now has a richer diagnostic API:
   fallback path for canvas/export rendering.
 
 The report records requested/output raster dimensions, rendered/skipped element
-counts, warnings, unsupported feature diagnostics, and a conservative fidelity
-level.
+counts, warnings, unsupported feature diagnostics, a conservative fidelity
+level, and stable node ID/byte-span provenance for node-level renderer
+diagnostics.
 
 Renderer diagnostics for known unsupported elements and attributes are parsed
 from SVG nodes/attributes rather than raw comment-sensitive source scans. This
-reduces false positives and makes skipped counts more meaningful, though a full
-scene/display-list IR is still planned before the report becomes a complete UI
-surface.
+reduces false positives and makes skipped counts more meaningful. Raster
+execution now consumes an owned display list containing lowered geometry,
+resolved style/transform state, pending diagnostics, and source provenance; it
+does not traverse XML nodes while writing pixels.
 
 The generated standalone app embeds the same RohKai-owned rasterizer module when
 Image widgets are present. This removes the older gray-frame placeholder export
@@ -80,7 +83,8 @@ textures at runtime.
 - Quoted and unquoted attribute values.
 - Safe built-in XML entities only: `amp`, `lt`, `gt`, `quot`, `apos`.
 - `width`, `height`, and `viewBox`.
-- Units: `px`, `%`, `in`, `cm`, `mm`, `pt`, `pc`, `em`, `rem`.
+- Units: unitless/`px`, `%`, `in`, `cm`, `mm`, `Q`, `pt`, `pc`, `em`, `ex`,
+  `rem`.
 - Transforms: `matrix`, `translate`, `scale`, `rotate`, `skewX`, `skewY`.
 - Nested groups and transform stack.
 - Local `symbol` / `use` expansion with cycle and depth protection.
@@ -96,9 +100,11 @@ textures at runtime.
 - Image-mode rasterization supports solid fills/strokes, inherited
   display/visibility, viewBox mapping, transforms, basic shapes, and path
   flattening for the current supported subset.
-- Image-mode rasterization now builds an internal scene item list before
-  drawing. Scene items carry inherited style and accumulated transforms, so
-  both group-level and shape-level `transform` attributes affect output.
+- Image-mode rasterization assigns stable preorder node IDs and byte spans,
+  builds a bounded first-id-wins local reference table, then lowers scene items
+  into an owned display list before drawing. Display commands carry inherited
+  style, accumulated transforms, resolved shape/path geometry, diagnostics, and
+  source provenance.
 - Image-mode rasterization emits structured diagnostics for known unsupported
   renderer buckets such as gradients, patterns, clips, masks, filters, markers,
   text, images, use/symbol, stroke dash/cap/join hints, fill-rule, and
@@ -142,8 +148,8 @@ RohKai rejects or ignores unsafe SVG features:
 - External network/file references are rejected for `use`, `image`, and related refs.
 - Image-mode rasterization also refuses unsafe raw `svg_source` containing
   `DOCTYPE`, custom entities, scripts, non-XML processing instructions, external
-  `http(s)`/`file` hrefs, excessive tag count, excessive path commands, or
-  excessive raster dimensions.
+  hrefs or non-local `url(...)` references, excessive tag count, excessive path
+  commands, or excessive raster dimensions.
 - `filter`, animation, `foreignObject`, `textPath`, masks, clips, gradients,
   patterns, paint-server references, and complex CSS selectors are reported as
   unsupported or approximated with structured diagnostics.

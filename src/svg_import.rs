@@ -375,32 +375,22 @@ fn deterministic_source_uuid(
 fn parse_svg_dimensions(svg: &str) -> (f32, f32) {
     // Try viewBox="min-x min-y width height"
     if let Some(vb) = extract_attr(svg, "viewBox").or_else(|| extract_attr(svg, "viewbox")) {
-        let nums: Vec<f32> = vb
-            .split_whitespace()
-            .chain(vb.split(','))
-            .filter_map(|s| s.trim().parse().ok())
-            .collect();
+        let nums = svg_core::parse_numbers(vb);
         if nums.len() >= 4 {
-            let w = nums[2].max(1.0);
-            let h = nums[3].max(1.0);
+            let w = nums[2].max(1.0) as f32;
+            let h = nums[3].max(1.0) as f32;
             return (w, h);
         }
     }
     // Try width/height attributes
     let w = extract_attr(svg, "width")
-        .and_then(|v| {
-            v.trim_end_matches(|c: char| !c.is_ascii_digit())
-                .parse()
-                .ok()
-        })
+        .and_then(|v| parse_length(v, 400.0))
+        .map(|value| value as f32)
         .unwrap_or(400.0_f32)
         .max(1.0);
     let h = extract_attr(svg, "height")
-        .and_then(|v| {
-            v.trim_end_matches(|c: char| !c.is_ascii_digit())
-                .parse()
-                .ok()
-        })
+        .and_then(|v| parse_length(v, 300.0))
+        .map(|value| value as f32)
         .unwrap_or(300.0_f32)
         .max(1.0);
     (w, h)
@@ -1592,27 +1582,7 @@ fn path_bounds(
 }
 
 fn parse_length(value: &str, percent_base: f64) -> Option<f64> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let end = trimmed
-        .find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | '-' | '+' | 'e' | 'E')))
-        .unwrap_or(trimmed.len());
-    let number = trimmed[..end].parse::<f64>().ok()?;
-    let unit = trimmed[end..].trim();
-    let value = match unit {
-        "" | "px" => number,
-        "%" => number * percent_base / 100.0,
-        "in" => number * 96.0,
-        "cm" => number * 96.0 / 2.54,
-        "mm" => number * 96.0 / 25.4,
-        "pt" => number * 96.0 / 72.0,
-        "pc" => number * 16.0,
-        "em" | "rem" => number * 16.0,
-        _ => number,
-    };
-    value.is_finite().then_some(value)
+    svg_core::resolve_length(value, svg_core::SvgLengthContext::user_units(percent_base))
 }
 
 fn parse_transform(value: &str) -> Matrix {

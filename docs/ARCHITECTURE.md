@@ -248,12 +248,14 @@ src/
   svg_import.rs         — SVG → WidgetInstance template importer (zero new dependencies)
   svg_core.rs           — shared SVG microsyntax module: CSS color parsing, numeric-list
                           parsing (e.g. viewBox/points/d tokens), affine transform
-                          decomposition, path command tokenization. Used by both
-                          svg_import.rs and canvas/svg_rasterizer.rs to avoid duplication.
+                          decomposition, path command tokenization, and length/unit
+                          parsing/resolution. Used by both svg_import.rs and
+                          canvas/svg_rasterizer.rs to avoid duplication.
   canvas/
     svg_rasterizer.rs   — zero-dependency SVG rasterizer for canvas Image preview;
-                          includes internal SvgSceneItem flattening boundary with
-                          accumulated transforms and resolved inherited style.
+                          stable source-spanned node IDs, bounded local references,
+                          SvgSceneItem flattening, and an owned display list with
+                          lowered geometry/style/transform/diagnostic state.
                           Supported subset — not full resvg/usvg equivalence.
 ```
 
