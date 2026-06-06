@@ -7,6 +7,16 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-06 — Codex SVG R1 Stroke Plan
+
+On `dev`, the next R1 work is decomposed into a local-space stroke mesh,
+cap/join/miter semantics, dash runs, antialiasing coverage, then exact bounds
+and transform torture tests. The current renderer transforms centerline points
+before applying an untransformed device-space width, so scaled strokes and
+translucent overlapping segment quads are the first correctness hazards to
+remove. R2 should begin only after these R1 geometry invariants and goldens are
+closed.
+
 ## 2026-06-06 — Codex SVG R1 Fill Rules
 
 On `dev`, inherited SVG `fill-rule` semantics now reach the owned display list
