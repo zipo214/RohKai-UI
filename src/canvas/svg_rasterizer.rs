@@ -280,42 +280,44 @@ fn svg_text_allowed(svg_text: &str) -> bool {
 }
 
 #[derive(Clone)]
-struct PendingDiagnostic {
-    feature: &'static str,
-    message: &'static str,
+enum PendingDiagnostic {
+    Unsupported {
+        feature: &'static str,
+        message: &'static str,
+    },
+    Warning {
+        code: &'static str,
+        message: &'static str,
+    },
 }
 
 fn unsupported_attr_diagnostics(attrs: &[(String, String)]) -> Vec<PendingDiagnostic> {
     let mut diagnostics = Vec::new();
     for (key, value) in attrs {
         let diagnostic = match key.as_str() {
-            "clip-path" => Some(PendingDiagnostic {
+            "clip-path" => Some(PendingDiagnostic::Unsupported {
                 feature: "clip-path attribute",
                 message: "clip-path attributes are diagnosed but not applied yet",
             }),
-            "mask" => Some(PendingDiagnostic {
+            "mask" => Some(PendingDiagnostic::Unsupported {
                 feature: "mask attribute",
                 message: "mask attributes are diagnosed but not applied yet",
             }),
-            "filter" => Some(PendingDiagnostic {
+            "filter" => Some(PendingDiagnostic::Unsupported {
                 feature: "filter attribute",
                 message: "filter attributes are diagnosed but not applied yet",
             }),
-            "stroke-dasharray" => Some(PendingDiagnostic {
+            "stroke-dasharray" => Some(PendingDiagnostic::Unsupported {
                 feature: "stroke dasharray",
                 message: "stroke dash arrays are not rasterized yet",
             }),
-            "stroke-linecap" => Some(PendingDiagnostic {
+            "stroke-linecap" => Some(PendingDiagnostic::Unsupported {
                 feature: "stroke linecap",
                 message: "stroke line caps use the current simple stroke fallback",
             }),
-            "stroke-linejoin" => Some(PendingDiagnostic {
+            "stroke-linejoin" => Some(PendingDiagnostic::Unsupported {
                 feature: "stroke linejoin",
                 message: "stroke line joins use the current simple stroke fallback",
-            }),
-            "fill-rule" => Some(PendingDiagnostic {
-                feature: "fill-rule",
-                message: "fill-rule is diagnosed; current path fill uses even-odd behavior",
             }),
             _ => None,
         };
@@ -323,12 +325,20 @@ fn unsupported_attr_diagnostics(attrs: &[(String, String)]) -> Vec<PendingDiagno
             diagnostics.push(diagnostic);
         }
         if value.to_ascii_lowercase().contains("url(#") {
-            diagnostics.push(PendingDiagnostic {
+            diagnostics.push(PendingDiagnostic::Unsupported {
                 feature: "paint server reference",
                 message:
                     "paint-server references are diagnosed; gradients/patterns are not rasterized yet",
             });
         }
+    }
+    if final_style_property(attrs, "fill-rule")
+        .is_some_and(|value| parse_fill_rule(value).is_none())
+    {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "style.invalid_fill_rule",
+            message: "invalid fill-rule value was ignored; inherited or default nonzero behavior was used",
+        });
     }
     diagnostics
 }
@@ -339,8 +349,28 @@ fn emit_diagnostics(
     report: &mut SvgRenderReport,
 ) {
     for diagnostic in diagnostics {
-        report.unsupported_at(diagnostic.feature, diagnostic.message, Some(source));
+        match diagnostic {
+            PendingDiagnostic::Unsupported { feature, message } => {
+                report.unsupported_at(*feature, *message, Some(source));
+            }
+            PendingDiagnostic::Warning { code, message } => {
+                report.warning_at(*code, *message, Some(source));
+            }
+        }
     }
+}
+
+fn final_style_property<'a>(attrs: &'a [(String, String)], property: &str) -> Option<&'a str> {
+    let presentation = attr_get(attrs, property);
+    let inline = attr_get(attrs, "style").and_then(|style| {
+        style.split(';').rev().find_map(|declaration| {
+            let (name, value) = declaration.split_once(':')?;
+            name.trim()
+                .eq_ignore_ascii_case(property)
+                .then_some(value.trim())
+        })
+    });
+    inline.or(presentation)
 }
 
 fn fallback_image(w: usize, h: usize) -> ColorImage {
@@ -371,9 +401,25 @@ impl Default for Paint {
 // Style
 // ---------------------------------------------------------------------------
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum FillRule {
+    #[default]
+    Nonzero,
+    Evenodd,
+}
+
+fn parse_fill_rule(value: &str) -> Option<FillRule> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "nonzero" => Some(FillRule::Nonzero),
+        "evenodd" => Some(FillRule::Evenodd),
+        _ => None,
+    }
+}
+
 #[derive(Clone)]
 struct Style {
     fill: Paint,
+    fill_rule: FillRule,
     stroke: Paint,
     stroke_width: f32,
     opacity: f32,
@@ -386,6 +432,7 @@ impl Default for Style {
     fn default() -> Self {
         Self {
             fill: Paint::Color(Rgba::BLACK),
+            fill_rule: FillRule::Nonzero,
             stroke: Paint::None,
             stroke_width: 1.0,
             opacity: 1.0,
@@ -404,6 +451,11 @@ impl Style {
         for &(k, v) in attrs {
             match k {
                 "fill" => s.fill = parse_paint(v),
+                "fill-rule" => {
+                    if let Some(fill_rule) = parse_fill_rule(v) {
+                        s.fill_rule = fill_rule;
+                    }
+                }
                 "stroke" => s.stroke = parse_paint(v),
                 "stroke-width" => {
                     s.stroke_width = v
@@ -444,6 +496,11 @@ impl Style {
                 let val = decl[colon + 1..].trim();
                 match prop {
                     "fill" => self.fill = parse_paint(val),
+                    "fill-rule" => {
+                        if let Some(fill_rule) = parse_fill_rule(val) {
+                            self.fill_rule = fill_rule;
+                        }
+                    }
                     "stroke" => self.stroke = parse_paint(val),
                     "stroke-width" => {
                         self.stroke_width = val
@@ -1881,7 +1938,7 @@ fn render_shape(
             let mut rendered = false;
             if *closed {
                 if let Some(fill) = style.effective_fill() {
-                    fill_polygon(buf, w, h, &transformed, fill);
+                    fill_polygon(buf, w, h, &transformed, style.fill_rule, fill);
                     rendered = true;
                 }
             }
@@ -1894,7 +1951,7 @@ fn render_shape(
         ShapeGeometry::Path { sub_paths } => {
             let mut rendered = false;
             if let Some(fill) = style.effective_fill() {
-                fill_path_subpaths(buf, w, h, sub_paths, xform, fill);
+                fill_path_subpaths(buf, w, h, sub_paths, xform, style.fill_rule, fill);
                 rendered = true;
             }
             if let Some((stroke_color, stroke_width)) = style.effective_stroke() {
@@ -1927,7 +1984,7 @@ fn render_closed_points(
     let transformed: Vec<_> = points.iter().map(|&(x, y)| xform.apply_f32(x, y)).collect();
     let mut rendered = false;
     if let Some(fill) = style.effective_fill() {
-        fill_polygon(buf, w, h, &transformed, fill);
+        fill_polygon(buf, w, h, &transformed, style.fill_rule, fill);
         rendered = true;
     }
     if let Some((stroke_color, stroke_w)) = style.effective_stroke() {
@@ -2449,103 +2506,130 @@ fn parse_point_list(s: &str) -> Vec<(f32, f32)> {
 // Pixel fill algorithms
 // ---------------------------------------------------------------------------
 
-/// Even-odd scanline fill for a single polygon.
-fn fill_polygon(buf: &mut [u8], w: usize, h: usize, pts: &[(f32, f32)], color: [u8; 4]) {
-    if pts.len() < 3 || color[3] == 0 {
-        return;
-    }
-
-    let min_y = pts
-        .iter()
-        .map(|p| p.1)
-        .fold(f32::INFINITY, f32::min)
-        .max(0.0) as usize;
-    let max_y = pts
-        .iter()
-        .map(|p| p.1)
-        .fold(f32::NEG_INFINITY, f32::max)
-        .min(h as f32 - 1.0) as usize;
-
-    let n = pts.len();
-    for row in min_y..=max_y {
-        let yf = row as f32 + 0.5;
-        let mut xs: Vec<f32> = Vec::new();
-        for k in 0..n {
-            let (x0, y0) = pts[k];
-            let (x1, y1) = pts[(k + 1) % n];
-            if (y0 <= yf && y1 > yf) || (y1 <= yf && y0 > yf) {
-                let t = (yf - y0) / (y1 - y0);
-                xs.push(x0 + t * (x1 - x0));
-            }
-        }
-        xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let mut k = 0;
-        while k + 1 < xs.len() {
-            let (x_start, x_end) = pixel_center_span(xs[k], xs[k + 1], w);
-            for col in x_start..x_end {
-                blend_pixel(buf, w, col, row, color);
-            }
-            k += 2;
-        }
-    }
+fn fill_polygon(
+    buf: &mut [u8],
+    w: usize,
+    h: usize,
+    points: &[(f32, f32)],
+    fill_rule: FillRule,
+    color: [u8; 4],
+) {
+    fill_transformed_subpaths(buf, w, h, &[points], fill_rule, color);
 }
 
-/// Combine multiple sub-paths into one even-odd fill.
 fn fill_path_subpaths(
     buf: &mut [u8],
     w: usize,
     h: usize,
     sub_paths: &[Vec<(f32, f32)>],
     xform: &Transform,
+    fill_rule: FillRule,
     color: [u8; 4],
 ) {
     if color[3] == 0 || sub_paths.is_empty() {
         return;
     }
 
-    // Bounding box
-    let mut min_y = usize::MAX;
-    let mut max_y = 0usize;
-    let all: Vec<Vec<(f32, f32)>> = sub_paths
+    let transformed: Vec<Vec<(f32, f32)>> = sub_paths
         .iter()
         .filter(|s| s.len() >= 2)
         .map(|s| s.iter().map(|&(px, py)| xform.apply_f32(px, py)).collect())
         .collect();
+    let transformed_refs: Vec<&[(f32, f32)]> = transformed.iter().map(Vec::as_slice).collect();
+    fill_transformed_subpaths(buf, w, h, &transformed_refs, fill_rule, color);
+}
 
-    for sub in &all {
-        for &(_, py) in sub {
-            let row = py as usize;
-            min_y = min_y.min(row);
-            max_y = max_y.max(row);
-        }
+#[derive(Clone, Copy)]
+struct ScanCrossing {
+    x: f32,
+    winding_delta: i32,
+}
+
+fn fill_transformed_subpaths(
+    buf: &mut [u8],
+    w: usize,
+    h: usize,
+    sub_paths: &[&[(f32, f32)]],
+    fill_rule: FillRule,
+    color: [u8; 4],
+) {
+    if color[3] == 0 || sub_paths.is_empty() {
+        return;
     }
-    let min_y = min_y.min(h.saturating_sub(1));
-    let max_y = max_y.min(h.saturating_sub(1));
 
-    for row in min_y..=max_y {
+    let min_y = sub_paths
+        .iter()
+        .flat_map(|path| path.iter().map(|point| point.1))
+        .fold(f32::INFINITY, f32::min);
+    let max_y = sub_paths
+        .iter()
+        .flat_map(|path| path.iter().map(|point| point.1))
+        .fold(f32::NEG_INFINITY, f32::max);
+    if !min_y.is_finite() || !max_y.is_finite() {
+        return;
+    }
+    let row_start = ((min_y - 0.5).ceil() as i32).clamp(0, h as i32) as usize;
+    let row_end = ((max_y - 0.5).ceil() as i32).clamp(0, h as i32) as usize;
+
+    for row in row_start..row_end {
         let yf = row as f32 + 0.5;
-        let mut xs: Vec<f32> = Vec::new();
-        for sub in &all {
+        let mut crossings = Vec::new();
+        for sub in sub_paths {
             let n = sub.len();
+            if n < 2 {
+                continue;
+            }
             for k in 0..n {
                 let (x0, y0) = sub[k];
                 let (x1, y1) = sub[(k + 1) % n];
                 if (y0 <= yf && y1 > yf) || (y1 <= yf && y0 > yf) {
                     let t = (yf - y0) / (y1 - y0);
-                    xs.push(x0 + t * (x1 - x0));
+                    crossings.push(ScanCrossing {
+                        x: x0 + t * (x1 - x0),
+                        winding_delta: if y1 > y0 { 1 } else { -1 },
+                    });
                 }
             }
         }
-        xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let mut k = 0;
-        while k + 1 < xs.len() {
-            let (x_start, x_end) = pixel_center_span(xs[k], xs[k + 1], w);
-            for col in x_start..x_end {
-                blend_pixel(buf, w, col, row, color);
+        crossings.sort_by(|left, right| left.x.total_cmp(&right.x));
+
+        let mut index = 0;
+        let mut winding = 0;
+        let mut parity = false;
+        while index < crossings.len() {
+            let x = crossings[index].x;
+            let mut next = index;
+            let mut winding_delta = 0;
+            let mut crossing_count = 0;
+            while next < crossings.len() && crossing_x_eq(crossings[next].x, x) {
+                winding_delta += crossings[next].winding_delta;
+                crossing_count += 1;
+                next += 1;
             }
-            k += 2;
+            winding += winding_delta;
+            if crossing_count % 2 == 1 {
+                parity = !parity;
+            }
+
+            if let Some(next_crossing) = crossings.get(next) {
+                let inside = match fill_rule {
+                    FillRule::Nonzero => winding != 0,
+                    FillRule::Evenodd => parity,
+                };
+                if inside {
+                    let (x_start, x_end) = pixel_center_span(x, next_crossing.x, w);
+                    for col in x_start..x_end {
+                        blend_pixel(buf, w, col, row, color);
+                    }
+                }
+            }
+            index = next;
         }
     }
+}
+
+fn crossing_x_eq(left: f32, right: f32) -> bool {
+    (left - right).abs() <= 1.0e-5 * left.abs().max(right.abs()).max(1.0)
 }
 
 fn pixel_center_span(left: f32, right: f32, width: usize) -> (usize, usize) {
@@ -2589,7 +2673,7 @@ fn stroke_polyline(
             (x1 - nx, y1 - ny),
             (x1 + nx, y1 + ny),
         ];
-        fill_polygon(buf, w, h, &quad, color);
+        fill_polygon(buf, w, h, &quad, FillRule::Nonzero, color);
     }
 }
 
@@ -3016,6 +3100,90 @@ mod tests {
         let image = rasterize(svg, 10, 10).unwrap();
 
         assert_eq!(pixel(&image, 5, 5), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn nonzero_and_evenodd_distinguish_same_winding_contours() {
+        let path = "M1 1 H9 V9 H1 Z M3 3 H7 V7 H3 Z";
+        let nonzero = rasterize(
+            &format!(r##"<svg viewBox="0 0 10 10"><path d="{path}" fill="#ff0000"/></svg>"##),
+            10,
+            10,
+        )
+        .unwrap();
+        let evenodd = rasterize_with_report(
+            &format!(
+                r##"<svg viewBox="0 0 10 10"><path d="{path}" fill="#ff0000" fill-rule="evenodd"/></svg>"##
+            ),
+            10,
+            10,
+        )
+        .unwrap();
+
+        assert_eq!(pixel(&nonzero, 5, 5), [255, 0, 0, 255]);
+        assert_eq!(pixel(&evenodd.image, 5, 5), [0, 0, 0, 0]);
+        assert_eq!(pixel(&evenodd.image, 2, 5), [255, 0, 0, 255]);
+        assert_eq!(evenodd.report.warning_count, 0);
+        assert_eq!(evenodd.report.unsupported_feature_count, 0);
+    }
+
+    #[test]
+    fn nonzero_creates_hole_for_opposite_winding_contours() {
+        let svg = r##"<svg viewBox="0 0 10 10">
+<path d="M1 1 H9 V9 H1 Z M3 3 V7 H7 V3 Z" fill="#00ff00"/>
+</svg>"##;
+        let image = rasterize(svg, 10, 10).unwrap();
+
+        assert_eq!(pixel(&image, 5, 5), [0, 0, 0, 0]);
+        assert_eq!(pixel(&image, 2, 5), [0, 255, 0, 255]);
+    }
+
+    #[test]
+    fn fill_rule_inherits_and_inline_style_overrides_presentation_attribute() {
+        let path = "M1 1 H9 V9 H1 Z M3 3 H7 V7 H3 Z";
+        let inherited = rasterize(
+            &format!(
+                r##"<svg viewBox="0 0 10 10"><g fill-rule="evenodd"><path d="{path}"/></g></svg>"##
+            ),
+            10,
+            10,
+        )
+        .unwrap();
+        let inline_override = rasterize(
+            &format!(
+                r##"<svg viewBox="0 0 10 10"><path d="{path}" fill-rule="nonzero" style="fill-rule: evenodd"/></svg>"##
+            ),
+            10,
+            10,
+        )
+        .unwrap();
+
+        assert_eq!(pixel(&inherited, 5, 5), [0, 0, 0, 0]);
+        assert_eq!(pixel(&inline_override, 5, 5), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn invalid_fill_rule_warns_and_keeps_inherited_rule() {
+        let svg = r##"<svg viewBox="0 0 10 10">
+<g fill-rule="evenodd">
+  <path d="M1 1 H9 V9 H1 Z M3 3 H7 V7 H3 Z" fill-rule="sideways"/>
+</g>
+</svg>"##;
+        let output = rasterize_with_report(svg, 10, 10).unwrap();
+
+        assert_eq!(pixel(&output.image, 5, 5), [0, 0, 0, 0]);
+        let warning = output
+            .report
+            .warnings
+            .iter()
+            .find(|warning| warning.code == "style.invalid_fill_rule")
+            .expect("invalid fill-rule warning");
+        assert!(warning.source.is_some());
+        assert!(!output
+            .report
+            .unsupported_features
+            .iter()
+            .any(|feature| feature.feature == "fill-rule"));
     }
 
     #[test]

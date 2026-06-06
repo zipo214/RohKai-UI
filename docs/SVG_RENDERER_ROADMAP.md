@@ -146,8 +146,9 @@ Current strengths:
   all standard commands including relative variants; cubic flattening has depth
   and point-count caps; arcs approximate to lines.
 - Rendering:
-  even-odd scanline polygon fill, stroke-as-quad expansion, basic alpha
-  compositing.
+  inherited `nonzero`/`evenodd` compound-path filling, stroke-as-quad
+  expansion, and basic alpha compositing. Invalid fill-rule values keep the
+  inherited/default rule and produce source-spanned warnings.
 - Cache integration:
   canvas previews use texture caching and bounded raster dimensions.
 
@@ -340,7 +341,7 @@ need all of it immediately, but this is the map.
 | ViewBox/preserveAspectRatio | Full modes and nested viewport behavior | Full `none`/alignment/meet/slice mapping for root and nested SVG viewports; nested overflow is not clipped | Add nested viewport overflow clipping in R4 | P1/P2 |
 | CSS cascade | Specificity/order/inheritance subset | Importer simple classes; rasterizer inline/presentation | Shared style engine with selector tiers | P1 |
 | Basic shapes | Full geometry and transforms | Mostly supported | Add exact bounds and tests | P0 |
-| Paths | Full grammar, fill rules, stroke geometry | Commands supported; even-odd fill only; simple stroke quads | Nonzero fill, joins/caps/dashes/miter | P0/P1 |
+| Paths | Full grammar, fill rules, stroke geometry | Commands plus inherited nonzero/evenodd filling are supported; strokes remain simple quads | Joins/caps/dashes/miter and exact bounds | P0/P1 |
 | Gradients | Linear/radial with units, transforms, spread, href | Unsupported/diagnosed | Implement paint server model | P2 |
 | Patterns | Tiled nested content | Unsupported/diagnosed | Implement after scene IR | P3 |
 | Images | Embedded PNG/JPEG and secure external policy | Import placeholder only; raster no decode | Add zero-dep PNG/JPEG decision or explicit non-support | P2 |
@@ -404,7 +405,9 @@ Tasks:
 - [x] Implement full `preserveAspectRatio` for root and nested SVG viewports:
   `none`, all nine alignments, and `meet`/`slice`; propagate per-viewport
   percentage bases through importer and raster display-list lowering.
-- Add nonzero fill rule plus `fill-rule` support.
+- [x] Add inherited `nonzero` and `evenodd` fill-rule support for compound
+  paths and closed geometry, with inline-style precedence, invalid-value
+  warnings, analytical winding tests, and golden fixtures.
 - Replace stroke-as-quad with stroke tessellation:
   caps, joins, miter limit, dasharray, dashoffset.
 - Add anti-aliased fill/stroke coverage:

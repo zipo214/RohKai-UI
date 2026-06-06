@@ -119,6 +119,20 @@ pub fn fixtures() -> Vec<GoldenFixture> {
             golden: "RRRR\nRRRR\nRRRR\nRRRR",
         },
         GoldenFixture {
+            name: "nonzero_same_winding_contours",
+            svg: r##"<svg viewBox="0 0 6 6"><path d="M0 0H6V6H0Z M2 2H4V4H2Z" fill="#ff0000"/></svg>"##,
+            width: 6,
+            height: 6,
+            golden: "RRRRRR\nRRRRRR\nRRRRRR\nRRRRRR\nRRRRRR\nRRRRRR",
+        },
+        GoldenFixture {
+            name: "evenodd_same_winding_hole",
+            svg: r##"<svg viewBox="0 0 6 6"><path d="M0 0H6V6H0Z M2 2H4V4H2Z" fill="#ff0000" fill-rule="evenodd"/></svg>"##,
+            width: 6,
+            height: 6,
+            golden: "RRRRRR\nRRRRRR\nRR..RR\nRR..RR\nRRRRRR\nRRRRRR",
+        },
+        GoldenFixture {
             name: "solid_stroke_line",
             svg: r##"<svg viewBox="0 0 4 4"><line x1="0" y1="2" x2="4" y2="2" stroke="#0000ff" stroke-width="2"/></svg>"##,
             width: 4,

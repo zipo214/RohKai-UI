@@ -31,7 +31,8 @@ being comfortable.
   `SvgSceneItem` flattening, and an owned display list that lowers geometry,
   style, transform, diagnostics, provenance, and per-viewport length bases
   before raster drawing. Root/nested viewports implement full
-  `preserveAspectRatio` mapping. Used by canvas Image preview and generated
+  `preserveAspectRatio` mapping; compound paths implement inherited
+  nonzero/evenodd fill rules. Used by canvas Image preview and generated
   exports. It is substantial and real, but still a supported subset, not full
   `resvg` / `usvg` / `tiny-skia` equivalence.
 - `src/svg_core.rs` - shared zero-dependency SVG microsyntax helpers used by the

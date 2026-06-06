@@ -7,6 +7,15 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-06 — Codex SVG R1 Fill Rules
+
+On `dev`, inherited SVG `fill-rule` semantics now reach the owned display list
+and raster backend. The renderer correctly defaults to nonzero, supports
+explicit evenodd, respects inherited and inline-style precedence, and warns on
+invalid final declarations without discarding the inherited rule. Analytical
+winding tests and golden fixtures protect the distinction; stroke tessellation
+is the next R1 slice.
+
 ## 2026-06-06 — Codex SVG R1 Viewport Semantics
 
 On `dev`, R1 now has shared full `preserveAspectRatio` semantics for root and

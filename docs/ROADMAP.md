@@ -295,6 +295,9 @@ Historical foundation completed here:
 - [x] Full SVG `preserveAspectRatio` semantics for root and nested viewports:
       `none`, all nine alignments, `meet`/`slice`, and per-viewport percentage
       bases; nested overflow clipping remains R4
+- [x] SVG compound-path fill semantics: inherited `nonzero` default and
+      explicit `evenodd`, inline-style precedence, invalid-value warnings,
+      analytical winding tests, and golden fixtures
 
 ## Stage 8 Addendum — Rulers, Presets, Theming ✅
 
@@ -426,6 +429,9 @@ requiring schema changes.
 - [x] SVG R1 viewport semantics — full root/nested `preserveAspectRatio`
       alignment, meet/slice/none mapping, and nested percentage coordinate
       bases; clipping remains explicitly deferred to R4
+- [x] SVG R1 fill semantics — nonzero/evenodd winding behavior reaches the
+      raster backend through inherited style and is protected by analytical
+      and golden tests
 - [x] Golden renderer fixture harness for supported raster output —
       `src/canvas/svg_golden.rs` (#[cfg(test)]); deterministic ASCII-grid
       signatures, supported + unsupported buckets, drift-detecting tests; zero

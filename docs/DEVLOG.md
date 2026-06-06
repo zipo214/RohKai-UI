@@ -2,6 +2,53 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-06 — SVG R1 Nonzero And Evenodd Fill Rules
+
+### Context Reviewed Before Editing
+- `AGENTS.md` and low-token preflight
+- `.agents/skills/svg-zero-dep/SKILL.md`
+- `docs/SVG_RENDERER_ROADMAP.md`, `docs/SVG_IMPORT.md`,
+  `docs/CODE_COOP.md`, and current git status
+- Raster style inheritance, display-list lowering, path flattening, compound
+  scan conversion, renderer diagnostics, and golden fixtures
+
+### Changes
+- Added inherited `FillRule` state with SVG-correct `nonzero` default and
+  explicit `evenodd` support from presentation attributes and inline styles.
+- Removed the obsolete unsupported-feature diagnostic for valid fill-rule
+  declarations.
+- Added source-spanned `style.invalid_fill_rule` warnings; invalid declarations
+  retain inherited/default behavior.
+- Replaced pairwise even-odd path filling with a deterministic crossing sweep
+  that groups coincident intersections and evaluates either winding count or
+  parity for every scanline interval.
+- Applied fill rules to compound paths and other closed geometry while keeping
+  the path-command/point/raster safety caps intact.
+- Added analytical tests for same-direction contours, opposite-direction
+  contours, inheritance, inline-style precedence, and malformed values.
+- Added nonzero and evenodd fixtures to the golden renderer corpus and updated
+  roadmap, current behavior, architecture, code index, and feature evaluation.
+
+### Verification
+- Focused SVG rasterizer tests: 26 passed.
+- SVG golden tests: 4 passed with the expanded fixture set.
+- Full suite: 214 passed, 2 ignored.
+- `cargo fmt --check`: clean.
+- `cargo check`: clean.
+- `cargo clippy -- -D warnings`: clean.
+- `scripts/check-text-encoding.ps1`: clean.
+- `scripts/check-dependency-policy.ps1`: clean.
+- `scripts/validate-svg-import.ps1`: clean.
+- Launch smoke: an existing June 5 RohKai process held the default debug
+  executable open, so the current tree was built into `target/smoke`; that
+  isolated binary stayed alive for 5 seconds.
+
+### Risks / Follow-ups
+- Fill edges remain hard coverage until the R1 antialiasing slice.
+- Stroke geometry still uses segment quads and does not yet implement
+  linecap/linejoin/miter/dash semantics.
+- Exact geometric/stroke bounds remain a later R1 item.
+
 ## 2026-06-06 — SVG R1 PreserveAspectRatio And Nested Viewports
 
 ### Context Reviewed Before Editing

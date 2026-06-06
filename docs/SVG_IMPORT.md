@@ -100,7 +100,8 @@ textures at runtime.
   widgets currently store RGB, not alpha.
 - Image-mode rasterization supports solid fills/strokes, inherited
   display/visibility, root and nested SVG viewport mapping, per-viewport
-  percentage bases, transforms, basic shapes, and path flattening for the
+  percentage bases, transforms, basic shapes, path flattening, and inherited
+  `fill-rule` values (`nonzero` by default and explicit `evenodd`) for the
   current supported subset. Nested viewport overflow clipping is not yet
   applied.
 - Image-mode rasterization assigns stable preorder node IDs and byte spans,
@@ -110,8 +111,9 @@ textures at runtime.
   source provenance.
 - Image-mode rasterization emits structured diagnostics for known unsupported
   renderer buckets such as gradients, patterns, clips, masks, filters, markers,
-  text, images, use/symbol, stroke dash/cap/join hints, fill-rule, and
-  paint-server references.
+  text, images, use/symbol, stroke dash/cap/join hints, and paint-server
+  references. Invalid fill-rule values produce warnings and preserve the
+  inherited/default rule.
 - Text flattening for simple `tspan` content.
 - Path bounds for `M`, `L`, `H`, `V`, `C`, `S`, `Q`, `T`, `A`, and `Z`.
 - Relative and absolute path commands.

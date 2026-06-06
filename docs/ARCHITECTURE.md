@@ -258,7 +258,9 @@ src/
                           SvgSceneItem flattening, and an owned display list with
                           lowered geometry/style/transform/diagnostic state.
                           Root and nested SVG viewports carry independent length
-                          bases and full preserveAspectRatio transforms.
+                          bases and full preserveAspectRatio transforms; inherited
+                          nonzero/evenodd fill rules reach compound-path scan
+                          conversion through the resolved Style.
                           Supported subset — not full resvg/usvg equivalence.
 ```
 

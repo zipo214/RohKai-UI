@@ -28,7 +28,7 @@ capabilities where required.
 | Source preservation | 4 | Original SVG preserved beside imported template and in Image widgets. | Needs source diff/viewer integration polish. |
 | Shared microsyntax | 3-4 | Shared colors, numbers, transforms, path tokenization, length/unit resolution, and preserveAspectRatio/viewBox mapping. | Needs shared style declarations plus broader fuzz/property tests. |
 | Raster IR | 3-4 | Stable source-spanned node IDs, bounded local references, flattened scene items, and owned lowered display commands. | R2 still needs actual reference expansion; later phases need reusable paint/compositing IR. |
-| Raster renderer | 2-3 | Own software rasterizer for supported subset; golden fixtures; full root/nested preserveAspectRatio mapping with per-viewport percentage bases. | Far from full SVG 1.1/2, text, filters, gradients, masks, compositing, and nested viewport clipping. |
+| Raster renderer | 2-3 | Own software rasterizer for supported subset; golden fixtures; full root/nested preserveAspectRatio mapping; inherited nonzero/evenodd compound-path fills. | Far from full SVG 1.1/2, text, filters, gradients, masks, compositing, advanced strokes, and nested viewport clipping. |
 | Text/tspan | 1-2 | Simple text import/flattening; text renderer planned. | Needs robust span model, bidi/shaping decisions, editable multi-span output. |
 
 ## Utility
@@ -55,7 +55,7 @@ capabilities where required.
 |---|---|---|
 | XML/security | Hardened subset | Full safe XML gate with fuzzing and resource budgets. |
 | CSS cascade | Inline/simple style subset | Selectors, inheritance, specificity for supported properties. |
-| Paths | Shared tokenizer and bounds/render subset | Full path semantics, fill rules, markers, stroke joins/caps. |
+| Paths | Shared tokenizer, command coverage, and nonzero/evenodd fill semantics | Exact bounds, markers, stroke joins/caps/dashes, antialiasing. |
 | Paint | Solid colors/opacity | Gradients, patterns, paint servers with diagnostics/fallbacks. |
 | Text | Simple labels/flattened spans | Text runs, font selection, bidi, shaping, fallback, editable grouping. |
 | Clipping/masking | Diagnostics awareness | Correct render where supported, import warnings where not editable. |
