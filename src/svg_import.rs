@@ -1072,24 +1072,44 @@ fn diagnose_descendants(node: &Node, nodes: &[Node], ctx: &mut ImportContext) {
 }
 
 fn update_viewport(node: &Node, state: &mut ParseState) {
+    let parent_w = state.viewport_w;
+    let parent_h = state.viewport_h;
+    let x = attr(&node.tag, "x")
+        .and_then(|value| parse_length(value, parent_w))
+        .unwrap_or(0.0);
+    let y = attr(&node.tag, "y")
+        .and_then(|value| parse_length(value, parent_h))
+        .unwrap_or(0.0);
     let width = attr(&node.tag, "width")
-        .and_then(|v| parse_length(v, state.viewport_w))
-        .unwrap_or(state.viewport_w);
+        .and_then(|value| parse_length(value, parent_w))
+        .unwrap_or(parent_w);
     let height = attr(&node.tag, "height")
-        .and_then(|v| parse_length(v, state.viewport_h))
-        .unwrap_or(state.viewport_h);
-    state.viewport_w = width.max(MIN_PLACEHOLDER_SIZE);
-    state.viewport_h = height.max(MIN_PLACEHOLDER_SIZE);
+        .and_then(|value| parse_length(value, parent_h))
+        .unwrap_or(parent_h);
+    let width = width.max(0.0);
+    let height = height.max(0.0);
 
     if let Some(view_box) = attr(&node.tag, "viewBox").or_else(|| attr(&node.tag, "viewbox")) {
         if let Some(nums) = parse_numbers(view_box).filter(|n| n.len() >= 4) {
-            let sx = state.viewport_w / nums[2].abs().max(1.0);
-            let sy = state.viewport_h / nums[3].abs().max(1.0);
-            let view_transform =
-                Matrix::scale(sx, sy).multiply(Matrix::translate(-nums[0], -nums[1]));
-            state.transform = state.transform.multiply(view_transform);
+            let aspect_ratio = svg_core::parse_preserve_aspect_ratio(
+                attr(&node.tag, "preserveaspectratio").unwrap_or(""),
+            );
+            if let Some(view_transform) = svg_core::viewbox_transform(
+                [nums[0], nums[1], nums[2], nums[3]],
+                [x, y, width, height],
+                aspect_ratio,
+            ) {
+                state.transform = state.transform.multiply(view_transform);
+                state.viewport_w = nums[2].abs();
+                state.viewport_h = nums[3].abs();
+                return;
+            }
         }
     }
+
+    state.transform = state.transform.multiply(Matrix::translate(x, y));
+    state.viewport_w = width;
+    state.viewport_h = height;
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2039,6 +2059,51 @@ mod tests {
         assert_eq!(output.widgets[2].kind, WidgetKind::Label);
         assert_eq!(output.widgets[2].props.label, "Hello & Rohkai");
         assert_eq!(output.report.fidelity, SvgFidelity::Medium);
+    }
+
+    #[test]
+    fn nested_viewport_state_honors_meet_and_none_mapping() {
+        let node = |preserve_aspect_ratio: &str| Node {
+            index: 1,
+            children: Vec::new(),
+            tag: Tag {
+                name: "svg".to_owned(),
+                attrs: vec![
+                    ("x".to_owned(), "20".to_owned()),
+                    ("y".to_owned(), "10".to_owned()),
+                    ("width".to_owned(), "40".to_owned()),
+                    ("height".to_owned(), "60".to_owned()),
+                    ("viewbox".to_owned(), "0 0 10 10".to_owned()),
+                    (
+                        "preserveaspectratio".to_owned(),
+                        preserve_aspect_ratio.to_owned(),
+                    ),
+                ],
+                self_closing: false,
+            },
+            text: String::new(),
+            source_order: 1,
+        };
+
+        let mut meet = ParseState {
+            viewport_w: 100.0,
+            viewport_h: 100.0,
+            ..Default::default()
+        };
+        update_viewport(&node("xMidYMid meet"), &mut meet);
+        assert_eq!(meet.transform.apply(0.0, 0.0), (20.0, 20.0));
+        assert_eq!(meet.transform.apply(10.0, 10.0), (60.0, 60.0));
+        assert_eq!((meet.viewport_w, meet.viewport_h), (10.0, 10.0));
+
+        let mut none = ParseState {
+            viewport_w: 100.0,
+            viewport_h: 100.0,
+            ..Default::default()
+        };
+        update_viewport(&node("none"), &mut none);
+        assert_eq!(none.transform.apply(0.0, 0.0), (20.0, 10.0));
+        assert_eq!(none.transform.apply(10.0, 10.0), (60.0, 70.0));
+        assert_eq!((none.viewport_w, none.viewport_h), (10.0, 10.0));
     }
 
     #[test]

@@ -554,6 +554,7 @@ enum SvgNode {
     Group {
         id: SvgNodeId,
         span: SvgSourceSpan,
+        is_viewport: bool,
         attrs: Vec<(String, String)>,
         children: Vec<SvgNode>,
     },
@@ -610,6 +611,7 @@ enum SvgNode {
 
 struct SvgDoc {
     viewbox: Option<[f32; 4]>,
+    preserve_aspect_ratio: svg_core::SvgPreserveAspectRatio,
     width: f32,
     height: f32,
     nodes: Vec<SvgNode>,
@@ -617,6 +619,7 @@ struct SvgDoc {
 
 struct SvgScene {
     viewbox: Option<[f32; 4]>,
+    preserve_aspect_ratio: svg_core::SvgPreserveAspectRatio,
     width: f32,
     height: f32,
     items: Vec<SvgSceneItem>,
@@ -627,6 +630,7 @@ struct SvgSceneItem {
     node: SvgNode,
     transform: Transform,
     style: Style,
+    length_bases: SvgLengthBases,
     skipped_by_unsupported_ancestor: bool,
 }
 
@@ -637,18 +641,12 @@ struct SvgLengthBases {
     other: f64,
 }
 
-impl SvgScene {
-    fn length_bases(&self) -> SvgLengthBases {
-        let (width, height) = match self.viewbox {
-            Some([_, _, width, height]) if width > 0.0 && height > 0.0 => {
-                (width as f64, height as f64)
-            }
-            _ => (self.width.max(0.0) as f64, self.height.max(0.0) as f64),
-        };
-        SvgLengthBases {
-            horizontal: width,
-            vertical: height,
-            other: ((width * width + height * height) / 2.0).sqrt(),
+impl SvgLengthBases {
+    fn new(horizontal: f64, vertical: f64) -> Self {
+        Self {
+            horizontal,
+            vertical,
+            other: ((horizontal * horizontal + vertical * vertical) / 2.0).sqrt(),
         }
     }
 }
@@ -686,16 +684,24 @@ impl SvgScene {
 
     fn from_doc(doc: SvgDoc) -> Self {
         let references = SvgReferenceTable::build(&doc.nodes);
+        let root_length_bases = match doc.viewbox {
+            Some([_, _, width, height]) if width > 0.0 && height > 0.0 => {
+                SvgLengthBases::new(width as f64, height as f64)
+            }
+            _ => SvgLengthBases::new(doc.width.max(0.0) as f64, doc.height.max(0.0) as f64),
+        };
         let mut items = Vec::new();
         Self::build_items(
             &doc.nodes,
             Transform::identity(),
             Style::default(),
+            root_length_bases,
             false,
             &mut items,
         );
         Self {
             viewbox: doc.viewbox,
+            preserve_aspect_ratio: doc.preserve_aspect_ratio,
             width: doc.width,
             height: doc.height,
             items,
@@ -707,6 +713,7 @@ impl SvgScene {
         nodes: &[SvgNode],
         inherited_transform: Transform,
         inherited_style: Style,
+        inherited_length_bases: SvgLengthBases,
         skipped_by_unsupported_ancestor: bool,
         items: &mut Vec<SvgSceneItem>,
     ) {
@@ -720,20 +727,33 @@ impl SvgScene {
             let local_transform = attr_get(attrs, "transform")
                 .map(Transform::parse_chained)
                 .unwrap_or_else(Transform::identity);
-            let combined_transform = inherited_transform.concat(local_transform);
+            let mut combined_transform = inherited_transform.concat(local_transform);
+            let mut child_length_bases = inherited_length_bases;
 
             match node {
-                SvgNode::Group { children, .. } => {
+                SvgNode::Group {
+                    is_viewport,
+                    children,
+                    ..
+                } => {
+                    if *is_viewport {
+                        let (viewport_transform, viewport_bases) =
+                            nested_viewport(attrs, inherited_length_bases);
+                        combined_transform = combined_transform.concat(viewport_transform);
+                        child_length_bases = viewport_bases;
+                    }
                     items.push(SvgSceneItem {
                         node: node.shallow(),
                         transform: combined_transform,
                         style: local_style.clone(),
+                        length_bases: child_length_bases,
                         skipped_by_unsupported_ancestor,
                     });
                     Self::build_items(
                         children,
                         combined_transform,
                         local_style,
+                        child_length_bases,
                         skipped_by_unsupported_ancestor,
                         items,
                     );
@@ -743,14 +763,23 @@ impl SvgScene {
                         node: node.shallow(),
                         transform: combined_transform,
                         style: local_style.clone(),
+                        length_bases: inherited_length_bases,
                         skipped_by_unsupported_ancestor,
                     });
-                    Self::build_items(children, combined_transform, local_style, true, items);
+                    Self::build_items(
+                        children,
+                        combined_transform,
+                        local_style,
+                        inherited_length_bases,
+                        true,
+                        items,
+                    );
                 }
                 _ => items.push(SvgSceneItem {
                     node: node.shallow(),
                     transform: combined_transform,
                     style: local_style,
+                    length_bases: inherited_length_bases,
                     skipped_by_unsupported_ancestor,
                 }),
             }
@@ -820,10 +849,15 @@ impl SvgNode {
     fn shallow(&self) -> Self {
         match self {
             SvgNode::Group {
-                id, span, attrs, ..
+                id,
+                span,
+                is_viewport,
+                attrs,
+                ..
             } => SvgNode::Group {
                 id: *id,
                 span: *span,
+                is_viewport: *is_viewport,
                 attrs: attrs.clone(),
                 children: Vec::new(),
             },
@@ -1077,6 +1111,8 @@ impl SvgDoc {
                 None
             }
         });
+        let preserve_aspect_ratio =
+            svg_core::parse_preserve_aspect_ratio(attr("preserveaspectratio").unwrap_or(""));
 
         let width = attr("width")
             .and_then(|value| {
@@ -1091,6 +1127,7 @@ impl SvgDoc {
 
         Some(SvgDoc {
             viewbox,
+            preserve_aspect_ratio,
             width,
             height,
             nodes: root_children,
@@ -1344,6 +1381,7 @@ impl<'a> XmlParser<'a> {
             "svg" | "g" => Some(SvgNode::Group {
                 id,
                 span,
+                is_viewport: tag == "svg",
                 attrs,
                 children,
             }),
@@ -1470,35 +1508,74 @@ fn attr_f32(attrs: &[(String, String)], key: &str, percent_base: f64, default: f
         .unwrap_or(default)
 }
 
+fn parse_view_box(attrs: &[(String, String)]) -> Option<[f64; 4]> {
+    let values = svg_core::parse_numbers(attr_get(attrs, "viewbox")?);
+    (values.len() >= 4).then_some([values[0], values[1], values[2], values[3]])
+}
+
+fn nested_viewport(
+    attrs: &[(String, String)],
+    parent_bases: SvgLengthBases,
+) -> (Transform, SvgLengthBases) {
+    let x = attr_f32(attrs, "x", parent_bases.horizontal, 0.0) as f64;
+    let y = attr_f32(attrs, "y", parent_bases.vertical, 0.0) as f64;
+    let width = attr_f32(
+        attrs,
+        "width",
+        parent_bases.horizontal,
+        parent_bases.horizontal as f32,
+    )
+    .max(0.0) as f64;
+    let height = attr_f32(
+        attrs,
+        "height",
+        parent_bases.vertical,
+        parent_bases.vertical as f32,
+    )
+    .max(0.0) as f64;
+
+    if let Some(view_box) = parse_view_box(attrs) {
+        let aspect_ratio = svg_core::parse_preserve_aspect_ratio(
+            attr_get(attrs, "preserveaspectratio").unwrap_or(""),
+        );
+        if let Some(transform) =
+            svg_core::viewbox_transform(view_box, [x, y, width, height], aspect_ratio)
+        {
+            return (
+                transform,
+                SvgLengthBases::new(view_box[2].abs(), view_box[3].abs()),
+            );
+        }
+    }
+
+    (
+        Transform::translate(x, y),
+        SvgLengthBases::new(width, height),
+    )
+}
+
 // ---------------------------------------------------------------------------
 // ViewBox → pixel transform
 // ---------------------------------------------------------------------------
 
 fn viewbox_to_pixel_transform(scene: &SvgScene, pw: usize, ph: usize) -> Transform {
-    let (vbx, vby, vbw, vbh) = match scene.viewbox {
-        Some([x, y, w, h]) if w > 0.0 && h > 0.0 => (x, y, w, h),
+    let view_box = match scene.viewbox {
+        Some([x, y, w, h]) if w > 0.0 && h > 0.0 => [x as f64, y as f64, w as f64, h as f64],
         _ => {
             // Fall back to width/height if present
             if scene.width > 0.0 && scene.height > 0.0 {
-                (0.0, 0.0, scene.width, scene.height)
+                [0.0, 0.0, scene.width as f64, scene.height as f64]
             } else {
                 return Transform::identity();
             }
         }
     };
-
-    let scale = (pw as f32 / vbw).min(ph as f32 / vbh);
-    let tx = (pw as f32 - vbw * scale) / 2.0 - vbx * scale;
-    let ty = (ph as f32 - vbh * scale) / 2.0 - vby * scale;
-
-    Transform {
-        a: scale as f64,
-        b: 0.0,
-        c: 0.0,
-        d: scale as f64,
-        e: tx as f64,
-        f: ty as f64,
-    }
+    svg_core::viewbox_transform(
+        view_box,
+        [0.0, 0.0, pw as f64, ph as f64],
+        scene.preserve_aspect_ratio,
+    )
+    .unwrap_or_else(Transform::identity)
 }
 
 // ---------------------------------------------------------------------------
@@ -1586,7 +1663,6 @@ impl DisplayList {
     /// Lowering pass: scene items → flat draw-command stream.
     fn build(scene: &SvgScene, view_xform: &Transform) -> Self {
         let mut commands = Vec::with_capacity(scene.items.len());
-        let length_bases = scene.length_bases();
         for item in &scene.items {
             let node_xform = view_xform.concat(item.transform);
             let source = item.node.source();
@@ -1613,7 +1689,7 @@ impl DisplayList {
                         }
                     } else {
                         DrawCommand::Shape {
-                            geometry: lower_shape_geometry(shape_node, length_bases),
+                            geometry: lower_shape_geometry(shape_node, item.length_bases),
                             transform: node_xform,
                             style: item.style.clone(),
                             diagnostics,
@@ -2405,9 +2481,8 @@ fn fill_polygon(buf: &mut [u8], w: usize, h: usize, pts: &[(f32, f32)], color: [
         xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let mut k = 0;
         while k + 1 < xs.len() {
-            let x_start = (xs[k].ceil() as i32).max(0) as usize;
-            let x_end = (xs[k + 1].floor() as i32).min(w as i32 - 1) as usize;
-            for col in x_start..=x_end {
+            let (x_start, x_end) = pixel_center_span(xs[k], xs[k + 1], w);
+            for col in x_start..x_end {
                 blend_pixel(buf, w, col, row, color);
             }
             k += 2;
@@ -2464,14 +2539,22 @@ fn fill_path_subpaths(
         xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let mut k = 0;
         while k + 1 < xs.len() {
-            let x_start = (xs[k].ceil() as i32).max(0) as usize;
-            let x_end = (xs[k + 1].floor() as i32).min(w as i32 - 1) as usize;
-            for col in x_start..=x_end {
+            let (x_start, x_end) = pixel_center_span(xs[k], xs[k + 1], w);
+            for col in x_start..x_end {
                 blend_pixel(buf, w, col, row, color);
             }
             k += 2;
         }
     }
+}
+
+fn pixel_center_span(left: f32, right: f32, width: usize) -> (usize, usize) {
+    let start = (left - 0.5).ceil() as i32;
+    let end = (right - 0.5).ceil() as i32;
+    (
+        start.clamp(0, width as i32) as usize,
+        end.clamp(0, width as i32) as usize,
+    )
 }
 
 /// Stroke a polyline by expanding each segment into a thin quad.
@@ -2537,6 +2620,27 @@ mod tests {
 
     fn pixel(image: &ColorImage, x: usize, y: usize) -> [u8; 4] {
         image.pixels[y * image.size[0] + x].to_array()
+    }
+
+    fn alpha_bounds(image: &ColorImage) -> Option<[usize; 4]> {
+        let mut min_x = image.size[0];
+        let mut min_y = image.size[1];
+        let mut max_x = 0;
+        let mut max_y = 0;
+        let mut found = false;
+        for y in 0..image.size[1] {
+            for x in 0..image.size[0] {
+                if pixel(image, x, y)[3] == 0 {
+                    continue;
+                }
+                found = true;
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
+            }
+        }
+        found.then_some([min_x, min_y, max_x, max_y])
     }
 
     #[test]
@@ -2791,6 +2895,85 @@ mod tests {
     }
 
     #[test]
+    fn root_viewbox_honors_meet_none_and_max_alignment() {
+        let meet = rasterize(
+            r##"<svg viewBox="0 0 100 50"><rect width="100" height="50" fill="#ff0000"/></svg>"##,
+            200,
+            200,
+        )
+        .unwrap();
+        assert_eq!(alpha_bounds(&meet), Some([0, 50, 199, 149]));
+        assert_eq!(pixel(&meet, 10, 10), [0, 0, 0, 0]);
+        assert_eq!(pixel(&meet, 10, 60), [255, 0, 0, 255]);
+
+        let none = rasterize(
+            r##"<svg viewBox="0 0 100 50" preserveAspectRatio="none"><rect width="100" height="50" fill="#ff0000"/></svg>"##,
+            200,
+            200,
+        )
+        .unwrap();
+        assert_eq!(alpha_bounds(&none), Some([0, 0, 199, 199]));
+        assert_eq!(pixel(&none, 10, 10), [255, 0, 0, 255]);
+        assert_eq!(pixel(&none, 10, 190), [255, 0, 0, 255]);
+
+        let max = rasterize(
+            r##"<svg viewBox="0 0 100 50" preserveAspectRatio="xMaxYMax meet"><rect width="100" height="50" fill="#ff0000"/></svg>"##,
+            200,
+            200,
+        )
+        .unwrap();
+        assert_eq!(alpha_bounds(&max), Some([0, 100, 199, 199]));
+        assert_eq!(pixel(&max, 10, 50), [0, 0, 0, 0]);
+        assert_eq!(pixel(&max, 10, 150), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn nested_svg_viewports_honor_aspect_ratio_and_percentage_geometry() {
+        let meet = rasterize(
+            r##"<svg viewBox="0 0 100 100">
+<svg x="20" y="10" width="40" height="60" viewBox="0 0 10 10">
+  <rect width="10" height="10" fill="#ff0000"/>
+</svg>
+</svg>"##,
+            100,
+            100,
+        )
+        .unwrap();
+        assert_eq!(alpha_bounds(&meet), Some([20, 20, 59, 59]));
+        assert_eq!(pixel(&meet, 25, 15), [0, 0, 0, 0]);
+        assert_eq!(pixel(&meet, 25, 25), [255, 0, 0, 255]);
+
+        let none = rasterize(
+            r##"<svg viewBox="0 0 100 100">
+<svg x="20" y="10" width="40" height="60" viewBox="0 0 10 10" preserveAspectRatio="none">
+  <rect width="10" height="10" fill="#00ff00"/>
+</svg>
+</svg>"##,
+            100,
+            100,
+        )
+        .unwrap();
+        assert_eq!(alpha_bounds(&none), Some([20, 10, 59, 69]));
+        assert_eq!(pixel(&none, 25, 15), [0, 255, 0, 255]);
+        assert_eq!(pixel(&none, 25, 65), [0, 255, 0, 255]);
+
+        let percentage = rasterize(
+            r##"<svg viewBox="0 0 100 100">
+<svg x="10%" y="20%" width="50%" height="40%" viewBox="0 0 10 10">
+  <rect width="100%" height="100%" fill="#0000ff"/>
+</svg>
+</svg>"##,
+            100,
+            100,
+        )
+        .unwrap();
+        assert_eq!(alpha_bounds(&percentage), Some([15, 20, 54, 59]));
+        assert_eq!(pixel(&percentage, 12, 25), [0, 0, 0, 0]);
+        assert_eq!(pixel(&percentage, 20, 25), [0, 0, 255, 255]);
+        assert_eq!(pixel(&percentage, 50, 55), [0, 0, 255, 255]);
+    }
+
+    #[test]
     fn root_percentage_dimensions_keep_a_usable_viewport_fallback() {
         let scene = SvgScene::parse(
             r#"<svg width="100%" height="50%"><rect width="100%" height="100%"/></svg>"#,
@@ -2802,7 +2985,7 @@ mod tests {
         let geometry = scene
             .items
             .iter()
-            .find_map(|item| lower_shape_geometry(&item.node, scene.length_bases()))
+            .find_map(|item| lower_shape_geometry(&item.node, item.length_bases))
             .unwrap();
         assert!(matches!(
             geometry,

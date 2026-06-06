@@ -7,6 +7,15 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-06 — Codex SVG R1 Viewport Semantics
+
+On `dev`, R1 now has shared full `preserveAspectRatio` semantics for root and
+nested SVG viewports: `none`, all nine alignments, `meet`/`slice`, and
+per-viewport percentage bases. Analytical alpha-bound and pixel tests caught
+and removed a leaked 20px designer-placeholder minimum from importer viewport
+math and corrected raster fill to pixel-center coverage. Nested viewport
+overflow clipping remains R4; the next R1 slice is nonzero/evenodd fill rules.
+
 ## 2026-06-06 — Codex SVG R0 Closure
 
 On `dev`, SVG R0 is now closed: importer and rasterizer share strict

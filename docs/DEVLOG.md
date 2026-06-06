@@ -2,6 +2,58 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-06 — SVG R1 PreserveAspectRatio And Nested Viewports
+
+### Context Reviewed Before Editing
+- `AGENTS.md` and low-token preflight
+- `.agents/skills/svg-zero-dep/SKILL.md`
+- `.agents/skills/project-model/SKILL.md`
+- `docs/SVG_RENDERER_ROADMAP.md`, `docs/SVG_IMPORT.md`,
+  `docs/CODE_COOP.md`, and current git status
+- `src/svg_core.rs`, `src/svg_import.rs`, and
+  `src/canvas/svg_rasterizer.rs`
+
+### Changes
+- Added shared parsing and transform construction for all SVG
+  `preserveAspectRatio` alignments, `meet`, `slice`, `none`, and optional
+  `defer` recognition.
+- Applied the shared mapping to importer root/nested viewport state and
+  rasterizer root/nested `<svg>` scene traversal.
+- Added per-scene-item viewport length bases so nested percentages resolve
+  against the nested user coordinate system rather than the root viewport.
+- Added analytical renderer tests that recover the full alpha bounds and probe
+  interior/exterior pixels for root meet/none/max alignment, nested viewport
+  alignment, and percentage geometry.
+- Removed an incorrect coupling between SVG viewport dimensions and RohKai's
+  20px minimum editable-placeholder size.
+- Corrected polygon and path filling to use pixel-center horizontal coverage,
+  eliminating an extra endpoint column while preserving existing goldens.
+- Updated the SVG roadmap, current-behavior docs, architecture, code index,
+  feature evaluation, and CoOp handoff. Nested viewport overflow clipping
+  remains explicitly deferred to R4.
+
+### Verification
+- Focused shared-core tests: 12 passed.
+- Focused SVG importer tests: 18 passed.
+- Focused SVG rasterizer tests: 22 passed.
+- SVG golden tests: 4 passed.
+- Full suite: 210 passed, 2 ignored.
+- `cargo fmt --check`: clean.
+- `cargo check`: clean.
+- `cargo clippy -- -D warnings`: clean.
+- `scripts/check-text-encoding.ps1`: clean.
+- `scripts/check-dependency-policy.ps1`: clean.
+- `scripts/validate-svg-import.ps1`: clean.
+- Launch smoke: debug RohKai process stayed alive for 5 seconds.
+
+### Risks / Follow-ups
+- Nested viewport coordinate mapping is complete for this phase, but overflow
+  clipping is not implemented and remains an R4 clipping task.
+- `defer` is parsed and preserved in the shared value model; referenced-image
+  behavior that gives it meaning is outside this slice.
+- The next R1 slice is explicit `nonzero`/`evenodd` fill-rule support, followed
+  by stroke tessellation and antialiasing.
+
 ## 2026-06-06 — SVG R0 Metadata, Lengths, And Owned Display List
 
 ### Context Reviewed Before Editing

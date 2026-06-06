@@ -120,7 +120,9 @@ Current strengths:
   rendered/skipped counts, parsed-node/attribute unsupported feature list,
   warnings, output raster dimensions, conservative fidelity score, and
   source-spanned node provenance on node-level diagnostics.
-- ViewBox-to-pixel mapping.
+- Full root and nested viewport mapping for `preserveAspectRatio`: `none`, all
+  nine alignments, and `meet`/`slice`. Nested viewport overflow clipping remains
+  a later clipping-phase item.
 - XML-ish parser for common SVG files.
 - Style inheritance:
   solid `fill`, `stroke`, `stroke-width`, opacity, display/visibility, inline
@@ -155,6 +157,8 @@ Current limits:
 - No full DOM/defs expansion for raster output. R0 now has bounded local-id and
   reference metadata, but R2 still owns actual reference expansion.
 - No `<use>` or `<symbol>` expansion in raster mode.
+- Nested `<svg>` coordinates and percentage bases are mapped, but nested
+  viewport overflow is not clipped yet.
 - No `<image>` decoding.
 - No gradients, patterns, clips, masks, filters, markers, blend modes, or
   compositing groups.
@@ -333,7 +337,7 @@ need all of it immediately, but this is the map.
 | XML model | Namespace-aware XML tree with source spans | Simple custom parser with stable byte spans | Add namespaces and better recovery | P1 |
 | Render IR | Scene/display-list separate from XML | Stable source-spanned node IDs, bounded local references, flattened scene items, and an owned geometry/diagnostic display list | Add R2 reference expansion and later reusable paint/compositing IR | P0/P1 |
 | Diagnostics | Structured per-node render/import diagnostics | Importer rich; rasterizer reports warnings, unsupported buckets, counts, fidelity, and node ID/byte-span provenance | Add R8 report/source UI | P1 |
-| ViewBox/preserveAspectRatio | Full modes and nested viewport behavior | Basic meet-style mapping | Implement full `preserveAspectRatio`, nested SVG | P1 |
+| ViewBox/preserveAspectRatio | Full modes and nested viewport behavior | Full `none`/alignment/meet/slice mapping for root and nested SVG viewports; nested overflow is not clipped | Add nested viewport overflow clipping in R4 | P1/P2 |
 | CSS cascade | Specificity/order/inheritance subset | Importer simple classes; rasterizer inline/presentation | Shared style engine with selector tiers | P1 |
 | Basic shapes | Full geometry and transforms | Mostly supported | Add exact bounds and tests | P0 |
 | Paths | Full grammar, fill rules, stroke geometry | Commands supported; even-odd fill only; simple stroke quads | Nonzero fill, joins/caps/dashes/miter | P0/P1 |
@@ -365,8 +369,8 @@ Tasks:
 - [x] Preserve `rasterize()` and `rasterize_or_fallback()` wrappers.
 - [x] Add first `SvgScene` IR:
   viewBox, parsed nodes, flattened scene items, resolved inherited styles, and
-  accumulated transforms. Source spans, reference table, stable node ids, and
-  richer diagnostic provenance remain follow-up work.
+  accumulated transforms. The later R0 tasks below subsequently added source
+  spans, stable node IDs, bounded references, and richer provenance.
 - [x] Add first internal `SvgSceneItem` flattening boundary with resolved
   inherited style, accumulated transforms, and unsupported-subtree flags.
 - [x] Split renderer into:
@@ -397,7 +401,9 @@ Goal: make basic vectors look reliably good.
 
 Tasks:
 
-- Implement full `preserveAspectRatio`.
+- [x] Implement full `preserveAspectRatio` for root and nested SVG viewports:
+  `none`, all nine alignments, and `meet`/`slice`; propagate per-viewport
+  percentage bases through importer and raster display-list lowering.
 - Add nonzero fill rule plus `fill-rule` support.
 - Replace stroke-as-quad with stroke tessellation:
   caps, joins, miter limit, dasharray, dashoffset.

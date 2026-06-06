@@ -158,6 +158,145 @@ pub fn resolve_length(value: &str, context: SvgLengthContext) -> Option<f64> {
     parse_length(value)?.resolve(context)
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SvgAlign {
+    Min,
+    #[default]
+    Mid,
+    Max,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SvgMeetOrSlice {
+    #[default]
+    Meet,
+    Slice,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SvgPreserveAspectRatio {
+    pub defer: bool,
+    pub align_x: Option<SvgAlign>,
+    pub align_y: Option<SvgAlign>,
+    pub meet_or_slice: SvgMeetOrSlice,
+}
+
+impl Default for SvgPreserveAspectRatio {
+    fn default() -> Self {
+        Self {
+            defer: false,
+            align_x: Some(SvgAlign::Mid),
+            align_y: Some(SvgAlign::Mid),
+            meet_or_slice: SvgMeetOrSlice::Meet,
+        }
+    }
+}
+
+pub fn parse_preserve_aspect_ratio(value: &str) -> SvgPreserveAspectRatio {
+    let mut out = SvgPreserveAspectRatio::default();
+    let mut tokens = value.split_ascii_whitespace();
+    let first = tokens.next();
+    let alignment = if first.is_some_and(|token| token.eq_ignore_ascii_case("defer")) {
+        out.defer = true;
+        tokens.next()
+    } else {
+        first
+    };
+
+    if let Some(alignment) = alignment {
+        if alignment.eq_ignore_ascii_case("none") {
+            out.align_x = None;
+            out.align_y = None;
+        } else if let Some((x, y)) = parse_alignment(alignment) {
+            out.align_x = Some(x);
+            out.align_y = Some(y);
+        }
+    }
+
+    if let Some(mode) = tokens.next() {
+        out.meet_or_slice = if mode.eq_ignore_ascii_case("slice") {
+            SvgMeetOrSlice::Slice
+        } else {
+            SvgMeetOrSlice::Meet
+        };
+    }
+    out
+}
+
+fn parse_alignment(value: &str) -> Option<(SvgAlign, SvgAlign)> {
+    let lower = value.to_ascii_lowercase();
+    let y_index = lower.find('y')?;
+    let x = match &lower[..y_index] {
+        "xmin" => SvgAlign::Min,
+        "xmid" => SvgAlign::Mid,
+        "xmax" => SvgAlign::Max,
+        _ => return None,
+    };
+    let y = match &lower[y_index..] {
+        "ymin" => SvgAlign::Min,
+        "ymid" => SvgAlign::Mid,
+        "ymax" => SvgAlign::Max,
+        _ => return None,
+    };
+    Some((x, y))
+}
+
+pub fn viewbox_transform(
+    view_box: [f64; 4],
+    viewport: [f64; 4],
+    aspect_ratio: SvgPreserveAspectRatio,
+) -> Option<Affine2D> {
+    let [view_x, view_y, view_width, view_height] = view_box;
+    let [port_x, port_y, port_width, port_height] = viewport;
+    if !view_box.into_iter().all(f64::is_finite)
+        || !viewport.into_iter().all(f64::is_finite)
+        || view_width <= 0.0
+        || view_height <= 0.0
+        || port_width <= 0.0
+        || port_height <= 0.0
+    {
+        return None;
+    }
+
+    let scale_x = port_width / view_width;
+    let scale_y = port_height / view_height;
+    let (scale_x, scale_y, offset_x, offset_y) = match (aspect_ratio.align_x, aspect_ratio.align_y)
+    {
+        (Some(align_x), Some(align_y)) => {
+            let scale = match aspect_ratio.meet_or_slice {
+                SvgMeetOrSlice::Meet => scale_x.min(scale_y),
+                SvgMeetOrSlice::Slice => scale_x.max(scale_y),
+            };
+            let remaining_x = port_width - view_width * scale;
+            let remaining_y = port_height - view_height * scale;
+            (
+                scale,
+                scale,
+                align_offset(remaining_x, align_x),
+                align_offset(remaining_y, align_y),
+            )
+        }
+        _ => (scale_x, scale_y, 0.0, 0.0),
+    };
+
+    Some(Affine2D {
+        a: scale_x,
+        b: 0.0,
+        c: 0.0,
+        d: scale_y,
+        e: port_x + offset_x - view_x * scale_x,
+        f: port_y + offset_y - view_y * scale_y,
+    })
+}
+
+fn align_offset(remaining: f64, align: SvgAlign) -> f64 {
+    match align {
+        SvgAlign::Min => 0.0,
+        SvgAlign::Mid => remaining / 2.0,
+        SvgAlign::Max => remaining,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SvgPathToken {
     Command(char),
@@ -573,6 +712,79 @@ mod tests {
         assert_eq!(resolve_length("e3px", context), None);
         assert_eq!(resolve_length("NaN", context), None);
         assert_eq!(resolve_length("1e309px", context), None);
+    }
+
+    #[test]
+    fn parses_all_preserve_aspect_ratio_modes() {
+        assert_eq!(
+            parse_preserve_aspect_ratio("none"),
+            SvgPreserveAspectRatio {
+                align_x: None,
+                align_y: None,
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            parse_preserve_aspect_ratio("defer xMaxYMin slice"),
+            SvgPreserveAspectRatio {
+                defer: true,
+                align_x: Some(SvgAlign::Max),
+                align_y: Some(SvgAlign::Min),
+                meet_or_slice: SvgMeetOrSlice::Slice,
+            }
+        );
+        assert_eq!(
+            parse_preserve_aspect_ratio("nonsense"),
+            SvgPreserveAspectRatio::default()
+        );
+    }
+
+    #[test]
+    fn parses_every_preserve_aspect_ratio_alignment() {
+        for (token, x, y) in [
+            ("xMinYMin", SvgAlign::Min, SvgAlign::Min),
+            ("xMidYMin", SvgAlign::Mid, SvgAlign::Min),
+            ("xMaxYMin", SvgAlign::Max, SvgAlign::Min),
+            ("xMinYMid", SvgAlign::Min, SvgAlign::Mid),
+            ("xMidYMid", SvgAlign::Mid, SvgAlign::Mid),
+            ("xMaxYMid", SvgAlign::Max, SvgAlign::Mid),
+            ("xMinYMax", SvgAlign::Min, SvgAlign::Max),
+            ("xMidYMax", SvgAlign::Mid, SvgAlign::Max),
+            ("xMaxYMax", SvgAlign::Max, SvgAlign::Max),
+        ] {
+            let parsed = parse_preserve_aspect_ratio(token);
+            assert_eq!(parsed.align_x, Some(x), "{token}");
+            assert_eq!(parsed.align_y, Some(y), "{token}");
+        }
+    }
+
+    #[test]
+    fn maps_viewboxes_for_none_meet_and_slice() {
+        let none = viewbox_transform(
+            [0.0, 0.0, 100.0, 50.0],
+            [10.0, 20.0, 200.0, 200.0],
+            parse_preserve_aspect_ratio("none"),
+        )
+        .unwrap();
+        assert_eq!(none.apply(100.0, 50.0), (210.0, 220.0));
+
+        let meet = viewbox_transform(
+            [0.0, 0.0, 100.0, 50.0],
+            [0.0, 0.0, 200.0, 200.0],
+            parse_preserve_aspect_ratio("xMidYMid meet"),
+        )
+        .unwrap();
+        assert_eq!(meet.apply(0.0, 0.0), (0.0, 50.0));
+        assert_eq!(meet.apply(100.0, 50.0), (200.0, 150.0));
+
+        let slice = viewbox_transform(
+            [-10.0, -20.0, 100.0, 50.0],
+            [0.0, 0.0, 200.0, 200.0],
+            parse_preserve_aspect_ratio("xMaxYMin slice"),
+        )
+        .unwrap();
+        assert_eq!(slice.apply(-10.0, -20.0), (-200.0, 0.0));
+        assert_eq!(slice.apply(90.0, 30.0), (200.0, 200.0));
     }
 
     #[test]

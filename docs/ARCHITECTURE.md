@@ -249,13 +249,16 @@ src/
   svg_core.rs           — shared SVG microsyntax module: CSS color parsing, numeric-list
                           parsing (e.g. viewBox/points/d tokens), affine transform
                           decomposition, path command tokenization, and length/unit
-                          parsing/resolution. Used by both svg_import.rs and
+                          parsing/resolution plus preserveAspectRatio/viewBox
+                          mapping. Used by both svg_import.rs and
                           canvas/svg_rasterizer.rs to avoid duplication.
   canvas/
     svg_rasterizer.rs   — zero-dependency SVG rasterizer for canvas Image preview;
                           stable source-spanned node IDs, bounded local references,
                           SvgSceneItem flattening, and an owned display list with
                           lowered geometry/style/transform/diagnostic state.
+                          Root and nested SVG viewports carry independent length
+                          bases and full preserveAspectRatio transforms.
                           Supported subset — not full resvg/usvg equivalence.
 ```
 

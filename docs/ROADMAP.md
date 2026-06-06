@@ -292,6 +292,9 @@ Historical foundation completed here:
 - [x] Shared SVG length/unit parsing and viewport-relative raster percentages
 - [x] Golden renderer fixture harness for supported raster output
 - [x] Shared SVG microsyntax module for importer/rasterizer parity
+- [x] Full SVG `preserveAspectRatio` semantics for root and nested viewports:
+      `none`, all nine alignments, `meet`/`slice`, and per-viewport percentage
+      bases; nested overflow clipping remains R4
 
 ## Stage 8 Addendum — Rulers, Presets, Theming ✅
 
@@ -420,6 +423,9 @@ requiring schema changes.
 - [x] SVG R0 metadata closure — stable preorder node IDs, exact byte spans,
       bounded first-id-wins local references, structured non-local reference
       rejection, and shared importer/rasterizer length parsing
+- [x] SVG R1 viewport semantics — full root/nested `preserveAspectRatio`
+      alignment, meet/slice/none mapping, and nested percentage coordinate
+      bases; clipping remains explicitly deferred to R4
 - [x] Golden renderer fixture harness for supported raster output —
       `src/canvas/svg_golden.rs` (#[cfg(test)]); deterministic ASCII-grid
       signatures, supported + unsupported buckets, drift-detecting tests; zero

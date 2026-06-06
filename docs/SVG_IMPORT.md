@@ -9,9 +9,9 @@ The parser is pure Rust and adds no crates.
 Importer and rasterizer share `src/svg_core.rs` for dependency-free SVG
 microsyntax helpers. The shared module currently owns color parsing and
 numeric-list scanning, affine transform math and transform-list parsing, and
-path data tokenization plus SVG length/unit parsing and resolution, so those
-behaviors do not drift between editable placeholder import and image-mode
-rasterization.
+path data tokenization, SVG length/unit parsing and resolution, plus
+`preserveAspectRatio`/viewBox-to-viewport mapping, so those behaviors do not
+drift between editable placeholder import and image-mode rasterization.
 
 ## Public API
 
@@ -82,7 +82,8 @@ textures at runtime.
 - XML-style tags and attributes.
 - Quoted and unquoted attribute values.
 - Safe built-in XML entities only: `amp`, `lt`, `gt`, `quot`, `apos`.
-- `width`, `height`, and `viewBox`.
+- `width`, `height`, `viewBox`, and full `preserveAspectRatio` parsing:
+  `none`, all nine alignments, and `meet`/`slice`.
 - Units: unitless/`px`, `%`, `in`, `cm`, `mm`, `Q`, `pt`, `pc`, `em`, `ex`,
   `rem`.
 - Transforms: `matrix`, `translate`, `scale`, `rotate`, `skewX`, `skewY`.
@@ -98,8 +99,10 @@ textures at runtime.
 - Opacity is approximated into solid RGB placeholder colors because RohKai
   widgets currently store RGB, not alpha.
 - Image-mode rasterization supports solid fills/strokes, inherited
-  display/visibility, viewBox mapping, transforms, basic shapes, and path
-  flattening for the current supported subset.
+  display/visibility, root and nested SVG viewport mapping, per-viewport
+  percentage bases, transforms, basic shapes, and path flattening for the
+  current supported subset. Nested viewport overflow clipping is not yet
+  applied.
 - Image-mode rasterization assigns stable preorder node IDs and byte spans,
   builds a bounded first-id-wins local reference table, then lowers scene items
   into an owned display list before drawing. Display commands carry inherited
@@ -238,5 +241,6 @@ cargo clippy -- -D warnings
 - Masks and clips
 - Gradient/pattern conversion
 - Full Image export parity for unsupported SVG features
+- Nested SVG viewport overflow clipping
 - Full `tspan` positioning and per-span styling
 - Text-on-path layout

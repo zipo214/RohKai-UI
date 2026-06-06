@@ -29,13 +29,14 @@ being comfortable.
 - `src/canvas/svg_rasterizer.rs` - current zero-new-dependency SVG rasterizer;
   stable source-spanned node IDs, bounded local reference metadata,
   `SvgSceneItem` flattening, and an owned display list that lowers geometry,
-  style, transform, diagnostics, and provenance before raster drawing. Used by
-  canvas Image preview and generated exports. It is substantial and real, but
-  still a supported subset, not full `resvg` / `usvg` / `tiny-skia`
-  equivalence.
+  style, transform, diagnostics, provenance, and per-viewport length bases
+  before raster drawing. Root/nested viewports implement full
+  `preserveAspectRatio` mapping. Used by canvas Image preview and generated
+  exports. It is substantial and real, but still a supported subset, not full
+  `resvg` / `usvg` / `tiny-skia` equivalence.
 - `src/svg_core.rs` - shared zero-dependency SVG microsyntax helpers used by the
   importer and rasterizer; currently owns color, numeric-list, affine
-  transform, path token, and length/unit parsing.
+  transform, path token, length/unit, and preserveAspectRatio/viewBox mapping.
 - `src/canvas/widget_instance.rs` - canvas rect conversion helpers.
 - `src/canvas/preview.rs` - F5 preview mode: renders the canvas as live egui widgets.
 - `src/canvas/overlays.rs` - Stage 11 read-only overlays: ownership (widget→field)
