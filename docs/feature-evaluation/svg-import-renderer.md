@@ -74,9 +74,11 @@ capabilities where required.
 
 ## Recommended Next Work
 
-1. Build SVG report UI in RohKai, not only tests/docs.
-2. Implement robust tspan/span metadata parser before any full text renderer.
-3. Add fixture categories for gradients, clips, masks, filters, symbols, CSS.
-4. Expand renderer golden tests and introduce optional visual review artifacts.
-5. Separate import-fidelity and render-fidelity scoring.
+Detailed sequencing is authoritative in `docs/SVG_RENDERER_ROADMAP.md`:
 
+1. Close R0 with stable source-spanned node IDs, reference metadata,
+   scene/display-list-only traversal, and shared length/unit parsing.
+2. Complete R1 geometry/stroke/antialiasing quality.
+3. Complete R2 shared styles and local references.
+4. Continue paint, clipping, images, text, effects, and conformance through
+   R3-R8. Robust `tspan` work belongs to R6; report UI belongs to R8.

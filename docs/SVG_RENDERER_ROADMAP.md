@@ -5,6 +5,34 @@ by comparing the current in-repo importer/rasterizer against the combined
 capability profile of mature SVG engines. This is not a promise to implement
 all of SVG at once. It is the inventory, gap map, and staged work plan.
 
+## Authority And Scope
+
+This file is the **single detailed source of truth** for SVG import maturity,
+SVG Image rasterization, SVG text import, renderer diagnostics, conformance,
+and SVG-facing editor UX.
+
+- `docs/ROADMAP.md` records only strategic summaries and historical stage
+  snapshots. If its SVG wording conflicts with this file, this file wins.
+- `docs/TEXT_IMPORT_PLAN.md` is the design note for Phase R6 and does not define
+  an independent schedule.
+- `docs/SVG_IMPORT.md` describes current shipped behavior, not future closure.
+- Stage 15 "Own Renderer" is separate. It concerns replacing egui as RohKai's
+  general UI/runtime renderer; completing SVG R0-R8 does not activate or
+  complete Stage 15.
+
+## Current Execution Order
+
+1. Close R0 metadata: stable `SvgNodeId`, source spans, reference table, and
+   scene/display-list-only traversal.
+2. Finish shared length/unit parsing in `svg_core`.
+3. Complete R1 geometry quality.
+4. Complete R2 style/reference resolution, including raster `<use>`.
+5. Continue R3-R8 in order, with R6 owning all `tspan`/text-plan execution and
+   R8 owning source/report UI.
+
+Unchecked derivative-backlog entries are implementation notes for these phases,
+not separate roadmap phases.
+
 ## Ground Rules
 
 - No `resvg`, `usvg`, `tiny-skia`, browser embedding, or substitute renderer
@@ -345,6 +373,11 @@ Tasks:
   rect/circle-equivalent fills, path fill, stroke, transform, opacity,
   unsupported gradient, unsupported clip, unsafe external reference.
 - [x] Add golden tests for currently supported primitives.
+- [ ] Add stable source-spanned `SvgNodeId` values and a bounded local reference
+  table to `SvgScene`.
+- [ ] Make raster execution consume only scene/display-list IR; no direct
+  XML-node-to-pixel traversal may remain.
+- [ ] Move shared SVG length/unit parsing into `svg_core`.
 
 Acceptance:
 
@@ -553,7 +586,7 @@ Acceptance:
 - Add source-spanned `SvgNodeId` and reference-table metadata on top of the
   current `SvgScene` / `SvgSceneItem` / `DisplayList` split.
 - Replace direct XML-to-render traversal with scene traversal.
-- Add explicit unsupported-feature enum instead of stringly diagnostics.
+- [x] Add explicit unsupported-feature enum instead of stringly diagnostics.
 - Add antialiasing strategy doc and prototype.
 
 ### Later Tasks

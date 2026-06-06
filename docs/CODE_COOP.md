@@ -7,6 +7,16 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-06 — Codex SVG Roadmap Consolidation
+
+On `dev`, I consolidated the scattered Stage 7.x, Stage 9, renderer R0-R8, and
+Stage 15 SVG language without deleting historical context.
+`docs/SVG_RENDERER_ROADMAP.md` is now the sole detailed SVG execution authority:
+R6 owns text/tspan work, R8 owns report/source-viewer UX, and Stage 15 remains
+a separate deferred general-renderer decision. The next implementation target
+is R0 closure: stable source-spanned node IDs, a bounded reference table,
+scene/display-list-only traversal, and shared SVG length parsing.
+
 ## 2026-06-06 — Codex Lazare Editor Stabilization
 
 On `dev`, the Lazare stabilization pass now replaces heuristic UUID searches

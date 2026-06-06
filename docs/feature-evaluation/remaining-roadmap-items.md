@@ -163,29 +163,20 @@ Closure Criteria:
 
 ### Implementation Status
 
-Status: Documentation Reconciliation Needed
+Status: Resolved
 
 Current Implementation Contract:
 
-- Roadmap Stage 9 marks SVG scene/display-list IR split and golden fixture
-  harness complete.
-- Stage 7.x SVG Import Maturity still has unchecked items with similar names.
-
-Insufficient Existing Surface:
-
-- Duplicate roadmap items can mislead agents into either redoing completed work
-  or marking future renderer depth as complete.
-
-Desired Closure Contract:
-
-- Reconcile the roadmap into two explicit levels:
-  - Initial IR/golden harness complete.
-  - Renderer v2 display-list/golden depth still planned, if more is desired.
+- `docs/SVG_RENDERER_ROADMAP.md` is the single detailed SVG authority.
+- Stage 7.x and Stage 9 SVG entries in `ROADMAP.md` are labeled historical
+  snapshots rather than competing active checklists.
+- Former Stage 7.x text tasks map to R6; report/source-viewer UX maps to R8.
+- Stage 15 is explicitly separate from SVG rendering.
 
 Closure Criteria:
 
-- Roadmap has no duplicate ambiguous SVG renderer checklist items.
-- Feature evaluation points to the correct next SVG renderer tasks.
+- [x] Roadmap has no duplicate ambiguous active SVG renderer checklist items.
+- [x] Feature evaluation points to R0 closure, shared lengths, then R1-R8.
 
 ## Parallelism Foundation
 
@@ -395,10 +386,11 @@ Closure Criteria:
 
 ## Recommended Ordering
 
-1. Reconcile duplicate SVG renderer roadmap entries.
-2. Close the small SVG inline expansion toggle if still desired.
-3. Build Formula Widget or Visual Widget Maker next, depending on product focus.
-4. Add generated-project compile fixtures before WASM/DB.
-5. Decide whether Stage 15 Own Renderer is strategic research or active product
+1. Close SVG R0 metadata/traversal and shared length parsing.
+2. Complete SVG R1 geometry quality, then R2 references/styles.
+3. Close the small SVG inline expansion toggle under R8 when editor UX reaches
+   that phase.
+4. Build Formula Widget or Visual Widget Maker next, depending on product focus.
+5. Add generated-project compile fixtures before WASM/DB.
+6. Decide whether Stage 15 Own Renderer is strategic research or active product
    work before starting code.
-

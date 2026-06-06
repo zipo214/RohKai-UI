@@ -2,6 +2,52 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-06 — SVG Roadmap Authority Consolidation
+
+### Docs Reviewed Before Editing
+- `AGENTS.md` and low-token preflight
+- `.agents/skills/svg-zero-dep/SKILL.md`
+- `docs/ROADMAP.md`
+- `docs/SVG_RENDERER_ROADMAP.md`
+- `docs/SVG_IMPORT.md`
+- `docs/TEXT_IMPORT_PLAN.md`
+- SVG and remaining-roadmap feature evaluations
+
+### Changes
+- Declared `docs/SVG_RENDERER_ROADMAP.md` the sole detailed authority for SVG
+  import maturity, SVG Image rasterization, SVG text, diagnostics,
+  conformance, and SVG-facing editor UX.
+- Converted Stage 7.x and Stage 9 SVG sections into historical snapshots with
+  explicit mappings instead of competing active checklists.
+- Assigned all text/tspan execution to R6 and report/source-viewer UX to R8.
+- Added the next execution order: close R0 metadata/traversal, share SVG
+  lengths, then complete R1 and R2 before R3-R8.
+- Explicitly separated Stage 15's proposed general RohKai renderer from the SVG
+  rasterizer roadmap.
+- Added an explicit `Current Active Work` roadmap heading and updated preflight
+  to prefer it, replacing the misleading behavior that labeled the final
+  numbered stage (deferred Stage 15) as current.
+- Mirrored the active-work clarification in `AGENTS.md` and `CLAUDE.md`.
+- Marked the roadmap source-of-truth reconciliation items complete and updated
+  feature evaluations, architecture, and code index to point to the same
+  authority.
+
+### Verification
+- Documentation diff and duplicate-check review completed.
+- Preflight now reports
+  `Current Active Work — Pre-Release Depth And SVG R0 Closure`.
+- AGENTS/CLAUDE mirrored guidance and skill drift checks: clean.
+- `cargo fmt --check`: clean.
+- `cargo check`: clean.
+- `scripts/check-text-encoding.ps1`: clean.
+- SVG dependency policy check: clean.
+
+### Risks / Follow-ups
+- The detailed renderer roadmap still contains derivative task lists beneath
+  R0-R8. They are implementation notes, not independent phases.
+- Stage 15 still needs a future explicit product/architecture activation
+  decision; this pass intentionally did not activate it.
+
 ## 2026-06-06 — Lazare Structured Ranges And Editor Viewport
 
 ### Docs Reviewed Before Editing

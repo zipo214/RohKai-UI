@@ -1,5 +1,12 @@
 # RohKai Roadmap
 
+## Current Active Work — Pre-Release Depth And SVG R0 Closure
+
+- Keep RohKai on egui/eframe while closing reliability and feature-depth gaps.
+- SVG execution follows `docs/SVG_RENDERER_ROADMAP.md`: finish R0 metadata and
+  scene traversal, share length parsing, then proceed through R1 and R2.
+- Stage 15's general RohKai renderer is deferred and is not the current stage.
+
 ## Stage 0 — Bootstrap ✅
 - [x] Cargo scaffold, eframe window opens
 - [x] Module structure: project / canvas / codegen / panels / widgets
@@ -238,20 +245,35 @@
 - [ ] Later: slots, layout groups, constraints, state variants, event zones,
       style tokens, and import simple descriptors into maker documents.
 
-## Stage 7.x - SVG Source Viewing (from code panel contraction)
+## Stage 7.x - SVG Source Viewing — Historical Snapshot
+
+> Detailed SVG work is now owned by `docs/SVG_RENDERER_ROADMAP.md`. This
+> snapshot records why the source viewer was introduced; its remaining inline
+> expansion control is tracked as editor UX in renderer Phase R8.
+
 - [x] Read-only SVG source viewer panel or popup for Image widgets
       (SVG is intentionally contracted in the live code panel — this gives a
       way to inspect/copy the raw SVG without polluting the code buffer)
-- [ ] Optional "expand SVG inline" toggle per Image widget for power users
+- Optional "expand SVG inline" toggle per Image widget for power users:
+  active closure item in SVG renderer Phase R8.
 
-## Stage 7.x - SVG Import Maturity
-- [ ] Robust `tspan` parser with span provenance and diagnostics
-- [ ] Editable multi-label grouped import for positioned spans
-- [ ] Optional vector-outline snapshot mode for visual comparison
-- [ ] RohKai-owned text layout/shaping engine only if editable text still needs it
-- [ ] More granular fidelity scoring for text-heavy, clipped, masked, filtered,
-      gradient, and pattern-heavy SVGs
-- [ ] Dedicated importer report UI showing skipped features and approximation notes
+## Stage 7.x - SVG Import Maturity — Historical Snapshot
+
+> Superseded as an active checklist by `docs/SVG_RENDERER_ROADMAP.md`. The
+> original items remain mapped below so history is preserved without creating
+> competing definitions of completion.
+
+| Former Stage 7.x item | Authoritative phase |
+|---|---|
+| Robust `tspan` parser with span provenance and diagnostics | R6 Text Import And Optional Rendering |
+| Editable multi-label grouped import for positioned spans | R6 |
+| Optional vector-outline snapshot mode | R6 |
+| RohKai-owned text layout/shaping engine, only if justified | R6 deferred decision |
+| More granular import/render fidelity scoring | R3, R4, R6, and R8 evidence |
+| Dedicated importer/render report UI | R8 Conformance And Editor UX |
+
+Historical foundation completed here:
+
 - [x] SVG renderer roadmap/truth inventory comparing RohKai to mature engines
 - [x] Shared `src/svg_core.rs` microsyntax module started for color, numeric
       list, affine transform, and path token parsing across importer/rasterizer
@@ -382,6 +404,10 @@ requiring schema changes.
       added to properties panel when code has unsaved edits
 
 ### SVG Renderer Progression
+
+> Historical completion mirror only. Active renderer sequencing and closure
+> criteria live exclusively in `docs/SVG_RENDERER_ROADMAP.md`.
+
 - [x] SVG renderer scene/display-list IR split — `DisplayList`/`DrawCommand` IR
       in `svg_rasterizer.rs`; build() lowers scene graph → flat command stream,
       execute() rasterizes; pixel output unchanged
@@ -615,12 +641,12 @@ the current dirty/in-flight truth, separates MVP surfaces from closure criteria,
 and prioritizes depth over more palette breadth.
 
 ### Source-Of-Truth Consolidation
-- [ ] Resolve the current dirty worktree into intentional commits/PRs so current
+- [x] Resolve the current dirty worktree into intentional commits/PRs so current
       truth is not spread across uncommitted code and docs.
-- [ ] Reconcile duplicated or stale roadmap lines against
+- [x] Reconcile duplicated or stale roadmap lines against
       `docs/feature-evaluation/*`, especially SVG renderer maturity and
       Stage 10/11 depth claims.
-- [ ] Keep `docs/ROADMAP.md` strategic, `docs/DEVLOG.md` chronological, and
+- [x] Keep `docs/ROADMAP.md` strategic, `docs/DEVLOG.md` chronological, and
       `docs/CODE_COOP.md` as short agent handoff only.
 
 ### Reliability Proofs
@@ -662,6 +688,13 @@ and prioritizes depth over more palette breadth.
 ---
 
 ## Stage 15 — Own Renderer
+
+> This is **not** the SVG renderer roadmap. SVG R0-R8 improves SVG import,
+> Image preview, and SVG export while RohKai continues to run on egui/eframe.
+> Stage 15 would replace RohKai's general widget/runtime rendering layer and
+> remains deferred until the pre-release depth gate is closed and a separate
+> architecture decision explicitly activates it.
+
 - [ ] Replace egui rendering layer with RohKai-owned pure Rust renderer
 - [ ] Widget descriptor format drives renderer widget model directly
 - [ ] Zero transient C dependencies

@@ -259,6 +259,9 @@ src/
 
 SVG work is a **zero-new-crate zone**: no `resvg`, `usvg`, `tiny-skia`, or substitute
 renderer chains. All SVG behavior is implemented in RohKai source files.
+`docs/SVG_RENDERER_ROADMAP.md` is the detailed SVG execution authority.
+Stage 15's proposed general RohKai renderer is a separate architecture track
+and does not describe the SVG rasterizer.
 
 ---
 

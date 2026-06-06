@@ -57,6 +57,8 @@ Stages 0–8, 8.5, 9 (core), 10, 11, and 14 complete. Stage 9's parallel-process
 sub-cluster (rayon-based parallel rasterization/codegen/export/template-load +
 benchmarks) and Form Layout remain deferred. Open stages: 12 (Platform Targets),
 13 (Data & Integration), 15 (Own Renderer), plus the deferred Stage 9 items.
+Current focused work is the pre-release depth gate and SVG R0-R2 maturity;
+Stage 15 remains a separate deferred architecture decision.
 
 Core features implemented:
 - Canvas: drag, drop, select, multi-select, resize, rubber-band, z-order, snap, smart guides,

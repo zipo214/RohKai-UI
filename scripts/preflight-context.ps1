@@ -44,9 +44,15 @@ Write-Host ""
 Write-Host "== Roadmap Current Stage =="
 $Roadmap = Join-Path $ProjectRoot "docs\ROADMAP.md"
 if (Test-Path $Roadmap) {
-    $stage = Get-Content -Path $Roadmap -Encoding utf8 |
-        Where-Object { $_ -match "^## Stage [0-9]" } |
-        Select-Object -Last 1
+    $roadmapLines = Get-Content -Path $Roadmap -Encoding utf8
+    $stage = $roadmapLines |
+        Where-Object { $_ -match "^## Current Active Work" } |
+        Select-Object -First 1
+    if (-not $stage) {
+        $stage = $roadmapLines |
+            Where-Object { $_ -match "^## Stage [0-9]" } |
+            Select-Object -Last 1
+    }
     if ($stage) {
         Write-Host $stage
     } else {

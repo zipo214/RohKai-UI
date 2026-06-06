@@ -108,6 +108,8 @@ being comfortable.
 
 - `src/svg_import.rs` - SVG-to-editable-template importer and diagnostics.
 - `docs/SVG_IMPORT.md` - current supported subset, security policy, limits.
+- `docs/SVG_RENDERER_ROADMAP.md` - single detailed authority for future SVG
+  import, rasterization, text, diagnostics, conformance, and editor UX work.
 - `docs/TEXT_IMPORT_PLAN.md` - planned text/tspan architecture.
 - `.agents/skills/svg-zero-dep/SKILL.md` and
   `.claude/skills/svg-zero-dep/SKILL.md` - mandatory guidance for SVG work.
