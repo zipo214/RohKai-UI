@@ -677,14 +677,14 @@ Goal: make the renderer dependable, measurable, and visible in RohKai.
 
 Tasks:
 
-- [x] SVG report UI: the properties panel surfaces the selected SVG Image
-  widget's `SvgRenderReport` — fidelity (colour-coded), rendered/skipped counts,
+- [x] SVG report UI: the properties panel surfaces the selected SVG widget's
+  `SvgRenderReport` — fidelity (colour-coded), rendered/skipped counts,
   warning + unsupported counts, and collapsible per-diagnostic lists with
   byte-span provenance. The report→rows mapping (`panels::svg_report::report_summary`)
   is a pure, unit-tested function; the panel only renders it (no new report
   computation beyond the existing `rasterize_with_report`).
-- [x] Source viewer + "rendered report / SVG source" toggle for SVG Image
-  widgets (read-only source view; toggle state in egui temp memory).
+- [x] Source viewer + "rendered report / SVG source" toggle for SVG widgets
+  (read-only source view; toggle state in egui temp memory).
 - [x] Golden-image corpus across geometry/paint/clip/mask/filter/image plus a
   polygon-geometry golden; raster text stays import-only (no raster golden).
   Malicious/edge inputs covered by the security unit tests in each phase.
@@ -778,3 +778,104 @@ A feature is not done until all of these are true:
 - Tests cover success, malformed input, security boundaries, and deterministic
   output.
 - Docs list the feature in supported or unsupported form.
+
+## Post-R8 Gap Analysis And Future Lanes (2026-06-06)
+
+R0-R8 are closed. This section is a gap analysis against W3C SVG 1.1 / SVG 2 /
+SVG Native and the mature static renderers (resvg/usvg, librsvg, Batik, browser
+static SVG) used **only as comparison/oracle targets, never as dependencies**.
+Every proposed lane below is achievable with original, dependency-free, secure,
+deterministic, bounded, golden-testable in-repo work.
+
+Terminology: **intra-roadmap** = was planned in R0-R8 and shipped or explicitly
+deferred; **extra-roadmap** = a real gap the roadmap never represented.
+
+### Post-R8 Gap Matrix
+
+| Capability | RohKai now | Mature engines | Priority | Gap type | Origin | Recommendation |
+|---|---|---|---|---|---|---|
+| Filter color-interpolation (linearRGB) | filters run in sRGB premultiplied | filters default `color-interpolation-filters: linearRGB` | P1 | conformance | extra-roadmap | implement (R10) |
+| Filter region precision | region = whole canvas | bbox-based `-10%..110%` + x/y/w/h filterUnits | P1 | implementation/conformance | partially (R7 noted approx) | implement (R10) |
+| Filters tier 2/3 | identity passthrough + diagnostic | feComposite/feBlend/feTile/feMorphology/feComponentTransfer/feImage/feTurbulence/feDisplacementMap | P2/P3 | implementation | intra-roadmap deferred | tier-2 implement (R10); tier-3 defer |
+| Patterns | diagnosed transparent | full tiling (patternUnits/contentUnits/viewBox/transform) | P1/P2 | implementation | intra-roadmap deferred | implement (R9/R10) |
+| Markers | none | marker-start/mid/end, orient, markerUnits, viewBox | P1 | implementation | extra-roadmap | implement (R9) |
+| vector-effect=non-scaling-stroke | none | supported | P2 | implementation | extra-roadmap | implement (R9) |
+| Raster text / textPath | import-only chunks; raster skips | full glyph layout + textPath | P1 | implementation | intra-roadmap deferred (R6 ph3) | implement editable-first + vector snapshot (R11) |
+| Namespace model | prefixes stripped (`xlink:href`→`href`) | real xmlns/qualified-name model | P1 | architecture/conformance | extra-roadmap | implement bounded model (R12) |
+| Malformed-document recovery | hard-reject on several constructs | lenient recovery + diagnostics | P1 | robustness | extra-roadmap | implement recovery policy (R12) |
+| Accessibility metadata | dropped | `title`/`desc`/`aria-*`/`role` exposed | P2 | editor/diagnostics | extra-roadmap | implement title/desc extraction (R12) |
+| Blend modes (mix-blend-mode) | normal over only | full isolation/blend | P2/P3 | implementation | extra-roadmap | tier-2 with feBlend (R10) |
+| CSS combinators/@media/vars | tier-1 selectors only | descendant/child/attr/pseudo, @media, custom props | P2/P3 | implementation | intra-roadmap (only justified tiers) | implement only fixture-justified tiers |
+| Color management (ICC) | sRGB assumed | ICC/`color-interpolation` | P4 | conformance | extra-roadmap | reject (out of scope) |
+| Conformance corpus validation | per-feature goldens; no W3C subset | W3C test-suite + reference oracles | P1 | conformance/testing | partially (R8 stand-in) | implement curated subset (R8.1) |
+| Fuzzing | none | fuzzed parsers/decoders | P0/P1 | testing/security | extra-roadmap | implement fuzz harness (R8.1) |
+| Benchmark methodology | one ignored bench + smoke | documented parse/scene/raster/alloc budgets | P2 | performance/testing | partially (R8) | document + expand (R8.1) |
+| Rendering precision policy | 8x8 coverage; nearest image/chroma | documented AA/gamma policy | P2 | docs/fidelity | extra-roadmap | document policy (R8.1) |
+| Sub-byte/interlaced PNG, progressive JPEG | diagnosed | supported | P3 | implementation | intra-roadmap deferred | defer (diagnosed) |
+
+### Proposed Future Lanes (all dependency-free, secure, deterministic, bounded)
+
+- **R8.1 — Conformance & security hardening** (P0/P1; depends R0-R8):
+  in-repo fuzz harness for the XML parser, path tokenizer, PNG/JPEG decoders, and
+  DEFLATE inflater (random + mutated corpus, asserts no panic / bounded output);
+  a curated W3C-1.1-subset golden corpus with an optional dev-only external-oracle
+  diff (CI artifact); documented benchmark methodology + memory-cap tests; a
+  written rendering-precision/AA policy. No runtime deps.
+- **R9 — Markers, vector-effect, patterns** (P1/P2; depends R1 stroke + R3 paint +
+  R4 IR): marker placement on path vertices (start/mid/end, orient incl.
+  `auto`/`auto-start-reverse`, markerUnits, marker viewBox); `vector-effect:
+  non-scaling-stroke`; pattern tiling via the offscreen pipeline (patternUnits/
+  patternContentUnits/viewBox/patternTransform, bounded tile count).
+- **R10 — Filter correctness & tier-2** (P1/P2; depends R7): linearRGB
+  color-interpolation-filters; precise filter-region computation + clipping;
+  feComposite, feBlend (+ mix-blend-mode), feComponentTransfer, feMorphology;
+  bounded buffers; goldens per primitive.
+- **R11 — Raster text & textPath** (P1; depends R6): editable-first stays; add an
+  optional vector-outline snapshot render path (own glyph-outline extraction, no
+  external font/shaping crate) and textPath layout; explicit diagnostics for
+  unshaped/bidi cases. Heavy — gate on real product need.
+- **R12 — XML/namespace & robustness** (P1; depends R0): real bounded namespace
+  model (qualified names, xmlns scoping, foreign-namespace skip with diagnostics);
+  malformed-document recovery policy (recover-and-diagnose instead of hard reject
+  where safe); accessibility metadata (`title`/`desc`) extraction surfaced in the
+  report panel and preserved on export.
+
+### Recommended Additions To R8 (conformance/testing) — fold into R8.1
+
+- Fuzz targets (parser/path/PNG/JPEG/inflate) with a checked-in seed corpus.
+- Curated W3C SVG 1.1 sub-corpus as goldens; dev-only oracle diff as a CI artifact.
+- Documented benchmark budgets (parse / scene-build / raster / peak alloc) and
+  memory-cap regression tests.
+- A rendering-precision policy doc (coverage grid, sampling, premultiplied/sRGB
+  vs linearRGB boundaries).
+
+### Explicit Non-Goals (remain rejected)
+
+- Scripting, SMIL/CSS animation, DOM, event handling.
+- External network/file loading; non-`data:` references stay fail-closed.
+- Full browser CSS layout engine; complete selector/cascade parity.
+- ICC color management beyond sRGB.
+- `foreignObject` content rendering.
+- Progressive/arithmetic/CMYK/12-bit JPEG; full HarfBuzz-class shaping + Unicode
+  bidi (editable-first text remains the contract).
+- Any external renderer dependency (resvg/usvg/tiny-skia/librsvg/Skia/Cairo/
+  browser) — comparison/oracle only.
+
+### Maturity Assessment
+
+- **Importer-grade: achieved (exceeds).** Editable widgets + per-node provenance +
+  structured diagnostics + source preservation.
+- **Editor-grade: achieved.** In-app report UI, source viewer, rendered/source
+  toggle, round-trip source preservation, honest fidelity scoring.
+- **Application-grade: approaching.** Deterministic, bounded, diagnosed rendering
+  of most static SVG (geometry, gradients, clips, masks, filter tier-1, PNG+JPEG
+  images). Blockers to "achieved": markers, patterns, vector-effect (R9) and
+  raster text (R11) — features common in real-world UI/diagram SVGs.
+- **Renderer-grade (resvg/librsvg-class): not yet.** Requires R9-R12 plus R8.1:
+  linearRGB filters + precise regions (R10), namespace model + malformed recovery
+  (R12), and a W3C-subset conformance corpus + fuzzing (R8.1). Until then,
+  "renderer-grade" is not claimed.
+
+Next maturity step (application → renderer grade): **R8.1 (conformance/fuzz) →
+R9 (markers/patterns/vector-effect) → R10 (filter correctness) → R11 (raster
+text) → R12 (namespace/robustness/a11y)**, in that order.

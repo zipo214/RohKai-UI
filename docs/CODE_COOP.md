@@ -14,8 +14,8 @@ On `dev`, SVG R8 closes the renderer roadmap. New `src/panels/svg_report.rs`:
 (fidelity / rendered / skipped / warnings / unsupported + per-diagnostic lines
 with byte-span provenance); `show_report(ui, src)` renders it with a
 rendered-report / SVG-source toggle (egui temp memory) and a read-only source
-viewer. Wired into `panels::properties::show_image` for the selected SVG Image
-widget (computes `rasterize_with_report` at a fixed 256px — no new report logic).
+viewer. Wired into `panels::properties::show_image` for the selected SVG widget
+(computes `rasterize_with_report` at a fixed 256px — no new report logic).
 Added a polygon-geometry golden, an `#[ignore]` benchmark
 (`raster_benchmark_complex_scene_within_budget`, measures parse+scene+raster of a
 200-rect gradient/clip/stroke scene), and a dev-only
