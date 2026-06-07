@@ -79,7 +79,15 @@ pub(crate) fn blank_descriptor() -> WidgetDescriptor {
 }
 
 pub fn sanitize_id(id: &str) -> String {
-    id.replace(['.', '/'], "-").replace(' ', "_")
+    // Whitelist filename-safe characters; map everything else (`. / \ < > : " | ? *`,
+    // control bytes, etc.) so save paths can never break on any platform.
+    id.chars()
+        .map(|c| match c {
+            ' ' => '_',
+            c if c.is_ascii_alphanumeric() || c == '-' || c == '_' => c,
+            _ => '-',
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -626,7 +634,7 @@ fn show_cargo_deps(ui: &mut egui::Ui, deps: &mut Vec<CargoDep>, new_name: &mut S
         if ui.small_button("+ Add dep").clicked() && !new_name.trim().is_empty() {
             deps.push(CargoDep {
                 name: std::mem::take(new_name).trim().to_owned(),
-                version: "*".to_owned(),
+                version: "0.1".to_owned(),
                 features: vec![],
             });
         }

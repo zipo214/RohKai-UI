@@ -663,7 +663,8 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
     }
 
     // Design-time non-visual components (timers etc.) — emitted as update() comments.
-    for line in crate::panels::component_tray::component_update_lines(&tree.app_props.components) {
+    for line in crate::codegen::component_state::component_update_lines(&tree.app_props.components)
+    {
         lines.push((None, line));
     }
 

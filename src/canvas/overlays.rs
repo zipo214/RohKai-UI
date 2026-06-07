@@ -6,7 +6,7 @@
 
 use crate::canvas::widget_instance::canvas_rect;
 use crate::codegen::field_collector;
-use crate::project::schema::{HandlerResult, WidgetInstance, WidgetKind};
+use crate::project::schema::{HandlerResult, WidgetInstance};
 use crate::project::ui_tree::UiTree;
 
 /// Colour for an AppState field badge, keyed by Rust type.
@@ -129,22 +129,24 @@ pub fn draw_error_flow(
     }
 }
 
-/// Whether a widget carries any event handler (used by the error-flow overlay).
+/// Whether a widget carries any event handler the stack will actually surface.
+/// Consults the authoritative `WidgetKind::supported_events()` matrix so the
+/// overlay never badges handlers that codegen/export ignore.
 fn has_handler(w: &WidgetInstance) -> bool {
-    let click = matches!(
-        w.kind,
-        WidgetKind::Button | WidgetKind::ToolButton | WidgetKind::CommandLinkButton
-    ) && !w.on_click.is_empty();
-    click
-        || !w.on_change.is_empty()
-        || !w.on_double_click.is_empty()
-        || !w.on_lost_focus.is_empty()
-        || !w.on_drag_stopped.is_empty()
+    use crate::project::schema::WidgetEvent;
+    let events = w.kind.supported_events();
+    let supports = |e: WidgetEvent| events.contains(&e);
+    (supports(WidgetEvent::Click) && !w.on_click.is_empty())
+        || (supports(WidgetEvent::DoubleClick) && !w.on_double_click.is_empty())
+        || (supports(WidgetEvent::Change) && !w.on_change.is_empty())
+        || (supports(WidgetEvent::LostFocus) && !w.on_lost_focus.is_empty())
+        || (supports(WidgetEvent::DragStopped) && !w.on_drag_stopped.is_empty())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::project::schema::WidgetKind;
 
     #[test]
     fn type_colors_distinct_per_kind() {

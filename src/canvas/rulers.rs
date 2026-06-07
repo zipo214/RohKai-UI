@@ -73,7 +73,11 @@ pub fn handle_interaction(
         *hovered = None;
         return;
     };
-    let pointer_owned = ui.rect_contains_pointer(panel_rect);
+    // Own the pointer only when it is over the canvas panel AND the canvas layer
+    // is topmost there, so guides aren't created/dragged under floating windows
+    // (mirrors the ownership check in interaction.rs).
+    let pointer_owned = ui.rect_contains_pointer(panel_rect)
+        && ui.ctx().layer_id_at(pointer) == Some(ui.layer_id());
 
     let just_pressed = ui.input(|i| i.pointer.primary_pressed());
     let is_down = ui.input(|i| i.pointer.primary_down());

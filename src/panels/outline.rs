@@ -283,8 +283,9 @@ fn render_row(
         &widget.props.label
     };
     let truncated;
-    let label: &str = if raw_label.len() > 22 {
-        truncated = format!("{}…", &raw_label[..20]);
+    let label: &str = if raw_label.chars().count() > 22 {
+        // Truncate on a char boundary so multi-byte UTF-8 never panics.
+        truncated = format!("{}…", raw_label.chars().take(20).collect::<String>());
         &truncated
     } else {
         raw_label

@@ -40,7 +40,7 @@ impl PreviewState {
                 WidgetKind::Slider | WidgetKind::ProgressBar => {
                     PreviewValue::Float(w.props.default_value)
                 }
-                WidgetKind::Checkbox => PreviewValue::Bool(false),
+                WidgetKind::Checkbox | WidgetKind::RadioButton => PreviewValue::Bool(false),
                 _ => PreviewValue::Str(w.props.label.clone()),
             };
             values.insert(key, val);
@@ -174,20 +174,19 @@ fn render_widget(
         }
         WidgetKind::RadioButton => {
             let label = widget.props.label.clone();
-            let checked = state
-                .values
-                .get(binding)
-                .and_then(|v| {
-                    if let PreviewValue::Bool(b) = v {
-                        Some(*b)
-                    } else {
-                        None
+            if let Some(PreviewValue::Bool(b)) = state.values.get_mut(binding) {
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+                    // Write the selection back so the preview reacts to clicks.
+                    if ui
+                        .add_sized(size, egui::RadioButton::new(*b, &label))
+                        .clicked()
+                    {
+                        *b = !*b;
                     }
-                })
-                .unwrap_or(false);
-            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
-                ui.add_sized(size, egui::RadioButton::new(checked, &label));
-            });
+                });
+            } else {
+                placeholder_box(ui, w_rect, "radio");
+            }
         }
         WidgetKind::ProgressBar => {
             let progress = state

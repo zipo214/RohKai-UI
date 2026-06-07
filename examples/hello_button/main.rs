@@ -5,7 +5,7 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Hello Button",
         eframe::NativeOptions::default(),
-        Box::new(|_cc| Ok(Box::new(HelloApp::default()))),
+        Box::new(|_cc| Ok(Box::new(HelloApp))),
     )
 }
 

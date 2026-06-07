@@ -8678,7 +8678,7 @@ mod tests {
         let image = rasterize(svg, 20, 20).unwrap();
         let alphas: Vec<u8> = image.pixels.iter().map(|color| color.a()).collect();
 
-        assert!(alphas.iter().any(|alpha| *alpha == 128));
+        assert!(alphas.contains(&128));
         assert!(alphas.iter().all(|alpha| *alpha <= 128));
     }
 

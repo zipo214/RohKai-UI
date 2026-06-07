@@ -243,7 +243,7 @@ Keyboard shortcuts: `Ctrl+N` new, `Ctrl+O` open, `Ctrl+S` save, `Ctrl+Shift+S` s
 
 ## SVG subsystem
 
-```
+```text
 src/
   svg_import.rs         — SVG → WidgetInstance template importer (zero new dependencies)
   svg_core.rs           — shared SVG microsyntax module: CSS color parsing, numeric-list

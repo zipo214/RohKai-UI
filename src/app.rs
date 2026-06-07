@@ -842,21 +842,24 @@ impl RohKaiApp {
             visuals.widgets.active.rounding = r;
             visuals.widgets.open.rounding = r;
         }
-        ctx.set_visuals(visuals);
-        if theme.base_font_size.is_some() || theme.spacing_scale.is_some() {
-            let mut style = (*ctx.style()).clone();
-            if let Some(fs) = theme.base_font_size {
-                for font_id in style.text_styles.values_mut() {
-                    font_id.size = fs;
-                }
+        // Rebuild the style from defaults every time (carrying the themed
+        // visuals) so clearing overrides — "Reset defaults" or loading a theme
+        // without font/spacing overrides — restores the base egui style.
+        let mut style = egui::Style {
+            visuals,
+            ..Default::default()
+        };
+        if let Some(fs) = theme.base_font_size {
+            for font_id in style.text_styles.values_mut() {
+                font_id.size = fs;
             }
-            if let Some(scale) = theme.spacing_scale {
-                let base = 4.0 * scale;
-                style.spacing.item_spacing = egui::vec2(base * 2.0, base);
-                style.spacing.button_padding = egui::vec2(base * 1.5, base * 0.5);
-            }
-            ctx.set_style(style);
         }
+        if let Some(scale) = theme.spacing_scale {
+            let base = 4.0 * scale;
+            style.spacing.item_spacing = egui::vec2(base * 2.0, base);
+            style.spacing.button_padding = egui::vec2(base * 1.5, base * 0.5);
+        }
+        ctx.set_style(style);
     }
 
     fn save_user_settings(&mut self) {
@@ -1431,9 +1434,13 @@ impl eframe::App for RohKaiApp {
             i.modifiers.ctrl
                 && (i.key_pressed(Key::Y) || (i.modifiers.shift && i.key_pressed(Key::Z)))
         });
-        if ctrl_z {
+        // Don't hijack Ctrl+Z/Y while a TextEdit (code editor, property fields,
+        // etc.) owns the keyboard — that would roll the UiTree instead of the
+        // text-edit's own undo.
+        let text_input_focused = ctx.wants_keyboard_input();
+        if ctrl_z && !text_input_focused {
             self.cmd_undo();
-        } else if ctrl_redo {
+        } else if ctrl_redo && !text_input_focused {
             self.cmd_redo();
         }
         if ctrl_r {
@@ -1859,6 +1866,9 @@ impl eframe::App for RohKaiApp {
         // ---------------------------------------------------------------
         let prev_canvas_w = self.project.ui_tree.app_props.win_w;
         let prev_canvas_h = self.project.ui_tree.app_props.win_h;
+        // Presets set both dimensions explicitly, so they must bypass the
+        // aspect-ratio correction below (which assumes a single DragValue edit).
+        let mut preset_applied = false;
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             if self.session.preview_mode {
                 ui.centered_and_justified(|ui| {
@@ -1912,6 +1922,7 @@ impl eframe::App for RohKaiApp {
                         if ui.button(*label).clicked() {
                             self.project.ui_tree.app_props.win_w = *w;
                             self.project.ui_tree.app_props.win_h = *h;
+                            preset_applied = true;
                             ui.close_menu();
                         }
                     }
@@ -1979,8 +1990,12 @@ impl eframe::App for RohKaiApp {
             });
         });
 
-        // Enforce aspect ratio after DragValue edits
-        if self.session.lock_aspect_ratio && prev_canvas_w > 0.0 && prev_canvas_h > 0.0 {
+        // Enforce aspect ratio after DragValue edits (presets bypass this).
+        if self.session.lock_aspect_ratio
+            && !preset_applied
+            && prev_canvas_w > 0.0
+            && prev_canvas_h > 0.0
+        {
             let cur_w = self.project.ui_tree.app_props.win_w;
             let cur_h = self.project.ui_tree.app_props.win_h;
             let ratio = prev_canvas_w / prev_canvas_h;

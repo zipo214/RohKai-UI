@@ -1,3 +1,4 @@
+pub mod component_state;
 pub mod egui_emitter;
 pub mod export;
 pub mod field_collector;

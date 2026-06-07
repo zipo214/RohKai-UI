@@ -7,7 +7,7 @@ pub fn emit(tree: &UiTree) -> String {
 
     // Design-time component state fields (DataSource etc.)
     let component_pairs =
-        crate::panels::component_tray::component_state_field_pairs(&tree.app_props.components);
+        crate::codegen::component_state::component_state_field_pairs(&tree.app_props.components);
 
     let mut out = String::from("// Generated AppState - do not edit manually\nstruct AppState {\n");
     for f in &collected.fields {
