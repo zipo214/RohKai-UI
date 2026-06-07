@@ -2,6 +2,59 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-06 — SVG R7: Masks + Filters Tier-1 (on the R4 offscreen pipeline)
+
+### Context Reviewed Before Editing
+- `CLAUDE.md`, low-token preflight, `.agents/skills/svg-zero-dep/SKILL.md`
+- `docs/SVG_RENDERER_ROADMAP.md` R7, `docs/svg-goal-plan-prompts/R7-masks-filters.goal.md`
+- `src/canvas/svg_rasterizer.rs` R4 layer/offscreen machinery (LayerRaw,
+  ResolvedLayer, layer_for_group, execute layer stack, Offscreen,
+  composite_offscreen, RasterTarget, render_shape, ClipMask), parser
+  classification (`unsupported_tag_feature`, `is_container_tag`, build_items)
+
+### Changes
+- Masks (`mask="url(#id)"`, alpha + luminance via `mask-type`): `resolve_mask` +
+  `collect_mask_items` lower the `<mask>` subtree to `MaskItem`s; `MaskDef::
+  build_alpha` renders them through `render_shape` into a premultiplied buffer and
+  reduces to a coverage alpha (luminance = 0.2125R+0.7154G+0.0721B on the
+  premultiplied buffer, or the alpha channel). Applied by multiplying the masked
+  element's isolated offscreen (`apply_mask_to_offscreen`).
+- Filters tier-1: `FilterGraph`/`FilterPrimitive`/`FilterKind`/`FilterInput`.
+  `parse_filter` reads the `<filter>` primitives; `FilterGraph::apply` runs them
+  on the premultiplied source-graphic offscreen with named results and
+  `in`/`SourceGraphic`/`SourceAlpha`. Primitives: `feGaussianBlur` (separable
+  triple box-blur, `MAX_BLUR_RADIUS`-capped), `feOffset`, `feFlood`,
+  `feMerge`(+`feMergeNode`), `feColorMatrix` (matrix/saturate/luminanceToAlpha),
+  `feDropShadow`. Color matrix unpremultiplies → matrix → repremultiplies.
+- Layer plumbing: `LayerRaw`/`ResolvedLayer` gained `mask_ref`/`filter_ref`;
+  `needs_offscreen` now also true for mask/filter; `LayerFrame<'a>` borrows the
+  `&ResolvedLayer` so `EndLayer` applies filter then mask before
+  `composite_offscreen`. Shapes carrying mask/filter get a synthetic layer
+  (`shape_layer`) emitted by `build_items`.
+- Parser: retain `fe*` primitive elements + skip `mask`/`filter` defs in scene
+  build (like `clipPath`); add `femerge` to `is_container_tag`. Removed the now
+  dead `PendingDiagnostic::Unsupported` variant (mask/filter attrs are applied,
+  not diagnosed).
+
+### Verification
+- `cargo test`: 293 passed, 3 ignored (3 new goldens: luminance mask, feOffset,
+  feFlood+feMerge; 8 unit tests: alpha mask, missing-mask diagnostic, gaussian
+  blur softening, colorMatrix saturate grayscale, dropShadow, unsupported-
+  primitive partial, huge-blur-bounded, mask+filter determinism).
+- Ignored all-built-in exported-project `cargo check`: passed (single `crate::`
+  import contract intact; masks/filters render in the embedded copy too).
+- `cargo fmt --check`, `cargo clippy -- -D warnings`,
+  `scripts/validate-svg-import.ps1`, `scripts/check-text-encoding.ps1`: clean.
+
+### Remaining Risks / Follow-Ups
+- Filter tier 2/3 (`feComposite`/`feBlend`/`feComponentTransfer`/`feMorphology`/
+  `feTile`/`feImage`/`feDisplacementMap`/`feTurbulence`/convolution/lighting) pass
+  through as identity with `filter.unsupported_primitive`.
+- Filter region is the whole canvas (already bounded) rather than the precise
+  filter-region rect; `maskContentUnits=objectBoundingBox` approximated in user
+  space. Blur is a box approximation, not an exact Gaussian.
+- Next: R8 (reference corpus, benchmarks, report UI + source viewer).
+
 ## 2026-06-06 — SVG R6: Editable Text Import (chunked multi-label, phases 1-2)
 
 ### Context Reviewed Before Editing

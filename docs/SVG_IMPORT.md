@@ -153,9 +153,14 @@ textures at runtime.
   `image.decode_failed`, `limit.image_pixels`) — including progressive/arithmetic/
   CMYK/12-bit JPEG, which are explicit unsupported cases. Component import still
   keeps `<image>` as an editable placeholder with the source preserved.
+- Image-mode rasterization renders `mask` (alpha + luminance) and filter tier-1
+  (`feGaussianBlur`, `feOffset`, `feFlood`, `feMerge`, `feColorMatrix`,
+  `feDropShadow`) through the R4 offscreen pipeline (R7). Filter tier 2/3
+  primitives pass through with a `filter.unsupported_primitive` partial-output
+  diagnostic; missing mask/filter refs warn and leave the element rendered.
 - Image-mode rasterization emits structured diagnostics for the remaining
-  unsupported renderer buckets such as patterns, masks, filters, markers, text,
-  vector effects, and unavailable paint-server references.
+  unsupported renderer buckets such as patterns, markers, text, vector effects,
+  and unavailable paint-server references.
   Invalid fill-rule/stroke declarations produce source-spanned warnings and
   preserve inherited/default behavior. Stroke complexity limits report
   truncation explicitly.
@@ -200,12 +205,12 @@ RohKai rejects or ignores unsafe SVG features:
   `DOCTYPE`, custom entities, scripts, non-XML processing instructions, external
   hrefs or non-local `url(...)` references, excessive tag count, excessive path
   commands, or excessive raster dimensions.
-- `filter`, animation, `foreignObject`, `textPath`, masks, patterns,
+- Animation, `foreignObject`, `textPath`, patterns, filter tier 2/3 primitives,
   unavailable paint-server references, and complex CSS selectors are reported
   as unsupported or approximated with structured diagnostics. Linear/radial
-  gradients and `clipPath` clipping are supported in Image-mode rendering but
-  remain non-editable, diagnosed placeholders in component import mode.
-- Mask/filter attributes are diagnosed separately from their definitions.
+  gradients, `clipPath` clipping, masks (alpha/luminance), and filter tier-1 are
+  supported in Image-mode rendering but remain non-editable, diagnosed
+  placeholders in component import mode.
   `clip-path` is applied in Image-mode rendering (R4); unresolved/cyclic/too-deep
   clip references and objectBoundingBox-on-group are diagnosed and skipped.
 

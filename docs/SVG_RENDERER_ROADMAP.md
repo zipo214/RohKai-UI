@@ -22,11 +22,12 @@ and SVG-facing editor UX.
 
 ## Current Execution Order
 
-1. R0-R6 are complete for their documented subsets (R5: PNG and baseline JPEG
+1. R0-R7 are complete for their documented subsets (R5: PNG and baseline JPEG
    `data:` images; R6: editable text import — chunked multi-label with
-   anchor/baseline diagnostics). Deferred follow-ons: progressive JPEG and the R6
-   vector-outline snapshot / raster text rendering.
-2. Continue R7-R8 in order, with R8 owning source/report UI.
+   anchor/baseline diagnostics; R7: alpha/luminance masks + filter tier-1 on the
+   R4 offscreen pipeline). Deferred follow-ons: progressive JPEG, the R6
+   vector-outline snapshot / raster text, and filter tier 2/3.
+2. R8 (conformance, benchmarks, report UI) is next.
 
 Unchecked derivative-backlog entries are implementation notes for these phases,
 not separate roadmap phases.
@@ -190,7 +191,9 @@ Current limits:
   markers) `data:` images are decoded and rendered through the R4 clip/compositing
   pipeline. Progressive/arithmetic/CMYK/12-bit JPEG and external sources are
   diagnosed rather than rendered.
-- No pattern rendering, masks, filters, markers, or blend modes.
+- No pattern rendering, markers, or blend modes. (Alpha/luminance masks and
+  filter tier-1 — blur/offset/flood/merge/colorMatrix/dropShadow — render via the
+  R4 offscreen pipeline as of R7; tier 2/3 filter primitives are diagnosed.)
 - Text imports as editable chunked labels (positioned spans become separate
   grouped labels with per-chunk anchor/baseline diagnostics); raster text
   rendering (vector-outline snapshot) is deferred, so the rasterizer still reports
@@ -387,8 +390,8 @@ need all of it immediately, but this is the map.
 | Images | Embedded PNG/JPEG and secure external policy | PNG (zlib/unfilter, types 0/2/3/4/6, 8/16-bit) and baseline JPEG (Huffman/IDCT/YCbCr, 4:4:4/4:2:2/4:2:0, restart) `data:` decoded + rendered through R4 clip/compositing; external refs fail-closed | Progressive JPEG; broader format/corpus | P2 |
 | `defs`/`use` | Id resolution and expansion | Importer and rasterizer support bounded local symbol/use expansion with cycles, depth/node limits, duplicate-ID diagnostics, and source-order stability | Extend references only as later phases require | P1 |
 | Clips | Actual clipping stack | clipPath rendered: clip-rule, transforms, both clipPathUnits (shape bbox), nested intersection, cycle/depth caps, plus nested-`<svg>` overflow clipping (R4) | objectBoundingBox-on-group; clip on text/image when those land | P2 |
-| Masks | Alpha/luminance masks | Diagnostics only | Offscreen mask buffers (R7; reuse R4 clip/offscreen machinery) | P3 |
-| Filters | Primitive graph | Diagnostics only | Start with drop shadow/blur/offset only if worth it | P4 |
+| Masks | Alpha/luminance masks | Alpha + luminance masks rendered through the R4 offscreen (shape/gradient mask content, `mask-type`, bounded by item/offscreen caps) | objectBoundingBox content units; mask region clipping | P3 |
+| Filters | Primitive graph | Tier-1 graph on R4 offscreen (premultiplied, capped): blur/offset/flood/merge/colorMatrix/dropShadow; unsupported primitives partial + diagnosed | Tier 2/3 primitives; full filter-region clipping | P4 |
 | Text | Full layout/shaping | Editable chunked multi-label import (positioned spans → grouped labels, per-chunk anchor/baseline diagnostics); raster text skipped | Vector-outline snapshot / raster text; shaping/bidi/textPath | P3/P4 |
 | Markers | Arrowheads and symbols on paths | Unsupported | Add after stroke geometry | P3 |
 | Antialiasing | High-quality coverage | Deterministic 8x8 coverage; winding/parity fills and unioned stroke coverage are separate | Tune quality/performance and add gamma-aware compositing | P1/P2 |
@@ -637,19 +640,35 @@ Goal: add expensive visual effects only after core geometry/paint is trustworthy
 
 Tasks:
 
-- Masks:
-  maskUnits, maskContentUnits, alpha/luminance mode, offscreen buffers.
-- Filters tier 1:
-  drop shadow, blur, offset, flood, merge, color matrix.
-- Filters tier 2:
-  blend/composite/component transfer/morphology.
-- Filters tier 3:
-  turbulence, displacement, convolution, lighting if still justified.
+- [x] Masks: alpha and luminance modes, `mask-type`, rendered through the R4
+  offscreen pipeline. Mask content (shapes/gradients) is rendered with the shape
+  renderer to a premultiplied buffer, reduced to a coverage alpha
+  (luminance = `0.2125R+0.7154G+0.0721B`, or the alpha channel), then multiplied
+  into the masked element's isolated offscreen. Bounded by `MAX_MASK_ITEMS` and
+  the existing offscreen caps. `maskContentUnits=objectBoundingBox` is approximated
+  in user space with a diagnostic.
+- [x] Filters tier 1: `feGaussianBlur` (separable triple box-blur,
+  radius-capped), `feOffset`, `feFlood`, `feMerge` (+`feMergeNode`),
+  `feColorMatrix` (matrix/saturate/luminanceToAlpha), and `feDropShadow`.
+  Primitive graph with named results, `in`/`SourceGraphic`/`SourceAlpha` inputs,
+  executed in premultiplied space on the element's isolated offscreen; output is
+  composited back as straight RGBA. Both masks and filters work on shapes and
+  groups (shapes with mask/filter get a synthetic layer).
+- [ ] **Deferred — Filters tier 2/3:** `feComposite`, `feBlend`,
+  `feComponentTransfer`, `feMorphology`, `feTile`, `feImage`,
+  `feDisplacementMap`, `feTurbulence`, convolution, lighting. These are passed
+  through as identity with a `filter.unsupported_primitive` partial-output
+  diagnostic. Full filter-region clipping (currently the whole canvas, which is
+  already bounded) is also a refinement.
 
 Acceptance:
 
-- Filter region limits prevent memory bombs.
-- Unsupported primitives show partial-output diagnostics.
+- [x] Filter region limits prevent memory bombs: buffers are bounded by the
+  offscreen byte/depth caps and blur radius is capped (`MAX_BLUR_RADIUS`); a huge
+  `stdDeviation` completes without hanging.
+- [x] Unsupported primitives show partial-output diagnostics
+  (`filter.unsupported_primitive`); missing/invalid mask or filter refs warn
+  (`mask.unresolved` / `filter.unresolved`) and leave the element rendered.
 
 ### Phase R8 — Conformance, Benchmarks, And Editor UX
 

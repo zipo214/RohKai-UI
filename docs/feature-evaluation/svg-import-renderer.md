@@ -58,8 +58,8 @@ capabilities where required.
 | Paths | Shared tokenizer, retained command semantics, nonzero/evenodd fills, affine cap/join/miter/dash strokes, transformed stroke bounds, and anti-aliased coverage | Reusable exact curve/arc fill bounds, markers, vector effects, exact SVG `arcs` joins, and broader conformance corpus. |
 | Paint | Solid colors/opacity plus deterministic linear/radial gradient fills and strokes; patterns are explicit transparent unsupported paint servers | Pattern tiling, color-space policy, and broader conformance corpus. |
 | Text | Chunked multi-label editable import (positioned spans → grouped labels, anchor/baseline diagnostics) | Vector snapshot / raster text, font selection, bidi, shaping, fallback. |
-| Clipping/masking | clipPath rendered (clip-rule, transforms, both units, nested intersection, nested-`<svg>` overflow); masks diagnosed | Mask offscreen buffers; objectBoundingBox-on-group; clip on text/image. |
-| Filters | Unsupported diagnostics | Optional safe subset or clear visual fallback. |
+| Clipping/masking | clipPath rendered (clip-rule, transforms, both units, nested intersection, nested-`<svg>` overflow); alpha + luminance masks rendered via the R4 offscreen (R7) | objectBoundingBox mask content units; mask region clipping. |
+| Filters | Tier-1 graph rendered (R7): blur/offset/flood/merge/colorMatrix/dropShadow on R4 offscreen, premultiplied, capped; unsupported primitives partial + diagnosed | Tier 2/3 primitives; full filter-region clipping. |
 | Images | PNG (zlib/unfilter, types 0/2/3/4/6, 8/16-bit) and baseline JPEG (Huffman/IDCT/YCbCr, 4:4:4/4:2:2/4:2:0, restart) `data:` decoded + rendered (R5) through R4 clip/compositing; external refs rejected | Progressive JPEG (deferred); broader format/corpus coverage. |
 | Golden tests | Initial fixtures | Broad fixture suite plus differential tests against reference outputs where allowed. |
 
@@ -77,13 +77,15 @@ capabilities where required.
 
 Detailed sequencing is authoritative in `docs/SVG_RENDERER_ROADMAP.md`:
 
-1. R0-R6 are complete for their documented subsets (R4: clipPath clipping,
+1. R0-R7 are complete for their documented subsets (R4: clipPath clipping,
    nested-`<svg>` overflow, premultiplied-alpha compositing, isolated group
-   opacity; R5: zero-dependency PNG and baseline JPEG `data:` decode + render
-   through the R4 pipeline; R6: editable chunked multi-label text import with
-   anchor/baseline diagnostics). Next is R7 masks/filters. Deferred follow-ons:
-   progressive JPEG (`image.unsupported_jpeg`) and the R6 vector-outline snapshot
-   / raster text rendering.
+   opacity; R5: zero-dependency PNG and baseline JPEG `data:` decode + render;
+   R6: editable chunked multi-label text import; R7: alpha/luminance masks +
+   filter tier-1 on the R4 offscreen pipeline). Next is R8 conformance/report UI.
+   Deferred follow-ons: progressive JPEG (`image.unsupported_jpeg`), the R6
+   vector-outline snapshot / raster text, and filter tier 2/3
+   (`filter.unsupported_primitive`).
 2. Keep R1-R3 quality under regression coverage while expanding real-world
    fixtures and reference comparisons.
-3. Continue effects and conformance through R7-R8. Report UI belongs to R8.
+3. R8 (reference corpus, benchmarks, report UI + source viewer) is the last
+   roadmap phase.

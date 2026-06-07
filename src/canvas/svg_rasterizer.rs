@@ -42,6 +42,12 @@ const MAX_CLIP_SHAPES: usize = 4_096;
 const MAX_OFFSCREEN_BYTES: usize = 134_217_728; // 128 MiB
 /// Maximum simultaneously live isolated-group offscreen buffers (nesting depth).
 const MAX_OFFSCREEN_DEPTH: usize = 8;
+/// Maximum shapes lowered from a single `<mask>` subtree (R7).
+const MAX_MASK_ITEMS: usize = 4_096;
+/// Maximum primitives executed from a single `<filter>` (R7).
+const MAX_FILTER_PRIMITIVES: usize = 64;
+/// Maximum Gaussian-blur box radius in device pixels (R7), to bound filter CPU.
+const MAX_BLUR_RADIUS: usize = 200;
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -318,10 +324,6 @@ fn svg_text_allowed(svg_text: &str) -> bool {
 
 #[derive(Clone)]
 enum PendingDiagnostic {
-    Unsupported {
-        feature: &'static str,
-        message: &'static str,
-    },
     Warning {
         code: &'static str,
         message: &'static str,
@@ -330,22 +332,8 @@ enum PendingDiagnostic {
 
 fn unsupported_attr_diagnostics(attrs: &[(String, String)]) -> Vec<PendingDiagnostic> {
     let mut diagnostics = Vec::new();
-    for (key, _value) in attrs {
-        let diagnostic = match key.as_str() {
-            "mask" => Some(PendingDiagnostic::Unsupported {
-                feature: "mask attribute",
-                message: "mask attributes are diagnosed but not applied yet",
-            }),
-            "filter" => Some(PendingDiagnostic::Unsupported {
-                feature: "filter attribute",
-                message: "filter attributes are diagnosed but not applied yet",
-            }),
-            _ => None,
-        };
-        if let Some(diagnostic) = diagnostic {
-            diagnostics.push(diagnostic);
-        }
-    }
+    // mask/filter attributes are applied via the R7 layer pipeline (see
+    // shape_layer / layer_for_group), so they are no longer diagnosed here.
     if final_style_property(attrs, "fill-rule")
         .is_some_and(|value| parse_fill_rule(value).is_none())
     {
@@ -428,14 +416,8 @@ fn emit_diagnostics(
     report: &mut SvgRenderReport,
 ) {
     for diagnostic in diagnostics {
-        match diagnostic {
-            PendingDiagnostic::Unsupported { feature, message } => {
-                report.unsupported_at(*feature, *message, Some(source));
-            }
-            PendingDiagnostic::Warning { code, message } => {
-                report.warning_at(*code, *message, Some(source));
-            }
-        }
+        let PendingDiagnostic::Warning { code, message } = diagnostic;
+        report.warning_at(*code, *message, Some(source));
     }
 }
 
@@ -1769,6 +1751,10 @@ struct SvgSceneItem {
 struct LayerRaw {
     /// `clip-path="url(#id)"` target, if any.
     clip_ref: Option<String>,
+    /// `mask="url(#id)"` target, if any (R7).
+    mask_ref: Option<String>,
+    /// `filter="url(#id)"` target, if any (R7).
+    filter_ref: Option<String>,
     /// Scene-space CTM of the element (view transform applied later).
     element_transform: Transform,
     /// Length bases of the element's user space (for clip percentages/objbb).
@@ -1960,9 +1946,10 @@ impl SvgScene {
                         build,
                     );
                 }
-                // A <clipPath> definition never renders directly; its children
-                // are consumed only when an element references it via clip-path.
-                SvgNode::Unsupported { tag, .. } if tag == "clippath" => {}
+                // clipPath/mask/filter definitions never render directly; their
+                // children are consumed only when an element references them.
+                SvgNode::Unsupported { tag, .. }
+                    if tag == "clippath" || tag == "mask" || tag == "filter" => {}
                 SvgNode::StyleSheet { .. }
                 | SvgNode::LinearGradient { .. }
                 | SvgNode::RadialGradient { .. }
@@ -1995,15 +1982,41 @@ impl SvgScene {
                         build,
                     );
                 }
-                _ => build.items.push(SvgSceneItem {
-                    node: node.shallow(),
-                    transform: combined_transform,
-                    style: local_style,
-                    length_bases: inherited_length_bases,
-                    skipped_by_unsupported_ancestor,
-                    layer: None,
-                    is_layer_end: false,
-                }),
+                _ => {
+                    // Shapes with mask/filter need an isolated offscreen (R7):
+                    // wrap them in a layer so EndLayer can post-process.
+                    let layer = if skipped_by_unsupported_ancestor {
+                        None
+                    } else {
+                        shape_layer(
+                            node.attrs(),
+                            combined_transform,
+                            inherited_length_bases,
+                            node.source(),
+                        )
+                    };
+                    let has_layer = layer.is_some();
+                    build.items.push(SvgSceneItem {
+                        node: node.shallow(),
+                        transform: combined_transform,
+                        style: local_style,
+                        length_bases: inherited_length_bases,
+                        skipped_by_unsupported_ancestor,
+                        layer,
+                        is_layer_end: false,
+                    });
+                    if has_layer {
+                        build.items.push(SvgSceneItem {
+                            node: node.shallow(),
+                            transform: combined_transform,
+                            style: Style::default(),
+                            length_bases: inherited_length_bases,
+                            skipped_by_unsupported_ancestor,
+                            layer: None,
+                            is_layer_end: true,
+                        });
+                    }
+                }
             }
         }
     }
@@ -2938,6 +2951,7 @@ fn is_container_tag(tag: &str) -> bool {
             | "foreignobject"
             | "style"
             | "switch"
+            | "femerge"
     )
 }
 
@@ -2972,6 +2986,12 @@ fn unsupported_tag_feature(tag: &str) -> Option<(&'static str, &'static str)> {
         "switch" => Some((
             "switch",
             "switch conditional processing is not implemented in raster mode yet",
+        )),
+        // Filter primitives are retained in the tree so a referenced <filter> can
+        // read them; they render only inside a supported filter (R7).
+        t if t.starts_with("fe") => Some((
+            "filter primitive",
+            "filter primitive elements render only inside a supported filter",
         )),
         _ => None,
     }
@@ -3099,19 +3119,61 @@ fn layer_for_group(
         return None;
     }
     let clip_ref = clip_path_ref(attrs);
+    let mask_ref = local_attr_ref(attrs, "mask");
+    let filter_ref = local_attr_ref(attrs, "filter");
     let opacity = style.opacity.clamp(0.0, 1.0);
     let isolate = parse_isolation(attrs);
-    if clip_ref.is_none() && overflow.is_none() && opacity >= 1.0 && !isolate {
+    if clip_ref.is_none()
+        && mask_ref.is_none()
+        && filter_ref.is_none()
+        && overflow.is_none()
+        && opacity >= 1.0
+        && !isolate
+    {
         return None;
     }
     Some(LayerRaw {
         clip_ref,
+        mask_ref,
+        filter_ref,
         element_transform,
         length_bases,
         is_group: true,
         overflow,
         opacity,
         isolate,
+        source,
+    })
+}
+
+/// A `<g>`/shape `mask`/`filter` reference resolved to a local `url(#id)` target.
+fn local_attr_ref(attrs: &[(String, String)], key: &str) -> Option<String> {
+    local_url_reference(attr_get(attrs, key)?).map(ToOwned::to_owned)
+}
+
+/// Build a LayerRaw for a *shape* that carries `mask`/`filter` (which need an
+/// isolated offscreen). Clip and opacity stay on the shape's own draw path.
+fn shape_layer(
+    attrs: &[(String, String)],
+    element_transform: Transform,
+    length_bases: SvgLengthBases,
+    source: SvgRenderSource,
+) -> Option<LayerRaw> {
+    let mask_ref = local_attr_ref(attrs, "mask");
+    let filter_ref = local_attr_ref(attrs, "filter");
+    if mask_ref.is_none() && filter_ref.is_none() {
+        return None;
+    }
+    Some(LayerRaw {
+        clip_ref: None,
+        mask_ref,
+        filter_ref,
+        element_transform,
+        length_bases,
+        is_group: false,
+        overflow: None,
+        opacity: 1.0,
+        isolate: false,
         source,
     })
 }
@@ -3482,9 +3544,700 @@ fn overflow_clip_shape(rect: [f64; 4], scene_transform: Transform, view: &Transf
     }
 }
 
+// ---------------------------------------------------------------------------
+// R7: masks
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq)]
+enum MaskMode {
+    Luminance,
+    Alpha,
+}
+
+/// One renderable shape lowered from a `<mask>` subtree.
+struct MaskItem {
+    geometry: ShapeGeometry,
+    transform: Transform,
+    style: Box<Style>,
+    length_bases: SvgLengthBases,
+    path_length: Option<f64>,
+}
+
+/// A resolved `<mask>`: its content shapes plus luminance/alpha mode.
+struct MaskDef {
+    items: Vec<MaskItem>,
+    mode: MaskMode,
+}
+
+impl MaskDef {
+    /// Render the mask content to a premultiplied buffer, then reduce to an
+    /// alpha coverage mask (luminance or alpha). Reuses the shape renderer so
+    /// gradient/solid mask content works identically to normal painting.
+    fn build_alpha(&self, w: usize, h: usize, paint_servers: &PaintServerTable) -> ClipMask {
+        let mut buf = vec![0u8; w * h * 4];
+        for item in &self.items {
+            let mut target = RasterTarget {
+                buf: &mut buf,
+                width: w,
+                height: h,
+                premultiplied: true,
+                clip: None,
+            };
+            render_shape(
+                &item.geometry,
+                &item.transform,
+                &item.style,
+                item.length_bases,
+                item.path_length,
+                paint_servers,
+                &mut target,
+            );
+        }
+        let mut alpha = vec![0u8; w * h];
+        for (i, slot) in alpha.iter_mut().enumerate() {
+            let r = buf[i * 4] as f32;
+            let g = buf[i * 4 + 1] as f32;
+            let b = buf[i * 4 + 2] as f32;
+            let a = buf[i * 4 + 3] as f32;
+            // buf is premultiplied, so luminance(premult rgb) == luminance(straight)*alpha.
+            *slot = match self.mode {
+                MaskMode::Alpha => a.round().clamp(0.0, 255.0) as u8,
+                MaskMode::Luminance => (0.2125 * r + 0.7154 * g + 0.0721 * b)
+                    .round()
+                    .clamp(0.0, 255.0) as u8,
+            };
+        }
+        ClipMask {
+            width: w,
+            height: h,
+            alpha,
+        }
+    }
+}
+
+fn resolve_mask(
+    scene: &SvgScene,
+    mask_id: &str,
+    element_ctm: Transform,
+    length_bases: SvgLengthBases,
+    diagnostics: &mut Vec<PendingDiagnostic>,
+) -> Option<MaskDef> {
+    let node = scene
+        .references
+        .by_xml_id
+        .get(mask_id)
+        .and_then(|id| scene.references.nodes_by_id.get(id));
+    let Some(SvgNode::Unsupported {
+        tag,
+        attrs,
+        children,
+        ..
+    }) = node
+    else {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "mask.unresolved",
+            message: "mask references an unavailable local id; no mask was applied",
+        });
+        return None;
+    };
+    if tag != "mask" {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "mask.unresolved",
+            message: "mask target is not a mask element; no mask was applied",
+        });
+        return None;
+    }
+    let mode = if final_style_property(attrs, "mask-type")
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("alpha"))
+    {
+        MaskMode::Alpha
+    } else {
+        MaskMode::Luminance
+    };
+    if attr_get(attrs, "maskcontentunits")
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("objectBoundingBox"))
+    {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "mask.content_units",
+            message: "maskContentUnits=objectBoundingBox is approximated in user space",
+        });
+    }
+    let mut items = Vec::new();
+    let root_style = Style::default();
+    collect_mask_items(
+        children,
+        element_ctm,
+        length_bases,
+        &root_style,
+        &scene.stylesheet,
+        &mut items,
+    );
+    if items.is_empty() {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "mask.empty",
+            message: "mask has no renderable content; the masked element is hidden",
+        });
+    }
+    Some(MaskDef { items, mode })
+}
+
+fn collect_mask_items(
+    nodes: &[SvgNode],
+    base: Transform,
+    length_bases: SvgLengthBases,
+    inherited: &Style,
+    sheet: &svg_core::SvgCssStyleSheet,
+    out: &mut Vec<MaskItem>,
+) {
+    for node in nodes {
+        if out.len() >= MAX_MASK_ITEMS {
+            break;
+        }
+        let style = inherited.inherit(node, sheet);
+        let local = attr_get(node.attrs(), "transform")
+            .map(Transform::parse_chained)
+            .unwrap_or_else(Transform::identity);
+        let transform = base.concat(local);
+        match node {
+            SvgNode::Group { children, .. } => {
+                collect_mask_items(children, transform, length_bases, &style, sheet, out)
+            }
+            _ => {
+                if let Some(geometry) = lower_shape_geometry(node, length_bases) {
+                    out.push(MaskItem {
+                        geometry,
+                        transform,
+                        style: Box::new(style),
+                        length_bases,
+                        path_length: parsed_path_length(node.attrs()),
+                    });
+                }
+            }
+        }
+    }
+}
+
+/// Multiply a premultiplied RGBA buffer in place by a coverage mask (all four
+/// channels scale, preserving premultiplication).
+fn apply_mask_to_offscreen(buf: &mut [u8], mask: &ClipMask, w: usize, h: usize) {
+    if mask.width != w || mask.height != h {
+        return;
+    }
+    for i in 0..(w * h) {
+        let m = mask.alpha[i] as u16;
+        for c in 0..4 {
+            let idx = i * 4 + c;
+            buf[idx] = ((buf[idx] as u16 * m + 127) / 255) as u8;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// R7: filters (tier 1)
+// ---------------------------------------------------------------------------
+
+enum FilterInput {
+    SourceGraphic,
+    SourceAlpha,
+    Reference(String),
+    Previous,
+}
+
+enum FilterKind {
+    GaussianBlur {
+        sx: f64,
+        sy: f64,
+    },
+    Offset {
+        dx: f64,
+        dy: f64,
+    },
+    Flood {
+        color: [u8; 4],
+    },
+    Merge {
+        inputs: Vec<FilterInput>,
+    },
+    ColorMatrix {
+        m: [f32; 20],
+    },
+    DropShadow {
+        dx: f64,
+        dy: f64,
+        sx: f64,
+        sy: f64,
+        color: [u8; 4],
+    },
+    /// Unsupported primitive passed through (partial output) with a diagnostic.
+    Identity,
+}
+
+struct FilterPrimitive {
+    kind: FilterKind,
+    input: FilterInput,
+    result: Option<String>,
+}
+
+struct FilterGraph {
+    primitives: Vec<FilterPrimitive>,
+}
+
+impl FilterGraph {
+    /// Run the primitive graph over a premultiplied source-graphic buffer,
+    /// returning the premultiplied result. Bounded by buffer size and primitive
+    /// count; never panics.
+    fn apply(&self, source: &[u8], w: usize, h: usize) -> Vec<u8> {
+        let source_alpha = source_alpha_buffer(source);
+        let mut named: HashMap<String, Vec<u8>> = HashMap::new();
+        let mut previous = source.to_vec();
+        for prim in &self.primitives {
+            let input = resolve_filter_input(&prim.input, source, &source_alpha, &named, &previous);
+            let out = match &prim.kind {
+                FilterKind::GaussianBlur { sx, sy } => gaussian_blur(&input, w, h, *sx, *sy),
+                FilterKind::Offset { dx, dy } => offset_buffer(&input, w, h, *dx, *dy),
+                FilterKind::Flood { color } => flood_buffer(*color, w, h),
+                FilterKind::ColorMatrix { m } => color_matrix(&input, m),
+                FilterKind::Merge { inputs } => {
+                    let mut acc = vec![0u8; w * h * 4];
+                    for fin in inputs {
+                        let layer =
+                            resolve_filter_input(fin, source, &source_alpha, &named, &previous);
+                        composite_premultiplied_over(&mut acc, &layer);
+                    }
+                    acc
+                }
+                FilterKind::DropShadow {
+                    dx,
+                    dy,
+                    sx,
+                    sy,
+                    color,
+                } => {
+                    let mut shadow = flood_masked(&source_alpha, *color);
+                    shadow = gaussian_blur(&shadow, w, h, *sx, *sy);
+                    shadow = offset_buffer(&shadow, w, h, *dx, *dy);
+                    composite_premultiplied_over(&mut shadow, source);
+                    shadow
+                }
+                FilterKind::Identity => input.clone(),
+            };
+            if let Some(name) = &prim.result {
+                named.insert(name.clone(), out.clone());
+            }
+            previous = out;
+        }
+        previous
+    }
+}
+
+fn resolve_filter_input(
+    input: &FilterInput,
+    source: &[u8],
+    source_alpha: &[u8],
+    named: &HashMap<String, Vec<u8>>,
+    previous: &[u8],
+) -> Vec<u8> {
+    match input {
+        FilterInput::SourceGraphic => source.to_vec(),
+        FilterInput::SourceAlpha => source_alpha.to_vec(),
+        FilterInput::Reference(name) => named
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| previous.to_vec()),
+        FilterInput::Previous => previous.to_vec(),
+    }
+}
+
+/// SourceAlpha = the source's alpha with zero RGB (premultiplied black).
+fn source_alpha_buffer(source: &[u8]) -> Vec<u8> {
+    let mut out = vec![0u8; source.len()];
+    let mut i = 3;
+    while i < source.len() {
+        out[i] = source[i];
+        i += 4;
+    }
+    out
+}
+
+/// Recolor a premultiplied alpha buffer with a flood colour (for drop shadow).
+fn flood_masked(alpha_buf: &[u8], color: [u8; 4]) -> Vec<u8> {
+    let mut out = vec![0u8; alpha_buf.len()];
+    let ca = color[3] as u32;
+    let mut i = 0;
+    while i + 3 < alpha_buf.len() {
+        let a = (alpha_buf[i + 3] as u32 * ca + 127) / 255; // combined alpha
+        out[i] = ((color[0] as u32 * a + 127) / 255) as u8;
+        out[i + 1] = ((color[1] as u32 * a + 127) / 255) as u8;
+        out[i + 2] = ((color[2] as u32 * a + 127) / 255) as u8;
+        out[i + 3] = a as u8;
+        i += 4;
+    }
+    out
+}
+
+fn flood_buffer(color: [u8; 4], w: usize, h: usize) -> Vec<u8> {
+    let a = color[3] as u32;
+    let pr = ((color[0] as u32 * a + 127) / 255) as u8;
+    let pg = ((color[1] as u32 * a + 127) / 255) as u8;
+    let pb = ((color[2] as u32 * a + 127) / 255) as u8;
+    let mut out = vec![0u8; w * h * 4];
+    for px in out.chunks_exact_mut(4) {
+        px[0] = pr;
+        px[1] = pg;
+        px[2] = pb;
+        px[3] = color[3];
+    }
+    out
+}
+
+fn offset_buffer(src: &[u8], w: usize, h: usize, dx: f64, dy: f64) -> Vec<u8> {
+    let mut out = vec![0u8; w * h * 4];
+    let dxi = dx.round() as i64;
+    let dyi = dy.round() as i64;
+    for y in 0..h as i64 {
+        let sy = y - dyi;
+        if sy < 0 || sy >= h as i64 {
+            continue;
+        }
+        for x in 0..w as i64 {
+            let sx = x - dxi;
+            if sx < 0 || sx >= w as i64 {
+                continue;
+            }
+            let di = ((y as usize) * w + x as usize) * 4;
+            let si = ((sy as usize) * w + sx as usize) * 4;
+            out[di..di + 4].copy_from_slice(&src[si..si + 4]);
+        }
+    }
+    out
+}
+
+/// Separable triple box blur approximating a Gaussian on a premultiplied buffer.
+fn gaussian_blur(src: &[u8], w: usize, h: usize, sx: f64, sy: f64) -> Vec<u8> {
+    let rx = blur_radius(sx);
+    let ry = blur_radius(sy);
+    let mut buf = src.to_vec();
+    if rx > 0 {
+        for _ in 0..3 {
+            buf = box_blur_h(&buf, w, h, rx);
+        }
+    }
+    if ry > 0 {
+        for _ in 0..3 {
+            buf = box_blur_v(&buf, w, h, ry);
+        }
+    }
+    buf
+}
+
+fn blur_radius(std_dev: f64) -> usize {
+    if !std_dev.is_finite() || std_dev <= 0.0 {
+        return 0;
+    }
+    // d ~= stdDev * 3 * sqrt(2*pi) / 4, per the SVG box-blur approximation note.
+    let d = (std_dev * 3.0 * (2.0 * std::f64::consts::PI).sqrt() / 4.0).round() as usize;
+    (d / 2).min(MAX_BLUR_RADIUS)
+}
+
+fn box_blur_h(src: &[u8], w: usize, h: usize, r: usize) -> Vec<u8> {
+    let mut out = vec![0u8; src.len()];
+    let span = (2 * r + 1) as u32;
+    for y in 0..h {
+        for c in 0..4 {
+            let mut sum: u32 = 0;
+            for x in 0..(r.min(w)) {
+                sum += src[(y * w + x) * 4 + c] as u32;
+            }
+            for x in 0..w {
+                let add = x + r;
+                if add < w {
+                    sum += src[(y * w + add) * 4 + c] as u32;
+                }
+                let sub = x as i64 - r as i64 - 1;
+                if sub >= 0 {
+                    sum -= src[(y * w + sub as usize) * 4 + c] as u32;
+                }
+                out[(y * w + x) * 4 + c] = ((sum + span / 2) / span) as u8;
+            }
+        }
+    }
+    out
+}
+
+fn box_blur_v(src: &[u8], w: usize, h: usize, r: usize) -> Vec<u8> {
+    let mut out = vec![0u8; src.len()];
+    let span = (2 * r + 1) as u32;
+    for x in 0..w {
+        for c in 0..4 {
+            let mut sum: u32 = 0;
+            for y in 0..(r.min(h)) {
+                sum += src[(y * w + x) * 4 + c] as u32;
+            }
+            for y in 0..h {
+                let add = y + r;
+                if add < h {
+                    sum += src[(add * w + x) * 4 + c] as u32;
+                }
+                let sub = y as i64 - r as i64 - 1;
+                if sub >= 0 {
+                    sum -= src[(sub as usize * w + x) * 4 + c] as u32;
+                }
+                out[(y * w + x) * 4 + c] = ((sum + span / 2) / span) as u8;
+            }
+        }
+    }
+    out
+}
+
+/// Apply a 4x5 colour matrix. Operates on straight RGBA (unpremultiply → matrix
+/// → clamp → premultiply) so it matches the SVG definition.
+fn color_matrix(src: &[u8], m: &[f32; 20]) -> Vec<u8> {
+    let mut out = vec![0u8; src.len()];
+    for (px, dst) in src.chunks_exact(4).zip(out.chunks_exact_mut(4)) {
+        let a = px[3] as f32 / 255.0;
+        let (r, g, b) = if a > 0.0 {
+            (
+                px[0] as f32 / 255.0 / a,
+                px[1] as f32 / 255.0 / a,
+                px[2] as f32 / 255.0 / a,
+            )
+        } else {
+            (0.0, 0.0, 0.0)
+        };
+        let nr = (m[0] * r + m[1] * g + m[2] * b + m[3] * a + m[4]).clamp(0.0, 1.0);
+        let ng = (m[5] * r + m[6] * g + m[7] * b + m[8] * a + m[9]).clamp(0.0, 1.0);
+        let nb = (m[10] * r + m[11] * g + m[12] * b + m[13] * a + m[14]).clamp(0.0, 1.0);
+        let na = (m[15] * r + m[16] * g + m[17] * b + m[18] * a + m[19]).clamp(0.0, 1.0);
+        dst[0] = (nr * na * 255.0).round().clamp(0.0, 255.0) as u8;
+        dst[1] = (ng * na * 255.0).round().clamp(0.0, 255.0) as u8;
+        dst[2] = (nb * na * 255.0).round().clamp(0.0, 255.0) as u8;
+        dst[3] = (na * 255.0).round().clamp(0.0, 255.0) as u8;
+    }
+    out
+}
+
+/// src-over compositing of one premultiplied layer onto a premultiplied accumulator.
+fn composite_premultiplied_over(dst: &mut [u8], src: &[u8]) {
+    let n = dst.len().min(src.len());
+    let mut i = 0;
+    while i + 3 < n {
+        let sa = src[i + 3] as u32;
+        let inv = 255 - sa;
+        for c in 0..4 {
+            dst[i + c] = (src[i + c] as u32 + (dst[i + c] as u32 * inv + 127) / 255).min(255) as u8;
+        }
+        i += 4;
+    }
+}
+
+fn parse_filter(
+    scene: &SvgScene,
+    filter_id: &str,
+    ctm: Transform,
+    diagnostics: &mut Vec<PendingDiagnostic>,
+) -> Option<FilterGraph> {
+    let node = scene
+        .references
+        .by_xml_id
+        .get(filter_id)
+        .and_then(|id| scene.references.nodes_by_id.get(id));
+    let Some(SvgNode::Unsupported { tag, children, .. }) = node else {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "filter.unresolved",
+            message: "filter references an unavailable local id; no filter was applied",
+        });
+        return None;
+    };
+    if tag != "filter" {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "filter.unresolved",
+            message: "filter target is not a filter element; no filter was applied",
+        });
+        return None;
+    }
+    let scale = affine_max_scale(ctm).max(1.0e-6);
+    let mut primitives = Vec::new();
+    for child in children {
+        if primitives.len() >= MAX_FILTER_PRIMITIVES {
+            diagnostics.push(PendingDiagnostic::Warning {
+                code: "limit.filter_primitives",
+                message:
+                    "filter exceeded the renderer primitive limit; remaining primitives skipped",
+            });
+            break;
+        }
+        let SvgNode::Unsupported {
+            tag: ptag, attrs, ..
+        } = child
+        else {
+            continue;
+        };
+        let input = parse_filter_input(attr_get(attrs, "in"));
+        let result = attr_get(attrs, "result").map(ToOwned::to_owned);
+        let kind = match ptag.as_str() {
+            "fegaussianblur" => {
+                let (sx, sy) = parse_std_deviation(attr_get(attrs, "stddeviation"));
+                FilterKind::GaussianBlur {
+                    sx: sx * scale,
+                    sy: sy * scale,
+                }
+            }
+            "feoffset" => FilterKind::Offset {
+                dx: attr_get(attrs, "dx").and_then(parse_f64).unwrap_or(0.0) * scale,
+                dy: attr_get(attrs, "dy").and_then(parse_f64).unwrap_or(0.0) * scale,
+            },
+            "feflood" => FilterKind::Flood {
+                color: flood_color(attrs),
+            },
+            "fecolormatrix" => FilterKind::ColorMatrix {
+                m: parse_color_matrix(attrs),
+            },
+            "femerge" => FilterKind::Merge {
+                inputs: child
+                    .children()
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|n| match n {
+                        SvgNode::Unsupported { tag, attrs, .. } if tag == "femergenode" => {
+                            Some(parse_filter_input(attr_get(attrs, "in")))
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+            },
+            "fedropshadow" => {
+                let (sx, sy) = parse_std_deviation(attr_get(attrs, "stddeviation"));
+                FilterKind::DropShadow {
+                    dx: attr_get(attrs, "dx").and_then(parse_f64).unwrap_or(2.0) * scale,
+                    dy: attr_get(attrs, "dy").and_then(parse_f64).unwrap_or(2.0) * scale,
+                    sx: sx * scale,
+                    sy: sy * scale,
+                    color: flood_color(attrs),
+                }
+            }
+            other => {
+                diagnostics.push(PendingDiagnostic::Warning {
+                    code: "filter.unsupported_primitive",
+                    message: "an unsupported filter primitive was passed through (partial output)",
+                });
+                let _ = other;
+                FilterKind::Identity
+            }
+        };
+        primitives.push(FilterPrimitive {
+            kind,
+            input,
+            result,
+        });
+    }
+    if primitives.is_empty() {
+        return None;
+    }
+    Some(FilterGraph { primitives })
+}
+
+fn parse_filter_input(value: Option<&str>) -> FilterInput {
+    match value.map(str::trim) {
+        Some("SourceGraphic") => FilterInput::SourceGraphic,
+        Some("SourceAlpha") => FilterInput::SourceAlpha,
+        Some(name) if !name.is_empty() => FilterInput::Reference(name.to_owned()),
+        _ => FilterInput::Previous,
+    }
+}
+
+fn parse_f64(value: &str) -> Option<f64> {
+    value.trim().parse::<f64>().ok().filter(|n| n.is_finite())
+}
+
+fn parse_std_deviation(value: Option<&str>) -> (f64, f64) {
+    let nums = svg_core::parse_numbers(value.unwrap_or(""));
+    match nums.as_slice() {
+        [x] => (*x, *x),
+        [x, y, ..] => (*x, *y),
+        _ => (0.0, 0.0),
+    }
+}
+
+fn flood_color(attrs: &[(String, String)]) -> [u8; 4] {
+    let color = final_style_property(attrs, "flood-color")
+        .and_then(svg_core::parse_color)
+        .unwrap_or(Rgba {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255,
+        });
+    let opacity = final_style_property(attrs, "flood-opacity")
+        .and_then(parse_f64)
+        .unwrap_or(1.0)
+        .clamp(0.0, 1.0);
+    [
+        color.r,
+        color.g,
+        color.b,
+        ((color.a as f64 * opacity).round().clamp(0.0, 255.0)) as u8,
+    ]
+}
+
+fn parse_color_matrix(attrs: &[(String, String)]) -> [f32; 20] {
+    let kind = attr_get(attrs, "type")
+        .map(|v| v.trim().to_ascii_lowercase())
+        .unwrap_or_else(|| "matrix".to_owned());
+    let values = svg_core::parse_numbers(attr_get(attrs, "values").unwrap_or(""));
+    let identity = {
+        let mut m = [0.0f32; 20];
+        m[0] = 1.0;
+        m[6] = 1.0;
+        m[12] = 1.0;
+        m[18] = 1.0;
+        m
+    };
+    match kind.as_str() {
+        "matrix" if values.len() == 20 => {
+            let mut m = [0.0f32; 20];
+            for (i, slot) in m.iter_mut().enumerate() {
+                *slot = values[i] as f32;
+            }
+            m
+        }
+        "saturate" => {
+            let s = values.first().copied().unwrap_or(1.0) as f32;
+            [
+                0.213 + 0.787 * s,
+                0.715 - 0.715 * s,
+                0.072 - 0.072 * s,
+                0.0,
+                0.0,
+                0.213 - 0.213 * s,
+                0.715 + 0.285 * s,
+                0.072 - 0.072 * s,
+                0.0,
+                0.0,
+                0.213 - 0.213 * s,
+                0.715 - 0.715 * s,
+                0.072 + 0.928 * s,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+            ]
+        }
+        "luminancetoalpha" => [
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.2125,
+            0.7154, 0.0721, 0.0, 0.0,
+        ],
+        _ => identity,
+    }
+}
+
 /// Fully-resolved layer payload carried by `DrawCommand::BeginLayer`.
 struct ResolvedLayer {
     clip: Option<ClipDef>,
+    mask: Option<MaskDef>,
+    filter: Option<FilterGraph>,
     opacity: f32,
     needs_offscreen: bool,
     diagnostics: Vec<PendingDiagnostic>,
@@ -3518,10 +4271,21 @@ impl ResolvedLayer {
             }
             (None, clip_path) => clip_path,
         };
+        let mask = raw.mask_ref.as_ref().and_then(|id| {
+            resolve_mask(scene, id, element_ctm, raw.length_bases, &mut diagnostics)
+        });
+        let filter = raw
+            .filter_ref
+            .as_ref()
+            .and_then(|id| parse_filter(scene, id, element_ctm, &mut diagnostics));
+        let needs_offscreen =
+            raw.opacity < 1.0 || raw.isolate || mask.is_some() || filter.is_some();
         ResolvedLayer {
             clip,
+            mask,
+            filter,
             opacity: raw.opacity.clamp(0.0, 1.0),
-            needs_offscreen: raw.opacity < 1.0 || raw.isolate,
+            needs_offscreen,
             diagnostics,
             source: raw.source,
         }
@@ -3773,13 +4537,23 @@ impl DisplayList {
                     frames.push(LayerFrame {
                         prev_effective,
                         pushed_offscreen,
+                        layer,
                     });
                 }
                 DrawCommand::EndLayer => {
                     if let Some(frame) = frames.pop() {
                         if frame.pushed_offscreen {
-                            if let Some(off) = offscreens.pop() {
+                            if let Some(mut off) = offscreens.pop() {
                                 offscreen_bytes = offscreen_bytes.saturating_sub(off.buf.len());
+                                // R7: filter then mask post-process the isolated offscreen
+                                // before it composites back into its parent.
+                                if let Some(filter) = &frame.layer.filter {
+                                    off.buf = filter.apply(&off.buf, w, h);
+                                }
+                                if let Some(mask) = &frame.layer.mask {
+                                    let alpha = mask.build_alpha(w, h, &self.paint_servers);
+                                    apply_mask_to_offscreen(&mut off.buf, &alpha, w, h);
+                                }
                                 match offscreens.last_mut() {
                                     Some(parent) => {
                                         composite_offscreen(&mut parent.buf, true, &off)
@@ -4165,11 +4939,13 @@ struct Offscreen {
 }
 
 /// One open layer scope in `DisplayList::execute`'s layer stack.
-struct LayerFrame {
+struct LayerFrame<'a> {
     /// Effective clip to restore when this layer closes.
     prev_effective: Option<ClipMask>,
     /// Whether this layer allocated an isolated offscreen (vs. clip-only).
     pushed_offscreen: bool,
+    /// The resolved layer, so `EndLayer` can apply R7 filter/mask post-processing.
+    layer: &'a ResolvedLayer,
 }
 
 struct RasterTarget<'a> {
@@ -7488,13 +8264,14 @@ mod tests {
 
     #[test]
     fn render_report_flags_unsupported_feature_buckets() {
+        // clipPath (R4) and filter (R7) now render; patterns remain unsupported.
         let svg = r##"<svg viewBox="0 0 20 20">
 <defs>
-  <linearGradient id="g"/>
   <clipPath id="c"><rect width="10" height="10"/></clipPath>
-  <filter id="f"/>
+  <pattern id="p" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="2" height="2"/></pattern>
+  <filter id="f"><feGaussianBlur stdDeviation="1"/></filter>
 </defs>
-<rect width="20" height="20" fill="url(#g)" clip-path="url(#c)" filter="url(#f)"/>
+<rect width="20" height="20" fill="url(#p)" clip-path="url(#c)" filter="url(#f)"/>
 </svg>"##;
         let output = rasterize_with_report(svg, 20, 20).unwrap();
         let features: Vec<&str> = output
@@ -7504,12 +8281,13 @@ mod tests {
             .map(|u| u.feature.as_str())
             .collect();
 
-        assert!(!features.contains(&"linearGradient"));
-        // R4: clipPath now renders, so it is no longer an unsupported feature.
+        // clipPath (R4) and filter (R7) render → not unsupported buckets.
         assert!(!features.contains(&"clipPath"));
         assert!(!features.contains(&"clip-path attribute"));
-        assert!(features.contains(&"filter"));
-        assert!(features.contains(&"filter attribute"));
+        assert!(!features.contains(&"filter"));
+        assert!(!features.contains(&"filter attribute"));
+        // Patterns remain explicitly unsupported.
+        assert!(features.contains(&"pattern"));
         assert_eq!(output.report.fidelity, SvgRenderFidelity::Low);
     }
 
@@ -8943,5 +9721,94 @@ mod tests {
         // BFINAL=1, BTYPE=00 → 0x01; LEN=5, NLEN=~5; literal "hello".
         let data = [0x01, 0x05, 0x00, 0xfa, 0xff, b'h', b'e', b'l', b'l', b'o'];
         assert_eq!(inflate(&data, 64).as_deref(), Some(&b"hello"[..]));
+    }
+
+    // --- R7: masks + filters ------------------------------------------------
+
+    #[test]
+    fn alpha_mask_uses_mask_alpha_channel() {
+        // mask-type:alpha with 50% black content → element drops to ~50% alpha.
+        let svg = r##"<svg viewBox="0 0 4 4"><mask id="m" mask-type="alpha"><rect width="4" height="4" fill="#000000" fill-opacity="0.5"/></mask><rect width="4" height="4" fill="#ff0000" mask="url(#m)"/></svg>"##;
+        let out = rasterize_with_report(svg, 4, 4).unwrap();
+        let p = pixel(&out.image, 2, 2);
+        assert!((p[3] as i32 - 128).abs() <= 4, "alpha {p:?}");
+        assert!(p[0] > 0, "still red {p:?}");
+        assert!(!out
+            .report
+            .unsupported_features
+            .iter()
+            .any(|f| f.feature == "mask"));
+    }
+
+    #[test]
+    fn missing_mask_reference_is_diagnosed_and_element_visible() {
+        let svg = r##"<svg viewBox="0 0 4 4"><rect width="4" height="4" fill="#ff0000" mask="url(#nope)"/></svg>"##;
+        let out = rasterize_with_report(svg, 4, 4).unwrap();
+        assert!(out
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.code == "mask.unresolved"));
+        // No mask applied → element renders fully.
+        assert_eq!(pixel(&out.image, 2, 2), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn gaussian_blur_softens_a_hard_edge() {
+        let svg = r##"<svg viewBox="0 0 8 8"><filter id="f"><feGaussianBlur stdDeviation="1.2"/></filter><rect x="2" y="2" width="4" height="4" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        let out = rasterize(svg, 8, 8).unwrap();
+        // Blur bleeds partial alpha outside the original sharp 4x4 rect.
+        assert!(out.pixels.iter().any(|c| c.a() > 0 && c.a() < 255));
+        // And bleeds into a pixel that was empty before the blur.
+        assert!(pixel(&out, 1, 4)[3] > 0);
+    }
+
+    #[test]
+    fn fecolormatrix_saturate_zero_grayscales() {
+        let svg = r##"<svg viewBox="0 0 4 4"><filter id="f"><feColorMatrix type="saturate" values="0"/></filter><rect width="4" height="4" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        let out = rasterize(svg, 4, 4).unwrap();
+        let p = pixel(&out, 2, 2);
+        assert_eq!(p[0], p[1], "grayscale r==g {p:?}");
+        assert_eq!(p[1], p[2], "grayscale g==b {p:?}");
+        assert!(p[0] > 0 && p[3] == 255, "non-empty {p:?}");
+    }
+
+    #[test]
+    fn fedropshadow_adds_offset_shadow() {
+        let svg = r##"<svg viewBox="0 0 6 6"><filter id="f"><feDropShadow dx="2" dy="2" stdDeviation="0" flood-color="#000000"/></filter><rect width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        let out = rasterize(svg, 6, 6).unwrap();
+        // Source stays red at the origin; a dark shadow appears at the offset.
+        assert_eq!(pixel(&out, 0, 0), [255, 0, 0, 255]);
+        let shadow = pixel(&out, 3, 3);
+        assert!(shadow[3] > 0 && shadow[0] < 64, "shadow {shadow:?}");
+    }
+
+    #[test]
+    fn unsupported_filter_primitive_is_partial_with_diagnostic() {
+        let svg = r##"<svg viewBox="0 0 4 4"><filter id="f"><feTurbulence baseFrequency="0.1"/></filter><rect width="4" height="4" fill="#00ff00" filter="url(#f)"/></svg>"##;
+        let out = rasterize_with_report(svg, 4, 4).unwrap();
+        assert!(out
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.code == "filter.unsupported_primitive"));
+        // Partial output: the source still renders (identity passthrough).
+        assert!(out.image.pixels.iter().any(|c| c.a() > 0));
+    }
+
+    #[test]
+    fn huge_blur_is_bounded_not_a_bomb() {
+        let svg = r##"<svg viewBox="0 0 8 8"><filter id="f"><feGaussianBlur stdDeviation="100000"/></filter><rect width="8" height="8" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        // Must complete (radius is capped) and not panic.
+        let out = rasterize_with_report(svg, 8, 8).unwrap();
+        assert_eq!(out.report.fidelity, SvgRenderFidelity::High);
+    }
+
+    #[test]
+    fn mask_and_filter_render_deterministically() {
+        let svg = r##"<svg viewBox="0 0 6 6"><mask id="m"><rect width="3" height="6" fill="#fff"/></mask><filter id="f"><feGaussianBlur stdDeviation="0.8"/></filter><rect width="6" height="6" fill="#0000ff" mask="url(#m)" filter="url(#f)"/></svg>"##;
+        let a = rasterize(svg, 6, 6).unwrap();
+        let b = rasterize(svg, 6, 6).unwrap();
+        assert_eq!(a.pixels, b.pixels);
     }
 }

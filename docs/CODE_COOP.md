@@ -7,6 +7,29 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-06 — SVG R7 Masks + Filters Tier-1
+
+On `dev`, SVG R7 is done in `src/canvas/svg_rasterizer.rs`, all on the R4
+offscreen pipeline. Masks: alpha + luminance (`mask-type`), rendered by lowering
+the `<mask>` subtree through the existing `render_shape`/`PaintSampler` into a
+premultiplied buffer, reduced to a coverage alpha, then multiplied into the
+masked element's isolated offscreen. Filters tier-1: a primitive graph
+(`feGaussianBlur` = separable triple box-blur radius-capped, `feOffset`,
+`feFlood`, `feMerge`/`feMergeNode`, `feColorMatrix` matrix/saturate/
+luminanceToAlpha, `feDropShadow`) run in premultiplied space, with
+`in`/`SourceGraphic`/`SourceAlpha`/named results. `LayerRaw`/`ResolvedLayer`
+gained `mask_ref`/`filter_ref`; `LayerFrame` borrows the `&ResolvedLayer` so
+`EndLayer` applies filter→mask before `composite_offscreen`. Shapes with
+mask/filter now get a synthetic layer (`shape_layer`) in `build_items`. Parser:
+`fe*` primitives + `mask`/`filter` defs retained (skipped in scene build);
+`femerge` added to `is_container_tag`. mask/filter attrs no longer diagnosed as
+unsupported (the dead `PendingDiagnostic::Unsupported` variant was removed).
+Tier 2/3 primitives pass through with `filter.unsupported_primitive`; blur radius
++ offscreen caps bound everything (huge stdDeviation completes). Tests: 3 new
+goldens (luminance mask, feOffset, feFlood+feMerge) + 8 unit tests; full suite
+293 passed, ignored export compile + clippy/fmt/validate-svg/encoding clean.
+Next: R8 conformance/benchmarks/report UI.
+
 ## 2026-06-06 — SVG R6 Text Import (chunked multi-label, phase 1-2)
 
 On `dev`, SVG R6 editable text import is done (TEXT_IMPORT_PLAN phases 1-2) in

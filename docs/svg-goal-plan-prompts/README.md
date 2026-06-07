@@ -11,15 +11,14 @@ the roadmap wins.
 
 ## Status (updated 2026-06-06)
 
-- R0–R6 complete for documented subsets. R4 (clip/overflow/premultiplied/group
-  opacity), R5 (zero-dependency PNG **and baseline JPEG** `data:` decode + render
-  through the R4 pipeline), and R6 (editable chunked multi-label text import with
-  anchor/baseline diagnostics) are done and verified.
+- R0–R7 complete for documented subsets. R4 (clip/overflow/premultiplied/group
+  opacity), R5 (zero-dependency PNG **and baseline JPEG** `data:` decode), R6
+  (editable chunked multi-label text import), and R7 (alpha/luminance masks +
+  filter tier-1 on the R4 offscreen pipeline) are done and verified.
 - Deferred follow-ons (tracked in `SVG_RENDERER_ROADMAP.md`): progressive JPEG
-  (`image.unsupported_jpeg`); the R6 vector-outline snapshot / raster text
-  rendering; broader conformance corpus.
-- R7–R8 remain. Run them in order; each is its own goal with its own gate.
-  **Next: R7 masks + filters.**
+  (`image.unsupported_jpeg`); R6 vector-outline snapshot / raster text; filter
+  tier 2/3 (`filter.unsupported_primitive`).
+- R8 remains. **Next: R8 conformance, benchmarks, report UI + source viewer.**
 
 ## Run order
 

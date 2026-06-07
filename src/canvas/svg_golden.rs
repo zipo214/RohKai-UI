@@ -259,6 +259,31 @@ pub fn fixtures() -> Vec<GoldenFixture> {
             golden: "oooooo\noooooo\noooooo\noooooo",
         },
         GoldenFixture {
+            // R7: luminance mask — white mask content over the left half keeps it
+            // visible; the right half (no mask content = black) is masked out.
+            name: "luminance_mask_left_half",
+            svg: r##"<svg viewBox="0 0 4 4"><mask id="m"><rect width="2" height="4" fill="#ffffff"/></mask><rect width="4" height="4" fill="#ff0000" mask="url(#m)"/></svg>"##,
+            width: 4,
+            height: 4,
+            golden: "RR..\nRR..\nRR..\nRR..",
+        },
+        GoldenFixture {
+            // R7: feOffset shifts the blue strip two user units to the right.
+            name: "feoffset_shifts_right",
+            svg: r##"<svg viewBox="0 0 4 4"><filter id="f"><feOffset dx="2" dy="0"/></filter><rect width="2" height="4" fill="#0000ff" filter="url(#f)"/></svg>"##,
+            width: 4,
+            height: 4,
+            golden: "..BB\n..BB\n..BB\n..BB",
+        },
+        GoldenFixture {
+            // R7: feFlood (green) + feMerge with SourceGraphic (red 2x2 on top).
+            name: "feflood_femerge",
+            svg: r##"<svg viewBox="0 0 4 4"><filter id="f"><feFlood flood-color="#00ff00" result="bg"/><feMerge><feMergeNode in="bg"/><feMergeNode in="SourceGraphic"/></feMerge></filter><rect width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##,
+            width: 4,
+            height: 4,
+            golden: "RRGG\nRRGG\nGGGG\nGGGG",
+        },
+        GoldenFixture {
             name: "unsafe_external_href_rejected",
             svg: r##"<svg viewBox="0 0 4 4"><image href="https://example.invalid/a.png" width="4" height="4"/></svg>"##,
             width: 4,
