@@ -40,7 +40,10 @@ impl PreviewState {
                 WidgetKind::Slider | WidgetKind::ProgressBar => {
                     PreviewValue::Float(w.props.default_value)
                 }
-                WidgetKind::Checkbox | WidgetKind::RadioButton => PreviewValue::Bool(false),
+                WidgetKind::Checkbox => PreviewValue::Bool(false),
+                // Radios sharing a binding form a group: the binding holds the
+                // selected option's label, so mutual exclusion works correctly.
+                WidgetKind::RadioButton => PreviewValue::Str(w.props.label.clone()),
                 _ => PreviewValue::Str(w.props.label.clone()),
             };
             values.insert(key, val);
@@ -174,14 +177,16 @@ fn render_widget(
         }
         WidgetKind::RadioButton => {
             let label = widget.props.label.clone();
-            if let Some(PreviewValue::Bool(b)) = state.values.get_mut(binding) {
+            if let Some(PreviewValue::Str(selected)) = state.values.get_mut(binding) {
+                let checked = *selected == label;
                 ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
-                    // Write the selection back so the preview reacts to clicks.
+                    // Selecting this radio sets the group binding to its label, so
+                    // other radios sharing the binding deselect.
                     if ui
-                        .add_sized(size, egui::RadioButton::new(*b, &label))
+                        .add_sized(size, egui::RadioButton::new(checked, &label))
                         .clicked()
                     {
-                        *b = !*b;
+                        *selected = label.clone();
                     }
                 });
             } else {

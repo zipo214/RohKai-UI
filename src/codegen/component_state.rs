@@ -18,11 +18,22 @@ pub fn default_handler_name(kind: &ComponentKind) -> &'static str {
     }
 }
 
-fn sanitize_field_name(name: &str) -> String {
-    name.chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+/// Build a valid, unique Rust field identifier from a component name + id.
+/// The id-derived suffix guarantees uniqueness across components (so two
+/// components whose names sanitize to the same base can't collide in
+/// `struct AppState`) and keeps the identifier clear of Rust keywords; a `f_`
+/// prefix covers empty/digit-leading names.
+fn sanitize_field_name(name: &str, id: &uuid::Uuid) -> String {
+    let mut base: String = name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect::<String>()
-        .to_lowercase()
+        .to_lowercase();
+    if base.is_empty() || base.starts_with(|c: char| c.is_ascii_digit()) {
+        base.insert_str(0, "f_");
+    }
+    let suffix: String = id.simple().to_string().chars().take(8).collect();
+    format!("{base}_{suffix}")
 }
 
 /// Generate `(field_decl, default_assignment)` pairs for all components.
@@ -33,14 +44,14 @@ pub fn component_state_field_pairs(components: &[DesignComponent]) -> Vec<(Strin
     for comp in components {
         match comp.kind {
             ComponentKind::DataSource | ComponentKind::HttpRequest => {
-                let name = sanitize_field_name(&comp.name);
+                let name = sanitize_field_name(&comp.name, &comp.id);
                 pairs.push((
                     format!("    {name}_data: String,"),
                     format!("            {name}_data: String::new(),"),
                 ));
             }
             ComponentKind::StateMachine => {
-                let name = sanitize_field_name(&comp.name);
+                let name = sanitize_field_name(&comp.name, &comp.id);
                 pairs.push((
                     format!("    {name}_state: usize,"),
                     format!("            {name}_state: 0,"),
@@ -128,8 +139,31 @@ mod tests {
         let comp = make_datasource("user_list");
         let pairs = component_state_field_pairs(&[comp]);
         assert!(pairs.len() == 1);
-        assert!(pairs[0].0.contains("user_list_data"));
+        assert!(pairs[0].0.contains("user_list_") && pairs[0].0.contains("_data:"));
         assert!(pairs[0].1.contains("String::new()"));
+    }
+
+    #[test]
+    fn field_names_are_unique_and_keyword_safe() {
+        // Names that sanitize to the same base must not collide.
+        let a = make_datasource("user data");
+        let b = make_datasource("user-data");
+        let pairs = component_state_field_pairs(&[a, b]);
+        assert_eq!(pairs.len(), 2);
+        assert_ne!(pairs[0].0, pairs[1].0);
+
+        // Digit-leading / keyword-like names still yield valid identifiers.
+        let kw = DesignComponent {
+            id: Uuid::new_v4(),
+            kind: ComponentKind::DataSource,
+            name: "1 type".to_owned(),
+            interval_ms: None,
+            handler: String::new(),
+        };
+        let p = component_state_field_pairs(&[kw]);
+        let ident = p[0].0.trim().split(':').next().unwrap();
+        assert!(!ident.starts_with(|c: char| c.is_ascii_digit()));
+        assert_ne!(ident, "type");
     }
 
     #[test]

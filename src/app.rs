@@ -260,6 +260,16 @@ impl RohKaiApp {
         }
     }
 
+    /// Re-seed preview state from the current tree when preview mode is active.
+    /// Must be called after any replacement of `self.project.ui_tree` (new /
+    /// open / undo) so live preview bindings never go stale.
+    fn refresh_preview_state(&mut self) {
+        if self.session.preview_mode {
+            self.session.preview_state =
+                crate::canvas::preview::PreviewState::init_from_tree(&self.project.ui_tree);
+        }
+    }
+
     fn canvas_modal_blocked(&self) -> bool {
         self.pending_command.is_some() || self.pending_svg_import.is_some()
     }
@@ -311,6 +321,7 @@ impl RohKaiApp {
         self.dirty_cache = false;
         self.dirty_cache_checked_at = 0.0;
         self.reset_undo_baseline();
+        self.refresh_preview_state();
     }
 
     /// Re-seed the undo stack to the current tree, clearing history.
@@ -331,6 +342,7 @@ impl RohKaiApp {
                 self.session.selected.retain(|id| live.contains(id));
                 self.dirty_cache_checked_at = 0.0;
                 self.undo_suppress_record = true;
+                self.refresh_preview_state();
             }
             Err(e) => self.messages.last_error = Some(format!("Undo restore failed: {e}")),
         }
@@ -365,6 +377,7 @@ impl RohKaiApp {
                     self.dirty_cache = false;
                     self.dirty_cache_checked_at = 0.0;
                     self.reset_undo_baseline();
+                    self.refresh_preview_state();
                 }
                 Err(e) => self.messages.last_error = Some(e),
             }
