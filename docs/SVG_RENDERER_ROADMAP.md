@@ -749,14 +749,18 @@ scope per the secure-static profile.
 - [x] Implement and document deterministic 8x8 coverage with separate fill
   winding/parity and stroke-union modes.
 
-### Later Tasks
+### Later Tasks (all complete — R0–R8)
 
-- Implement gradients. (done — R3)
-- Implement clip stack. (done — R4: clipPath, overflow, premultiplied
-  compositing, isolated group opacity)
-- Implement `<use>` in raster mode. (done — R2)
-- Implement text import phase 1 from `docs/TEXT_IMPORT_PLAN.md`.
-- Implement renderer report UI in RohKai.
+- [x] Implement gradients. (R3)
+- [x] Implement clip stack. (R4: clipPath, overflow, premultiplied compositing,
+  isolated group opacity)
+- [x] Implement `<use>` in raster mode. (R2)
+- [x] Implement text import phase 1 from `docs/TEXT_IMPORT_PLAN.md`. (R6)
+- [x] Implement renderer report UI in RohKai. (R8)
+
+The original R0–R8 backlog is closed. New work lives in
+**Post-R8 Gap Analysis And Future Lanes** below (R8.1, R9–R12), with paste-ready
+goal prompts in `docs/svg-goal-plan-prompts/`.
 
 ## Non-Goals For The Next Pass
 
