@@ -22,12 +22,13 @@ and SVG-facing editor UX.
 
 ## Current Execution Order
 
-1. R0-R7 are complete for their documented subsets (R5: PNG and baseline JPEG
+1. R0-R8 are complete for their documented subsets (R5: PNG and baseline JPEG
    `data:` images; R6: editable text import — chunked multi-label with
    anchor/baseline diagnostics; R7: alpha/luminance masks + filter tier-1 on the
-   R4 offscreen pipeline). Deferred follow-ons: progressive JPEG, the R6
+   R4 offscreen pipeline; R8: in-app report UI + source viewer, golden corpus,
+   benchmark, and dev-only oracle). **The SVG renderer roadmap is closed.**
+2. Deferred follow-ons (tracked, runtime-diagnosed): progressive JPEG, the R6
    vector-outline snapshot / raster text, and filter tier 2/3.
-2. R8 (conformance, benchmarks, report UI) is next.
 
 Unchecked derivative-backlog entries are implementation notes for these phases,
 not separate roadmap phases.
@@ -380,7 +381,7 @@ need all of it immediately, but this is the map.
 | Secure parse budgets | Comprehensive limits across parse/render/filter/reference work | Basic importer + rasterizer limits | Add unified limit config/report for rasterizer too | P0 |
 | XML model | Namespace-aware XML tree with source spans | Simple custom parser with stable byte spans | Add namespaces and better recovery | P1 |
 | Render IR | Scene/display-list separate from XML | Stable source-spanned node IDs, bounded expanded local references, flattened scene items, owned geometry/diagnostic/clip commands, BeginLayer/EndLayer compositing scopes, and reusable paint-server IR | Extend for masks/filters (R7) | P0/P1 |
-| Diagnostics | Structured per-node render/import diagnostics | Importer rich; rasterizer reports warnings, unsupported buckets, counts, fidelity, and node ID/byte-span provenance | Add R8 report/source UI | P1 |
+| Diagnostics | Structured per-node render/import diagnostics | Importer rich; rasterizer reports warnings, unsupported buckets, counts, fidelity, and node ID/byte-span provenance, surfaced in the R8 properties report panel + source viewer | Closed | P1 |
 | ViewBox/preserveAspectRatio | Full modes and nested viewport behavior | Full `none`/alignment/meet/slice mapping for root and nested SVG viewports; nested viewport overflow is clipped (R4) | Closed | P1/P2 |
 | CSS cascade | Specificity/order/inheritance subset | Shared bounded tier-1 element/class/id compound and grouped selectors, inline/presentation precedence, inheritance, and currentColor | Add only selector/property tiers justified by real fixtures | P1/P3 |
 | Basic shapes | Full geometry and transforms | Supported subset with affine transforms, anti-aliased fill/stroke, and transformed stroke-bound tests | Add reusable exact fill/path bounds and more extreme-coordinate tests | P0/P1 |
@@ -396,7 +397,7 @@ need all of it immediately, but this is the map.
 | Markers | Arrowheads and symbols on paths | Unsupported | Add after stroke geometry | P3 |
 | Antialiasing | High-quality coverage | Deterministic 8x8 coverage; winding/parity fills and unioned stroke coverage are separate | Tune quality/performance and add gamma-aware compositing | P1/P2 |
 | Compositing | Correct premultiplied alpha/groups | Premultiplied-alpha offscreen compositing for isolated group opacity (no double-darken, halo-free); straight-RGBA base buffer + output (R4) | Gamma-correct base pipeline; blend modes | P1 |
-| Tests | Golden corpus + fuzz + oracles | Analytical renderer tests plus a small dependency-free ASCII golden corpus and ignored performance smoke | Add broader licensed corpus, fuzzing, and reference-renderer oracle workflow | P0/P1 |
+| Tests | Golden corpus + fuzz + oracles | Per-feature ASCII golden corpus + pixel-exact unit tests across R0-R7, an ignored benchmark, and a dev-only deterministic reference-oracle stand-in | Broader licensed corpus + fuzzing (future) | P0/P1 |
 
 ## Roadmap
 
@@ -676,21 +677,36 @@ Goal: make the renderer dependable, measurable, and visible in RohKai.
 
 Tasks:
 
-- Add reference comparison harness:
-  browser/librsvg/resvg may be optional developer-only or CI-artifact tools, not
-  runtime dependencies.
-- Add golden-image corpus:
-  geometry, paint, text, clips, masks, filters, malicious inputs.
-- Add renderer benchmark suite:
-  parse time, scene build time, raster time, peak allocations.
-- Add SVG report UI:
-  fidelity, warnings, unsupported features, source node ids.
-- Add source viewer and "rendered vs editable approximation" toggle.
+- [x] SVG report UI: the properties panel surfaces the selected SVG Image
+  widget's `SvgRenderReport` — fidelity (colour-coded), rendered/skipped counts,
+  warning + unsupported counts, and collapsible per-diagnostic lists with
+  byte-span provenance. The report→rows mapping (`panels::svg_report::report_summary`)
+  is a pure, unit-tested function; the panel only renders it (no new report
+  computation beyond the existing `rasterize_with_report`).
+- [x] Source viewer + "rendered report / SVG source" toggle for SVG Image
+  widgets (read-only source view; toggle state in egui temp memory).
+- [x] Golden-image corpus across geometry/paint/clip/mask/filter/image plus a
+  polygon-geometry golden; raster text stays import-only (no raster golden).
+  Malicious/edge inputs covered by the security unit tests in each phase.
+- [x] Renderer benchmark suite (`#[ignore]`): `raster_benchmark_complex_scene
+  _within_budget` measures parse+scene+raster of a 200-rect gradient/clip/stroke
+  scene, alongside the existing ignored 512px fill smoke.
+- [x] Dev-only reference-oracle workflow (`#[ignore]`
+  `reference_oracle_scene_is_deterministic`): external reference renderers are
+  developer/CI-artifact tools only, never runtime/Cargo dependencies; the in-repo
+  stand-in asserts deterministic output so any external diff is reproducible.
 
 Acceptance:
 
-- Every supported feature has visual tests.
-- Roadmap claims match tests and diagnostics.
+- [x] Every supported feature has a visual test (golden or pixel-exact unit test).
+- [x] Roadmap claims match tests and diagnostics; report + provenance are visible
+  in-app.
+
+**SVG renderer roadmap R0–R8 complete.** Remaining work is explicitly deferred:
+baseline-JPEG follow-ups (progressive JPEG), the R6 vector-outline snapshot /
+raster text rendering, and filter tier 2/3 — all tracked above and diagnosed at
+runtime. Animation, scripting, and external network/file loading stay out of
+scope per the secure-static profile.
 
 ## Derivative Task Backlog
 

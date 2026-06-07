@@ -77,15 +77,15 @@ capabilities where required.
 
 Detailed sequencing is authoritative in `docs/SVG_RENDERER_ROADMAP.md`:
 
-1. R0-R7 are complete for their documented subsets (R4: clipPath clipping,
-   nested-`<svg>` overflow, premultiplied-alpha compositing, isolated group
-   opacity; R5: zero-dependency PNG and baseline JPEG `data:` decode + render;
-   R6: editable chunked multi-label text import; R7: alpha/luminance masks +
-   filter tier-1 on the R4 offscreen pipeline). Next is R8 conformance/report UI.
-   Deferred follow-ons: progressive JPEG (`image.unsupported_jpeg`), the R6
-   vector-outline snapshot / raster text, and filter tier 2/3
-   (`filter.unsupported_primitive`).
+1. R0-R8 are complete for their documented subsets — the SVG renderer roadmap is
+   closed (R4: clipPath/overflow/premultiplied compositing/group opacity; R5:
+   zero-dependency PNG + baseline JPEG `data:` decode + render; R6: editable
+   chunked multi-label text import; R7: alpha/luminance masks + filter tier-1;
+   R8: in-app report UI + source viewer, golden corpus, benchmark, dev-only
+   oracle). Deferred, runtime-diagnosed follow-ons: progressive JPEG
+   (`image.unsupported_jpeg`), the R6 vector-outline snapshot / raster text, and
+   filter tier 2/3 (`filter.unsupported_primitive`).
 2. Keep R1-R3 quality under regression coverage while expanding real-world
    fixtures and reference comparisons.
-3. R8 (reference corpus, benchmarks, report UI + source viewer) is the last
-   roadmap phase.
+3. Future (post-roadmap): broader licensed conformance corpus + fuzzing, and the
+   deferred follow-ons above.

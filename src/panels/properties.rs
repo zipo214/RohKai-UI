@@ -849,6 +849,10 @@ fn show_image(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) -
         });
         ui.checkbox(&mut w.expand_svg_inline, "Expand SVG inline in code panel")
             .on_hover_text("Show full SVG source in the live code panel instead of [SVG: N bytes]");
+        ui.separator();
+        if let Some(src) = w.svg_source.as_deref() {
+            crate::panels::svg_report::show_report(ui, src);
+        }
     } else {
         ui.label(
             egui::RichText::new("No SVG source")

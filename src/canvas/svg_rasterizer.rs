@@ -9811,4 +9811,53 @@ mod tests {
         let b = rasterize(svg, 6, 6).unwrap();
         assert_eq!(a.pixels, b.pixels);
     }
+
+    // --- R8: conformance / benchmark harness --------------------------------
+
+    /// Build a multi-feature SVG with `n` gradient-filled, clipped, stroked rects.
+    fn benchmark_svg(n: usize) -> String {
+        let mut s = String::from(
+            r##"<svg viewBox="0 0 256 256"><defs><linearGradient id="g"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient><clipPath id="c"><rect width="256" height="200"/></clipPath></defs>"##,
+        );
+        for i in 0..n {
+            let x = (i * 7) % 240;
+            let y = (i * 11) % 240;
+            s.push_str(&format!(
+                r##"<rect x="{x}" y="{y}" width="16" height="16" fill="url(#g)" stroke="#000" stroke-width="1" clip-path="url(#c)"/>"##
+            ));
+        }
+        s.push_str("</svg>");
+        s
+    }
+
+    #[test]
+    #[ignore = "perf benchmark; run with --ignored to measure parse+scene+raster time."]
+    fn raster_benchmark_complex_scene_within_budget() {
+        let svg = benchmark_svg(200);
+        let start = std::time::Instant::now();
+        let out = rasterize_with_report(&svg, 256, 256).expect("benchmark scene renders");
+        let elapsed = start.elapsed();
+        eprintln!("raster_benchmark: 200 gradient/clip/stroke rects @256px in {elapsed:?} (debug)");
+        // Produced pixels and stayed bounded; generous guard catches only hangs
+        // (debug builds are slow — this measures, it does not gate fidelity).
+        assert!(out.image.pixels.iter().any(|c| c.a() > 0));
+        assert!(
+            elapsed.as_secs_f64() < 30.0,
+            "raster benchmark unexpectedly slow: {elapsed:?}"
+        );
+    }
+
+    /// Dev-only reference-oracle workflow. Comparison against external reference
+    /// renderers is a CI-artifact / developer-only step and MUST NOT become a
+    /// runtime or Cargo dependency (zero-dependency policy). As an in-repo
+    /// stand-in this asserts the renderer is deterministic for a representative
+    /// multi-feature scene so any external oracle diff is reproducible.
+    #[test]
+    #[ignore = "dev-only reference-oracle workflow; external renderers are CI artifacts, never runtime deps"]
+    fn reference_oracle_scene_is_deterministic() {
+        let svg = benchmark_svg(64);
+        let a = rasterize(&svg, 256, 256).unwrap();
+        let b = rasterize(&svg, 256, 256).unwrap();
+        assert_eq!(a.pixels, b.pixels);
+    }
 }

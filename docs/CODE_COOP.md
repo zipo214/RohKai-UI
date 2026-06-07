@@ -7,6 +7,26 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-06 — SVG R8 Conformance + Report UI (roadmap R0–R8 closed)
+
+On `dev`, SVG R8 closes the renderer roadmap. New `src/panels/svg_report.rs`:
+`report_summary(&SvgRenderReport)` is a pure, unit-tested mapping to display rows
+(fidelity / rendered / skipped / warnings / unsupported + per-diagnostic lines
+with byte-span provenance); `show_report(ui, src)` renders it with a
+rendered-report / SVG-source toggle (egui temp memory) and a read-only source
+viewer. Wired into `panels::properties::show_image` for the selected SVG Image
+widget (computes `rasterize_with_report` at a fixed 256px — no new report logic).
+Added a polygon-geometry golden, an `#[ignore]` benchmark
+(`raster_benchmark_complex_scene_within_budget`, measures parse+scene+raster of a
+200-rect gradient/clip/stroke scene), and a dev-only
+`reference_oracle_scene_is_deterministic` (`#[ignore]`) — external reference
+renderers stay CI-artifact/dev-only, never runtime deps (note: don't write the
+banned crate names in `src/`; `validate-svg-import.ps1` greps for them). Tests:
+297 passed / 5 ignored; clippy --all-targets, fmt, validate-svg, encoding,
+ignored exported-project compile all clean. Roadmap R0–R8 marked complete;
+deferred lanes (progressive JPEG, R6 raster-text snapshot, filter tier 2/3) stay
+tracked + runtime-diagnosed.
+
 ## 2026-06-06 — SVG R7 Masks + Filters Tier-1
 
 On `dev`, SVG R7 is done in `src/canvas/svg_rasterizer.rs`, all on the R4

@@ -2,6 +2,50 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-06 — SVG R8: Conformance, Benchmark, Report UI (roadmap R0–R8 closed)
+
+### Context Reviewed Before Editing
+- `CLAUDE.md`, low-token preflight, `.agents/skills/svg-zero-dep/SKILL.md`
+- `docs/SVG_RENDERER_ROADMAP.md` R8, `docs/svg-goal-plan-prompts/R8-*`
+- `src/canvas/svg_rasterizer.rs` (SvgRenderReport/fidelity/warning/unsupported,
+  rasterize_with_report), `src/panels/properties.rs` show_image + svg_source,
+  `src/panels/mod.rs`, `src/canvas/svg_golden.rs`
+
+### Changes
+- New `src/panels/svg_report.rs`: `report_summary(&SvgRenderReport)` — a pure,
+  unit-tested mapping to display rows (fidelity / rendered / skipped / warnings /
+  unsupported) plus per-diagnostic `(code/feature, message[+byte-span])` lines;
+  `show_report(ui, src)` renders it with a rendered-report / SVG-source toggle
+  (egui temp memory) and a read-only source viewer.
+- Wired the report panel into `panels::properties::show_image` for the selected
+  SVG Image widget (computes `rasterize_with_report` at a fixed 256px; reuses the
+  existing report, no new computation). Registered the module in `panels/mod.rs`.
+- Golden corpus: added a crisp polygon-geometry golden (`polygon_square_fill`).
+- Benchmark: `#[ignore] raster_benchmark_complex_scene_within_budget` measures
+  parse+scene+raster of a 200-rect gradient/clip/stroke 256px scene (eprintln
+  timing; generous hang guard — measures, doesn't gate). Joins the existing
+  ignored 512px fill smoke.
+- Dev-only oracle: `#[ignore] reference_oracle_scene_is_deterministic` — external
+  reference renderers stay CI-artifact/dev-only, never runtime deps; in-repo
+  stand-in asserts deterministic output. (Avoided banned crate names in `src/` so
+  `validate-svg-import.ps1`'s dependency-policy grep stays green.)
+
+### Verification
+- `cargo test`: 297 passed, 5 ignored (R8 benchmark + oracle + prior 3). The 3
+  svg_report unit tests assert the report→rows mapping incl. byte-span provenance.
+- Ignored R8 tests pass when run with `--ignored` (benchmark ~6.5s/200 rects debug).
+- `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
+  `scripts/validate-svg-import.ps1`, `scripts/check-text-encoding.ps1`: clean.
+  Ignored all-built-in exported-project `cargo check`: passes.
+
+### Remaining Risks / Follow-Ups
+- SVG renderer roadmap **R0–R8 closed**. Deferred + runtime-diagnosed: progressive
+  JPEG, R6 vector-outline snapshot / raster text, filter tier 2/3.
+- Post-roadmap: broader licensed conformance corpus + fuzzing; a true external
+  reference-oracle remains a CI-artifact step, never a runtime dependency.
+- Report panel re-rasterizes the selected Image at 256px each frame (cheap,
+  selection-scoped); could cache by source hash if it ever shows up in profiles.
+
 ## 2026-06-06 — SVG R7: Masks + Filters Tier-1 (on the R4 offscreen pipeline)
 
 ### Context Reviewed Before Editing

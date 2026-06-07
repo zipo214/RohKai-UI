@@ -284,6 +284,14 @@ pub fn fixtures() -> Vec<GoldenFixture> {
             golden: "RRGG\nRRGG\nGGGG\nGGGG",
         },
         GoldenFixture {
+            // Geometry coverage: axis-aligned <polygon> fills crisply (Poly path).
+            name: "polygon_square_fill",
+            svg: r##"<svg viewBox="0 0 4 4"><polygon points="0,0 4,0 4,4 0,4" fill="#ff0000"/></svg>"##,
+            width: 4,
+            height: 4,
+            golden: "RRRR\nRRRR\nRRRR\nRRRR",
+        },
+        GoldenFixture {
             name: "unsafe_external_href_rejected",
             svg: r##"<svg viewBox="0 0 4 4"><image href="https://example.invalid/a.png" width="4" height="4"/></svg>"##,
             width: 4,

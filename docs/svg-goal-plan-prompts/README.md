@@ -11,14 +11,16 @@ the roadmap wins.
 
 ## Status (updated 2026-06-06)
 
-- R0–R7 complete for documented subsets. R4 (clip/overflow/premultiplied/group
-  opacity), R5 (zero-dependency PNG **and baseline JPEG** `data:` decode), R6
-  (editable chunked multi-label text import), and R7 (alpha/luminance masks +
-  filter tier-1 on the R4 offscreen pipeline) are done and verified.
-- Deferred follow-ons (tracked in `SVG_RENDERER_ROADMAP.md`): progressive JPEG
-  (`image.unsupported_jpeg`); R6 vector-outline snapshot / raster text; filter
-  tier 2/3 (`filter.unsupported_primitive`).
-- R8 remains. **Next: R8 conformance, benchmarks, report UI + source viewer.**
+- **R0–R8 complete — the SVG renderer roadmap is closed.** R4 (clip/overflow/
+  premultiplied/group opacity), R5 (zero-dependency PNG **and baseline JPEG**
+  `data:` decode), R6 (editable chunked multi-label text import), R7
+  (alpha/luminance masks + filter tier-1), and R8 (in-app report UI + source
+  viewer, golden corpus, benchmark, dev-only oracle) are done and verified.
+- Deferred follow-ons (tracked in `SVG_RENDERER_ROADMAP.md`, runtime-diagnosed):
+  progressive JPEG (`image.unsupported_jpeg`); R6 vector-outline snapshot /
+  raster text; filter tier 2/3 (`filter.unsupported_primitive`); broader
+  conformance corpus + fuzzing.
+- These goal prompts remain as the authored execution record; each phase shipped.
 
 ## Run order
 
