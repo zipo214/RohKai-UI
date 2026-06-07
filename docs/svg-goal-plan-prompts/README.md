@@ -32,6 +32,19 @@ the roadmap wins.
 | R7 | [R7-masks-filters.goal.md](R7-masks-filters.goal.md) | masks (alpha/luminance) + filters tier 1 on R4 offscreen pipeline |
 | R8 | [R8-conformance-benchmarks-ux.goal.md](R8-conformance-benchmarks-ux.goal.md) | reference harness, golden corpus, benchmarks, report UI + source viewer |
 
+### Post-R8 lanes (current run order)
+
+R0–R8 are shipped. Remaining lanes — execute **in this order**, reading each
+prompt before starting (per the SVG roadmap step protocol in CLAUDE.md/AGENTS.md):
+
+| Lane | File | Theme |
+|---|---|---|
+| R8.1 | [R8.1-conformance-security-hardening.goal.md](R8.1-conformance-security-hardening.goal.md) | in-repo fuzz harness, W3C-subset corpus, benchmark methodology, precision policy |
+| R9 | [R9-markers-vector-effect-patterns.goal.md](R9-markers-vector-effect-patterns.goal.md) | markers (start/mid/end, orient), non-scaling-stroke, pattern tiling |
+| R10 | [R10-filter-correctness-tier2.goal.md](R10-filter-correctness-tier2.goal.md) | linearRGB filters, precise filter region, tier-2 primitives, blend modes |
+| R11 | [R11-raster-text-textpath.goal.md](R11-raster-text-textpath.goal.md) | opt-in raster text + textPath via a bundled zero-dep vector glyph set |
+| R12 | [R12-namespace-recovery-a11y.goal.md](R12-namespace-recovery-a11y.goal.md) | bounded namespace model, malformed-document recovery, title/desc a11y metadata |
+
 ## Why one phase per goal
 
 Finishing R4–R8 in a single goal produces the hollow-surface failure
