@@ -2503,6 +2503,7 @@ impl eframe::App for RohKaiApp {
                     &self.project.ui_tree,
                     &mut self.session.preview_state,
                     panel_rect,
+                    &mut self.svg_texture_cache,
                 );
                 if exited {
                     self.set_preview_mode(false);

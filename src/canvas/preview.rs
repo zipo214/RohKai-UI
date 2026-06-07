@@ -65,6 +65,7 @@ pub fn render(
     tree: &UiTree,
     state: &mut PreviewState,
     panel_rect: egui::Rect,
+    svg_texture_cache: &mut crate::canvas::interaction::SvgTextureCache,
 ) -> bool {
     let canvas_size = [tree.app_props.win_w, tree.app_props.win_h];
     let zoom = 1.0_f32;
@@ -88,7 +89,7 @@ pub fn render(
             continue;
         }
         let binding = widget.state_binding.clone().unwrap_or_default();
-        render_widget(ui, widget, w_rect, &binding, state);
+        render_widget(ui, widget, w_rect, &binding, state, svg_texture_cache);
     }
 
     // "PREVIEW" badge — top-left of panel.
@@ -123,6 +124,7 @@ fn render_widget(
     w_rect: egui::Rect,
     binding: &str,
     state: &mut PreviewState,
+    svg_texture_cache: &mut crate::canvas::interaction::SvgTextureCache,
 ) {
     let size = w_rect.size();
     match &widget.kind {
@@ -423,12 +425,42 @@ fn render_widget(
             };
             placeholder_box(ui, w_rect, tag);
         }
-        WidgetKind::Image | WidgetKind::Custom(_) => {
-            let tag = match &widget.kind {
-                WidgetKind::Image => "img",
-                _ => "cst",
-            };
-            placeholder_box(ui, w_rect, tag);
+        WidgetKind::Image => {
+            // Render the real rasterized SVG (matches the design canvas + export),
+            // reusing the shared texture cache so preview layout/visual matches.
+            if let Some(svg) = widget.svg_source.as_deref() {
+                let ppp = ui.ctx().pixels_per_point();
+                let tw = ((w_rect.width() * ppp).round() as u32).clamp(1, 4096);
+                let th = ((w_rect.height() * ppp).round() as u32).clamp(1, 4096);
+                let needs = svg_texture_cache
+                    .get(&widget.id)
+                    .map(|(_, _, ctw, cth)| *ctw != tw || *cth != th)
+                    .unwrap_or(true);
+                if needs {
+                    let image = crate::canvas::svg_rasterizer::rasterize_or_fallback(svg, tw, th);
+                    let tex = ui.ctx().load_texture(
+                        format!("svg_{}", widget.id),
+                        image,
+                        egui::TextureOptions::LINEAR,
+                    );
+                    svg_texture_cache.insert(widget.id, (tex, ppp, tw, th));
+                }
+                if let Some((tex, _, _, _)) = svg_texture_cache.get(&widget.id) {
+                    ui.painter().image(
+                        tex.id(),
+                        w_rect,
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        egui::Color32::WHITE,
+                    );
+                } else {
+                    placeholder_box(ui, w_rect, "img");
+                }
+            } else {
+                placeholder_box(ui, w_rect, "img");
+            }
+        }
+        WidgetKind::Custom(_) => {
+            placeholder_box(ui, w_rect, "cst");
         }
     }
 }
