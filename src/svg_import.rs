@@ -1047,10 +1047,11 @@ fn import_node(
             node, nodes, rules, id_index, state, style, use_stack, widgets, ctx,
         )?,
         "text" => {
-            if let Some(widget) = text_widget(node, nodes, state, &style, ctx) {
-                widgets.push(widget);
-            } else {
+            let chunks = text_widgets(node, nodes, state, &style, ctx);
+            if chunks.is_empty() {
                 ctx.skip();
+            } else {
+                widgets.extend(chunks);
             }
         }
         name if is_supported_shape(name) => {
@@ -1411,14 +1412,36 @@ fn image_ref_allowed(
     true
 }
 
-fn text_widget(
+/// One independently positioned SVG text chunk (TEXT_IMPORT_PLAN phase 1).
+/// Each non-empty chunk becomes one editable RohKai `Label`, grouped with its
+/// siblings via `SvgImportMetadata::text_group`.
+struct TextChunk {
+    x: f64,
+    y: f64,
+    text: String,
+    font_size: f64,
+    anchor: Option<String>,
+    baseline: Option<String>,
+    fill: Option<String>,
+    /// Node index of the element that owns this chunk (`text` or `tspan`), for
+    /// per-chunk provenance.
+    source_node: usize,
+    warning_flags: Vec<String>,
+}
+
+/// Import an SVG `<text>` element into one or more editable `Label` widgets:
+/// the text is split into chunks at every absolutely-positioned `<tspan>` so
+/// positioned spans become separate, grouped labels instead of collapsing into
+/// one misleading label. Relative/styled spans flatten into the surrounding
+/// chunk with explicit diagnostics; `textPath`/bidi/shaping stay deferred.
+fn text_widgets(
     node: &Node,
     nodes: &[Node],
     state: ParseState,
     style: &Style,
     ctx: &mut ImportContext,
-) -> Option<WidgetInstance> {
-    let mut warning_flags = Vec::new();
+) -> Vec<WidgetInstance> {
+    let mut shared_flags = Vec::new();
     if attr(&node.tag, "font-family").is_none() {
         ctx.warn(
             "text.missing_font",
@@ -1426,53 +1449,185 @@ fn text_widget(
             Some(node),
             SvgWarningSeverity::Info,
         );
-        warning_flags.push("missing-font".to_owned());
+        shared_flags.push("missing-font".to_owned());
     }
 
-    let label = collapse_ws(&flatten_text(node.index, nodes, ctx));
-    if label.is_empty() {
-        return None;
-    }
-    ctx.text_element_count += 1;
-    ctx.text_character_count += label.chars().count();
-
-    let mut x = attr(&node.tag, "x")
-        .and_then(|v| parse_length(v, state.viewport_w))
-        .unwrap_or(0.0);
-    let mut y = attr(&node.tag, "y")
-        .and_then(|v| parse_length(v, state.viewport_h))
-        .unwrap_or(0.0);
-    x += attr(&node.tag, "dx")
-        .and_then(|v| parse_length(v, state.viewport_w))
-        .unwrap_or(0.0);
-    y += attr(&node.tag, "dy")
-        .and_then(|v| parse_length(v, state.viewport_h))
-        .unwrap_or(0.0);
-
-    let font_size = style
+    let group = format!("svgtext-{}", node.source_order);
+    let base_font = style
         .font_size
         .or_else(|| attr(&node.tag, "font-size").and_then(|v| parse_length(v, state.viewport_h)))
         .unwrap_or(16.0)
         .clamp(8.0, 96.0);
-    let mut width = (label.chars().count() as f64 * font_size * 0.6).max(MIN_PLACEHOLDER_SIZE);
+    let attr_len = |n: &Node, key: &str, base: f64| -> f64 {
+        attr(&n.tag, key)
+            .and_then(|v| parse_length(v, base))
+            .unwrap_or(0.0)
+    };
+    let start_x = attr_len(node, "x", state.viewport_w) + attr_len(node, "dx", state.viewport_w);
+    let start_y = attr_len(node, "y", state.viewport_h) + attr_len(node, "dy", state.viewport_h);
+
+    let mut chunks: Vec<TextChunk> = Vec::new();
+    let mut current = TextChunk {
+        x: start_x,
+        y: start_y,
+        text: collapse_ws(&decode_entities(&node.text, ctx, Some(node))),
+        font_size: base_font,
+        anchor: style.text_anchor.clone(),
+        baseline: style.dominant_baseline.clone(),
+        fill: style.fill.clone(),
+        source_node: node.index,
+        warning_flags: shared_flags.clone(),
+    };
+
+    for &child_id in &node.children {
+        let child = &nodes[child_id];
+        match child.tag.name.as_str() {
+            "tspan" => {
+                let abs_x = attr(&child.tag, "x").and_then(|v| parse_length(v, state.viewport_w));
+                let abs_y = attr(&child.tag, "y").and_then(|v| parse_length(v, state.viewport_h));
+                let has_adjust = ["dx", "dy", "rotate", "textlength", "lengthadjust"]
+                    .into_iter()
+                    .any(|key| attr(&child.tag, key).is_some());
+                let span_text = collapse_ws(&tspan_text(child_id, nodes, ctx));
+                let span_font = attr(&child.tag, "font-size")
+                    .and_then(|v| parse_length(v, state.viewport_h))
+                    .map(|s| s.clamp(8.0, 96.0))
+                    .unwrap_or(base_font);
+                let span_anchor = attr(&child.tag, "text-anchor")
+                    .map(ToOwned::to_owned)
+                    .or_else(|| current.anchor.clone());
+                let span_baseline = attr(&child.tag, "dominant-baseline")
+                    .map(ToOwned::to_owned)
+                    .or_else(|| current.baseline.clone());
+                let span_fill = attr(&child.tag, "fill")
+                    .map(ToOwned::to_owned)
+                    .or_else(|| current.fill.clone());
+
+                if has_adjust {
+                    ctx.warn(
+                        "text.tspan_adjust",
+                        "tspan dx/dy/rotate/textLength approximated; source SVG preserved for exact layout",
+                        Some(child),
+                        SvgWarningSeverity::Info,
+                    );
+                }
+
+                if abs_x.is_some() || abs_y.is_some() {
+                    // Absolutely-positioned span starts a new chunk → new label.
+                    let mut flags = shared_flags.clone();
+                    if has_adjust {
+                        flags.push("tspan-adjust".to_owned());
+                    }
+                    let started = TextChunk {
+                        x: abs_x.unwrap_or(current.x),
+                        y: abs_y.unwrap_or(current.y),
+                        text: span_text,
+                        font_size: span_font,
+                        anchor: span_anchor,
+                        baseline: span_baseline,
+                        fill: span_fill,
+                        source_node: child.index,
+                        warning_flags: flags,
+                    };
+                    chunks.push(std::mem::replace(&mut current, started));
+                } else {
+                    // Relative/styled span flattens into the current chunk.
+                    if attr(&child.tag, "style").is_some()
+                        || attr(&child.tag, "class").is_some()
+                        || attr(&child.tag, "font-size").is_some()
+                        || attr(&child.tag, "fill").is_some()
+                    {
+                        ctx.warn(
+                            "text.tspan_style",
+                            "styled tspan flattened into the surrounding editable text run; source SVG preserved",
+                            Some(child),
+                            SvgWarningSeverity::Info,
+                        );
+                        current.warning_flags.push("tspan-style".to_owned());
+                    }
+                    if has_adjust {
+                        current.warning_flags.push("tspan-adjust".to_owned());
+                    }
+                    if !current.text.is_empty() && !span_text.is_empty() {
+                        current.text.push(' ');
+                    }
+                    current.text.push_str(&span_text);
+                }
+            }
+            "textpath" => ctx.unsupported("textPath", Some(child)),
+            _ => {}
+        }
+    }
+    chunks.push(current);
+
+    let multi = chunks.iter().filter(|c| !c.text.trim().is_empty()).count() > 1;
+    chunks
+        .into_iter()
+        .filter_map(|chunk| {
+            build_text_label(chunk, state, &group, multi, style.opacity, nodes, ctx)
+        })
+        .collect()
+}
+
+/// Concatenate a `<tspan>` subtree's text (including nested spans) without
+/// emitting per-span diagnostics; the caller owns chunk-level diagnostics.
+fn tspan_text(node_id: usize, nodes: &[Node], ctx: &mut ImportContext) -> String {
+    let node = &nodes[node_id];
+    let mut text = node.text.clone();
+    for &child_id in &node.children {
+        let child = &nodes[child_id];
+        match child.tag.name.as_str() {
+            "tspan" => {
+                text.push(' ');
+                text.push_str(&tspan_text(child_id, nodes, ctx));
+            }
+            "textpath" => ctx.unsupported("textPath", Some(child)),
+            _ => {}
+        }
+    }
+    decode_entities(&text, ctx, Some(node))
+}
+
+/// Place one text chunk as an editable `Label` with deterministic placeholder
+/// metrics, per-chunk anchor/baseline handling, and grouped provenance.
+fn build_text_label(
+    chunk: TextChunk,
+    state: ParseState,
+    group: &str,
+    grouped: bool,
+    opacity: Option<f64>,
+    nodes: &[Node],
+    ctx: &mut ImportContext,
+) -> Option<WidgetInstance> {
+    let text = collapse_ws(&chunk.text);
+    if text.is_empty() {
+        return None;
+    }
+    let src = &nodes[chunk.source_node];
+    let mut flags = chunk.warning_flags.clone();
+
+    let font_size = chunk.font_size;
+    let mut x = chunk.x;
+    let mut y = chunk.y;
+    let mut width = (text.chars().count() as f64 * font_size * 0.6).max(MIN_PLACEHOLDER_SIZE);
     let height = (font_size * 1.25).max(MIN_PLACEHOLDER_SIZE);
 
-    match style.text_anchor.as_deref() {
+    match chunk.anchor.as_deref() {
         Some("middle") => x -= width / 2.0,
         Some("end") => x -= width,
         _ => {}
     }
-    match style.dominant_baseline.as_deref() {
+    match chunk.baseline.as_deref() {
         Some("middle") | Some("central") => y -= height / 2.0,
         Some("hanging") => {}
         Some(_) => {
             ctx.warn(
                 "text.baseline",
                 "dominant-baseline approximated",
-                Some(node),
+                Some(src),
                 SvgWarningSeverity::Info,
             );
-            warning_flags.push("baseline-approx".to_owned());
+            flags.push("baseline-approx".to_owned());
             y -= font_size;
         }
         None => y -= font_size,
@@ -1483,65 +1638,33 @@ fn text_widget(
     }
     let bounds = Bounds::new(x, y, width, height)?.transform(state.transform);
     let rect = bounds.rect();
-    let fill_color = style_color(
-        style.fill.as_deref(),
-        style.opacity,
-        node,
-        ctx,
-        &mut warning_flags,
-    );
+    let fill_color = style_color(chunk.fill.as_deref(), opacity, src, ctx, &mut flags);
+
+    ctx.text_element_count += 1;
+    ctx.text_character_count += text.chars().count();
+
+    let mut metadata = metadata_for(src, state, flags);
+    if grouped {
+        metadata.text_group = Some(group.to_owned());
+    }
 
     Some(WidgetInstance {
-        id: deterministic_uuid(node, &rect),
+        id: deterministic_source_uuid(
+            "svg-text-chunk",
+            &format!("{group}:{}:{text}", src.source_order),
+            &rect,
+        ),
         kind: WidgetKind::Label,
         rect,
         props: WidgetProps {
-            label,
+            label: text,
             ..Default::default()
         },
         state_binding: None,
-        import_metadata: Some(metadata_for(node, state, warning_flags)),
+        import_metadata: Some(metadata),
         fg_color: fill_color,
         ..Default::default()
     })
-}
-
-fn flatten_text(node_id: usize, nodes: &[Node], ctx: &mut ImportContext) -> String {
-    let node = &nodes[node_id];
-    let mut text = node.text.clone();
-    for &child_id in &node.children {
-        let child = &nodes[child_id];
-        match child.tag.name.as_str() {
-            "tspan" => {
-                if ["x", "y", "dx", "dy", "rotate", "textlength", "lengthadjust"]
-                    .into_iter()
-                    .any(|key| attr(&child.tag, key).is_some())
-                {
-                    ctx.warn(
-                        "text.complex_tspan",
-                        "positioned or adjusted tspan flattened into editable placeholder text; source SVG preserved for exact layout",
-                        Some(child),
-                        SvgWarningSeverity::Warning,
-                    );
-                }
-                if attr(&child.tag, "style").is_some() || attr(&child.tag, "class").is_some() {
-                    ctx.warn(
-                        "text.tspan_style",
-                        "tspan style was flattened into one editable text placeholder",
-                        Some(child),
-                        SvgWarningSeverity::Info,
-                    );
-                }
-                text.push(' ');
-                text.push_str(&flatten_text(child_id, nodes, ctx));
-            }
-            "textpath" => {
-                ctx.unsupported("textPath", Some(child));
-            }
-            _ => {}
-        }
-    }
-    decode_entities(&text, ctx, Some(node))
 }
 
 fn metadata_for(node: &Node, state: ParseState, warning_flags: Vec<String>) -> SvgImportMetadata {
@@ -1552,6 +1675,7 @@ fn metadata_for(node: &Node, state: ParseState, warning_flags: Vec<String>) -> S
         source_order: node.source_order,
         transform_summary: state.transform.summary(),
         warning_flags,
+        text_group: None,
     }
 }
 
@@ -2420,6 +2544,106 @@ mod tests {
         assert_eq!(output.report.fidelity, SvgFidelity::Medium);
     }
 
+    // --- R6: text import phase 1 -------------------------------------------
+
+    fn text_group_of(w: &WidgetInstance) -> Option<String> {
+        w.import_metadata
+            .as_ref()
+            .and_then(|m| m.text_group.clone())
+    }
+
+    #[test]
+    fn positioned_tspans_import_as_grouped_multi_labels() {
+        let svg = r#"
+            <svg>
+                <text id="t" x="10" y="20" font-family="Noto">
+                    <tspan x="10" y="20">Top</tspan>
+                    <tspan x="10" y="60">Bottom</tspan>
+                </text>
+            </svg>
+        "#;
+        let out = import_svg_template(svg, SvgImportOptions::default()).unwrap();
+        let labels: Vec<_> = out
+            .widgets
+            .iter()
+            .filter(|w| w.kind == WidgetKind::Label)
+            .collect();
+        assert_eq!(
+            labels.len(),
+            2,
+            "positioned tspans should split into 2 labels"
+        );
+        assert_eq!(labels[0].props.label, "Top");
+        assert_eq!(labels[1].props.label, "Bottom");
+        // Both chunks share one provenance group.
+        let g0 = text_group_of(labels[0]);
+        assert!(g0.is_some(), "grouped chunks carry a text_group");
+        assert_eq!(g0, text_group_of(labels[1]));
+        // Distinct vertical placement (source order preserved).
+        assert!(labels[1].rect.y > labels[0].rect.y);
+    }
+
+    #[test]
+    fn simple_text_imports_as_single_ungrouped_label() {
+        let svg = r#"<svg><text x="10" y="20" font-family="Noto">Hello</text></svg>"#;
+        let out = import_svg_template(svg, SvgImportOptions::default()).unwrap();
+        assert_eq!(out.widgets.len(), 1);
+        assert_eq!(out.widgets[0].props.label, "Hello");
+        assert_eq!(text_group_of(&out.widgets[0]), None);
+    }
+
+    #[test]
+    fn text_anchor_shifts_chunk_horizontally() {
+        // Same anchor x and width: an end-anchored chunk sits left of a
+        // start-anchored one (compared after origin normalization).
+        let svg = r#"
+            <svg>
+                <text x="100" y="20" text-anchor="start" font-family="Noto">WORD</text>
+                <text x="100" y="50" text-anchor="end" font-family="Noto">WORD</text>
+            </svg>
+        "#;
+        let out = import_svg_template(svg, SvgImportOptions::default()).unwrap();
+        let start = &out.widgets[0].rect;
+        let end = &out.widgets[1].rect;
+        assert!(end.x < start.x, "start {start:?} end {end:?}");
+    }
+
+    #[test]
+    fn unsupported_baseline_is_diagnosed() {
+        let svg = r#"<svg><text x="0" y="20" dominant-baseline="text-top" font-family="Noto">B</text></svg>"#;
+        let out = import_svg_template(svg, SvgImportOptions::default()).unwrap();
+        assert!(out
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.code == "text.baseline"));
+    }
+
+    #[test]
+    fn text_chunks_are_deterministic() {
+        let svg = r#"
+            <svg><text x="5" y="10">
+                <tspan x="5" y="10">A</tspan><tspan x="5" y="30">B</tspan>
+            </text></svg>
+        "#;
+        let first = import_svg_template(svg, SvgImportOptions::default()).unwrap();
+        let second = import_svg_template(svg, SvgImportOptions::default()).unwrap();
+        let ids = |o: &SvgImportOutput| o.widgets.iter().map(|w| w.id).collect::<Vec<_>>();
+        assert_eq!(ids(&first), ids(&second));
+    }
+
+    #[test]
+    fn textpath_stays_deferred_unsupported() {
+        // A rect keeps the import non-empty; the textPath stays diagnosed.
+        let svg = r##"<svg><rect width="10" height="10"/><text x="0" y="20"><textPath href="#p">curved</textPath></text></svg>"##;
+        let out = import_svg_template(svg, SvgImportOptions::default()).unwrap();
+        assert!(out
+            .report
+            .unsupported_features
+            .iter()
+            .any(|f| f.feature == "textPath"));
+    }
+
     #[test]
     fn recovers_from_empty_geometry_and_extreme_transform_deterministically() {
         let svg = r#"
@@ -2516,10 +2740,10 @@ mod tests {
             FixtureCase {
                 name: "tspan_text",
                 svg: include_str!("../tests/fixtures/svg_import/real_world/tspan_text.svg"),
-                min_widgets: 1,
+                min_widgets: 2,
                 fidelity: SvgFidelity::Medium,
                 unsupported: &[],
-                warnings: &["text.complex_tspan"],
+                warnings: &["text.tspan_adjust", "text.tspan_style"],
             },
             FixtureCase {
                 name: "paint_servers",

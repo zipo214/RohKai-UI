@@ -229,18 +229,21 @@ endpoint-to-center conversion and deterministic sampling with a documented
 
 ## Text Policy
 
-Current behavior keeps text editable:
+Current behavior keeps text editable (TEXT_IMPORT_PLAN phases 1-2):
 
-- Simple `<text>` becomes a RohKai `Label`.
-- Simple `<tspan>` content is flattened into the label text.
-- Positioned, adjusted, or styled `tspan` content is imported approximately with
-  warnings.
-- Text-heavy SVGs are not reported as high fidelity, even when imported
-  successfully.
+- `<text>` is split into chunks at every absolutely-positioned (`x`/`y`) `<tspan>`;
+  each non-empty chunk becomes its own editable RohKai `Label`.
+- Sibling chunks share a `text_group` provenance id; a single-chunk `<text>` stays
+  one ungrouped label.
+- Relative/styled `<tspan>` content flattens into the surrounding chunk with
+  explicit `text.tspan_adjust` / `text.tspan_style` diagnostics.
+- `text-anchor` (start/middle/end) and `dominant-baseline` are applied per chunk;
+  unsupported baselines are approximated with a `text.baseline` diagnostic.
+- Raster text rendering, `textPath`, bidi, and shaping remain deferred; text-heavy
+  SVGs are still not reported as high fidelity.
 
-Future text work is planned in `docs/TEXT_IMPORT_PLAN.md`. The intended path is
-robust `tspan` parsing and editable multi-label groups before any optional
-vector-outline or owned shaping engine work.
+Remaining text work is in `docs/TEXT_IMPORT_PLAN.md` (phase 3+): an optional
+vector-outline snapshot mode and an owned shaping engine only if needed.
 
 ## Validation
 

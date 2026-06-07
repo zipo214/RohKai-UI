@@ -2,6 +2,54 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-06 — SVG R6: Editable Text Import (chunked multi-label, phases 1-2)
+
+### Context Reviewed Before Editing
+- `CLAUDE.md`, low-token preflight, `.agents/skills/svg-zero-dep/SKILL.md`,
+  project-model skill
+- `docs/TEXT_IMPORT_PLAN.md`, `docs/SVG_RENDERER_ROADMAP.md` R6,
+  `docs/svg-goal-plan-prompts/R6-text-import-rendering.goal.md`
+- `src/svg_import.rs` (text_widget/flatten_text, resolve_style text fields,
+  metadata_for, normalize_widgets), `src/project/schema.rs` SvgImportMetadata
+
+### Changes
+- Added a `TextChunk` model to `svg_import.rs`: `<text>`/`<tspan>` split into
+  chunks at every absolutely-positioned span (`x`/`y`). `text_widget` →
+  `text_widgets` returning `Vec<WidgetInstance>` (one Label per non-empty chunk);
+  `flatten_text` → `tspan_text` (warning-free subtree concat) + `build_text_label`
+  (per-chunk placement, anchor, baseline, fill, provenance).
+- Each chunk carries per-chunk font size, anchor, baseline, fill, source node,
+  and warning flags. Relative/styled spans flatten into the current chunk with
+  `text.tspan_adjust` / `text.tspan_style` diagnostics; absolute spans start a new
+  chunk → new label.
+- `text-anchor` start/middle/end and `dominant-baseline` middle/central/hanging
+  applied per chunk; other baselines approximated with `text.baseline`.
+  `text.missing_font` flags placeholder metrics. `textPath` stays
+  unsupported-diagnosed.
+- Schema: added `SvgImportMetadata::text_group: Option<String>`
+  (`#[serde(default)]`, backward-compatible) tying a text element's chunk labels
+  together; single-chunk text stays ungrouped (None).
+- `import_node` "text" branch extends widgets with all chunk labels.
+
+### Verification
+- `cargo test`: 285 passed, 3 ignored (6 new R6 tests: grouped multi-label split,
+  single-label no-group, relative anchor shift, baseline diagnostic, determinism,
+  textPath deferred). Updated the `tspan_text` real-world fixture expectation
+  (now 2 labels; `text.tspan_adjust` + `text.tspan_style`).
+- Ignored all-built-in exported-project `cargo check`: passed (schema field is
+  serde-default backward-compatible).
+- `cargo fmt --check`, `cargo clippy -- -D warnings`,
+  `scripts/validate-svg-import.ps1`, `scripts/check-text-encoding.ps1`: clean.
+
+### Remaining Risks / Follow-Ups
+- Raster text rendering (vector-outline snapshot) deferred — rasterizer still
+  buckets `<text>` as unsupported (TEXT_IMPORT_PLAN phase 3).
+- Interleaved direct-text-after-tspan merges into the element's first chunk (the
+  Node model concatenates direct text); rare, documented approximation.
+- Placeholder font metrics (no real font measurement); textPath, bidi, shaping
+  deferred. Owned shaping engine only if phases 1-3 prove insufficient.
+- Next: R7 masks/filters.
+
 ## 2026-06-06 — SVG R5 Follow-on: Baseline JPEG Decoder
 
 ### Context Reviewed Before Editing

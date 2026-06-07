@@ -29,7 +29,7 @@ capabilities where required.
 | Shared microsyntax | 4 | Shared colors, numbers, lengths, checked transforms, path tokenization, preserveAspectRatio/viewBox mapping, declarations, and bounded tier-1 CSS selectors/cascade. | Needs broader fuzz/property tests and only those later CSS tiers justified by fixtures. |
 | Raster IR | 4 | Stable source-spanned node IDs, bounded expanded local references, flattened scene items, owned lowered display commands (incl. clip geometry + BeginLayer/EndLayer compositing scopes), and reusable solid/linear/radial paint-server IR. | Later phases add image/text/effects IR. |
 | Raster renderer | 3-4 | Own software rasterizer for supported subset; retained paths; viewport mapping; nonzero/evenodd fills; affine caps/joins/miters/dashes; deterministic 8x8 coverage; bounded use/symbol expansion; and linear/radial gradient fills/strokes with units, transforms, spread, href, CSS/currentColor stops, diagnostics, goldens, and performance tests. | Still lacks patterns, text, filters, masks, vector effects, markers, and exact arcs joins. clipPath clipping, nested-`<svg>` overflow, premultiplied-alpha isolated group compositing, and group opacity landed in R4. |
-| Text/tspan | 1-2 | Simple text import/flattening; text renderer planned. | Needs robust span model, bidi/shaping decisions, editable multi-span output. |
+| Text/tspan | 3 | Chunked multi-label import: positioned spans become separate grouped labels with provenance + per-chunk anchor/baseline diagnostics; relative/styled spans flatten with warnings. Raster text deferred. | Vector-outline snapshot / raster text, bidi/shaping, textPath. |
 
 ## Utility
 
@@ -57,7 +57,7 @@ capabilities where required.
 | CSS cascade | Inline/simple style subset | Selectors, inheritance, specificity for supported properties. |
 | Paths | Shared tokenizer, retained command semantics, nonzero/evenodd fills, affine cap/join/miter/dash strokes, transformed stroke bounds, and anti-aliased coverage | Reusable exact curve/arc fill bounds, markers, vector effects, exact SVG `arcs` joins, and broader conformance corpus. |
 | Paint | Solid colors/opacity plus deterministic linear/radial gradient fills and strokes; patterns are explicit transparent unsupported paint servers | Pattern tiling, color-space policy, and broader conformance corpus. |
-| Text | Simple labels/flattened spans | Text runs, font selection, bidi, shaping, fallback, editable grouping. |
+| Text | Chunked multi-label editable import (positioned spans → grouped labels, anchor/baseline diagnostics) | Vector snapshot / raster text, font selection, bidi, shaping, fallback. |
 | Clipping/masking | clipPath rendered (clip-rule, transforms, both units, nested intersection, nested-`<svg>` overflow); masks diagnosed | Mask offscreen buffers; objectBoundingBox-on-group; clip on text/image. |
 | Filters | Unsupported diagnostics | Optional safe subset or clear visual fallback. |
 | Images | PNG (zlib/unfilter, types 0/2/3/4/6, 8/16-bit) and baseline JPEG (Huffman/IDCT/YCbCr, 4:4:4/4:2:2/4:2:0, restart) `data:` decoded + rendered (R5) through R4 clip/compositing; external refs rejected | Progressive JPEG (deferred); broader format/corpus coverage. |
@@ -77,12 +77,13 @@ capabilities where required.
 
 Detailed sequencing is authoritative in `docs/SVG_RENDERER_ROADMAP.md`:
 
-1. R0-R5 are complete for their documented subsets (R4: clipPath clipping,
+1. R0-R6 are complete for their documented subsets (R4: clipPath clipping,
    nested-`<svg>` overflow, premultiplied-alpha compositing, isolated group
    opacity; R5: zero-dependency PNG and baseline JPEG `data:` decode + render
-   through the R4 pipeline). Next is R6 text import. Progressive JPEG is a tracked
-   deferred R5 follow-on (diagnosed `image.unsupported_jpeg`).
+   through the R4 pipeline; R6: editable chunked multi-label text import with
+   anchor/baseline diagnostics). Next is R7 masks/filters. Deferred follow-ons:
+   progressive JPEG (`image.unsupported_jpeg`) and the R6 vector-outline snapshot
+   / raster text rendering.
 2. Keep R1-R3 quality under regression coverage while expanding real-world
    fixtures and reference comparisons.
-3. Continue text, effects, and conformance through R6-R8. Robust `tspan` work
-   belongs to R6; report UI belongs to R8.
+3. Continue effects and conformance through R7-R8. Report UI belongs to R8.

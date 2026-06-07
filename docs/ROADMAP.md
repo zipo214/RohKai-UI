@@ -1,13 +1,14 @@
 # RohKai Roadmap
 
-## Current Active Work — Pre-Release Depth And SVG R6 Text Import
+## Current Active Work — Pre-Release Depth And SVG R7 Masks/Filters
 
 - Keep RohKai on egui/eframe while closing reliability and feature-depth gaps.
 - SVG execution follows `docs/SVG_RENDERER_ROADMAP.md`: R0 metadata, shared
   microsyntax/style semantics, bounded references, R1 geometry, R3
   linear/radial paint servers, R4 clipping/viewport-overflow/group-compositing,
-  and R5 PNG + baseline JPEG `data:` embedded images are complete; R6 text import
-  is next (progressive JPEG is a tracked deferred R5 follow-on).
+  R5 PNG + baseline JPEG `data:` embedded images, and R6 editable chunked text
+  import are complete; R7 masks/filters is next. Deferred follow-ons: progressive
+  JPEG and the R6 vector-outline snapshot / raster text rendering.
 - Stage 15's general RohKai renderer is deferred and is not the current stage.
 
 ## Stage 0 — Bootstrap ✅

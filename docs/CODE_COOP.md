@@ -7,6 +7,24 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-06 — SVG R6 Text Import (chunked multi-label, phase 1-2)
+
+On `dev`, SVG R6 editable text import is done (TEXT_IMPORT_PLAN phases 1-2) in
+`src/svg_import.rs`. `<text>`/`<tspan>` now parse into a `TextChunk` model that
+splits at every absolutely-positioned span (`x`/`y`); each non-empty chunk
+imports as its own editable `Label` (was: one collapsed label). Sibling chunks
+share a new `SvgImportMetadata::text_group` id (schema field, `#[serde(default)]`,
+backward-compatible). Relative/styled spans flatten into the surrounding chunk
+with `text.tspan_adjust`/`text.tspan_style` diagnostics; per-chunk `text-anchor`
+and `dominant-baseline` apply with `text.baseline` for approximated baselines;
+`text.missing_font` flags placeholder metrics. `text_widget` → `text_widgets`
+(returns `Vec`); `flatten_text` → `tspan_text` (warning-free concat) +
+`build_text_label`. Raster text rendering (vector snapshot), textPath, bidi, and
+shaping stay deferred (phase 3+); rasterizer still buckets `<text>` as
+unsupported. Tests: 6 new R6 unit tests + updated `tspan_text` fixture (now 2
+labels); full suite 285 passed, ignored export compile + clippy/fmt/validate-svg/
+encoding clean. Next: R7 masks/filters.
+
 ## 2026-06-06 — SVG R5 JPEG Decoder (baseline JPEG now rendered)
 
 On `dev`, the R5 baseline JPEG follow-on is done in

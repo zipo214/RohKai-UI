@@ -844,6 +844,10 @@ pub struct SvgImportMetadata {
     pub source_order: usize,
     pub transform_summary: String,
     pub warning_flags: Vec<String>,
+    /// When this widget is one chunk of a multi-label SVG `<text>` import (R6),
+    /// the shared group id tying the chunks of one text element together.
+    #[serde(default)]
+    pub text_group: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

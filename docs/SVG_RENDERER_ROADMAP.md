@@ -22,10 +22,11 @@ and SVG-facing editor UX.
 
 ## Current Execution Order
 
-1. R0-R5 are complete for their documented subsets (R5: PNG and baseline JPEG
-   `data:` images; progressive JPEG is a tracked deferred follow-on).
-2. Continue R6-R8 in order, with R6 owning all `tspan`/text-plan execution and R8
-   owning source/report UI.
+1. R0-R6 are complete for their documented subsets (R5: PNG and baseline JPEG
+   `data:` images; R6: editable text import — chunked multi-label with
+   anchor/baseline diagnostics). Deferred follow-ons: progressive JPEG and the R6
+   vector-outline snapshot / raster text rendering.
+2. Continue R7-R8 in order, with R8 owning source/report UI.
 
 Unchecked derivative-backlog entries are implementation notes for these phases,
 not separate roadmap phases.
@@ -190,7 +191,10 @@ Current limits:
   pipeline. Progressive/arithmetic/CMYK/12-bit JPEG and external sources are
   diagnosed rather than rendered.
 - No pattern rendering, masks, filters, markers, or blend modes.
-- No text rendering.
+- Text imports as editable chunked labels (positioned spans become separate
+  grouped labels with per-chunk anchor/baseline diagnostics); raster text
+  rendering (vector-outline snapshot) is deferred, so the rasterizer still reports
+  `<text>` in the `text` unsupported bucket.
 - No full CSS media/import/pseudo/attribute/combinator selector model.
 - No gamma-correct compositing pipeline. (Premultiplied-alpha compositing and
   isolated group opacity are implemented for layer compositing; the base buffer
@@ -385,7 +389,7 @@ need all of it immediately, but this is the map.
 | Clips | Actual clipping stack | clipPath rendered: clip-rule, transforms, both clipPathUnits (shape bbox), nested intersection, cycle/depth caps, plus nested-`<svg>` overflow clipping (R4) | objectBoundingBox-on-group; clip on text/image when those land | P2 |
 | Masks | Alpha/luminance masks | Diagnostics only | Offscreen mask buffers (R7; reuse R4 clip/offscreen machinery) | P3 |
 | Filters | Primitive graph | Diagnostics only | Start with drop shadow/blur/offset only if worth it | P4 |
-| Text | Full layout/shaping | Import flatten; raster skips | Implement text plan in phases | P3/P4 |
+| Text | Full layout/shaping | Editable chunked multi-label import (positioned spans → grouped labels, per-chunk anchor/baseline diagnostics); raster text skipped | Vector-outline snapshot / raster text; shaping/bidi/textPath | P3/P4 |
 | Markers | Arrowheads and symbols on paths | Unsupported | Add after stroke geometry | P3 |
 | Antialiasing | High-quality coverage | Deterministic 8x8 coverage; winding/parity fills and unioned stroke coverage are separate | Tune quality/performance and add gamma-aware compositing | P1/P2 |
 | Compositing | Correct premultiplied alpha/groups | Premultiplied-alpha offscreen compositing for isolated group opacity (no double-darken, halo-free); straight-RGBA base buffer + output (R4) | Gamma-correct base pipeline; blend modes | P1 |
@@ -597,18 +601,35 @@ Goal: keep text editable first, then add fidelity modes.
 
 Tasks:
 
-- Execute `docs/TEXT_IMPORT_PLAN.md` phase 1:
-  robust `tspan` runs, chunks, provenance, anchors, baselines diagnostics.
-- Add multi-label grouped import for positioned spans.
-- Add optional vector-outline snapshot mode only after source preservation and
-  editable text remain intact.
+- [x] Execute `docs/TEXT_IMPORT_PLAN.md` phase 1: a `TextChunk` model splits
+  `<text>`/`<tspan>` at every absolutely-positioned span (`x`/`y`), with per-chunk
+  font size, anchor, baseline, fill, and provenance (`source_node`, warning
+  flags). Relative/styled spans flatten into the surrounding chunk with explicit
+  `text.tspan_adjust` / `text.tspan_style` diagnostics.
+- [x] Multi-label grouped import for positioned spans: each non-empty chunk
+  imports as its own editable `Label`; sibling chunks share a
+  `SvgImportMetadata::text_group` id. Simple single-chunk text stays one
+  ungrouped label (no regression). Placeholder bounds remain deterministic and
+  documented as approximate.
+- [x] Anchor + baseline handling: `text-anchor` start/middle/end applied per
+  chunk; `dominant-baseline` middle/central/hanging applied, others approximated
+  with a `text.baseline` diagnostic. `text.missing_font` flags placeholder
+  metrics.
+- [ ] **Deferred:** optional vector-outline snapshot mode (raster text rendering)
+  — the rasterizer still reports `<text>` as the `text` unsupported bucket. Will
+  be added only after editable text + source preservation are proven, per
+  TEXT_IMPORT_PLAN phase 3. `textPath`, bidi, and full shaping/kerning/ligatures
+  remain deferred with explicit diagnostics.
 - Defer owned shaping engine until the product proves it needs one.
 
 Acceptance:
 
-- Text-heavy SVGs no longer collapse into misleading single labels without
-  detailed warnings.
-- Users can choose editable approximation vs visual snapshot mode.
+- [x] Text-heavy SVGs no longer collapse into misleading single labels without
+  detailed warnings: positioned spans become separate grouped labels with
+  provenance and per-chunk diagnostics.
+- [ ] Users can choose editable approximation vs visual snapshot mode — editable
+  import is done; the visual snapshot toggle is deferred to the R6 follow-on / R8
+  report UI.
 
 ### Phase R7 — Masks And Filters
 
