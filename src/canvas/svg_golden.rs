@@ -140,6 +140,27 @@ pub fn fixtures() -> Vec<GoldenFixture> {
             golden: "....\nBBBB\nBBBB\n....",
         },
         GoldenFixture {
+            name: "antialiased_diagonal_fill",
+            svg: r##"<svg viewBox="0 0 8 8"><path d="M1 1 L7 3 L2 7 Z" fill="#ff0000"/></svg>"##,
+            width: 8,
+            height: 8,
+            golden: "........\n.ooo....\n.oRRRoo.\n.oRRRRo.\n.oRRRo..\n.oRoo...\n.ooo....\n........",
+        },
+        GoldenFixture {
+            name: "dashed_round_cap_stroke",
+            svg: r##"<svg viewBox="0 0 12 4"><line x1="1" y1="2" x2="11" y2="2" stroke="#0000ff" stroke-width="2" stroke-linecap="round" stroke-dasharray="3 2"/></svg>"##,
+            width: 12,
+            height: 4,
+            golden: "............\noBBBooBBBo..\noBBBooBBBo..\n............",
+        },
+        GoldenFixture {
+            name: "evenodd_self_intersection",
+            svg: r##"<svg viewBox="0 0 10 10"><path d="M5 .5 L7.65 9 L.7 3.75 L9.3 3.75 L2.35 9 Z" fill="#00ff00" fill-rule="evenodd"/></svg>"##,
+            width: 10,
+            height: 10,
+            golden: "....oo....\n....oo....\n....oo....\noooooooooo\n.oGo..oGo.\n..oo..oo..\n...GooG...\n..oGooGo..\n..oo..oo..\n..........",
+        },
+        GoldenFixture {
             name: "opacity_bucket",
             svg: r##"<svg viewBox="0 0 4 4"><rect width="4" height="4" fill="#00ff00" opacity="0.5"/></svg>"##,
             width: 4,
@@ -147,18 +168,95 @@ pub fn fixtures() -> Vec<GoldenFixture> {
             golden: "oooo\noooo\noooo\noooo",
         },
         GoldenFixture {
-            name: "unsupported_gradient_stays_transparent",
+            name: "single_stop_gradient_extends_solid_color",
             svg: r##"<svg viewBox="0 0 4 4"><defs><linearGradient id="g"><stop offset="0" stop-color="#f00"/></linearGradient></defs><rect width="4" height="4" fill="url(#g)"/></svg>"##,
             width: 4,
             height: 4,
-            golden: "....\n....\n....\n....",
+            golden: "RRRR\nRRRR\nRRRR\nRRRR",
         },
         GoldenFixture {
-            name: "unsupported_clip_diagnosed_not_applied",
+            name: "linear_gradient_red_to_blue",
+            svg: r##"<svg viewBox="0 0 8 2"><defs><linearGradient id="g"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient></defs><rect width="8" height="2" fill="url(#g)"/></svg>"##,
+            width: 8,
+            height: 2,
+            golden: "RRRRBBBB\nRRRRBBBB",
+        },
+        GoldenFixture {
+            name: "linear_gradient_repeat_spread",
+            svg: r##"<svg viewBox="0 0 8 2"><defs><linearGradient id="g" gradientUnits="userSpaceOnUse" x1="0" x2="2" spreadMethod="repeat"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient></defs><rect width="8" height="2" fill="url(#g)"/></svg>"##,
+            width: 8,
+            height: 2,
+            golden: "RBRBRBRB\nRBRBRBRB",
+        },
+        GoldenFixture {
+            name: "radial_gradient_red_to_green",
+            svg: r##"<svg viewBox="0 0 5 5"><defs><radialGradient id="g"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="green"/></radialGradient></defs><rect width="5" height="5" fill="url(#g)"/></svg>"##,
+            width: 5,
+            height: 5,
+            golden: "GGGGG\nGRRRG\nGRRRG\nGRRRG\nGGGGG",
+        },
+        GoldenFixture {
+            // R4: clip-path now renders visibly clipped (left half) rather than
+            // being diagnosed-only.  The clipPath unions a 2x4 rect over a 4x4
+            // fill, so the right two columns are clipped out.
+            name: "rect_clip_path_applied",
             svg: r##"<svg viewBox="0 0 4 4"><clipPath id="c"><rect width="2" height="4"/></clipPath><rect width="4" height="4" fill="#ff0000" clip-path="url(#c)"/></svg>"##,
             width: 4,
             height: 4,
-            golden: "RRRR\nRRRR\nRRRR\nRRRR",
+            golden: "RR..\nRR..\nRR..\nRR..",
+        },
+        GoldenFixture {
+            // R4: clipPath with a nonzero-rule path (triangle) clips the fill.
+            name: "path_clip_nonzero",
+            svg: r##"<svg viewBox="0 0 8 8"><clipPath id="c"><path d="M0 0 L8 0 L0 8 Z"/></clipPath><rect width="8" height="8" fill="#00ff00" clip-path="url(#c)"/></svg>"##,
+            width: 8,
+            height: 8,
+            golden: "GGGGGGGo\nGGGGGGo.\nGGGGGo..\nGGGGo...\nGGGo....\nGGo.....\nGo......\no.......",
+        },
+        GoldenFixture {
+            // R4: objectBoundingBox clip units scale a [0,1] clip rect to the
+            // referencing shape's bounding box (left half of a 4x4 fill).
+            name: "object_bounding_box_clip",
+            svg: r##"<svg viewBox="0 0 4 4"><clipPath id="c" clipPathUnits="objectBoundingBox"><rect width="0.5" height="1"/></clipPath><rect width="4" height="4" fill="#0000ff" clip-path="url(#c)"/></svg>"##,
+            width: 4,
+            height: 4,
+            golden: "BB..\nBB..\nBB..\nBB..",
+        },
+        GoldenFixture {
+            // R4: nested <svg> overflow clipping — the inner content overflows
+            // its 2x2 viewport but is clipped to it.
+            name: "nested_svg_overflow_clip",
+            svg: r##"<svg viewBox="0 0 4 4"><svg x="0" y="0" width="2" height="2"><rect width="4" height="4" fill="#ff0000"/></svg></svg>"##,
+            width: 4,
+            height: 4,
+            golden: "RR..\nRR..\n....\n....",
+        },
+        GoldenFixture {
+            // R4: evenodd clip-rule punches a hole — outer 8x8 minus inner 4x4.
+            name: "path_clip_evenodd_hole",
+            svg: r##"<svg viewBox="0 0 8 8"><clipPath id="c"><path d="M0 0 H8 V8 H0 Z M2 2 H6 V6 H2 Z" clip-rule="evenodd"/></clipPath><rect width="8" height="8" fill="#ff0000" clip-path="url(#c)"/></svg>"##,
+            width: 8,
+            height: 8,
+            golden: "RRRRRRRR\nRRRRRRRR\nRR....RR\nRR....RR\nRR....RR\nRR....RR\nRRRRRRRR\nRRRRRRRR",
+        },
+        GoldenFixture {
+            // R4: transformed clipPath child — a 2x4 clip rect translated right
+            // by 1 user unit clips columns 1..3 of a 4x4 fill.
+            name: "transformed_clip_child",
+            svg: r##"<svg viewBox="0 0 4 4"><clipPath id="c"><rect width="2" height="4" transform="translate(1,0)"/></clipPath><rect width="4" height="4" fill="#00ff00" clip-path="url(#c)"/></svg>"##,
+            width: 4,
+            height: 4,
+            golden: ".GG.\n.GG.\n.GG.\n.GG.",
+        },
+        GoldenFixture {
+            // R4: a translucent group with two overlapping fills composites once
+            // at group opacity — the overlap is the same bucket as the rest
+            // ('o' partial), proving no double-darkening.
+            name: "translucent_group_no_double_darken",
+            svg: r##"<svg viewBox="0 0 6 4"><g opacity="0.5"><rect width="4" height="4" fill="#ff0000"/><rect x="2" width="4" height="4" fill="#ff0000"/></g></svg>"##,
+            width: 6,
+            height: 4,
+            golden: "oooooo\noooooo\noooooo\noooooo",
         },
         GoldenFixture {
             name: "unsafe_external_href_rejected",

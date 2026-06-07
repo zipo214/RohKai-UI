@@ -3227,6 +3227,52 @@ mod tests {
         }
     }
 
+    #[test]
+    fn embedded_svg_sources_keep_single_import_rewrite_contract() {
+        const IMPORT: &str = "use crate::svg_core::{self, Rgba};";
+        let crate_refs: Vec<_> = SVG_RASTERIZER_SOURCE.match_indices("crate::").collect();
+
+        assert_eq!(
+            crate_refs.len(),
+            1,
+            "embedded rasterizer gained a new crate-relative path"
+        );
+        assert!(
+            SVG_RASTERIZER_SOURCE.contains(IMPORT),
+            "known svg_core import changed; update export embedding deliberately"
+        );
+        assert!(
+            !SVG_CORE_SOURCE.contains("crate::"),
+            "embedded svg_core must remain standalone and crate-path free"
+        );
+
+        let embedded = SVG_RASTERIZER_SOURCE.replace(IMPORT, "use super::svg_core::{self, Rgba};");
+        assert!(!embedded.contains("crate::"));
+        assert!(embedded.contains("use super::svg_core::{self, Rgba};"));
+    }
+
+    /// Invariant: every SVG R4 feature that *renders* in the in-app rasterizer
+    /// also renders in the export-embedded copy.  Because export embeds
+    /// `svg_rasterizer.rs` verbatim, this checks that the render-path symbols
+    /// (not merely diagnostics) are present in the embedded source, so there can
+    /// be no in-app-only clip/compositing support.
+    #[test]
+    fn embedded_rasterizer_includes_r4_render_paths() {
+        for marker in [
+            "fn resolve_clip",              // clipPath reference resolution
+            "fn build_mask",                // clip coverage -> alpha mask
+            "DrawCommand::BeginLayer",      // group/viewport layer scoping
+            "fn composite_offscreen",       // isolated group opacity compositing
+            "fn blend_pixel_premultiplied", // premultiplied internal buffer
+            "fn overflow_clip_shape",       // nested <svg> overflow clipping
+        ] {
+            assert!(
+                SVG_RASTERIZER_SOURCE.contains(marker),
+                "embedded rasterizer missing R4 render path: {marker}"
+            );
+        }
+    }
+
     /// Always-run smoke: the fixture generates the required files and its source
     /// contains every feature-matrix marker.  Fast (no compilation).
     #[test]

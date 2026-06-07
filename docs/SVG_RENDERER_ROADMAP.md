@@ -22,10 +22,10 @@ and SVG-facing editor UX.
 
 ## Current Execution Order
 
-1. Complete R1 geometry quality now that the R0 IR boundary is closed.
-2. Complete R2 style/reference resolution, including raster `<use>`.
-3. Continue R3-R8 in order, with R6 owning all `tspan`/text-plan execution and
-   R8 owning source/report UI.
+1. R0-R5 are complete for their documented subsets (R5: PNG and baseline JPEG
+   `data:` images; progressive JPEG is a tracked deferred follow-on).
+2. Continue R6-R8 in order, with R6 owning all `tspan`/text-plan execution and R8
+   owning source/report UI.
 
 Unchecked derivative-backlog entries are implementation notes for these phases,
 not separate roadmap phases.
@@ -85,8 +85,9 @@ Current strengths:
   `rect`, `circle`, `ellipse`, `line`, `polyline`, `polygon`, `path`, `image`
   placeholder, local `use`, `symbol`, `text`.
 - Style subset:
-  presentation attributes, inline `style=""`, simple `.class { key: value; }`,
-  inherited display/visibility/opacity/font basics.
+  presentation attributes, inline `style=""`, bounded tier-1 element/class/id
+  compound and grouped selectors with specificity/source order, inherited
+  display/visibility/opacity/font basics, and `currentColor`.
 - Transforms:
   `matrix`, `translate`, `scale`, `rotate`, `skewX`, `skewY`; nested stack.
 - Paths:
@@ -125,14 +126,28 @@ Current strengths:
   a later clipping-phase item.
 - XML-ish parser for common SVG files.
 - Style inheritance:
-  solid `fill`, `stroke`, `stroke-width`, opacity, display/visibility, inline
-  `style=""`.
+  presentation attributes, inline declarations, bounded tier-1
+  element/class/id/grouped selectors, specificity/source order, solid
+  fill/stroke, stroke geometry, opacity, display/visibility, and
+  `currentColor`.
 - Closed scene/display-list boundary:
   parsed nodes receive stable preorder `SvgNodeId` values and exact byte spans;
   a bounded first-id-wins local reference table records resolved/unresolved
   fragment uses; scene items accumulate transforms and resolved inherited
   style; the owned display list lowers lengths, shape geometry, path geometry,
   diagnostics, and provenance before raster execution.
+- References:
+  bounded first-id-wins `defs`/`symbol`/`use` expansion with source-order
+  stability, cycle/depth/node limits, duplicate-ID diagnostics, symbol viewBox
+  mapping, and inherited style.
+- Paint servers:
+  solid paint plus linear/radial gradients with stop color/opacity, CSS stop
+  style, objectBoundingBox/userSpaceOnUse units, gradient transforms,
+  pad/reflect/repeat spread, bounded href inheritance, deterministic sampling,
+  and gradient strokes through the existing union-coverage backend. Invalid
+  gradient values and unresolved paint references produce source-spanned
+  warnings. Patterns preserve exact unsupported attributes and remain
+  transparent.
 - Shared lengths:
   importer and rasterizer use `svg_core` for unitless/px, percentages, absolute
   physical units, and font-relative unit parsing. Raster geometry resolves
@@ -146,28 +161,49 @@ Current strengths:
   all standard commands including relative variants; cubic flattening has depth
   and point-count caps; arcs approximate to lines.
 - Rendering:
-  inherited `nonzero`/`evenodd` compound-path filling, stroke-as-quad
-  expansion, and basic alpha compositing. Invalid fill-rule values keep the
+  deterministic 8x8 subpixel coverage with separate fill and stroke modes.
+  Fills evaluate inherited `nonzero`/`evenodd` winding or parity per sample;
+  strokes union their tessellated pieces before one alpha composite so joins
+  and overlapping pieces do not darken. Invalid fill-rule values keep the
   inherited/default rule and produce source-spanned warnings.
+- Stroke geometry:
+  local-space width expansion followed by the complete affine transform;
+  butt/round/square caps; miter, miter-clip, round, and bevel joins; miter
+  limits; dash arrays, signed dash offsets, closed-seam continuation,
+  zero-length round/square strokes, and `pathLength` dash calibration. The SVG
+  `arcs` join is accepted with a source-spanned warning and approximated by
+  bounded miter-clip geometry.
+- Bounds and budgets:
+  stroke meshes retain local and transformed device bounds. Dash runs,
+  primitives, vertices, path tokens, flattened points, raster dimensions, and
+  total pixels are bounded; runtime stroke truncation emits
+  `limit.stroke_complexity` rather than failing silently.
 - Cache integration:
   canvas previews use texture caching and bounded raster dimensions.
 
 Current limits:
 
 - No real XML namespace model.
-- No full DOM/defs expansion for raster output. R0 now has bounded local-id and
-  reference metadata, but R2 still owns actual reference expansion.
-- No `<use>` or `<symbol>` expansion in raster mode.
-- Nested `<svg>` coordinates and percentage bases are mapped, but nested
-  viewport overflow is not clipped yet.
-- No `<image>` decoding.
-- No gradients, patterns, clips, masks, filters, markers, blend modes, or
-  compositing groups.
+- PNG (zlib/DEFLATE + unfilter, color types 0/2/3/4/6 at 8/16-bit) and baseline
+  JPEG (Huffman entropy, IDCT, YCbCr, 4:4:4/4:2:2/4:2:0 subsampling, restart
+  markers) `data:` images are decoded and rendered through the R4 clip/compositing
+  pipeline. Progressive/arithmetic/CMYK/12-bit JPEG and external sources are
+  diagnosed rather than rendered.
+- No pattern rendering, masks, filters, markers, or blend modes.
 - No text rendering.
-- No full CSS cascade/specificity/media/import/pseudo/class/tag selector model.
-- No anti-aliased area coverage, gamma-correct blending, stroke joins/caps,
-  miter limits, dash arrays, or vector effects.
-- No golden-image conformance suite against reference renderers.
+- No full CSS media/import/pseudo/attribute/combinator selector model.
+- No gamma-correct compositing pipeline. (Premultiplied-alpha compositing and
+  isolated group opacity are implemented for layer compositing; the base buffer
+  remains straight-RGBA, so non-grouped output is byte-stable with prior goldens.)
+- `clipPath` is implemented (clip-rule, transforms, both clipPathUnits with
+  shape bounding boxes, nested clip intersection, nested-`<svg>` overflow).
+  objectBoundingBox clip units on a group element have no single bounding box and
+  are diagnosed/skipped rather than approximated.
+- No `vector-effect`, markers, exact SVG `arcs` line-join geometry, or SVG 2
+  context-sensitive stroke semantics.
+- No broad external reference-renderer conformance corpus. RohKai has a small,
+  dependency-free ASCII golden suite for current fills, transforms, opacity,
+  anti-aliased diagonals, compound fill rules, and dashed strokes.
 
 ## Combined Feature Inventory
 
@@ -336,24 +372,24 @@ need all of it immediately, but this is the map.
 |---|---|---|---|---|
 | Secure parse budgets | Comprehensive limits across parse/render/filter/reference work | Basic importer + rasterizer limits | Add unified limit config/report for rasterizer too | P0 |
 | XML model | Namespace-aware XML tree with source spans | Simple custom parser with stable byte spans | Add namespaces and better recovery | P1 |
-| Render IR | Scene/display-list separate from XML | Stable source-spanned node IDs, bounded local references, flattened scene items, and an owned geometry/diagnostic display list | Add R2 reference expansion and later reusable paint/compositing IR | P0/P1 |
+| Render IR | Scene/display-list separate from XML | Stable source-spanned node IDs, bounded expanded local references, flattened scene items, owned geometry/diagnostic/clip commands, BeginLayer/EndLayer compositing scopes, and reusable paint-server IR | Extend for masks/filters (R7) | P0/P1 |
 | Diagnostics | Structured per-node render/import diagnostics | Importer rich; rasterizer reports warnings, unsupported buckets, counts, fidelity, and node ID/byte-span provenance | Add R8 report/source UI | P1 |
-| ViewBox/preserveAspectRatio | Full modes and nested viewport behavior | Full `none`/alignment/meet/slice mapping for root and nested SVG viewports; nested overflow is not clipped | Add nested viewport overflow clipping in R4 | P1/P2 |
-| CSS cascade | Specificity/order/inheritance subset | Importer simple classes; rasterizer inline/presentation | Shared style engine with selector tiers | P1 |
-| Basic shapes | Full geometry and transforms | Mostly supported | Add exact bounds and tests | P0 |
-| Paths | Full grammar, fill rules, stroke geometry | Commands plus inherited nonzero/evenodd filling are supported; strokes remain simple quads | Joins/caps/dashes/miter and exact bounds | P0/P1 |
-| Gradients | Linear/radial with units, transforms, spread, href | Unsupported/diagnosed | Implement paint server model | P2 |
+| ViewBox/preserveAspectRatio | Full modes and nested viewport behavior | Full `none`/alignment/meet/slice mapping for root and nested SVG viewports; nested viewport overflow is clipped (R4) | Closed | P1/P2 |
+| CSS cascade | Specificity/order/inheritance subset | Shared bounded tier-1 element/class/id compound and grouped selectors, inline/presentation precedence, inheritance, and currentColor | Add only selector/property tiers justified by real fixtures | P1/P3 |
+| Basic shapes | Full geometry and transforms | Supported subset with affine transforms, anti-aliased fill/stroke, and transformed stroke-bound tests | Add reusable exact fill/path bounds and more extreme-coordinate tests | P0/P1 |
+| Paths | Full grammar, fill rules, stroke geometry | Full command grammar; retained curves/arcs; nonzero/evenodd fills; local-space cap/join/miter/dash stroke meshes | Exact arc extrema, SVG `arcs` join, vector effects, markers | P1/P3 |
+| Gradients | Linear/radial with units, transforms, spread, href | Linear/radial fills and strokes support stops/opacity, both units, transforms, all spread modes, href inheritance, currentColor/CSS stops, deterministic sampling, limits, diagnostics, and goldens | Add color-space/gamma policy and broader conformance fixtures | P2 |
 | Patterns | Tiled nested content | Unsupported/diagnosed | Implement after scene IR | P3 |
-| Images | Embedded PNG/JPEG and secure external policy | Import placeholder only; raster no decode | Add zero-dep PNG/JPEG decision or explicit non-support | P2 |
-| `defs`/`use` | Id resolution and expansion | Importer supports local use; raster does not | Shared reference resolver | P1 |
-| Clips | Actual clipping stack | Diagnostics only | Clip masks in raster pipeline | P2 |
-| Masks | Alpha/luminance masks | Diagnostics only | Offscreen mask buffers | P3 |
+| Images | Embedded PNG/JPEG and secure external policy | PNG (zlib/unfilter, types 0/2/3/4/6, 8/16-bit) and baseline JPEG (Huffman/IDCT/YCbCr, 4:4:4/4:2:2/4:2:0, restart) `data:` decoded + rendered through R4 clip/compositing; external refs fail-closed | Progressive JPEG; broader format/corpus | P2 |
+| `defs`/`use` | Id resolution and expansion | Importer and rasterizer support bounded local symbol/use expansion with cycles, depth/node limits, duplicate-ID diagnostics, and source-order stability | Extend references only as later phases require | P1 |
+| Clips | Actual clipping stack | clipPath rendered: clip-rule, transforms, both clipPathUnits (shape bbox), nested intersection, cycle/depth caps, plus nested-`<svg>` overflow clipping (R4) | objectBoundingBox-on-group; clip on text/image when those land | P2 |
+| Masks | Alpha/luminance masks | Diagnostics only | Offscreen mask buffers (R7; reuse R4 clip/offscreen machinery) | P3 |
 | Filters | Primitive graph | Diagnostics only | Start with drop shadow/blur/offset only if worth it | P4 |
 | Text | Full layout/shaping | Import flatten; raster skips | Implement text plan in phases | P3/P4 |
 | Markers | Arrowheads and symbols on paths | Unsupported | Add after stroke geometry | P3 |
-| Antialiasing | High-quality coverage | Hard scanline/quad edges | Area coverage or supersampling | P1 |
-| Compositing | Correct premultiplied alpha/groups | Basic over blend | Premultiplied pipeline + group opacity | P1 |
-| Tests | Golden corpus + fuzz + oracles | Unit/fixture tests, not full golden | Add golden/reference harness | P0 |
+| Antialiasing | High-quality coverage | Deterministic 8x8 coverage; winding/parity fills and unioned stroke coverage are separate | Tune quality/performance and add gamma-aware compositing | P1/P2 |
+| Compositing | Correct premultiplied alpha/groups | Premultiplied-alpha offscreen compositing for isolated group opacity (no double-darken, halo-free); straight-RGBA base buffer + output (R4) | Gamma-correct base pipeline; blend modes | P1 |
+| Tests | Golden corpus + fuzz + oracles | Analytical renderer tests plus a small dependency-free ASCII golden corpus and ignored performance smoke | Add broader licensed corpus, fuzzing, and reference-renderer oracle workflow | P0/P1 |
 
 ## Roadmap
 
@@ -408,13 +444,24 @@ Tasks:
 - [x] Add inherited `nonzero` and `evenodd` fill-rule support for compound
   paths and closed geometry, with inline-style precedence, invalid-value
   warnings, analytical winding tests, and golden fixtures.
-- Replace stroke-as-quad with stroke tessellation:
-  caps, joins, miter limit, dasharray, dashoffset.
-- Add anti-aliased fill/stroke coverage:
-  either deterministic supersampling or analytic edge coverage.
-- Add exact path/shape bounds where feasible.
-- Add transform edge-case tests: rotation, skew, nested viewports, negative
-  viewBox, tiny/huge coordinates.
+- [x] Replace stroke-as-quad with local-space stroke tessellation:
+  butt/round/square caps; miter, miter-clip, round, and bevel joins; miter
+  limits; dasharray, signed dashoffset, closed seams, zero-length caps, and
+  `pathLength` calibration. Exact SVG `arcs` joins remain deferred and are
+  reported as an approximation.
+- [x] Add deterministic 8x8 anti-aliased coverage with two explicit modes:
+  fill winding/parity for nonzero/evenodd and union coverage for stroke
+  primitives.
+- [x] Add retained local/device stroke bounds and analytical cap, miter,
+  affine-transform, and rendered-alpha bound tests.
+- [x] Add transform edge-case tests for rotation and non-uniform scaling of
+  complete stroke outlines. Broader tiny/huge-coordinate and nested clipping
+  torture cases continue in R4/R9.
+- [x] Add bounded dash/primitive/vertex work and visible
+  `limit.stroke_complexity` diagnostics.
+- [x] Add selected anti-aliased diagonal, dashed round-cap, and
+  self-intersecting evenodd golden fixtures plus a coarse ignored 512px fill
+  performance smoke.
 
 Acceptance:
 
@@ -428,15 +475,15 @@ Goal: remove duplicated importer/rasterizer understanding.
 
 Tasks:
 
-- Extract shared SVG microsyntax modules:
+- [x] Extract shared SVG microsyntax modules:
   numbers, lengths, colors, transforms, paths, style declarations.
-- Implement selector tier 1:
+- [x] Implement selector tier 1:
   presentation attrs, inline style, element selectors, class selectors,
   id selectors, grouped selectors, specificity/order.
-- Implement reference resolver:
+- [x] Implement reference resolver:
   `defs`, `symbol`, `use`, local paint refs, cycle/depth limits.
-- Add currentColor and basic inherited color behavior.
-- Add duplicate-id diagnostics.
+- [x] Add currentColor and basic inherited color behavior.
+- [x] Add duplicate-id diagnostics.
 
 Acceptance:
 
@@ -450,14 +497,14 @@ Goal: cover the biggest visual gap in real SVG art.
 
 Tasks:
 
-- Add paint server IR:
+- [x] Add paint server IR:
   solid, linear gradient, radial gradient, pattern placeholder.
-- Linear gradients:
+- [x] Linear gradients:
   stops, opacity, units, transform, spread methods, href inheritance.
-- Radial gradients:
+- [x] Radial gradients:
   center/focal/radius, units, transform, spread methods, href inheritance.
-- Gradient sampling with deterministic interpolation.
-- Pattern diagnostics upgraded:
+- [x] Gradient sampling with deterministic interpolation.
+- [x] Pattern diagnostics upgraded:
   report exact unsupported pattern attributes until real pattern rendering lands.
 
 Acceptance:
@@ -472,35 +519,77 @@ Goal: make exported design-tool SVGs stop leaking outside their intended masks.
 
 Tasks:
 
-- Add clip stack.
-- Implement `clipPath` with transforms and clip-rule.
-- Implement nested viewport overflow clipping.
-- Add premultiplied-alpha internal buffer.
-- Add group opacity and isolated offscreen compositing.
+- [x] Add clip stack (layer scope threaded through display-list execution; clip =
+  coverage mask intersected before compositing each primitive).
+- [x] Implement `clipPath` with transforms and clip-rule. Supports nonzero and
+  evenodd `clip-rule`, transformed clipPath children, nested `<g>` in clipPath,
+  clipPathUnits `userSpaceOnUse` and `objectBoundingBox` (shape bbox), and
+  clipPath-of-clipPath intersection with cycle/depth bounds. objectBoundingBox on
+  a `<g>` (no single bbox) is diagnosed `clip.object_bounding_box` and skipped.
+- [x] Implement nested viewport overflow clipping (nested `<svg>` content is
+  clipped to its viewport rect using the existing preserveAspectRatio mapping).
+- [x] Add premultiplied-alpha internal buffer (isolated group offscreens
+  composite in premultiplied space; straight-RGBA `ColorImage` output unchanged
+  at the boundary; halo-free clipped/composited edges).
+- [x] Add group opacity and isolated offscreen compositing (`<g opacity>` /
+  `isolation:isolate` render to an offscreen composited once at group opacity, so
+  overlapping children do not double-darken; bounded by offscreen depth/byte caps
+  with a `limit.offscreen_buffer` diagnostic on truncation).
 
 Acceptance:
 
-- Clip fixtures render visually clipped, not just diagnosed.
-- Alpha edges remain deterministic and not haloed.
+- [x] Clip fixtures render visually clipped, not just diagnosed (ASCII goldens:
+  rect clip, path clip nonzero/evenodd, transformed clip, objectBoundingBox clip,
+  nested-svg overflow, translucent overlap group).
+- [x] Alpha edges remain deterministic and not haloed (determinism +
+  halo-free unit tests).
 
 ### Phase R5 — Embedded Raster Images
 
 Goal: decide and implement real image policy without dependency creep.
 
+Decision (2026-06-06): implement zero-dependency PNG and baseline JPEG decoders
+for inline `data:` images. PNG landed first (lossless DEFLATE + unfilter); the
+baseline JPEG decoder (Huffman + IDCT + YCbCr + chroma upsampling) followed.
+Both are pure RohKai source, `data:`-only, and bounded — no new crates.
+
 Tasks:
 
-- Decide whether to implement zero-dependency PNG and JPEG decoders in RohKai or
-  keep image decode explicitly unsupported.
-- If implemented:
-  parse PNG chunks, zlib/deflate, filters, color types, alpha, interlace policy;
-  parse JPEG baseline DCT, Huffman, quantization, YCbCr conversion, EXIF policy.
-- If not implemented:
-  keep placeholder behavior but make diagnostics/UI clearer.
+- [x] Implement zero-dependency PNG decode for inline base64 `data:` images:
+  signature/chunk parse (IHDR/PLTE/tRNS/IDAT/IEND), from-scratch zlib + DEFLATE
+  inflate (stored/fixed/dynamic Huffman), scanline unfilter (None/Sub/Up/Average/
+  Paeth), and expansion to straight RGBA8 for color types 0/2/3/4/6 at bit depth 8
+  (and 16 truncated to 8). Drawn through the R4 clip/premultiplied pipeline with
+  nearest-neighbour sampling, `preserveAspectRatio` placement (`slice` overflow
+  trimmed to the destination rect), element opacity, and `clip-path`.
+- [x] Security caps cover image decode memory and CPU: pixel budget
+  (`MAX_IMAGE_PIXELS`), inflate output bound (`MAX_IMAGE_DECODE_BYTES`), and
+  bounded chunk reads. Malformed/oversized/unsupported inputs are diagnosed, not
+  mis-decoded.
+- [x] Honest diagnostics for every degraded path: external references
+  (`image.external_rejected` / fail-closed document gate), non-PNG
+  (`image.unsupported_format`), interlace or unsupported bit depth/color type
+  (`image.unsupported_png`), decode failures (`image.decode_failed`), and
+  oversize (`limit.image_pixels`).
+- [x] **Baseline JPEG decode** — zero-dependency decoder for baseline /
+  extended-sequential Huffman JPEG (SOF0/SOF1), 8-bit, 1 or 3 components
+  (grayscale or YCbCr), arbitrary integer chroma subsampling (4:4:4 / 4:2:2 /
+  4:2:0 …) with restart markers and `0xFF00` byte-stuffing: marker parse,
+  quant/Huffman tables, entropy decode (DC diff + AC RLE in zigzag), dequantize,
+  separable 8×8 IDCT, chroma upsampling, and YCbCr→RGB. Drawn through the same R4
+  clip/premultiplied image path as PNG. Progressive, arithmetic, lossless,
+  12-bit, and CMYK/4-component are diagnosed `image.unsupported_jpeg`; malformed
+  input is `image.decode_failed`. Design note: `docs/jpegdecoder roadmap.md`.
+  Remaining JPEG follow-ups (deferred): progressive JPEG, integer/AAN IDCT for
+  speed, and a broader reference corpus.
 
 Acceptance:
 
-- No "image supported" claim unless pixels really render.
-- Security caps cover image decode memory and CPU.
+- [x] No "image supported" claim unless pixels really render: PNG `data:` images
+  render real pixels in both the in-app and export-embedded rasterizers (same
+  embedded source); JPEG and other formats/sources are explicitly diagnosed.
+- [x] Security caps cover image decode memory and CPU (pixel + inflate-byte caps;
+  bounded, deterministic failures with diagnostics).
 
 ### Phase R6 — Text Import And Optional Rendering
 
@@ -601,13 +690,15 @@ Acceptance:
   current `SvgScene` / `SvgSceneItem` / `DisplayList` split.
 - [x] Replace direct XML-to-render traversal with owned display-list traversal.
 - [x] Add explicit unsupported-feature enum instead of stringly diagnostics.
-- Add antialiasing strategy doc and prototype.
+- [x] Implement and document deterministic 8x8 coverage with separate fill
+  winding/parity and stroke-union modes.
 
 ### Later Tasks
 
-- Implement gradients.
-- Implement clip stack.
-- Implement `<use>` in raster mode.
+- Implement gradients. (done — R3)
+- Implement clip stack. (done — R4: clipPath, overflow, premultiplied
+  compositing, isolated group opacity)
+- Implement `<use>` in raster mode. (done — R2)
 - Implement text import phase 1 from `docs/TEXT_IMPORT_PLAN.md`.
 - Implement renderer report UI in RohKai.
 

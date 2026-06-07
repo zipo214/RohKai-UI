@@ -6,6 +6,8 @@ use uuid::Uuid;
 
 const MIN_PLACEHOLDER_SIZE: f64 = 20.0;
 const ARC_TOLERANCE_PX: f64 = 0.5;
+const MAX_CSS_RULES: usize = 4_096;
+const MAX_CSS_DECLARATIONS: usize = 16_384;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub enum SvgImportMode {
@@ -589,13 +591,9 @@ struct Style {
     font_size: Option<f64>,
     text_anchor: Option<String>,
     dominant_baseline: Option<String>,
+    color: Option<String>,
     fill: Option<String>,
     stroke: Option<String>,
-}
-
-struct ClassRule {
-    class_name: String,
-    decls: Vec<(String, String)>,
 }
 
 fn scan_svg(svg: &str, ctx: &mut ImportContext) -> Result<Vec<Node>, SvgImportError> {
@@ -823,8 +821,8 @@ fn attr<'a>(tag: &'a Tag, key: &str) -> Option<&'a str> {
 fn collect_style_rules(
     nodes: &[Node],
     ctx: &mut ImportContext,
-) -> Result<Vec<ClassRule>, SvgImportError> {
-    let mut out = Vec::new();
+) -> Result<svg_core::SvgCssStyleSheet, SvgImportError> {
+    let mut out = svg_core::SvgCssStyleSheet::default();
     for node in nodes.iter().filter(|n| n.tag.name == "style") {
         if node.text.len() > ctx.limits.max_style_bytes {
             return Err(SvgImportError::new(
@@ -832,47 +830,66 @@ fn collect_style_rules(
                 format!("style block exceeded {} bytes", ctx.limits.max_style_bytes),
             ));
         }
-        for block in node.text.split('}') {
-            let Some((selector, body)) = block.split_once('{') else {
-                continue;
-            };
-            let selector = selector.trim();
-            if selector.starts_with('.') && selector[1..].chars().all(is_css_ident_char) {
-                out.push(ClassRule {
-                    class_name: selector[1..].to_owned(),
-                    decls: parse_decls(body),
-                });
-            } else if !selector.is_empty() {
-                ctx.unsupported("complex CSS selector", Some(node));
-            }
+        let remaining_rules = MAX_CSS_RULES.saturating_sub(out.rules.len());
+        let used_declarations = out
+            .rules
+            .iter()
+            .map(|rule| rule.declarations.len())
+            .sum::<usize>();
+        let remaining_declarations = MAX_CSS_DECLARATIONS.saturating_sub(used_declarations);
+        let mut parsed =
+            svg_core::parse_css_stylesheet(&node.text, remaining_rules, remaining_declarations);
+        let order_offset = out.rules.len();
+        for rule in &mut parsed.rules {
+            rule.source_order += order_offset;
         }
+        if parsed.unsupported_selector_count > 0 {
+            ctx.unsupported("complex CSS selector", Some(node));
+        }
+        if parsed.malformed_rule_count > 0 || parsed.dropped_declaration_count > 0 {
+            ctx.warn(
+                "css.malformed_rule",
+                "malformed or unsupported CSS declarations were ignored",
+                Some(node),
+                SvgWarningSeverity::Warning,
+            );
+        }
+        if parsed.dropped_rule_count > 0
+            || out.rules.len() + parsed.rules.len() >= MAX_CSS_RULES
+            || used_declarations
+                + parsed
+                    .rules
+                    .iter()
+                    .map(|rule| rule.declarations.len())
+                    .sum::<usize>()
+                >= MAX_CSS_DECLARATIONS
+        {
+            ctx.warn(
+                "limit.css_rules",
+                "CSS rules or declarations exceeded importer safety limits",
+                Some(node),
+                SvgWarningSeverity::Warning,
+            );
+        }
+        out.unsupported_selector_count += parsed.unsupported_selector_count;
+        out.malformed_rule_count += parsed.malformed_rule_count;
+        out.dropped_rule_count += parsed.dropped_rule_count;
+        out.dropped_declaration_count += parsed.dropped_declaration_count;
+        out.rules.extend(parsed.rules);
     }
     Ok(out)
-}
-
-fn is_css_ident_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, '_' | '-')
-}
-
-fn parse_decls(style: &str) -> Vec<(String, String)> {
-    style
-        .split(';')
-        .filter_map(|decl| {
-            let (name, value) = decl.split_once(':')?;
-            Some((name.trim().to_ascii_lowercase(), value.trim().to_owned()))
-        })
-        .collect()
 }
 
 fn resolve_style(
     node: &Node,
     inherited: &Style,
-    rules: &[ClassRule],
+    sheet: &svg_core::SvgCssStyleSheet,
     ctx: &mut ImportContext,
 ) -> Style {
     let mut style = inherited.clone();
 
     for key in [
+        "color",
         "fill",
         "stroke",
         "stroke-width",
@@ -888,19 +905,47 @@ fn resolve_style(
         }
     }
 
-    if let Some(classes) = attr(&node.tag, "class") {
-        for class_name in classes.split_whitespace() {
-            for rule in rules.iter().filter(|r| r.class_name == class_name) {
-                for (key, value) in &rule.decls {
-                    apply_style_decl(&mut style, key, value);
-                }
-            }
+    let element = node.tag.name.as_str();
+    let id = attr(&node.tag, "id");
+    let classes = attr(&node.tag, "class").unwrap_or("");
+    let mut matches: Vec<_> = sheet
+        .rules
+        .iter()
+        .filter_map(|rule| {
+            rule.matching_specificity(element, id, classes)
+                .map(|specificity| (specificity, rule.source_order, rule))
+        })
+        .collect();
+    matches.sort_by_key(|(specificity, order, _)| (*specificity, *order));
+    for (_, _, rule) in matches {
+        for declaration in &rule.declarations {
+            apply_style_decl(&mut style, &declaration.name, &declaration.value);
         }
     }
 
     if let Some(inline) = attr(&node.tag, "style") {
-        for (key, value) in parse_decls(inline) {
-            apply_style_decl(&mut style, &key, &value);
+        let (declarations, dropped) =
+            svg_core::parse_style_declarations(inline, MAX_CSS_DECLARATIONS);
+        if dropped > 0 {
+            ctx.warn(
+                "css.invalid_inline_declaration",
+                "malformed or unsupported inline style declarations were ignored",
+                Some(node),
+                SvgWarningSeverity::Warning,
+            );
+        }
+        for declaration in declarations {
+            apply_style_decl(&mut style, &declaration.name, &declaration.value);
+        }
+    }
+
+    let current_color = style.color.clone().unwrap_or_else(|| "black".to_owned());
+    for paint in [&mut style.fill, &mut style.stroke] {
+        if paint
+            .as_deref()
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("currentcolor"))
+        {
+            *paint = Some(current_color.clone());
         }
     }
 
@@ -921,6 +966,7 @@ fn apply_style_decl(style: &mut Style, key: &str, value: &str) {
         "font-size" => style.font_size = parse_length(value, 16.0),
         "text-anchor" => style.text_anchor = Some(value.trim().to_owned()),
         "dominant-baseline" => style.dominant_baseline = Some(value.trim().to_owned()),
+        "color" => style.color = Some(value.trim().to_owned()),
         "fill" => style.fill = Some(value.trim().to_owned()),
         "stroke" => style.stroke = Some(value.trim().to_owned()),
         _ => {}
@@ -931,7 +977,7 @@ fn apply_style_decl(style: &mut Style, key: &str, value: &str) {
 fn import_node(
     node_id: usize,
     nodes: &[Node],
-    rules: &[ClassRule],
+    rules: &svg_core::SvgCssStyleSheet,
     id_index: &HashMap<String, usize>,
     parent_state: ParseState,
     inherited_style: Style,
@@ -1116,7 +1162,7 @@ fn update_viewport(node: &Node, state: &mut ParseState) {
 fn expand_use(
     node: &Node,
     nodes: &[Node],
-    rules: &[ClassRule],
+    rules: &svg_core::SvgCssStyleSheet,
     id_index: &HashMap<String, usize>,
     mut state: ParseState,
     style: Style,
@@ -2162,6 +2208,36 @@ mod tests {
         assert_eq!(output.widgets.len(), 1);
         assert!(output.widgets[0].rect.w >= 20.0);
         assert!(output.report.skipped_element_count >= 1);
+    }
+
+    #[test]
+    fn tier1_css_specificity_and_current_color_match_rasterizer_rules() {
+        let svg = r##"<svg viewBox="0 0 30 10" color="#112233">
+<style>
+  rect, .base { fill: #ff0000; }
+  rect.hot { fill: #00ff00; }
+  #hero { fill: currentColor; }
+</style>
+<rect class="base" width="10" height="10"/>
+<rect class="hot" x="10" width="10" height="10"/>
+<rect id="hero" class="hot" x="20" width="10" height="10"/>
+</svg>"##;
+        let output = import_svg_template(svg, SvgImportOptions::default()).unwrap();
+        let colors: Vec<Option<[u8; 3]>> = output
+            .widgets
+            .iter()
+            .map(|widget| widget.fg_color)
+            .collect();
+
+        assert_eq!(
+            colors,
+            vec![Some([255, 0, 0]), Some([0, 255, 0]), Some([17, 34, 51])]
+        );
+        assert!(!output
+            .report
+            .unsupported_features
+            .iter()
+            .any(|feature| feature.feature == "complex CSS selector"));
     }
 
     #[test]

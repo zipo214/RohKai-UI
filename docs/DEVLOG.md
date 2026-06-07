@@ -2,6 +2,309 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-06 — SVG R5 Follow-on: Baseline JPEG Decoder
+
+### Context Reviewed Before Editing
+- `CLAUDE.md`, low-token preflight, `.agents/skills/svg-zero-dep/SKILL.md`
+- `docs/jpegdecoder roadmap.md` (design note), `docs/SVG_RENDERER_ROADMAP.md` R5
+- `src/canvas/svg_rasterizer.rs` PNG decoder + image path (`decode_image_href`,
+  `DrawCommand::Image`, R4 clip/premultiplied pipeline), `src/codegen/export.rs`
+  embedding contract
+
+### Changes
+- Implemented a zero-dependency baseline JPEG decoder in `svg_rasterizer.rs`:
+  marker scan (SOI/APPn/DQT/DHT/SOF0/SOF1/DRI/SOS/EOI, others skipped), quant
+  tables (8/16-bit), canonical JPEG Huffman tables (Annex F decode), MSB-first
+  entropy bit reader with `0xFF00` de-stuffing, DC-diff + AC run-length (zigzag)
+  block decode, dequantization, separable 8×8 float IDCT, nearest chroma
+  upsampling, and YCbCr→RGB. Supports 8-bit, 1 or 3 components, arbitrary integer
+  sampling factors (4:4:4 / 4:2:2 / 4:2:0 …) and restart intervals.
+- `decode_image_href` now routes `FF D8` to `decode_jpeg`; replaced the
+  `JpegDeferred` error with `MalformedJpeg` (`image.decode_failed`) and
+  `UnsupportedJpeg` (`image.unsupported_jpeg`); `NotPng` → `NotImage`.
+  Progressive/arithmetic/lossless/12-bit/CMYK are diagnosed unsupported.
+- JPEG draws through the existing R4 clip/premultiplied image path (same
+  `DrawCommand::Image`), so clipping, opacity, preserveAspectRatio, and export
+  embedding are shared with PNG. No new `crate::` refs; std-only.
+
+### Verification
+- `cargo test`: 279 passed, 3 ignored. 6 JPEG tests: baseline 4:4:4 color,
+  4:2:0 chroma-subsampled two-region, true 1-component grayscale, determinism,
+  progressive-unsupported, malformed-not-panicking. Fixtures: 4:4:4 / 4:2:0 from
+  ffmpeg's mjpeg encoder (ground truth); the 1-component grayscale JPEG was
+  hand-encoded (flat block, Annex-K Huffman tables) since ffmpeg emitted
+  3-component gray.
+- Ignored all-built-in exported-project `cargo check`: passed (decoder embedded;
+  single `crate::` import contract intact).
+- `cargo fmt --check`, `cargo clippy -- -D warnings` (fixed rust-1.95
+  is_none_or / is_multiple_of / resize / collapsible-match lints across the PNG
+  and JPEG code), `scripts/validate-svg-import.ps1`,
+  `scripts/check-text-encoding.ps1`: clean.
+
+### Remaining Risks / Follow-Ups
+- Deferred JPEG: progressive, arithmetic, lossless, 12-bit, CMYK/4-component.
+- Float IDCT (clarity over speed); integer/AAN IDCT is a future optimization.
+- Nearest chroma upsampling and nearest image sampling (deterministic, not
+  smoothed). Broader reference-image corpus is future conformance (R8).
+- Next: R6 text import.
+
+## 2026-06-06 — SVG R5: Embedded PNG Raster Images (JPEG Deferred)
+
+### Context Reviewed Before Editing
+- `CLAUDE.md`, low-token preflight, `.agents/skills/svg-zero-dep/SKILL.md`
+- `docs/SVG_RENDERER_ROADMAP.md` (R5 source of truth),
+  `docs/svg-goal-plan-prompts/R5-embedded-raster-images.goal.md`
+- `src/canvas/svg_rasterizer.rs` (SvgNode model, scene build, DisplayList
+  build/execute, R4 clip/premultiplied pipeline, RasterTarget, caps),
+  `src/svg_core.rs` (viewbox_transform/preserveAspectRatio, Affine2D),
+  `src/svg_import.rs` image placeholder + data-URI cap, `src/codegen/export.rs`
+  embedding contract
+
+### Decision
+- Implement zero-dependency PNG `data:` decode now; defer baseline JPEG to a
+  tracked follow-on (detected and reported `image.jpeg_unsupported`). PNG is
+  lossless/bounded and covers the bulk of embedded design-tool images; JPEG is a
+  larger, separate lossy pipeline (Huffman + IDCT + YCbCr).
+
+### Changes
+- Added a from-scratch image decoder to `svg_rasterizer.rs`: base64 decode, zlib
+  wrapper, DEFLATE inflate (stored/fixed/dynamic Huffman, puff-style canonical
+  decoder), PNG chunk parse (IHDR/PLTE/tRNS/IDAT/IEND), scanline unfilter
+  (None/Sub/Up/Average/Paeth), and RGBA8 expansion for color types 0/2/3/4/6 at
+  bit depth 8 and 16 (truncated). Interlace and sub-byte depths are diagnosed.
+- `<image>` lowers to `DrawCommand::Image` (or `ImageSkipped` with a specific
+  code) in `DisplayList::build`; `execute` draws via nearest-neighbour sampling
+  through the R4 clip/premultiplied `RasterTarget`, clipped to the destination
+  rect (slice overflow) plus any `clip-path`, faded by element opacity.
+- Placement reuses `svg_core::viewbox_transform` for `preserveAspectRatio`.
+  Security: pixel cap (`MAX_IMAGE_PIXELS`), inflate-byte cap
+  (`MAX_IMAGE_DECODE_BYTES`), bounded chunk reads; external references remain
+  fail-closed at the existing document gate.
+- Refreshed the stale `unsupported_tag_feature("image")` message.
+
+### Verification
+- `cargo test`: 274 passed, 3 ignored (14 new R5 tests: RGBA/RGB/palette+tRNS/
+  gray decode, nearest-neighbour scale, clip, opacity, determinism,
+  JPEG-deferred, interlaced, oversize, truncated, external document gate,
+  stored-block inflate). PNG fixtures minted with real zlib (python) to exercise
+  the dynamic-Huffman inflate path.
+- Ignored all-built-in exported-project `cargo check`: passed (decoder embedded;
+  single `crate::` import rewrite contract intact).
+- `cargo fmt --check`, `cargo clippy -- -D warnings`,
+  `scripts/validate-svg-import.ps1`, `scripts/check-text-encoding.ps1`: clean.
+
+### Remaining Risks / Follow-Ups
+- Baseline JPEG decode deferred (tracked R5 follow-on); progressive JPEG out of
+  scope.
+- Sub-byte (1/2/4-bit) and interlaced PNG are diagnosed, not decoded.
+- Nearest-neighbour sampling (no bilinear) — deterministic but not smoothed.
+- Component import keeps `<image>` as an editable placeholder by design.
+- Next: R6 text import (or the JPEG follow-on).
+
+## 2026-06-06 — SVG R4: Clipping, Viewport Overflow, Premultiplied Compositing, Group Opacity
+
+### Context Reviewed Before Editing
+- `CLAUDE.md`, low-token preflight, `.agents/skills/svg-zero-dep/SKILL.md`
+- `docs/SVG_RENDERER_ROADMAP.md` (R4 source of truth), `docs/SVG_IMPORT.md`,
+  `docs/feature-evaluation/svg-import-renderer.md`
+- `src/canvas/svg_rasterizer.rs` (full: SvgScene→DisplayList→execute, coverage,
+  blend, paint sampler, references), `src/svg_core.rs` (Affine2D/inverse,
+  viewbox), `src/canvas/svg_golden.rs`, `src/codegen/export.rs` embedding +
+  `embedded_svg_sources_keep_single_import_rewrite_contract`, and
+  `src/canvas/interaction.rs` Image preview path.
+
+### Derived Render/Export Path Matrix
+- Pixel-flow source of truth: `SvgScene{items}` (flat preorder) → `DisplayList`
+  (`build` lowers, `execute` rasters) → `render_shape` → `coverage_scan`/
+  `rasterize_coverage` → `blend_pixel`. Single shared coverage scan now also
+  feeds clip masks.
+- Both paint paths are one source: in-app `interaction.rs` →
+  `svg_rasterizer::rasterize_or_fallback`; export embeds `svg_rasterizer.rs`
+  verbatim into `mod rohkai_svg` (only rewrite: `crate::svg_core`→
+  `super::svg_core`). No app-only support is possible by construction.
+
+### Changes (`src/canvas/svg_rasterizer.rs` unless noted)
+- Layer model: `SvgSceneItem` gained `layer: Option<LayerRaw>` + `is_layer_end`;
+  scene flattening emits begin/end markers for groups and nested-`<svg>` that
+  need clip/opacity/overflow. `DisplayList` gained `DrawCommand::BeginLayer`/
+  `EndLayer`; `execute` maintains a clip + offscreen layer stack.
+- clipPath rendering: `resolve_clip` (reuses the shared first-id-wins reference
+  table; bounded `MAX_CLIP_DEPTH`, cycle detection), `collect_clip_shapes`
+  (per-child transforms, nested `<g>`, `clip-rule` nonzero/evenodd),
+  clipPathUnits userSpaceOnUse + objectBoundingBox (shape bbox via
+  `geometry_local_bounds`), clipPath-of-clipPath intersection. clipPath defs no
+  longer render directly or emit a `clipPath` unsupported bucket.
+- Nested-`<svg>` overflow clipping: `overflow_clip_shape` builds a device rect
+  from the pre-viewport transform captured in `LayerRaw`; combined with any
+  group clip-path via `ClipDef.nested`.
+- Premultiplied compositing: `ClipMask` + `coverage_scan` refactor;
+  `RasterTarget` now carries `premultiplied` + `clip`; `blend_pixel_premultiplied`
+  and `composite_offscreen` composite isolated offscreens once at group opacity.
+  Base buffer and emitted `ColorImage` stay straight RGBA, so non-grouped output
+  is byte-stable.
+- Group opacity/isolation: `<g opacity>` / `isolation:isolate` allocate a
+  premultiplied offscreen (bounded by `MAX_OFFSCREEN_DEPTH`/`MAX_OFFSCREEN_BYTES`,
+  `limit.offscreen_buffer` on truncation). `opacity` made non-inherited in
+  `Style::inherit_parts` (the double-darken fix).
+- Diagnostics: removed "clip-path attribute" unsupported; added `clip.unresolved`,
+  `reference.clip_cycle`, `limit.clip_depth`, `clip.object_bounding_box`,
+  `limit.offscreen_buffer`.
+- Export (`src/codegen/export.rs`): no new `crate::` refs (rewrite contract
+  intact); added `embedded_rasterizer_includes_r4_render_paths` invariant test.
+
+### Golden Justification
+- `unsupported_clip_diagnosed_not_applied` (expected full `RRRR`) renamed to
+  `rect_clip_path_applied` with golden `RR..`: clip is now applied, which is
+  provably more correct than the prior diagnosed-only behavior. Added goldens:
+  `path_clip_nonzero`, `path_clip_evenodd_hole`, `transformed_clip_child`,
+  `object_bounding_box_clip`, `nested_svg_overflow_clip`,
+  `translucent_group_no_double_darken`. All other goldens unchanged (byte-stable).
+
+### Verification
+- `cargo fmt --check` clean; `cargo check` clean; `cargo clippy -- -D warnings`
+  zero warnings.
+- `cargo test`: 260 passed, 0 failed, 3 ignored (added 11 R4 unit tests +
+  7 R4 goldens + 1 export invariant test).
+- Ignored export cargo checks: `export_compile_fixture_cargo_check` and
+  `all_builtin_widgets_export_cargo_check` both pass → embedded R4 rasterizer
+  compiles standalone (export parity).
+- `scripts/validate-svg-import.ps1` pass; `scripts/check-text-encoding.ps1` OK.
+- `cargo run` launch smoke: app launched (PID alive), exited cleanly (exit 0);
+  clip preview correctness covered by
+  `clip_path_renders_visibly_clipped_high_fidelity`.
+
+### Risks / Follow-ups
+- Root `<svg opacity>` no longer cascades to children (opacity is now
+  non-inherited per SVG); a root-level group composite is not implemented. Minor;
+  documented in roadmap limits.
+- objectBoundingBox clipPathUnits on a `<g>` has no single bbox → diagnosed and
+  skipped, not approximated.
+- Isolated offscreens are full raster size; deep nesting is bounded by depth/byte
+  caps with a visible diagnostic and graceful (non-isolated) degrade.
+- Next: R5 embedded raster images (zero-dependency PNG/JPEG decision).
+
+## 2026-06-06 — SVG R2 Shared Semantics And R3 Paint Servers
+
+### Context Reviewed Before Editing
+- `AGENTS.md`, low-token preflight with devlog, current dirty `dev` status
+- `.agents/skills/svg-zero-dep/SKILL.md`
+- `docs/SVG_RENDERER_ROADMAP.md`, `docs/SVG_IMPORT.md`,
+  `docs/CODE_COOP.md`, and renderer/export embedding contracts
+- Importer/rasterizer style, local-reference, scene/display-list, coverage,
+  golden, diagnostics, and export fixture code
+
+### Changes
+- Added shared bounded tier-1 CSS declarations/selectors/cascade to `svg_core`:
+  element/class/ID compound selectors, grouped selectors, specificity/source
+  order, rule/declaration budgets, and complex-selector diagnostics.
+- Unified importer/rasterizer `currentColor`, style precedence, shared checked
+  transform parsing, color/number/length/path microsyntax, and malformed
+  fallback behavior.
+- Added stable bounded raster `defs`/`symbol`/`use` expansion with symbol
+  viewBox mapping, inherited style, duplicate-ID first-wins behavior,
+  cycle/depth/node limits, and source-spanned diagnostics.
+- Added owned paint-server IR and deterministic linear/radial gradient fills
+  and strokes: stop color/opacity, CSS/currentColor stops,
+  objectBoundingBox/userSpaceOnUse, gradient transforms, pad/reflect/repeat,
+  focal radial geometry, and bounded href inheritance.
+- Kept fill winding/parity and stroke union coverage separate while sampling
+  paint per covered pixel. Added malformed units/transform/spread/length/stop
+  diagnostics and unresolved paint-reference warnings.
+- Upgraded patterns to explicit transparent unsupported paint servers whose
+  diagnostics preserve exact supplied pattern attributes.
+- Replaced the obsolete transparent-gradient golden with linear, radial,
+  repeat-spread, and single-stop goldens; added focused semantics,
+  determinism/fidelity, reference, malformed-input, CSS, and cycle tests.
+- Kept both embedded renderer sources std-only and preserved the single-import
+  export rewrite contract.
+
+### Verification
+- R2 boundary before R3: 238 tests passed, 3 ignored; strict clippy,
+  dependency/encoding policy, embedding contract, and ignored all-widget
+  exported-project compile passed.
+- Final full suite: 248 passed, 3 ignored.
+- SVG validation: importer 19 passed; rasterizer 53 passed and 1 ignored
+  performance smoke; all 4 golden harness tests passed.
+- Explicit 512x512 anti-aliased fill performance smoke passed in about 0.17s
+  on this machine against the 5-second debug budget.
+- `cargo fmt --check`, `cargo check`, and
+  `cargo clippy -- -D warnings`: clean.
+- Dependency policy, UTF-8 encoding policy, embedding-source contract, and
+  `scripts/validate-svg-import.ps1`: clean.
+- Ignored all-built-in exported-project `cargo check`: passed with the embedded
+  shared `svg_core` and SVG rasterizer.
+- Launch smoke: the current debug app remained alive for 5 seconds.
+
+### Remaining Risks / Follow-Ups
+- Component import intentionally keeps gradients editable only as diagnosed
+  approximations; Image-mode rendering is the high-fidelity fallback.
+- Patterns, clips, masks, filters, text, embedded raster images, isolated group
+  compositing, and nested viewport overflow clipping remain later phases.
+- R4 is next: clip stack, nested overflow, premultiplied-alpha internals, and
+  isolated group opacity/compositing.
+
+## 2026-06-06 — SVG R1 Stroke Geometry, Coverage, And Dashes
+
+### Context Reviewed Before Editing
+- `AGENTS.md`, low-token preflight, and current git status on `dev`
+- `.agents/skills/svg-zero-dep/SKILL.md`
+- `docs/SVG_RENDERER_ROADMAP.md`, `docs/SVG_IMPORT.md`,
+  `docs/CODE_COOP.md`, and the current renderer/export embedding paths
+- Existing path parser, fill rules, display list, raster limits, golden harness,
+  and the ignored all-built-in exported-project compile fixture
+
+### Changes
+- Replaced flattened-only path storage with retained line, quadratic, cubic,
+  arc, subpath, and explicit-close semantics. Curve flattening now measures
+  tolerance after the final device transform.
+- Added inherited stroke width, cap, join, miter-limit, dash-array,
+  dash-offset, and positive `pathLength` handling using shared SVG lengths.
+- Replaced device-space segment quads with bounded local-space stroke meshes
+  transformed as complete geometry. Implemented butt/round/square caps;
+  miter, miter-clip, round, and bevel joins; and a diagnosed miter-clip
+  approximation for SVG `arcs` joins.
+- Added signed dash phase, odd-list repetition, continuity through vertices,
+  closed-seam merging, zero-length round/square output, and `pathLength`
+  calibration.
+- Added deterministic 8x8 subpixel coverage with two separate semantics:
+  winding/parity accumulation for nonzero/evenodd fills and union coverage for
+  stroke primitives. Translucent stroke joins now composite once.
+- Added local/device stroke bounds, raster destination context, dash/run/
+  primitive/vertex caps, and source-spanned `limit.stroke_complexity` warnings
+  when bounded work truncates.
+- Enforced exported-source embedding: the rasterizer may contain only the one
+  known `crate::svg_core` import, and embedded `svg_core` remains free of
+  crate-local references.
+- Added analytical tests for transformed widths/bounds, caps, miter limits,
+  nonuniform transforms, anti-aliased edges, self-intersecting evenodd fills,
+  opacity union, dash phase/seams/pathLength, malformed declarations, limits,
+  and determinism.
+- Added three focused ASCII goldens: anti-aliased diagonal fill, dashed
+  round-cap stroke, and self-intersecting evenodd fill.
+- Updated renderer/import/roadmap/feature-evaluation documentation so R1 claims
+  match implementation and R2 is the next phase.
+
+### Verification
+- Full suite: 230 passed, 3 ignored.
+- SVG rasterizer: 41 passed, 1 ignored performance smoke.
+- Explicit 512x512 anti-aliased fill performance smoke: passed in about 0.13s
+  on this machine against a 5-second debug budget.
+- SVG golden suite: 4 harness tests passed with all fixtures matching.
+- Ignored all-built-in exported-project `cargo check`: passed, including the
+  embedded SVG renderer path.
+- `cargo fmt --check`, `cargo check`, and
+  `cargo clippy -- -D warnings`: clean.
+- Dependency policy, UTF-8 encoding policy, and
+  `scripts/validate-svg-import.ps1`: clean.
+- Launch smoke: current debug binary remained alive for 5 seconds.
+
+### Remaining Risks / Follow-Ups
+- SVG `arcs` line joins are approximated, not exact.
+- Gamma-aware/group compositing, vector effects, markers, nested viewport
+  clipping, paint servers, text, filters, clips, and masks remain later phases.
+- R2 should centralize shared style/reference behavior without weakening the
+  completed R1 geometry and export-embedding invariants.
+
 ## 2026-06-06 — SVG R1 Nonzero And Evenodd Fill Rules
 
 ### Context Reviewed Before Editing

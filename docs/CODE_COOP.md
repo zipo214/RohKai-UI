@@ -7,6 +7,97 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-06 — SVG R5 JPEG Decoder (baseline JPEG now rendered)
+
+On `dev`, the R5 baseline JPEG follow-on is done in
+`src/canvas/svg_rasterizer.rs`: a from-scratch decoder for baseline /
+extended-sequential Huffman JPEG (SOF0/SOF1), 8-bit, 1 or 3 components
+(grayscale / YCbCr), arbitrary integer chroma subsampling (4:4:4/4:2:2/4:2:0 …)
+with restart markers and `0xFF00` de-stuffing. Pipeline: marker parse → quant +
+Huffman tables → entropy decode (DC diff + AC RLE, zigzag) → dequantize →
+separable 8×8 float IDCT → chroma upsample → YCbCr→RGB, drawn through the same R4
+clip/premultiplied image path as PNG (`decode_image_href` now routes `FF D8`
+to `decode_jpeg`). Progressive/arithmetic/lossless/12-bit/CMYK →
+`image.unsupported_jpeg`; malformed → `image.decode_failed`. std-only, embedded
+verbatim by export (single `crate::` import preserved), so in-app and exported
+rasterizers decode JPEG identically. 6 JPEG tests (ffmpeg-minted 4:4:4 / 4:2:0
+fixtures + a hand-encoded 1-component grayscale fixture + progressive/malformed
+guards); full suite 279 passed, ignored export compile + clippy/fmt/validate-svg/
+encoding all clean. Deferred JPEG follow-ups: progressive, integer/AAN IDCT,
+broader corpus. Next: R6 text import.
+
+## 2026-06-06 — SVG R5 PNG Embedded Images (PNG done, JPEG deferred)
+
+On `dev`, SVG R5 embedded raster images: a zero-dependency PNG `data:` decoder
+lands in `src/canvas/svg_rasterizer.rs` (base64 + from-scratch zlib/DEFLATE
+inflate with stored/fixed/dynamic Huffman + scanline unfilter + RGBA8 expansion
+for color types 0/2/3/4/6 at 8/16-bit; interlace and sub-byte depths diagnosed).
+`<image>` lowers to `DrawCommand::Image`/`ImageSkipped` in `DisplayList::build`
+and draws through the R4 clip/premultiplied pipeline with
+`svg_core::viewbox_transform` `preserveAspectRatio` placement (slice trimmed to
+the dest rect), element opacity, `clip-path`, and deterministic nearest-neighbour
+sampling. Decode is bounded by pixel/inflate caps; external refs stay fail-closed
+at the existing document gate; baseline JPEG is detected and reported
+`image.jpeg_unsupported` as a tracked deferred follow-on. Decoder is std-only and
+embedded verbatim by export (single `crate::` import preserved), so in-app and
+exported rasterizers render PNG identically. 14 R5 tests (real zlib fixtures via
+python) + ignored export compile pass; full suite 274 passed; clippy/fmt/
+validate-svg/encoding clean. Next: R6 text import, or the JPEG follow-on.
+
+## 2026-06-06 — SVG R4 Complete (clip / overflow / compositing / group opacity)
+
+On `dev`, SVG R4 is done end-to-end in `src/canvas/svg_rasterizer.rs` (single
+source embedded verbatim by `src/codegen/export.rs`, so in-app and exported
+rasterizers render identically). Added: a layer stack threaded through
+`DisplayList` via `BeginLayer`/`EndLayer` markers (scene flattening emits them
+for groups/nested-`<svg>` that need clip/opacity/overflow); `clipPath` rendering
+(clip-rule nonzero/evenodd, transformed children, both clipPathUnits with shape
+bbox for objectBoundingBox, nested clip intersection, reuse of the first-id-wins
+reference table with cycle/depth caps); nested-`<svg>` overflow clipping;
+premultiplied-alpha offscreen compositing (`blend_pixel_premultiplied` +
+`composite_offscreen`, straight-RGBA base/output unchanged); isolated group
+opacity (no double-darken) bounded by offscreen depth/byte caps. `opacity` is now
+non-inherited (reset in `Style::inherit_parts`) — the key correctness fix; root
+opacity no longer cascades to children (minor, documented). Coverage was
+refactored into a shared `coverage_scan` used by fills, strokes, and clip masks.
+Goldens: clip golden flipped from diagnosed→rendered (justified in DEVLOG) plus
+new clip/overflow/group goldens. Hazard: clip resolution happens in
+`DisplayList::build` (needs `view_xform`); overflow rect uses the pre-viewport
+transform captured in `LayerRaw`. All gates green, zero warnings. Next: R5
+embedded raster images.
+
+## 2026-06-06 — Codex SVG R2/R3 Complete
+
+On `dev`, R2 shared style/reference resolution and R3 linear/radial paint
+servers are complete for the documented subset. Importer and rasterizer now
+share bounded tier-1 CSS/currentColor semantics; raster mode expands guarded
+local use/symbol references and renders deterministic gradient fills/strokes
+with units, transforms, spread, href inheritance, malformed-value diagnostics,
+goldens, and export-embedding coverage. Patterns remain explicit transparent
+unsupported paint servers; R4 clipping and compositing is next after the final
+whole-repo gate recorded in the devlog.
+
+## 2026-06-06 — Codex SVG R2/R3 Execution
+
+On `dev`, I am continuing directly from the verified dirty R1 tree into R2
+shared style/reference semantics and then R3 paint servers. R2 must close
+selector specificity/order, currentColor, duplicate IDs, and bounded local
+`defs`/`symbol`/`use` expansion before R3 consumes those references for
+gradients. The renderer and `svg_core` remain embedded export sources, so all
+new code stays std-only, bounded, deterministic, and covered by the existing
+embedding/export compile contracts.
+
+## 2026-06-06 — Codex SVG R1 Stroke Execution
+
+On `dev`, SVG R1 stroke execution and final whole-repo gates are complete.
+The renderer now retains path semantics, tessellates local-space caps/joins,
+supports dashes and `pathLength`, uses separate fill winding/parity and
+stroke-union 8x8 coverage, and reports bounded-work truncation. Export embedding
+is enforced by a source-contract test; the next SVG work is R2 shared
+style/reference resolution, not more R1 geometry. Full tests, strict clippy,
+SVG validation, dependency/encoding policy, export compile, performance smoke,
+and launch smoke all passed.
+
 ## 2026-06-06 — Codex SVG R1 Stroke Plan
 
 On `dev`, the next R1 work is decomposed into a local-space stroke mesh,

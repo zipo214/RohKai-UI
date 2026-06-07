@@ -26,9 +26,9 @@ capabilities where required.
 | Import parser | 3 | Handles common shapes, paths, groups, style subset, transforms, `use`, metadata. | Needs richer CSS, text/tspan, clipping/masking behavior, and report UI. |
 | Diagnostics | 3-4 | Structured warnings/errors/fidelity for many unsupported buckets; raster node diagnostics carry stable node IDs and source byte spans. | Needs R8 UI surfacing and per-element remediation suggestions. |
 | Source preservation | 4 | Original SVG preserved beside imported template and in Image widgets. | Needs source diff/viewer integration polish. |
-| Shared microsyntax | 3-4 | Shared colors, numbers, transforms, path tokenization, length/unit resolution, and preserveAspectRatio/viewBox mapping. | Needs shared style declarations plus broader fuzz/property tests. |
-| Raster IR | 3-4 | Stable source-spanned node IDs, bounded local references, flattened scene items, and owned lowered display commands. | R2 still needs actual reference expansion; later phases need reusable paint/compositing IR. |
-| Raster renderer | 2-3 | Own software rasterizer for supported subset; golden fixtures; full root/nested preserveAspectRatio mapping; inherited nonzero/evenodd compound-path fills. | Far from full SVG 1.1/2, text, filters, gradients, masks, compositing, advanced strokes, and nested viewport clipping. |
+| Shared microsyntax | 4 | Shared colors, numbers, lengths, checked transforms, path tokenization, preserveAspectRatio/viewBox mapping, declarations, and bounded tier-1 CSS selectors/cascade. | Needs broader fuzz/property tests and only those later CSS tiers justified by fixtures. |
+| Raster IR | 4 | Stable source-spanned node IDs, bounded expanded local references, flattened scene items, owned lowered display commands (incl. clip geometry + BeginLayer/EndLayer compositing scopes), and reusable solid/linear/radial paint-server IR. | Later phases add image/text/effects IR. |
+| Raster renderer | 3-4 | Own software rasterizer for supported subset; retained paths; viewport mapping; nonzero/evenodd fills; affine caps/joins/miters/dashes; deterministic 8x8 coverage; bounded use/symbol expansion; and linear/radial gradient fills/strokes with units, transforms, spread, href, CSS/currentColor stops, diagnostics, goldens, and performance tests. | Still lacks patterns, text, filters, masks, vector effects, markers, and exact arcs joins. clipPath clipping, nested-`<svg>` overflow, premultiplied-alpha isolated group compositing, and group opacity landed in R4. |
 | Text/tspan | 1-2 | Simple text import/flattening; text renderer planned. | Needs robust span model, bidi/shaping decisions, editable multi-span output. |
 
 ## Utility
@@ -55,12 +55,12 @@ capabilities where required.
 |---|---|---|
 | XML/security | Hardened subset | Full safe XML gate with fuzzing and resource budgets. |
 | CSS cascade | Inline/simple style subset | Selectors, inheritance, specificity for supported properties. |
-| Paths | Shared tokenizer, command coverage, and nonzero/evenodd fill semantics | Exact bounds, markers, stroke joins/caps/dashes, antialiasing. |
-| Paint | Solid colors/opacity | Gradients, patterns, paint servers with diagnostics/fallbacks. |
+| Paths | Shared tokenizer, retained command semantics, nonzero/evenodd fills, affine cap/join/miter/dash strokes, transformed stroke bounds, and anti-aliased coverage | Reusable exact curve/arc fill bounds, markers, vector effects, exact SVG `arcs` joins, and broader conformance corpus. |
+| Paint | Solid colors/opacity plus deterministic linear/radial gradient fills and strokes; patterns are explicit transparent unsupported paint servers | Pattern tiling, color-space policy, and broader conformance corpus. |
 | Text | Simple labels/flattened spans | Text runs, font selection, bidi, shaping, fallback, editable grouping. |
-| Clipping/masking | Diagnostics awareness | Correct render where supported, import warnings where not editable. |
+| Clipping/masking | clipPath rendered (clip-rule, transforms, both units, nested intersection, nested-`<svg>` overflow); masks diagnosed | Mask offscreen buffers; objectBoundingBox-on-group; clip on text/image. |
 | Filters | Unsupported diagnostics | Optional safe subset or clear visual fallback. |
-| Images | Placeholder/source preservation | Data URI policy, image decode strategy, export/runtime handling. |
+| Images | PNG (zlib/unfilter, types 0/2/3/4/6, 8/16-bit) and baseline JPEG (Huffman/IDCT/YCbCr, 4:4:4/4:2:2/4:2:0, restart) `data:` decoded + rendered (R5) through R4 clip/compositing; external refs rejected | Progressive JPEG (deferred); broader format/corpus coverage. |
 | Golden tests | Initial fixtures | Broad fixture suite plus differential tests against reference outputs where allowed. |
 
 ## Depth Measurements
@@ -77,8 +77,12 @@ capabilities where required.
 
 Detailed sequencing is authoritative in `docs/SVG_RENDERER_ROADMAP.md`:
 
-1. Complete R1 geometry/stroke/antialiasing quality; R0 metadata and IR closure
-   are now complete.
-2. Complete R2 shared styles and local reference expansion.
-3. Continue paint, clipping, images, text, effects, and conformance through
-   R3-R8. Robust `tspan` work belongs to R6; report UI belongs to R8.
+1. R0-R5 are complete for their documented subsets (R4: clipPath clipping,
+   nested-`<svg>` overflow, premultiplied-alpha compositing, isolated group
+   opacity; R5: zero-dependency PNG and baseline JPEG `data:` decode + render
+   through the R4 pipeline). Next is R6 text import. Progressive JPEG is a tracked
+   deferred R5 follow-on (diagnosed `image.unsupported_jpeg`).
+2. Keep R1-R3 quality under regression coverage while expanding real-world
+   fixtures and reference comparisons.
+3. Continue text, effects, and conformance through R6-R8. Robust `tspan` work
+   belongs to R6; report UI belongs to R8.

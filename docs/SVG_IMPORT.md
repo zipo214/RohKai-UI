@@ -23,9 +23,10 @@ drift between editable placeholder import and image-mode rasterization.
 The report includes imported/skipped counts, warnings, unsupported features, and
 an approximate fidelity level: `High`, `Medium`, or `Low`.
 
-Fidelity is intentionally conservative. SVGs with masks, clips, filters,
-paint-server references, many unsupported features, or text-heavy placeholder
-imports are downgraded so RohKai does not imply pixel-perfect reproduction.
+Fidelity is intentionally conservative. SVGs with masks, filters,
+unavailable paint-server references, many unsupported features, or text-heavy
+placeholder imports are downgraded so RohKai does not imply pixel-perfect
+reproduction. (clipPath clipping renders as of R4 and is not a downgrade.)
 
 ## Import Modes
 
@@ -89,10 +90,12 @@ textures at runtime.
 - Transforms: `matrix`, `translate`, `scale`, `rotate`, `skewX`, `skewY`.
 - Nested groups and transform stack.
 - Local `symbol` / `use` expansion with cycle and depth protection.
-- Minimal style resolution:
+- Shared bounded style resolution:
   - presentation attributes
   - inline `style=""`
-  - simple `.class { key: value; }` rules from `<style>`
+  - tier-1 element, class, ID, compound, and grouped rules from `<style>`
+  - specificity and source-order precedence
+  - inherited `currentColor`
   - inherited visibility/display/opacity/font basics
 - Solid paint approximation for simple `fill`, `stroke`, named colors,
   `#rgb`, `#rrggbb`, and `rgb(...)`.
@@ -102,18 +105,60 @@ textures at runtime.
   display/visibility, root and nested SVG viewport mapping, per-viewport
   percentage bases, transforms, basic shapes, path flattening, and inherited
   `fill-rule` values (`nonzero` by default and explicit `evenodd`) for the
-  current supported subset. Nested viewport overflow clipping is not yet
-  applied.
+  current supported subset. Nested `<svg>` viewport overflow is clipped to the
+  viewport rect (R4).
+- Image-mode fills and strokes use deterministic 8x8 subpixel coverage. Fill
+  samples preserve nonzero/evenodd winding semantics; stroke samples union all
+  tessellated pieces before compositing so translucent joins do not darken.
+- Image-mode stroke geometry supports local-space width under affine
+  transforms, butt/round/square caps, miter/miter-clip/round/bevel joins,
+  miter limits, dash arrays and signed offsets, closed seams, zero-length
+  round/square caps, and positive `pathLength` dash calibration. `arcs` joins
+  are diagnosed and approximated with bounded miter-clip geometry.
 - Image-mode rasterization assigns stable preorder node IDs and byte spans,
   builds a bounded first-id-wins local reference table, then lowers scene items
   into an owned display list before drawing. Display commands carry inherited
   style, accumulated transforms, resolved shape/path geometry, diagnostics, and
   source provenance.
-- Image-mode rasterization emits structured diagnostics for known unsupported
-  renderer buckets such as gradients, patterns, clips, masks, filters, markers,
-  text, images, use/symbol, stroke dash/cap/join hints, and paint-server
-  references. Invalid fill-rule values produce warnings and preserve the
-  inherited/default rule.
+- Image-mode rasterization expands bounded local `defs`/`symbol`/`use`
+  references with cycle/depth/node guards and duplicate-ID diagnostics.
+- Image-mode rasterization renders linear/radial gradient fills and strokes,
+  including stop opacity, CSS/currentColor stops, both gradient units,
+  gradient transforms, pad/reflect/repeat spread, bounded href inheritance,
+  deterministic interpolation, and malformed-value diagnostics.
+- Image-mode rasterization applies `clipPath` clipping (R4): `clip-rule`
+  nonzero/evenodd, transformed clipPath children and nested `<g>`, clipPathUnits
+  `userSpaceOnUse` and `objectBoundingBox` (against a shape's bounding box), and
+  clipPath-of-clipPath intersection. Clip references reuse the shared first-id-wins
+  reference table with cycle/depth bounds. Missing references, cycles, depth
+  overflow, and objectBoundingBox-on-group (no single bbox) are diagnosed
+  (`clip.unresolved`, `reference.clip_cycle`, `limit.clip_depth`,
+  `clip.object_bounding_box`) and skipped rather than approximated.
+- Image-mode rasterization composites `<g opacity>` / `isolation:isolate`
+  groups through a premultiplied-alpha offscreen and composites once at group
+  opacity, so overlapping children do not double-darken. Offscreen buffers are
+  bounded by depth/byte caps with a `limit.offscreen_buffer` diagnostic on
+  truncation. The internal compositing buffer is premultiplied; the emitted
+  `ColorImage` remains straight RGBA and non-grouped output is byte-stable.
+- Image-mode rasterization decodes inline base64 `data:` PNG and baseline JPEG
+  images (R5) with zero-dependency decoders: PNG via a from-scratch zlib/DEFLATE
+  inflater + scanline unfilter (color types 0/2/3/4/6 at 8/16-bit); JPEG via
+  baseline/extended-sequential Huffman decode (marker parse, dequantization, 8×8
+  IDCT, YCbCr→RGB, 4:4:4/4:2:2/4:2:0 chroma upsampling, restart markers). Both
+  draw through the R4 clip/compositing pipeline with `preserveAspectRatio`
+  placement, element opacity, and `clip-path`. Decode memory/CPU is bounded by
+  pixel and inflate/output caps. External image references are rejected
+  fail-closed; unsupported or malformed inputs are diagnosed
+  (`image.unsupported_format`, `image.unsupported_png`, `image.unsupported_jpeg`,
+  `image.decode_failed`, `limit.image_pixels`) — including progressive/arithmetic/
+  CMYK/12-bit JPEG, which are explicit unsupported cases. Component import still
+  keeps `<image>` as an editable placeholder with the source preserved.
+- Image-mode rasterization emits structured diagnostics for the remaining
+  unsupported renderer buckets such as patterns, masks, filters, markers, text,
+  vector effects, and unavailable paint-server references.
+  Invalid fill-rule/stroke declarations produce source-spanned warnings and
+  preserve inherited/default behavior. Stroke complexity limits report
+  truncation explicitly.
 - Text flattening for simple `tspan` content.
 - Path bounds for `M`, `L`, `H`, `V`, `C`, `S`, `Q`, `T`, `A`, and `Z`.
 - Relative and absolute path commands.
@@ -155,10 +200,14 @@ RohKai rejects or ignores unsafe SVG features:
   `DOCTYPE`, custom entities, scripts, non-XML processing instructions, external
   hrefs or non-local `url(...)` references, excessive tag count, excessive path
   commands, or excessive raster dimensions.
-- `filter`, animation, `foreignObject`, `textPath`, masks, clips, gradients,
-  patterns, paint-server references, and complex CSS selectors are reported as
-  unsupported or approximated with structured diagnostics.
-- Clip/mask/filter attributes are diagnosed separately from their definitions.
+- `filter`, animation, `foreignObject`, `textPath`, masks, patterns,
+  unavailable paint-server references, and complex CSS selectors are reported
+  as unsupported or approximated with structured diagnostics. Linear/radial
+  gradients and `clipPath` clipping are supported in Image-mode rendering but
+  remain non-editable, diagnosed placeholders in component import mode.
+- Mask/filter attributes are diagnosed separately from their definitions.
+  `clip-path` is applied in Image-mode rendering (R4); unresolved/cyclic/too-deep
+  clip references and objectBoundingBox-on-group are diagnosed and skipped.
 
 ## Image Policy
 
@@ -209,6 +258,9 @@ That runs:
 - SVG importer tests
 - SVG rasterizer tests
 - SVG golden renderer fixtures
+- stroke cap/join/dash/pathLength and transform-bound tests
+- self-intersecting evenodd and non-darkening translucent-stroke tests
+- an ignored coarse 512px anti-aliased fill performance smoke
 - shared SVG core microsyntax tests
 - SVG source-preservation tests
 - deterministic output tests
@@ -231,7 +283,7 @@ cargo clippy -- -D warnings
 
 ## Known Unsupported Features
 
-- Full SVG rendering
+- Full SVG specification rendering
 - Full XML DOM
 - Full CSS cascade
 - Filters
@@ -240,9 +292,10 @@ cargo clippy -- -D warnings
 - External resources
 - Browser layout behavior
 - Text shaping and font metrics
-- Masks and clips
-- Gradient/pattern conversion
+- Masks (clips are supported as of R4)
+- objectBoundingBox clip units on a `<g>` (no single bounding box)
+- Editable gradient/pattern conversion during component import
+- Pattern rasterization
 - Full Image export parity for unsupported SVG features
-- Nested SVG viewport overflow clipping
 - Full `tspan` positioning and per-span styling
 - Text-on-path layout

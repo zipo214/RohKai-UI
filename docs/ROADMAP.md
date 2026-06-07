@@ -1,11 +1,13 @@
 # RohKai Roadmap
 
-## Current Active Work — Pre-Release Depth And SVG R1 Geometry
+## Current Active Work — Pre-Release Depth And SVG R6 Text Import
 
 - Keep RohKai on egui/eframe while closing reliability and feature-depth gaps.
 - SVG execution follows `docs/SVG_RENDERER_ROADMAP.md`: R0 metadata, shared
-  lengths, and the owned display-list boundary are complete; proceed through R1
-  geometry quality and R2 style/reference resolution.
+  microsyntax/style semantics, bounded references, R1 geometry, R3
+  linear/radial paint servers, R4 clipping/viewport-overflow/group-compositing,
+  and R5 PNG + baseline JPEG `data:` embedded images are complete; R6 text import
+  is next (progressive JPEG is a tracked deferred R5 follow-on).
 - Stage 15's general RohKai renderer is deferred and is not the current stage.
 
 ## Stage 0 — Bootstrap ✅
@@ -215,6 +217,8 @@
 - [x] Export injects descriptor `cargo_deps` into generated `Cargo.toml`
 - [x] Ply Button (`widgets/ply-button.rkwd`) as first shipped example
 - [x] Descriptor load errors shown in ribbon — non-fatal, app runs without them
+
+[//]: # (did ply button actually get implemented?)
 
 ## Stage 7.x - Widget Descriptor Maturity
 - [x] File → Import Widget Definition… dialog (load a single `.rkwd` without restart)
@@ -432,6 +436,13 @@ requiring schema changes.
 - [x] SVG R1 fill semantics — nonzero/evenodd winding behavior reaches the
       raster backend through inherited style and is protected by analytical
       and golden tests
+- [x] SVG R1 stroke geometry — retained path segments, local-space affine
+      stroke expansion, cap/join/miter semantics, dash arrays/offsets,
+      `pathLength` calibration, zero-length caps, transformed bounds, and
+      visible complexity-limit diagnostics
+- [x] SVG R1 anti-aliasing — deterministic 8x8 fill winding/parity coverage and
+      separate unioned stroke coverage, protected by analytical, golden,
+      determinism, and coarse performance tests
 - [x] Golden renderer fixture harness for supported raster output —
       `src/canvas/svg_golden.rs` (#[cfg(test)]); deterministic ASCII-grid
       signatures, supported + unsupported buckets, drift-detecting tests; zero
@@ -625,7 +636,7 @@ See `docs/STAGE11_PLAN.md` for the full design (function, depth, UX, impact).
 ---
 
 ## Stage 13 — Data & Integration
-- [ ] DB connection configurator — SQLite/PostgreSQL/MySQL
+- [ ] DB connection configurator — SQLite/PostgreSQL/MySQL/Supabase
 - [ ] Uses sqlx or rusqlite crate (user approves exact crate at stage start)
 - [ ] Visual query builder — select table, columns, filter
 - [ ] Bind widget to query result field

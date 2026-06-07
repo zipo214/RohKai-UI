@@ -56,6 +56,237 @@ pub fn parse_numbers(value: &str) -> Vec<f64> {
         .collect()
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SvgStyleDeclaration {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SvgCssSelector {
+    pub element: Option<String>,
+    pub id: Option<String>,
+    pub classes: Vec<String>,
+}
+
+impl SvgCssSelector {
+    pub fn specificity(&self) -> [u16; 3] {
+        [
+            u16::from(self.id.is_some()),
+            self.classes.len().min(u16::MAX as usize) as u16,
+            u16::from(self.element.is_some()),
+        ]
+    }
+
+    pub fn matches(&self, element: &str, id: Option<&str>, classes: &str) -> bool {
+        if self
+            .element
+            .as_deref()
+            .is_some_and(|expected| !expected.eq_ignore_ascii_case(element))
+        {
+            return false;
+        }
+        if self
+            .id
+            .as_deref()
+            .is_some_and(|expected| id != Some(expected))
+        {
+            return false;
+        }
+        self.classes.iter().all(|expected| {
+            classes
+                .split_ascii_whitespace()
+                .any(|class| class == expected)
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SvgCssRule {
+    pub selectors: Vec<SvgCssSelector>,
+    pub declarations: Vec<SvgStyleDeclaration>,
+    pub source_order: usize,
+}
+
+impl SvgCssRule {
+    pub fn matching_specificity(
+        &self,
+        element: &str,
+        id: Option<&str>,
+        classes: &str,
+    ) -> Option<[u16; 3]> {
+        self.selectors
+            .iter()
+            .filter(|selector| selector.matches(element, id, classes))
+            .map(SvgCssSelector::specificity)
+            .max()
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SvgCssStyleSheet {
+    pub rules: Vec<SvgCssRule>,
+    pub unsupported_selector_count: usize,
+    pub malformed_rule_count: usize,
+    pub dropped_rule_count: usize,
+    pub dropped_declaration_count: usize,
+}
+
+pub fn parse_style_declarations(
+    input: &str,
+    max_declarations: usize,
+) -> (Vec<SvgStyleDeclaration>, usize) {
+    let mut declarations = Vec::new();
+    let mut dropped = 0;
+    for declaration in input.split(';') {
+        let Some((name, value)) = declaration.split_once(':') else {
+            if !declaration.trim().is_empty() {
+                dropped += 1;
+            }
+            continue;
+        };
+        let name = name.trim().to_ascii_lowercase();
+        let value = value.trim();
+        if name.is_empty() || value.is_empty() || value.contains("!important") {
+            dropped += 1;
+            continue;
+        }
+        if declarations.len() >= max_declarations {
+            dropped += 1;
+            continue;
+        }
+        declarations.push(SvgStyleDeclaration {
+            name,
+            value: value.to_owned(),
+        });
+    }
+    (declarations, dropped)
+}
+
+pub fn parse_css_stylesheet(
+    input: &str,
+    max_rules: usize,
+    max_declarations: usize,
+) -> SvgCssStyleSheet {
+    let mut sheet = SvgCssStyleSheet::default();
+    let mut source_order = 0;
+    let mut rest = input;
+    while let Some(open) = rest.find('{') {
+        let selector_text = rest[..open].trim();
+        let body = &rest[open + 1..];
+        let Some(close) = body.find('}') else {
+            sheet.malformed_rule_count += 1;
+            break;
+        };
+        rest = &body[close + 1..];
+        let declarations_text = &body[..close];
+        if selector_text.is_empty() {
+            sheet.malformed_rule_count += 1;
+            continue;
+        }
+        let mut selectors = Vec::new();
+        for selector in selector_text.split(',') {
+            match parse_tier1_selector(selector.trim()) {
+                Some(selector) => selectors.push(selector),
+                None => sheet.unsupported_selector_count += 1,
+            }
+        }
+        if selectors.is_empty() {
+            continue;
+        }
+        let remaining = max_declarations.saturating_sub(
+            sheet
+                .rules
+                .iter()
+                .map(|rule| rule.declarations.len())
+                .sum::<usize>(),
+        );
+        let (declarations, dropped) = parse_style_declarations(declarations_text, remaining);
+        sheet.dropped_declaration_count += dropped;
+        if declarations.is_empty() {
+            continue;
+        }
+        if sheet.rules.len() >= max_rules {
+            sheet.dropped_rule_count += 1;
+            continue;
+        }
+        sheet.rules.push(SvgCssRule {
+            selectors,
+            declarations,
+            source_order,
+        });
+        source_order += 1;
+    }
+    sheet
+}
+
+fn parse_tier1_selector(input: &str) -> Option<SvgCssSelector> {
+    if input.is_empty()
+        || input.chars().any(|c| {
+            c.is_ascii_whitespace() || matches!(c, '>' | '+' | '~' | '[' | ']' | ':' | '*' | '|')
+        })
+    {
+        return None;
+    }
+    let bytes = input.as_bytes();
+    let mut index = 0;
+    let mut element = None;
+    let mut id = None;
+    let mut classes = Vec::new();
+    if bytes
+        .first()
+        .is_some_and(|byte| is_css_identifier_start(*byte as char))
+    {
+        let end = scan_css_identifier(input, index);
+        element = Some(input[index..end].to_ascii_lowercase());
+        index = end;
+    }
+    while index < input.len() {
+        let marker = bytes[index] as char;
+        if marker != '.' && marker != '#' {
+            return None;
+        }
+        index += 1;
+        let end = scan_css_identifier(input, index);
+        if end == index {
+            return None;
+        }
+        let name = input[index..end].to_owned();
+        if marker == '#' {
+            if id.replace(name).is_some() {
+                return None;
+            }
+        } else if !classes.contains(&name) {
+            classes.push(name);
+        }
+        index = end;
+    }
+    (element.is_some() || id.is_some() || !classes.is_empty()).then_some(SvgCssSelector {
+        element,
+        id,
+        classes,
+    })
+}
+
+fn scan_css_identifier(input: &str, mut index: usize) -> usize {
+    while index < input.len() {
+        let c = input.as_bytes()[index] as char;
+        if !is_css_identifier_char(c) {
+            break;
+        }
+        index += 1;
+    }
+    index
+}
+
+fn is_css_identifier_start(c: char) -> bool {
+    c.is_ascii_alphabetic() || matches!(c, '_' | '-')
+}
+
+fn is_css_identifier_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '_' | '-')
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SvgLengthUnit {
     Number,
@@ -430,6 +661,26 @@ impl Affine2D {
         (x as f32, y as f32)
     }
 
+    pub fn inverse(self) -> Option<Self> {
+        let determinant = self.a * self.d - self.b * self.c;
+        if !determinant.is_finite() || determinant.abs() <= 1.0e-15 {
+            return None;
+        }
+        let inverse = 1.0 / determinant;
+        let out = Self {
+            a: self.d * inverse,
+            b: -self.b * inverse,
+            c: -self.c * inverse,
+            d: self.a * inverse,
+            e: (self.c * self.f - self.d * self.e) * inverse,
+            f: (self.b * self.e - self.a * self.f) * inverse,
+        };
+        [out.a, out.b, out.c, out.d, out.e, out.f]
+            .into_iter()
+            .all(f64::is_finite)
+            .then_some(out)
+    }
+
     pub fn is_finite(self) -> bool {
         self.a.is_finite()
             && self.b.is_finite()
@@ -453,19 +704,22 @@ impl Affine2D {
         )
     }
 
-    pub fn parse_transform(value: &str) -> Self {
+    pub fn parse_transform_checked(value: &str) -> Option<Self> {
         let mut rest = value.trim();
         let mut out = Self::IDENTITY;
 
-        while let Some(paren) = rest.find('(') {
+        if rest.is_empty() {
+            return Some(out);
+        }
+
+        while !rest.is_empty() {
+            let paren = rest.find('(')?;
             let name = rest[..paren].trim().to_ascii_lowercase();
             let after = &rest[paren + 1..];
-            let Some(end) = after.find(')') else {
-                break;
-            };
-            let nums = parse_numbers(&after[..end]);
+            let end = after.find(')')?;
+            let nums = parse_number_list_strict(&after[..end])?;
             let local = match name.as_str() {
-                "matrix" if nums.len() >= 6 => Self {
+                "matrix" if nums.len() == 6 => Self {
                     a: nums[0],
                     b: nums[1],
                     c: nums[2],
@@ -473,33 +727,76 @@ impl Affine2D {
                     e: nums[4],
                     f: nums[5],
                 },
-                "translate" if !nums.is_empty() => {
+                "translate" if matches!(nums.len(), 1 | 2) => {
                     Self::translate(nums[0], *nums.get(1).unwrap_or(&0.0))
                 }
-                "scale" if !nums.is_empty() => {
+                "scale" if matches!(nums.len(), 1 | 2) => {
                     Self::scale(nums[0], *nums.get(1).unwrap_or(&nums[0]))
                 }
-                "rotate" if !nums.is_empty() => {
-                    if nums.len() >= 3 {
+                "rotate" if matches!(nums.len(), 1 | 3) => {
+                    if nums.len() == 3 {
                         Self::rotate_about(nums[0], nums[1], nums[2])
                     } else {
                         Self::rotate(nums[0])
                     }
                 }
-                "skewx" if !nums.is_empty() => Self::skew_x(nums[0]),
-                "skewy" if !nums.is_empty() => Self::skew_y(nums[0]),
-                _ => Self::IDENTITY,
+                "skewx" if nums.len() == 1 => Self::skew_x(nums[0]),
+                "skewy" if nums.len() == 1 => Self::skew_y(nums[0]),
+                _ => return None,
             };
+            if [local.a, local.b, local.c, local.d, local.e, local.f]
+                .into_iter()
+                .any(|number| !number.is_finite())
+            {
+                return None;
+            }
             out = out.multiply(local);
-            rest = &after[end + 1..];
+            rest = after[end + 1..].trim_start();
+            if let Some(after_comma) = rest.strip_prefix(',') {
+                rest = after_comma.trim_start();
+            }
         }
 
-        out
+        Some(out)
+    }
+
+    pub fn parse_transform(value: &str) -> Self {
+        Self::parse_transform_checked(value).unwrap_or(Self::IDENTITY)
     }
 
     pub fn parse_chained(value: &str) -> Self {
         Self::parse_transform(value)
     }
+}
+
+fn parse_number_list_strict(value: &str) -> Option<Vec<f64>> {
+    let bytes = value.as_bytes();
+    let mut out = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        while index < bytes.len()
+            && ((bytes[index] as char).is_ascii_whitespace() || bytes[index] == b',')
+        {
+            index += 1;
+        }
+        if index == bytes.len() {
+            break;
+        }
+        let start = index;
+        if !is_number_start(bytes[index] as char) {
+            return None;
+        }
+        index = scan_number_end(value, index);
+        if index == start {
+            return None;
+        }
+        let number = value[start..index].parse::<f64>().ok()?;
+        if !number.is_finite() {
+            return None;
+        }
+        out.push(number);
+    }
+    Some(out)
 }
 
 fn parse_hex_color(hex: &str) -> Option<Rgba> {
@@ -694,6 +991,48 @@ mod tests {
     }
 
     #[test]
+    fn tier1_css_parses_grouped_compound_selectors_and_specificity() {
+        let sheet = parse_css_stylesheet(
+            "rect, .hot { fill: red; } rect.hot#hero { stroke: blue; }",
+            16,
+            32,
+        );
+
+        assert_eq!(sheet.unsupported_selector_count, 0);
+        assert_eq!(sheet.rules.len(), 2);
+        assert_eq!(
+            sheet.rules[1].matching_specificity("rect", Some("hero"), "hot"),
+            Some([1, 1, 1])
+        );
+        assert_eq!(
+            sheet.rules[0].matching_specificity("rect", Some("hero"), "hot"),
+            Some([0, 1, 0])
+        );
+    }
+
+    #[test]
+    fn tier1_css_rejects_complex_selectors_and_important() {
+        let sheet = parse_css_stylesheet(
+            "g > rect { fill: red; } .ok { stroke: blue !important; fill: green; }",
+            16,
+            32,
+        );
+
+        assert_eq!(sheet.unsupported_selector_count, 1);
+        assert_eq!(sheet.rules.len(), 1);
+        assert_eq!(sheet.rules[0].declarations.len(), 1);
+        assert_eq!(sheet.dropped_declaration_count, 1);
+    }
+
+    #[test]
+    fn tier1_css_honors_rule_and_declaration_budgets() {
+        let sheet = parse_css_stylesheet(".a { fill:red; stroke:blue; } .b { fill:green; }", 1, 1);
+
+        assert_eq!(sheet.rules.len(), 1);
+        assert!(sheet.dropped_rule_count > 0 || sheet.dropped_declaration_count > 0);
+    }
+
+    #[test]
     fn parses_and_resolves_svg_lengths() {
         let context = SvgLengthContext::user_units(200.0);
         assert_eq!(resolve_length("25%", context), Some(50.0));
@@ -846,5 +1185,27 @@ mod tests {
 
         assert!((x - 10.0).abs() < 0.001);
         assert!((y - 20.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn affine_inverse_round_trips_points_and_rejects_singular_matrices() {
+        let matrix = Affine2D::translate(10.0, -3.0)
+            .multiply(Affine2D::rotate(27.0))
+            .multiply(Affine2D::scale(2.0, 0.5));
+        let point = matrix.apply(4.0, 9.0);
+        let restored = matrix.inverse().unwrap().apply(point.0, point.1);
+
+        assert!((restored.0 - 4.0).abs() < 1.0e-9);
+        assert!((restored.1 - 9.0).abs() < 1.0e-9);
+        assert!(Affine2D::scale(0.0, 1.0).inverse().is_none());
+    }
+
+    #[test]
+    fn checked_transform_parser_rejects_malformed_or_unknown_functions() {
+        assert!(Affine2D::parse_transform_checked("translate(2 3) rotate(45)").is_some());
+        assert!(Affine2D::parse_transform_checked("translate(nope)").is_none());
+        assert!(Affine2D::parse_transform_checked("matrix(1 0 0 1 2)").is_none());
+        assert!(Affine2D::parse_transform_checked("warp(1 2)").is_none());
+        assert!(Affine2D::parse_transform_checked("scale(2) trailing").is_none());
     }
 }
