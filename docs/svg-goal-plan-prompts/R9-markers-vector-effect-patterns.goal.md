@@ -7,9 +7,12 @@ src/canvas/svg_rasterizer.rs (DisplayList build/execute, stroke geometry/flatten
 from R4/R7, PaintServerTable, render_shape, unsupported_tag_feature, is_container_tag), src/svg_core.rs
 (Affine2D, viewbox_transform), src/canvas/svg_golden.rs, src/codegen/export.rs (single-crate:: contract).
 Precondition: reuse R1 stroke flattening, R3 paint, R4 clip/offscreen — do not fork them.
+STATUS: vector-effect non-scaling-stroke is DONE + committed (61f3d66: VectorEffect enum,
+effective_device_stroke, vector_effect.unsupported diag, golden r9_non_scaling_stroke + 2 tests).
+Implement ONLY markers + pattern tiling; do not redo vector-effect.
 
-Goal: implement R9 markers + vector-effect + pattern tiling end to end, rendering visibly in BOTH in-app and
-export-embedded rasterizers. No new crates. Bounded + deterministic + diagnosed.
+Goal: implement R9 markers + pattern tiling end to end (vector-effect already done), rendering visibly
+in BOTH in-app and export-embedded rasterizers. No new crates. Bounded + deterministic + diagnosed.
 
 Before coding, derive + REPORT from code:
 1. where flattened path vertices/tangents are available (for marker placement) and how strokes lower
@@ -22,8 +25,8 @@ Required:
    (angle | auto | auto-start-reverse from segment tangents), markerUnits (strokeWidth|userSpaceOnUse),
    marker viewBox/refX/refY/markerWidth/markerHeight + overflow clip. Bounded marker count (cap +
    limit.* diagnostic). Render through the display list.
-2. vector-effect: non-scaling-stroke — stroke width stays constant in device space regardless of CTM scale
-   (expand stroke after, not before, the transform). Diagnose other vector-effect values.
+2. [DONE in 61f3d66] vector-effect: non-scaling-stroke renders constant device-space width + diagnoses
+   other values. Skip — retained here only for lane provenance.
 3. Patterns: real tiling via the R7 offscreen — patternUnits/patternContentUnits/viewBox/patternTransform,
    nested content rendered once to a tile then repeated across the fill bbox; bounded tile count/pixels with
    limit.* on truncation. Flip pattern from diagnosed->rendered; keep diagnostics for unsupported sub-attrs.
