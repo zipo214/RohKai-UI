@@ -22,7 +22,7 @@ capabilities where required.
 
 | Feature | Current Depth | What It Does Now | Gap |
 |---|---:|---|---|
-| Security gate | 4 | Rejects DOCTYPE/entities and guards unsupported risky input. | Needs broader fuzz corpus and size/resource telemetry. |
+| Security gate | 4 | Rejects DOCTYPE/entities and guards unsupported risky input; R8.1 deterministic fuzz harness (XML/path/PNG/JPEG/inflate, seed corpus) + memory-cap regressions assert no-panic/bounded output. | Broader licensed corpus + size/resource telemetry remain. |
 | Import parser | 3 | Handles common shapes, paths, groups, style subset, transforms, `use`, metadata. | Needs richer CSS, text/tspan, clipping/masking behavior, and report UI. |
 | Diagnostics | 3-4 | Structured warnings/errors/fidelity for many unsupported buckets; raster node diagnostics carry stable node IDs and source byte spans. | Needs R8 UI surfacing and per-element remediation suggestions. |
 | Source preservation | 4 | Original SVG preserved beside imported template and in Image widgets. | Needs source diff/viewer integration polish. |
@@ -53,7 +53,7 @@ capabilities where required.
 
 | Capability | RohKai Current | Ideal |
 |---|---|---|
-| XML/security | Hardened subset | Full safe XML gate with fuzzing and resource budgets. |
+| XML/security | Hardened subset + R8.1 deterministic fuzz harness over parsers/decoders | Full safe XML gate with fuzzing and resource budgets. |
 | CSS cascade | Inline/simple style subset | Selectors, inheritance, specificity for supported properties. |
 | Paths | Shared tokenizer, retained command semantics, nonzero/evenodd fills, affine cap/join/miter/dash strokes, transformed stroke bounds, and anti-aliased coverage | Reusable exact curve/arc fill bounds, markers, vector effects, exact SVG `arcs` joins, and broader conformance corpus. |
 | Paint | Solid colors/opacity plus deterministic linear/radial gradient fills and strokes; patterns are explicit transparent unsupported paint servers | Pattern tiling, color-space policy, and broader conformance corpus. |

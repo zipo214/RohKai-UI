@@ -7,6 +7,24 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-07 — SVG R8.1 Conformance + Security Hardening (post-R8 lane 1/5)
+
+On `dev`. Post-R8 lanes now have paste-ready goal prompts in
+`docs/svg-goal-plan-prompts/` (R8.1, R9–R12, each ≤4000 chars) and an auto-read
+protocol in CLAUDE.md/AGENTS.md (read the lane prompt before starting it).
+**R8.1 shipped**: in-repo deterministic fuzz harness in
+`src/canvas/svg_rasterizer.rs` test module (`fuzz_rng`/`fuzz_mutate`/`fuzz_drive`/
+`fuzz_run` + `fuzz_smoke_decoders_never_panic` always-run and
+`fuzz_decoders_no_panic_bounded` ignored 8k sweep), seed corpus in
+`tests/fixtures/svg_fuzz/` (seed.svg, seed_path.txt); 9 new `w3c_*` ASCII goldens
+filling feature gaps (currentColor, rgb(), fill-opacity, use, nested transform,
+polyline, circle, ellipse, alpha mask) in `src/canvas/svg_golden.rs`; memory-cap
+regressions (oversized canvas/document, path-token flood, inflate ceiling); new
+`docs/SVG_PRECISION_AND_BENCH.md` precision+benchmark policy (flags sRGB-vs-
+linearRGB filter boundary as the R10 gap). No new deps; both embedded sources
+stay std-only. Next lane: **R9** (markers/vector-effect/patterns) — read
+`docs/svg-goal-plan-prompts/R9-markers-vector-effect-patterns.goal.md` first.
+
 ## 2026-06-06 — SVG R8 Conformance + Report UI (roadmap R0–R8 closed)
 
 On `dev`, SVG R8 closes the renderer roadmap. New `src/panels/svg_report.rs`:

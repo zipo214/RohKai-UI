@@ -114,8 +114,9 @@ Core features implemented:
   requires invariant tests instead of fixing only the obvious surface.
 - For SVG/Image work, `svg-zero-dep` is a relevant skill and must be read.
 - SVG renderer roadmap step protocol: before starting ANY SVG renderer lane
-  (R0–R8 are done; remaining lanes are R8.1, R9, R10, R11, R12), FIRST read that
-  lane's paste-ready goal prompt in
+  (R0–R8 and R8.1 are done; remaining lanes are R9, R10, R11, R12, plus the
+  optional R8.2 deep-fuzz hardening lane that does not block the others), FIRST
+  read that lane's paste-ready goal prompt in
   `docs/svg-goal-plan-prompts/<lane>-*.goal.md` (e.g. `R9-*.goal.md`) and follow
   it exactly: derive source-of-truth paths before coding, render in BOTH the
   in-app and export-embedded rasterizers, add golden/unit tests + diagnostics +

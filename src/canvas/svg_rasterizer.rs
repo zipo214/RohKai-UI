@@ -9830,6 +9830,8 @@ mod tests {
         s
     }
 
+    // Parse/scene-build/raster/peak-alloc budgets + methodology:
+    // docs/SVG_PRECISION_AND_BENCH.md (measure-not-gate; budgets are targets).
     #[test]
     #[ignore = "perf benchmark; run with --ignored to measure parse+scene+raster time."]
     fn raster_benchmark_complex_scene_within_budget() {
@@ -9859,5 +9861,193 @@ mod tests {
         let a = rasterize(&svg, 256, 256).unwrap();
         let b = rasterize(&svg, 256, 256).unwrap();
         assert_eq!(a.pixels, b.pixels);
+    }
+
+    // --- R8.1: in-repo fuzz harness + memory/CPU cap regressions ------------
+    //
+    // The decoders below all consume untrusted bytes (SVG text, path data,
+    // base64/DEFLATE, PNG, JPEG). The harness mutates a fixed, checked-in seed
+    // corpus with a deterministic PRNG (no `rand`/clock dependency) so any CI
+    // run is byte-for-byte reproducible, and asserts the invariant every parser
+    // must hold: no panic, Err-or-bounded-Ok, bounded output.
+
+    /// Deterministic xorshift64* PRNG.
+    fn fuzz_rng(state: &mut u64) -> u64 {
+        let mut x = *state;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        *state = x;
+        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    /// Mutate a seed buffer with a bounded number of byte edits.
+    fn fuzz_mutate(seed: &[u8], rng: &mut u64) -> Vec<u8> {
+        let mut out = seed.to_vec();
+        let edits = (fuzz_rng(rng) % 8) as usize + 1;
+        for _ in 0..edits {
+            if out.is_empty() {
+                out.push((fuzz_rng(rng) & 0xff) as u8);
+                continue;
+            }
+            let idx = (fuzz_rng(rng) as usize) % out.len();
+            match fuzz_rng(rng) % 5 {
+                0 => out[idx] ^= 1u8 << (fuzz_rng(rng) % 8),  // bit flip
+                1 => out[idx] = (fuzz_rng(rng) & 0xff) as u8, // byte replace
+                2 => out.insert(idx, (fuzz_rng(rng) & 0xff) as u8), // insert
+                3 => {
+                    out.remove(idx); // delete
+                }
+                _ => out.truncate(idx), // truncate tail
+            }
+        }
+        out
+    }
+
+    /// The checked-in seed corpus: a feature-dense SVG + a path string from
+    /// `tests/fixtures/svg_fuzz/`, plus the canonical PNG/JPEG payloads.
+    fn fuzz_seed_corpus() -> Vec<Vec<u8>> {
+        let svg = include_str!("../../tests/fixtures/svg_fuzz/seed.svg");
+        let path = include_str!("../../tests/fixtures/svg_fuzz/seed_path.txt");
+        let png = base64_decode(PNG_RGBA_2X2.strip_prefix("data:image/png;base64,").unwrap())
+            .expect("seed png decodes");
+        let jpeg = base64_decode(
+            JPEG_RED_444
+                .strip_prefix("data:image/jpeg;base64,")
+                .unwrap(),
+        )
+        .expect("seed jpeg decodes");
+        vec![svg.as_bytes().to_vec(), path.as_bytes().to_vec(), png, jpeg]
+    }
+
+    /// Feed one mutated buffer through every untrusted-input decoder, asserting
+    /// the no-panic / bounded-output contract for each path.
+    fn fuzz_drive(buf: &[u8]) {
+        if let Ok(text) = std::str::from_utf8(buf) {
+            // rasterize_or_fallback never errors and is bounded to the canvas.
+            let img = rasterize_or_fallback(text, 24, 24);
+            assert!(img.pixels.len() <= 24 * 24, "raster output bounded");
+            // The path tokenizer must not panic and stays under its token cap.
+            let pd = parse_path_d(text);
+            assert!(pd.subpaths.len() <= MAX_PATH_TOKENS, "path output bounded");
+        }
+        if let Ok(img) = decode_png(buf) {
+            assert!(
+                img.width * img.height <= MAX_IMAGE_PIXELS,
+                "png pixels bounded"
+            );
+            assert_eq!(
+                img.rgba.len(),
+                img.width * img.height * 4,
+                "png buffer exact"
+            );
+        }
+        if let Ok(img) = decode_jpeg(buf) {
+            assert!(
+                img.width * img.height <= MAX_IMAGE_PIXELS,
+                "jpeg pixels bounded"
+            );
+            assert_eq!(
+                img.rgba.len(),
+                img.width * img.height * 4,
+                "jpeg buffer exact"
+            );
+        }
+        if let Some(out) = inflate(buf, 4096) {
+            assert!(out.len() <= 4096, "inflate output bounded");
+        }
+    }
+
+    fn fuzz_run(iterations: usize) {
+        let corpus = fuzz_seed_corpus();
+        let mut rng: u64 = 0x9E37_79B9_7F4A_7C15;
+        for i in 0..iterations {
+            let seed = &corpus[i % corpus.len()];
+            let buf = fuzz_mutate(seed, &mut rng);
+            fuzz_drive(&buf);
+        }
+    }
+
+    /// Iteration count for the ignored sweep. Configurable via `ROHKAI_FUZZ_ITERS`
+    /// so the SAME harness covers the smoke/sweep/deep tiers without recompiling:
+    /// default `default`; `ROHKAI_FUZZ_ITERS=8000`/`50000` for a deeper run. The
+    /// fixed PRNG seed keeps any count byte-for-byte reproducible. Debug rasterize
+    /// is slow (~ms/iter) — run deep tiers under `--release`. See
+    /// docs/SVG_PRECISION_AND_BENCH.md.
+    fn fuzz_iters_from_env(default: usize) -> usize {
+        std::env::var("ROHKAI_FUZZ_ITERS")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(default)
+    }
+
+    #[test]
+    fn fuzz_smoke_decoders_never_panic() {
+        // Always-run: a few deterministic iterations across each seed.
+        fuzz_run(64);
+    }
+
+    #[test]
+    #[ignore = "fuzz: deterministic sweep over the seed corpus; run with --ignored (ROHKAI_FUZZ_ITERS to deepen)"]
+    fn fuzz_decoders_no_panic_bounded() {
+        // Default 1k keeps the debug ignored run bounded; raise via env + --release
+        // for an 8k/50k sweep (all reproducible from the fixed seed).
+        fuzz_run(fuzz_iters_from_env(1_000));
+    }
+
+    #[test]
+    fn oversized_canvas_request_is_clamped_not_allocated() {
+        // A 100k x 100k request (10^10 px) is clamped to the pixel cap rather
+        // than allocating the raw buffer.
+        let (w, h) = raster_size(100_000, 100_000);
+        assert!(w * h <= MAX_RASTER_PIXELS, "{w}x{h} exceeds raster cap");
+        let img = rasterize_or_fallback(
+            r##"<svg viewBox="0 0 4 4"><rect width="4" height="4" fill="red"/></svg>"##,
+            100_000,
+            100_000,
+        );
+        assert!(
+            img.pixels.len() <= MAX_RASTER_PIXELS,
+            "raster output bounded"
+        );
+    }
+
+    #[test]
+    fn oversized_svg_document_is_rejected_bounded() {
+        let huge = format!(
+            "<svg viewBox=\"0 0 4 4\">{}</svg>",
+            "z".repeat(MAX_SVG_BYTES)
+        );
+        assert!(huge.len() > MAX_SVG_BYTES);
+        assert!(
+            !svg_text_allowed(&huge),
+            "oversized document must be rejected"
+        );
+        // And the public entry falls back instead of processing it.
+        let img = rasterize_or_fallback(&huge, 8, 8);
+        assert!(!img.pixels.is_empty());
+    }
+
+    #[test]
+    fn path_token_flood_collapses_to_default() {
+        let flood = format!("M{}", "1 1 ".repeat(MAX_PATH_TOKENS + 50));
+        let pd = parse_path_d(&flood);
+        assert!(
+            pd.subpaths.is_empty(),
+            "token flood must collapse to default"
+        );
+    }
+
+    #[test]
+    fn inflate_respects_output_ceiling() {
+        // Stored-block stream: "hello" (5 bytes).
+        let data = [0x01, 0x05, 0x00, 0xfa, 0xff, b'h', b'e', b'l', b'l', b'o'];
+        assert_eq!(inflate(&data, 64).as_deref(), Some(&b"hello"[..]));
+        // A ceiling below the payload returns None, not a full allocation.
+        assert!(
+            inflate(&data, 2).is_none(),
+            "inflate must honor the ceiling"
+        );
     }
 }

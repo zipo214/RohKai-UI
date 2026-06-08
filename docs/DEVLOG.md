@@ -2,6 +2,49 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-07 — SVG R8.1: Conformance + Security Hardening (post-R8 lane 1/5)
+
+### Context Reviewed Before Editing
+- `CLAUDE.md`/`AGENTS.md` SVG roadmap step protocol; `svg-zero-dep` skill
+- `docs/svg-goal-plan-prompts/R8.1-conformance-security-hardening.goal.md`
+- `docs/SVG_RENDERER_ROADMAP.md` Post-R8 gap matrix + lanes
+- `src/canvas/svg_rasterizer.rs` (decoders: `decode_png`/`decode_jpeg`/`inflate`/
+  `base64_decode`/`parse_path_d`/`rasterize_or_fallback`; caps; bench/oracle),
+  `src/canvas/svg_golden.rs` (golden harness + fixtures)
+
+### Changes
+- Generated paste-ready post-R8 goal prompts (R8.1, R9–R12, each ≤4000 chars) +
+  README run-order; added the auto-read "SVG renderer roadmap step protocol" to
+  CLAUDE.md and AGENTS.md. (commit `8f52a8e`)
+- **Fuzz harness** (in `svg_rasterizer.rs` test module): deterministic xorshift
+  PRNG (`fuzz_rng`), bounded byte mutator (`fuzz_mutate`), `fuzz_drive` runs each
+  mutated buffer through rasterize_or_fallback / parse_path_d / decode_png /
+  decode_jpeg / inflate asserting no-panic + bounded output, over a checked-in
+  seed corpus (`tests/fixtures/svg_fuzz/seed.svg` + `seed_path.txt` + the PNG/JPEG
+  payload consts). `fuzz_smoke_decoders_never_panic` (always-run, 64 iters) +
+  `fuzz_decoders_no_panic_bounded` (ignored, 8k iters, validated at 50k).
+- **Curated W3C-1.1 subset goldens** (9) in `svg_golden.rs`: currentColor, rgb(),
+  fill-opacity, `<use>`, nested-group transform, polyline, circle, ellipse,
+  `mask-type="alpha"`. Crisp predictions matched the renderer exactly; AA disc
+  signatures baked from captured output.
+- **Memory-cap regressions**: oversized canvas request clamped (not allocated),
+  oversized document rejected, path-token flood → empty default, inflate output
+  ceiling honored.
+- **Docs**: new `docs/SVG_PRECISION_AND_BENCH.md` (coverage grid, nearest
+  sampling, premultiplied/sRGB vs linearRGB boundary — flags filters-run-in-sRGB
+  as the R10 gap; benchmark budgets + methodology). Flipped R8.1 gap rows + lane
+  bullet + maturity assessment in the roadmap; updated feature-evaluation.
+
+### Verification
+- `cargo fmt --check`, `cargo check`, `cargo test` (302 pass / 6 ignored),
+  `cargo clippy --all-targets -- -D warnings`, `cargo test -- --ignored`
+  (fuzz + bench + oracle), validate-svg-import.ps1, check-text-encoding.ps1.
+
+### Risks / Follow-ups
+- Goldens for circle/ellipse are renderer-defined (golden workflow): they catch
+  regressions, not absolute AA correctness. Crisp goldens validate correctness.
+- Next lane: **R9** (markers/vector-effect/patterns). Read its goal prompt first.
+
 ## 2026-06-06 — SVG R8: Conformance, Benchmark, Report UI (roadmap R0–R8 closed)
 
 ### Context Reviewed Before Editing

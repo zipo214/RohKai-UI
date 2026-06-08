@@ -39,11 +39,23 @@ prompt before starting (per the SVG roadmap step protocol in CLAUDE.md/AGENTS.md
 
 | Lane | File | Theme |
 |---|---|---|
-| R8.1 | [R8.1-conformance-security-hardening.goal.md](R8.1-conformance-security-hardening.goal.md) | in-repo fuzz harness, W3C-subset corpus, benchmark methodology, precision policy |
+| R8.1 ✅ | [R8.1-conformance-security-hardening.goal.md](R8.1-conformance-security-hardening.goal.md) | in-repo fuzz harness, W3C-subset corpus, benchmark methodology, precision policy |
 | R9 | [R9-markers-vector-effect-patterns.goal.md](R9-markers-vector-effect-patterns.goal.md) | markers (start/mid/end, orient), non-scaling-stroke, pattern tiling |
 | R10 | [R10-filter-correctness-tier2.goal.md](R10-filter-correctness-tier2.goal.md) | linearRGB filters, precise filter region, tier-2 primitives, blend modes |
 | R11 | [R11-raster-text-textpath.goal.md](R11-raster-text-textpath.goal.md) | opt-in raster text + textPath via a bundled zero-dep vector glyph set |
 | R12 | [R12-namespace-recovery-a11y.goal.md](R12-namespace-recovery-a11y.goal.md) | bounded namespace model, malformed-document recovery, title/desc a11y metadata |
+
+**Optional hardening (parallel — does not block the order above):**
+
+| Lane | File | Theme |
+|---|---|---|
+| R8.2 | [R8.2-deep-fuzz-ci-coverage.goal.md](R8.2-deep-fuzz-ci-coverage.goal.md) | structure-aware mutators, directory seed corpus, release/nightly deep-fuzz + coverage workflow (all zero-dep) |
+
+R8.2 extends R8.1's fuzz harness into a deeper continuous capability. It depends
+on R8.1 but is **optional** and can run anytime — the main lane order stays
+R9 → R10 → R11 → R12. The R8.1 harness already ships a fixed-seed sweep whose
+depth is env-configurable (`ROHKAI_FUZZ_ITERS`); R8.2 is only needed when a
+release nightly / coverage-tracked deep-fuzz job is wanted.
 
 ## Why one phase per goal
 

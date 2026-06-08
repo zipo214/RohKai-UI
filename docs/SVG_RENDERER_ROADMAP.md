@@ -811,20 +811,33 @@ deferred; **extra-roadmap** = a real gap the roadmap never represented.
 | Blend modes (mix-blend-mode) | normal over only | full isolation/blend | P2/P3 | implementation | extra-roadmap | tier-2 with feBlend (R10) |
 | CSS combinators/@media/vars | tier-1 selectors only | descendant/child/attr/pseudo, @media, custom props | P2/P3 | implementation | intra-roadmap (only justified tiers) | implement only fixture-justified tiers |
 | Color management (ICC) | sRGB assumed | ICC/`color-interpolation` | P4 | conformance | extra-roadmap | reject (out of scope) |
-| Conformance corpus validation | per-feature goldens; no W3C subset | W3C test-suite + reference oracles | P1 | conformance/testing | partially (R8 stand-in) | implement curated subset (R8.1) |
-| Fuzzing | none | fuzzed parsers/decoders | P0/P1 | testing/security | extra-roadmap | implement fuzz harness (R8.1) |
-| Benchmark methodology | one ignored bench + smoke | documented parse/scene/raster/alloc budgets | P2 | performance/testing | partially (R8) | document + expand (R8.1) |
-| Rendering precision policy | 8x8 coverage; nearest image/chroma | documented AA/gamma policy | P2 | docs/fidelity | extra-roadmap | document policy (R8.1) |
+| Conformance corpus validation | per-feature goldens + curated W3C-1.1 subset | W3C test-suite + reference oracles | P1 | conformance/testing | yes (R8.1 curated subset) | DONE (R8.1); broader licensed corpus future |
+| Fuzzing | in-repo deterministic fuzz harness (XML/path/PNG/JPEG/inflate) | fuzzed parsers/decoders | P0/P1 | testing/security | yes (R8.1 smoke + ignored sweep) | DONE (R8.1) |
+| Benchmark methodology | documented parse/scene/raster/alloc budgets + memory-cap tests | budgets + regression tests | P2 | performance/testing | yes (R8.1) | DONE (R8.1, docs/SVG_PRECISION_AND_BENCH.md) |
+| Rendering precision policy | documented coverage/sampling/premul-sRGB-vs-linearRGB policy | documented AA/gamma policy | P2 | docs/fidelity | yes (R8.1 policy doc) | DONE (R8.1); linearRGB filter boundary = R10 |
 | Sub-byte/interlaced PNG, progressive JPEG | diagnosed | supported | P3 | implementation | intra-roadmap deferred | defer (diagnosed) |
 
 ### Proposed Future Lanes (all dependency-free, secure, deterministic, bounded)
 
-- **R8.1 — Conformance & security hardening** (P0/P1; depends R0-R8):
-  in-repo fuzz harness for the XML parser, path tokenizer, PNG/JPEG decoders, and
-  DEFLATE inflater (random + mutated corpus, asserts no panic / bounded output);
-  a curated W3C-1.1-subset golden corpus with an optional dev-only external-oracle
-  diff (CI artifact); documented benchmark methodology + memory-cap tests; a
-  written rendering-precision/AA policy. No runtime deps.
+- **R8.1 — Conformance & security hardening** — ✅ DONE (P0/P1; depends R0-R8):
+  in-repo deterministic fuzz harness (`fuzz_*` in `svg_rasterizer.rs`, seed corpus
+  in `tests/fixtures/svg_fuzz/`) over the XML parser, path tokenizer, PNG/JPEG
+  decoders, and DEFLATE inflater — fixed-seed xorshift mutation, asserts no panic /
+  bounded output / Err-or-bounded-Ok; always-run smoke + ignored 50k sweep. Curated
+  W3C-1.1-subset golden corpus (`w3c_*` fixtures: currentColor, rgb(), fill-opacity,
+  use, nested transform, polyline, circle, ellipse, alpha mask). Memory-cap
+  regression tests (oversized canvas/document, path-token flood, inflate ceiling).
+  Documented benchmark methodology + rendering-precision policy in
+  `docs/SVG_PRECISION_AND_BENCH.md` (flags the sRGB-vs-linearRGB filter boundary as
+  the R10 gap). Dev-only external-oracle diff documented as a CI artifact, never a
+  runtime dep. No new dependencies.
+- **R8.2 — Deep-fuzz / CI / coverage** (OPTIONAL hardening; depends R8.1; does NOT
+  block R9-R12): extend the R8.1 harness with deterministic structure-aware
+  mutators (path-token / XML-token / PNG-chunk / JPEG-marker level), a
+  directory-driven seed corpus, and a documented release nightly + coverage
+  workflow (still zero-dep — no cargo-fuzz/libfuzzer). The R8.1 sweep is already
+  env-configurable (`ROHKAI_FUZZ_ITERS`); R8.2 is only needed when a continuous
+  deep-fuzz job is wanted. Prompt: `R8.2-deep-fuzz-ci-coverage.goal.md`.
 - **R9 — Markers, vector-effect, patterns** (P1/P2; depends R1 stroke + R3 paint +
   R4 IR): marker placement on path vertices (start/mid/end, orient incl.
   `auto`/`auto-start-reverse`, markerUnits, marker viewBox); `vector-effect:
@@ -875,11 +888,12 @@ deferred; **extra-roadmap** = a real gap the roadmap never represented.
   of most static SVG (geometry, gradients, clips, masks, filter tier-1, PNG+JPEG
   images). Blockers to "achieved": markers, patterns, vector-effect (R9) and
   raster text (R11) — features common in real-world UI/diagram SVGs.
-- **Renderer-grade (resvg/librsvg-class): not yet.** Requires R9-R12 plus R8.1:
-  linearRGB filters + precise regions (R10), namespace model + malformed recovery
-  (R12), and a W3C-subset conformance corpus + fuzzing (R8.1). Until then,
+- **Renderer-grade (resvg/librsvg-class): not yet.** R8.1 (W3C-subset conformance
+  corpus + fuzzing + precision policy) is **done**; still requires R9-R12:
+  markers/patterns/vector-effect (R9), linearRGB filters + precise regions (R10),
+  raster text (R11), namespace model + malformed recovery (R12). Until then,
   "renderer-grade" is not claimed.
 
-Next maturity step (application → renderer grade): **R8.1 (conformance/fuzz) →
+Next maturity step (application → renderer grade): **R8.1 (conformance/fuzz) ✅ →
 R9 (markers/patterns/vector-effect) → R10 (filter correctness) → R11 (raster
-text) → R12 (namespace/robustness/a11y)**, in that order.
+text) → R12 (namespace/robustness/a11y)**. R8.1 complete; R9 is next.

@@ -291,6 +291,84 @@ pub fn fixtures() -> Vec<GoldenFixture> {
             height: 4,
             golden: "RRRR\nRRRR\nRRRR\nRRRR",
         },
+        // -------------------------------------------------------------------
+        // R8.1: curated W3C SVG 1.1 sub-corpus filling feature gaps so every
+        // supported feature has a visual golden (paint/shape/structure/mask).
+        // -------------------------------------------------------------------
+        GoldenFixture {
+            // W3C paint-server: `currentColor` resolves from inherited `color`.
+            name: "w3c_current_color_inherits",
+            svg: r##"<svg viewBox="0 0 4 4" color="#ff0000"><rect width="4" height="4" fill="currentColor"/></svg>"##,
+            width: 4,
+            height: 4,
+            golden: "RRRR\nRRRR\nRRRR\nRRRR",
+        },
+        GoldenFixture {
+            // W3C color: functional rgb() notation parses to a solid paint.
+            name: "w3c_rgb_func_color",
+            svg: r##"<svg viewBox="0 0 4 4"><rect width="4" height="4" fill="rgb(0,0,255)"/></svg>"##,
+            width: 4,
+            height: 4,
+            golden: "BBBB\nBBBB\nBBBB\nBBBB",
+        },
+        GoldenFixture {
+            // W3C opacity: fill-opacity buckets to partial alpha (not full).
+            name: "w3c_fill_opacity_half",
+            svg: r##"<svg viewBox="0 0 4 4"><rect width="4" height="4" fill="#00ff00" fill-opacity="0.5"/></svg>"##,
+            width: 4,
+            height: 4,
+            golden: "oooo\noooo\noooo\noooo",
+        },
+        GoldenFixture {
+            // W3C structure: <use> instances a referenced rect, offset by x.
+            name: "w3c_use_references_rect",
+            svg: r##"<svg viewBox="0 0 4 4"><defs><rect id="r" width="2" height="4" fill="#ff0000"/></defs><use href="#r" x="2" y="0"/></svg>"##,
+            width: 4,
+            height: 4,
+            golden: "..RR\n..RR\n..RR\n..RR",
+        },
+        GoldenFixture {
+            // W3C coordinate systems: nested group transforms concatenate, placing
+            // a 2x2 fill in the bottom-right quadrant.
+            name: "w3c_nested_group_transform",
+            svg: r##"<svg viewBox="0 0 4 4"><g transform="translate(2,0)"><g transform="translate(0,2)"><rect width="2" height="2" fill="#0000ff"/></g></g></svg>"##,
+            width: 4,
+            height: 4,
+            golden: "....\n....\n..BB\n..BB",
+        },
+        GoldenFixture {
+            // W3C basic shapes: <polyline> stroked horizontally.
+            name: "w3c_polyline_stroke",
+            svg: r##"<svg viewBox="0 0 4 4"><polyline points="0,2 4,2" fill="none" stroke="#0000ff" stroke-width="2"/></svg>"##,
+            width: 4,
+            height: 4,
+            golden: "....\nBBBB\nBBBB\n....",
+        },
+        GoldenFixture {
+            // W3C basic shapes: <circle> fill (anti-aliased disc).
+            name: "w3c_circle_fill",
+            svg: r##"<svg viewBox="0 0 8 8"><circle cx="4" cy="4" r="3" fill="#ff0000"/></svg>"##,
+            width: 8,
+            height: 8,
+            golden: "........\n.ooRRoo.\n.oRRRRo.\n.RRRRRR.\n.RRRRRR.\n.oRRRRo.\n.ooRRoo.\n........",
+        },
+        GoldenFixture {
+            // W3C basic shapes: <ellipse> fill (wide AA disc).
+            name: "w3c_ellipse_fill",
+            svg: r##"<svg viewBox="0 0 8 4"><ellipse cx="4" cy="2" rx="3" ry="1.5" fill="#00ff00"/></svg>"##,
+            width: 8,
+            height: 4,
+            golden: ".oooooo.\n.oGGGGo.\n.oGGGGo.\n.oooooo.",
+        },
+        GoldenFixture {
+            // W3C masking: mask-type="alpha" keys on the mask's ALPHA channel, so
+            // an opaque BLACK left half stays visible (luminance would mask it out).
+            name: "w3c_alpha_mask_left_half",
+            svg: r##"<svg viewBox="0 0 4 4"><mask id="m" mask-type="alpha"><rect width="2" height="4" fill="#000000"/></mask><rect width="4" height="4" fill="#ff0000" mask="url(#m)"/></svg>"##,
+            width: 4,
+            height: 4,
+            golden: "RR..\nRR..\nRR..\nRR..",
+        },
         GoldenFixture {
             name: "unsafe_external_href_rejected",
             svg: r##"<svg viewBox="0 0 4 4"><image href="https://example.invalid/a.png" width="4" height="4"/></svg>"##,
