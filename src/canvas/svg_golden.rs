@@ -370,6 +370,16 @@ pub fn fixtures() -> Vec<GoldenFixture> {
             golden: "RR..\nRR..\nRR..\nRR..",
         },
         GoldenFixture {
+            // R9: vector-effect="non-scaling-stroke" — a width-2 stroke under a
+            // 4x group scale stays ~2px in device space (cols 3-4) instead of
+            // scaling to ~8px.
+            name: "r9_non_scaling_stroke",
+            svg: r##"<svg viewBox="0 0 8 8"><g transform="scale(4)"><line x1="1" y1="0" x2="1" y2="2" stroke="#0000ff" stroke-width="2" vector-effect="non-scaling-stroke"/></g></svg>"##,
+            width: 8,
+            height: 8,
+            golden: "...BB...\n...BB...\n...BB...\n...BB...\n...BB...\n...BB...\n...BB...\n...BB...",
+        },
+        GoldenFixture {
             name: "unsafe_external_href_rejected",
             svg: r##"<svg viewBox="0 0 4 4"><image href="https://example.invalid/a.png" width="4" height="4"/></svg>"##,
             width: 4,

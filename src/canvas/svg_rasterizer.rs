@@ -516,6 +516,25 @@ fn parse_stroke_linejoin(value: &str) -> Option<StrokeLineJoin> {
     }
 }
 
+/// `vector-effect` (R9). Only `non-scaling-stroke` is supported; every other
+/// value is diagnosed and treated as `none`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum VectorEffect {
+    #[default]
+    None,
+    NonScalingStroke,
+}
+
+/// Parse a `vector-effect` value. Returns `None` for unrecognized values so the
+/// caller can emit a diagnostic; recognized values map to a `VectorEffect`.
+fn parse_vector_effect(value: &str) -> Option<VectorEffect> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "none" => Some(VectorEffect::None),
+        "non-scaling-stroke" => Some(VectorEffect::NonScalingStroke),
+        _ => None,
+    }
+}
+
 fn default_stroke_width() -> svg_core::SvgLength {
     svg_core::SvgLength {
         value: 1.0,
@@ -548,6 +567,7 @@ struct Style {
     stop_color: Rgba,
     stop_opacity: f32,
     visible: bool,
+    vector_effect: VectorEffect,
 }
 
 impl Default for Style {
@@ -569,6 +589,7 @@ impl Default for Style {
             stop_color: Rgba::BLACK,
             stop_opacity: 1.0,
             visible: true,
+            vector_effect: VectorEffect::None,
         }
     }
 }
@@ -590,6 +611,9 @@ impl Style {
         // to children, or overlapping children in a translucent group would
         // double-darken.  Reset before applying this element's own declarations.
         s.opacity = 1.0;
+        // `vector-effect` is likewise non-inherited: it applies only to the
+        // element that declares it.
+        s.vector_effect = VectorEffect::None;
         for (key, value) in attrs {
             if key != "style" {
                 s.apply_declaration(key, value);
@@ -685,6 +709,13 @@ impl Style {
             }
             "stop-opacity" => {
                 self.stop_opacity = value.parse().unwrap_or(self.stop_opacity);
+            }
+            "vector-effect" => {
+                // Recognized values set the effect; unrecognized values fall back
+                // to None and are diagnosed at lowering time.
+                if let Some(effect) = parse_vector_effect(value) {
+                    self.vector_effect = effect;
+                }
             }
             "display" if value.trim() == "none" => {
                 self.visible = false;
@@ -4460,6 +4491,14 @@ impl DisplayList {
                         }
                     } else {
                         let geometry = lower_shape_geometry(shape_node, item.length_bases);
+                        if let Some(value) = attr_get(shape_node.attrs(), "vector-effect") {
+                            if parse_vector_effect(value).is_none() {
+                                diagnostics.push(PendingDiagnostic::Warning {
+                                    code: "vector_effect.unsupported",
+                                    message: "unsupported vector-effect value; treated as none",
+                                });
+                            }
+                        }
                         let clip = clip_path_ref(shape_node.attrs()).and_then(|id| {
                             let bbox = geometry.as_ref().map(geometry_local_bounds);
                             let mut visited = Vec::new();
@@ -4988,6 +5027,32 @@ struct RenderOutcome {
     stroke_limit_hit: bool,
 }
 
+/// Resolve the stroke for a shape, applying `vector-effect: non-scaling-stroke`.
+///
+/// The stroke mesh is built in local space and then scaled by the CTM, so a
+/// constant device-space width is achieved by dividing the user-space width
+/// (and dash metrics) by the CTM scale before meshing — the later device
+/// transform restores exactly the requested pixel width regardless of zoom.
+/// Non-uniform scales use the bounded `affine_max_scale` approximation.
+fn effective_device_stroke(
+    style: &Style,
+    xform: &Transform,
+    length_bases: SvgLengthBases,
+) -> Option<ResolvedStroke> {
+    let mut stroke = style.effective_stroke(length_bases)?;
+    if style.vector_effect == VectorEffect::NonScalingStroke {
+        let inv = 1.0 / affine_max_scale(*xform).max(1.0e-6);
+        stroke.width *= inv;
+        if let Some(dashes) = stroke.dash_array.as_mut() {
+            for d in dashes.iter_mut() {
+                *d *= inv;
+            }
+        }
+        stroke.dash_offset *= inv;
+    }
+    Some(stroke)
+}
+
 fn render_shape(
     geometry: &ShapeGeometry,
     xform: &Transform,
@@ -5024,7 +5089,7 @@ fn render_shape(
             target,
         ),
         ShapeGeometry::Line { from, to } => {
-            if let Some(stroke) = style.effective_stroke(length_bases) {
+            if let Some(stroke) = effective_device_stroke(style, xform, length_bases) {
                 let bounds = local_bounds(&[*from, *to]);
                 let sampler = PaintSampler::from_resolved(
                     &stroke.paint,
@@ -5067,7 +5132,7 @@ fn render_shape(
                     outcome.drawn |= !sampler.is_transparent();
                 }
             }
-            if let Some(stroke) = style.effective_stroke(length_bases) {
+            if let Some(stroke) = effective_device_stroke(style, xform, length_bases) {
                 let sampler = PaintSampler::from_resolved(
                     &stroke.paint,
                     paint_servers,
@@ -5115,7 +5180,7 @@ fn render_shape(
                 rasterize_fill_coverage(target, &refs, style.fill_rule, &sampler);
                 outcome.drawn |= !sampler.is_transparent();
             }
-            if let Some(stroke) = style.effective_stroke(length_bases) {
+            if let Some(stroke) = effective_device_stroke(style, xform, length_bases) {
                 let sampler = PaintSampler::from_resolved(
                     &stroke.paint,
                     paint_servers,
@@ -9861,6 +9926,47 @@ mod tests {
         let a = rasterize(&svg, 256, 256).unwrap();
         let b = rasterize(&svg, 256, 256).unwrap();
         assert_eq!(a.pixels, b.pixels);
+    }
+
+    // --- R9: vector-effect non-scaling-stroke -------------------------------
+
+    /// Count image columns containing at least one opaque pixel.
+    fn opaque_columns(img: &egui::ColorImage) -> usize {
+        let [w, h] = img.size;
+        (0..w)
+            .filter(|&x| (0..h).any(|y| img.pixels[y * w + x].a() > 0))
+            .count()
+    }
+
+    #[test]
+    fn non_scaling_stroke_keeps_device_width_constant() {
+        // Same geometry under a 4x group scale: the plain stroke scales with the
+        // CTM (~8px wide); non-scaling-stroke stays ~2px in device space.
+        let nss = r##"<svg viewBox="0 0 16 16"><g transform="scale(4)"><line x1="2" y1="0" x2="2" y2="4" stroke="#000000" stroke-width="2" vector-effect="non-scaling-stroke"/></g></svg>"##;
+        let plain = r##"<svg viewBox="0 0 16 16"><g transform="scale(4)"><line x1="2" y1="0" x2="2" y2="4" stroke="#000000" stroke-width="2"/></g></svg>"##;
+        let nss_cols = opaque_columns(&rasterize(nss, 16, 16).unwrap());
+        let plain_cols = opaque_columns(&rasterize(plain, 16, 16).unwrap());
+        assert!(
+            plain_cols >= nss_cols + 3,
+            "non-scaling-stroke must stay narrow: nss={nss_cols} plain={plain_cols}"
+        );
+        assert!(
+            (1..=4).contains(&nss_cols),
+            "non-scaling device width bounded near 2px: {nss_cols}"
+        );
+    }
+
+    #[test]
+    fn unsupported_vector_effect_value_is_diagnosed() {
+        let svg = r##"<svg viewBox="0 0 8 8"><line x1="0" y1="4" x2="8" y2="4" stroke="#000000" stroke-width="2" vector-effect="fixed-position"/></svg>"##;
+        let out = rasterize_with_report(svg, 8, 8).unwrap();
+        assert!(
+            out.report
+                .warnings
+                .iter()
+                .any(|w| w.code == "vector_effect.unsupported"),
+            "unsupported vector-effect value must be diagnosed"
+        );
     }
 
     // --- R8.1: in-repo fuzz harness + memory/CPU cap regressions ------------

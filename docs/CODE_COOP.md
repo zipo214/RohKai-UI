@@ -7,6 +7,22 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-07 — SVG R9 part 1: vector-effect non-scaling-stroke
+
+On `dev`. Started R9 (markers/vector-effect/patterns). **Shipped the vector-effect
+pillar fully**: new `VectorEffect` enum + `parse_vector_effect`, non-inherited
+`Style.vector_effect` field (reset in `inherit_parts` like opacity), parsed in
+`apply_declaration`. `effective_device_stroke(style, xform, length_bases)` divides
+user-space stroke width + dash metrics by `affine_max_scale(ctm)` so the stroke
+stays constant in device space (the mesh is built in local space then CTM-scaled,
+so dividing first restores the requested px width). Unsupported `vector-effect`
+values are diagnosed (`vector_effect.unsupported`) at shape lowering. Golden
+`r9_non_scaling_stroke` + 2 unit tests. Gate green (fmt/test 304/clippy/scripts).
+**R9 NOT complete** — markers and pattern tiling remain (the larger def-subtree
+placement/tiling parts; reuse the `<mask>`/`resolve_clip` machinery:
+`scene.references.by_xml_id` → render child subtree via `render_shape` into a
+buffer). Next: implement markers, then patterns, before flipping R9 in the roadmap.
+
 ## 2026-06-07 — SVG R8.1 Conformance + Security Hardening (post-R8 lane 1/5)
 
 On `dev`. Post-R8 lanes now have paste-ready goal prompts in
