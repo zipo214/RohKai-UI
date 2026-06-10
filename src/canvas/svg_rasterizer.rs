@@ -48,6 +48,16 @@ const MAX_MASK_ITEMS: usize = 4_096;
 const MAX_FILTER_PRIMITIVES: usize = 64;
 /// Maximum Gaussian-blur box radius in device pixels (R7), to bound filter CPU.
 const MAX_BLUR_RADIUS: usize = 200;
+/// Maximum marker placements (start/mid/end vertices) drawn per stroked shape (R9).
+const MAX_MARKER_PLACEMENTS: usize = 10_000;
+/// Maximum shapes lowered from a single `<marker>` subtree (R9).
+const MAX_MARKER_CONTENT_ITEMS: usize = 1_024;
+/// Maximum shapes lowered from a single `<pattern>` subtree (R9).
+const MAX_PATTERN_CONTENT_ITEMS: usize = 4_096;
+/// Maximum pixels in one rendered pattern tile buffer (R9), to bound tile memory.
+const MAX_PATTERN_TILE_PIXELS: usize = 1_048_576; // 1024 x 1024
+/// Maximum `<pattern>` href-inheritance chain depth (R9).
+const MAX_PATTERN_REFERENCE_DEPTH: usize = 32;
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -947,6 +957,10 @@ struct PaintServerWarning {
 #[derive(Clone, Default)]
 struct PaintServerTable {
     servers: HashMap<String, PaintServer>,
+    /// Resolved `<pattern>` paint servers (R9), tiled lazily per fill at paint
+    /// time.  Kept separate from gradient `servers` so the gradient enum stays
+    /// untouched.
+    patterns: HashMap<String, PatternDef>,
     warnings: Vec<PaintServerWarning>,
 }
 
@@ -964,6 +978,26 @@ impl PaintServerTable {
         {
             let mut stack = Vec::new();
             let _ = table.resolve(&id, references, stylesheet, root_style, &mut stack);
+        }
+        // R9: resolve `<pattern>` definitions (separate pass; patterns are not
+        // gradients and inherit attributes/content via their own href chain).
+        for local in &references.ordered_ids {
+            let is_pattern = references.nodes_by_id.get(&local.node_id).is_some_and(
+                |node| matches!(node, SvgNode::Unsupported { tag, .. } if tag == "pattern"),
+            );
+            if !is_pattern || table.patterns.contains_key(&local.xml_id) {
+                continue;
+            }
+            let mut stack = Vec::new();
+            if let Some(def) = build_pattern_def(
+                &local.xml_id,
+                references,
+                stylesheet,
+                &mut table.warnings,
+                &mut stack,
+            ) {
+                table.patterns.insert(local.xml_id.clone(), def);
+            }
         }
         table
     }
@@ -1346,6 +1380,146 @@ fn percent_length(value: f64) -> svg_core::SvgLength {
     }
 }
 
+// ---------------------------------------------------------------------------
+// R9: pattern paint servers (tiled nested content)
+// ---------------------------------------------------------------------------
+
+/// `patternUnits` / `patternContentUnits` coordinate system (R9).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PatternUnits {
+    UserSpaceOnUse,
+    ObjectBoundingBox,
+}
+
+fn parse_pattern_units(value: &str) -> Option<PatternUnits> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "userspaceonuse" => Some(PatternUnits::UserSpaceOnUse),
+        "objectboundingbox" => Some(PatternUnits::ObjectBoundingBox),
+        _ => None,
+    }
+}
+
+/// A resolved `<pattern>` paint server (R9). Attributes are stored post-href
+/// merge as `Option`s; defaults (`objectBoundingBox` tile units,
+/// `userSpaceOnUse` content units) are applied when a tile is built so that
+/// `href`-chained patterns inherit cleanly. The tile itself is rendered lazily
+/// per fill in `build_pattern_sampler`, mirroring `MaskDef::build_alpha`.
+#[derive(Clone)]
+struct PatternDef {
+    units: Option<PatternUnits>,
+    content_units: Option<PatternUnits>,
+    x: Option<svg_core::SvgLength>,
+    y: Option<svg_core::SvgLength>,
+    width: Option<svg_core::SvgLength>,
+    height: Option<svg_core::SvgLength>,
+    view_box: Option<[f64; 4]>,
+    aspect: Option<svg_core::SvgPreserveAspectRatio>,
+    pattern_transform: Option<Transform>,
+    items: Vec<MaskItem>,
+}
+
+/// Resolve a `<pattern>` definition, merging `href`-inherited attributes and
+/// content. Bounded by `MAX_PATTERN_REFERENCE_DEPTH`; cyclic href chains are
+/// diagnosed and dropped (never panic).
+fn build_pattern_def(
+    id: &str,
+    references: &SvgReferenceTable,
+    stylesheet: &svg_core::SvgCssStyleSheet,
+    warnings: &mut Vec<PaintServerWarning>,
+    stack: &mut Vec<SvgNodeId>,
+) -> Option<PatternDef> {
+    if stack.len() >= MAX_PATTERN_REFERENCE_DEPTH {
+        return None;
+    }
+    let node = references
+        .by_xml_id
+        .get(id)
+        .and_then(|nid| references.nodes_by_id.get(nid))?;
+    let SvgNode::Unsupported {
+        tag,
+        attrs,
+        children,
+        ..
+    } = node
+    else {
+        return None;
+    };
+    if tag != "pattern" {
+        return None;
+    }
+    if stack.contains(&node.id()) {
+        warnings.push(PaintServerWarning {
+            code: "reference.pattern_cycle",
+            message: "cyclic pattern href inheritance was ignored".to_owned(),
+            source: node.source(),
+        });
+        return None;
+    }
+    stack.push(node.id());
+    let inherited = attr_get(attrs, "href")
+        .or_else(|| attr_get(attrs, "xlink:href"))
+        .and_then(|href| href.trim().strip_prefix('#'))
+        .and_then(|base| build_pattern_def(base, references, stylesheet, warnings, stack));
+    stack.pop();
+
+    let inherit = |pick: &dyn Fn(&PatternDef) -> Option<svg_core::SvgLength>, key: &str| {
+        attr_get(attrs, key)
+            .and_then(svg_core::parse_length)
+            .or_else(|| inherited.as_ref().and_then(pick))
+    };
+    let units = attr_get(attrs, "patternunits")
+        .and_then(parse_pattern_units)
+        .or_else(|| inherited.as_ref().and_then(|p| p.units));
+    let content_units = attr_get(attrs, "patterncontentunits")
+        .and_then(parse_pattern_units)
+        .or_else(|| inherited.as_ref().and_then(|p| p.content_units));
+    let x = inherit(&|p| p.x, "x");
+    let y = inherit(&|p| p.y, "y");
+    let width = inherit(&|p| p.width, "width");
+    let height = inherit(&|p| p.height, "height");
+    let view_box = parse_view_box(attrs).or_else(|| inherited.as_ref().and_then(|p| p.view_box));
+    let aspect = attr_get(attrs, "preserveaspectratio")
+        .map(svg_core::parse_preserve_aspect_ratio)
+        .or_else(|| inherited.as_ref().and_then(|p| p.aspect));
+    let pattern_transform = attr_get(attrs, "patterntransform")
+        .map(Transform::parse_chained)
+        .or_else(|| inherited.as_ref().and_then(|p| p.pattern_transform));
+
+    let content_bases = match view_box {
+        Some([_, _, w, h]) if w > 0.0 && h > 0.0 => SvgLengthBases::new(w.abs(), h.abs()),
+        _ => SvgLengthBases::new(0.0, 0.0),
+    };
+    let root_style = Style::default();
+    let mut items = Vec::new();
+    collect_mask_items(
+        children,
+        Transform::identity(),
+        content_bases,
+        &root_style,
+        stylesheet,
+        &mut items,
+    );
+    if items.is_empty() {
+        if let Some(base) = &inherited {
+            items = base.items.clone();
+        }
+    }
+    items.truncate(MAX_PATTERN_CONTENT_ITEMS);
+
+    Some(PatternDef {
+        units,
+        content_units,
+        x,
+        y,
+        width,
+        height,
+        view_box,
+        aspect,
+        pattern_transform,
+        items,
+    })
+}
+
 #[derive(Clone)]
 enum PaintSampler {
     Solid([u8; 4]),
@@ -1364,6 +1538,17 @@ enum PaintSampler {
         radius: f64,
         spread: GradientSpread,
         stops: Vec<GradientStop>,
+        opacity: f32,
+    },
+    /// R9 tiled `<pattern>`: a pre-rendered straight-RGBA tile repeated across
+    /// the fill via the device→pattern mapping.
+    Pattern {
+        tile: Vec<u8>,
+        tile_w: usize,
+        tile_h: usize,
+        device_to_pattern: Transform,
+        origin: (f64, f64),
+        size: (f64, f64),
         opacity: f32,
     },
     Transparent,
@@ -1386,7 +1571,7 @@ impl PaintSampler {
                 Self::Solid(color)
             }
             ResolvedPaintSource::Server(id) => {
-                servers.servers.get(id).map_or(Self::Transparent, |server| {
+                if let Some(server) = servers.servers.get(id) {
                     Self::from_server(
                         server,
                         paint.opacity,
@@ -1394,7 +1579,19 @@ impl PaintSampler {
                         object_transform,
                         length_bases,
                     )
-                })
+                } else if let Some(pattern) = servers.patterns.get(id) {
+                    build_pattern_sampler(
+                        pattern,
+                        id,
+                        paint.opacity,
+                        local_bounds,
+                        object_transform,
+                        length_bases,
+                        servers,
+                    )
+                } else {
+                    Self::Transparent
+                }
             }
         }
     }
@@ -1533,12 +1730,148 @@ impl PaintSampler {
                 };
                 sample_gradient(stops, spread_value(t, *spread), *opacity)
             }
+            Self::Pattern {
+                tile,
+                tile_w,
+                tile_h,
+                device_to_pattern,
+                origin,
+                size,
+                opacity,
+            } => {
+                let (tw, th) = *size;
+                if tw <= 0.0 || th <= 0.0 || *tile_w == 0 || *tile_h == 0 {
+                    return [0, 0, 0, 0];
+                }
+                let (px, py) = device_to_pattern.apply(device_x, device_y);
+                // Wrap into the tile rect (rem_euclid keeps negatives in range).
+                let u = (px - origin.0).rem_euclid(tw);
+                let v = (py - origin.1).rem_euclid(th);
+                let ix = (((u / tw) * *tile_w as f64) as usize).min(*tile_w - 1);
+                let iy = (((v / th) * *tile_h as f64) as usize).min(*tile_h - 1);
+                let i = (iy * *tile_w + ix) * 4;
+                let a = (tile[i + 3] as f32 * opacity.clamp(0.0, 1.0))
+                    .round()
+                    .clamp(0.0, 255.0) as u8;
+                [tile[i], tile[i + 1], tile[i + 2], a]
+            }
             Self::Transparent => [0, 0, 0, 0],
         }
     }
 
     fn is_transparent(&self) -> bool {
         matches!(self, Self::Transparent | Self::Solid([_, _, _, 0]))
+    }
+}
+
+/// Render a pattern tile once and produce a tiling sampler (R9). The tile is
+/// bounded to `MAX_PATTERN_TILE_PIXELS`; nested content is rendered through the
+/// shape renderer with this pattern removed from the server table, so a pattern
+/// whose content references itself (directly or via a cycle) terminates with a
+/// transparent paint instead of recursing forever.
+#[allow(clippy::too_many_arguments)]
+fn build_pattern_sampler(
+    def: &PatternDef,
+    pattern_id: &str,
+    opacity: f32,
+    bounds: [f64; 4],
+    object_transform: Transform,
+    length_bases: SvgLengthBases,
+    servers: &PaintServerTable,
+) -> PaintSampler {
+    let units = def.units.unwrap_or(PatternUnits::ObjectBoundingBox);
+    let content_units = def.content_units.unwrap_or(PatternUnits::UserSpaceOnUse);
+    let (bw, bh) = (bounds[2] - bounds[0], bounds[3] - bounds[1]);
+
+    // Resolve the tile rect (origin + size) into pattern user space.
+    let frac = |len: Option<svg_core::SvgLength>| -> f64 {
+        match len {
+            Some(l) => match l.unit {
+                svg_core::SvgLengthUnit::Percent => l.value / 100.0,
+                _ => l.value,
+            },
+            None => 0.0,
+        }
+    };
+    let user = |len: Option<svg_core::SvgLength>, base: f64| -> f64 {
+        len.and_then(|l| l.resolve(svg_core::SvgLengthContext::user_units(base)))
+            .unwrap_or(0.0)
+    };
+    let (tx, ty, tw, th) = match units {
+        PatternUnits::ObjectBoundingBox => {
+            if bw.abs() <= 1.0e-12 || bh.abs() <= 1.0e-12 {
+                return PaintSampler::Transparent;
+            }
+            (
+                bounds[0] + frac(def.x) * bw,
+                bounds[1] + frac(def.y) * bh,
+                frac(def.width) * bw,
+                frac(def.height) * bh,
+            )
+        }
+        PatternUnits::UserSpaceOnUse => (
+            user(def.x, length_bases.horizontal),
+            user(def.y, length_bases.vertical),
+            user(def.width, length_bases.horizontal),
+            user(def.height, length_bases.vertical),
+        ),
+    };
+    if tw <= 0.0 || th <= 0.0 {
+        return PaintSampler::Transparent;
+    }
+
+    let pattern_to_device =
+        object_transform.multiply(def.pattern_transform.unwrap_or_else(Transform::identity));
+    let Some(device_to_pattern) = pattern_to_device.inverse() else {
+        return PaintSampler::Transparent;
+    };
+
+    // Tile pixel size: scale the tile rect by the per-axis device scale, capped.
+    let sx = (pattern_to_device.a.powi(2) + pattern_to_device.b.powi(2)).sqrt();
+    let sy = (pattern_to_device.c.powi(2) + pattern_to_device.d.powi(2)).sqrt();
+    let mut tpw = ((tw * sx).round() as usize).clamp(1, MAX_RASTER_DIM as usize);
+    let mut tph = ((th * sy).round() as usize).clamp(1, MAX_RASTER_DIM as usize);
+    if tpw.saturating_mul(tph) > MAX_PATTERN_TILE_PIXELS {
+        let scale = (MAX_PATTERN_TILE_PIXELS as f64 / (tpw as f64 * tph as f64)).sqrt();
+        tpw = ((tpw as f64 * scale).floor() as usize).max(1);
+        tph = ((tph as f64 * scale).floor() as usize).max(1);
+    }
+
+    // content user space -> tile pixel space.
+    let content_to_tile_user = if let Some(vb) = def.view_box {
+        svg_core::viewbox_transform(vb, [0.0, 0.0, tw, th], def.aspect.unwrap_or_default())
+            .unwrap_or_else(Transform::identity)
+    } else if content_units == PatternUnits::ObjectBoundingBox {
+        Transform::scale(bw, bh)
+    } else {
+        Transform::identity()
+    };
+    let content_to_tile_px =
+        Transform::scale(tpw as f64 / tw, tph as f64 / th).multiply(content_to_tile_user);
+
+    // Render content into the tile with this pattern removed to break cycles.
+    let mut reduced = servers.clone();
+    reduced.patterns.remove(pattern_id);
+    let mut tile = vec![0u8; tpw * tph * 4];
+    {
+        let mut target = RasterTarget {
+            buf: &mut tile,
+            width: tpw,
+            height: tph,
+            premultiplied: false,
+            clip: None,
+        };
+        render_content_items(&def.items, content_to_tile_px, &reduced, &mut target);
+    }
+
+    PaintSampler::Pattern {
+        tile,
+        tile_w: tpw,
+        tile_h: tph,
+        device_to_pattern,
+        origin: (tx, ty),
+        size: (tw, th),
+        opacity: opacity.clamp(0.0, 1.0),
     }
 }
 
@@ -1977,10 +2310,16 @@ impl SvgScene {
                         build,
                     );
                 }
-                // clipPath/mask/filter definitions never render directly; their
-                // children are consumed only when an element references them.
+                // clipPath/mask/filter/marker/pattern definitions never render
+                // directly; their children are consumed only when an element
+                // references them (R9 flips marker/pattern from diagnosed to
+                // rendered, so they no longer emit an unsupported-node command).
                 SvgNode::Unsupported { tag, .. }
-                    if tag == "clippath" || tag == "mask" || tag == "filter" => {}
+                    if tag == "clippath"
+                        || tag == "mask"
+                        || tag == "filter"
+                        || tag == "marker"
+                        || tag == "pattern" => {}
                 SvgNode::StyleSheet { .. }
                 | SvgNode::LinearGradient { .. }
                 | SvgNode::RadialGradient { .. }
@@ -3585,7 +3924,10 @@ enum MaskMode {
     Alpha,
 }
 
-/// One renderable shape lowered from a `<mask>` subtree.
+/// One renderable shape lowered from a `<mask>` subtree.  Reused for `<marker>`
+/// and `<pattern>` content lowering (R9): the transform is content-relative and a
+/// base transform is applied at render time.
+#[derive(Clone)]
 struct MaskItem {
     geometry: ShapeGeometry,
     transform: Transform,
@@ -3606,24 +3948,19 @@ impl MaskDef {
     /// gradient/solid mask content works identically to normal painting.
     fn build_alpha(&self, w: usize, h: usize, paint_servers: &PaintServerTable) -> ClipMask {
         let mut buf = vec![0u8; w * h * 4];
-        for item in &self.items {
-            let mut target = RasterTarget {
-                buf: &mut buf,
-                width: w,
-                height: h,
-                premultiplied: true,
-                clip: None,
-            };
-            render_shape(
-                &item.geometry,
-                &item.transform,
-                &item.style,
-                item.length_bases,
-                item.path_length,
-                paint_servers,
-                &mut target,
-            );
-        }
+        let mut target = RasterTarget {
+            buf: &mut buf,
+            width: w,
+            height: h,
+            premultiplied: true,
+            clip: None,
+        };
+        render_content_items(
+            &self.items,
+            Transform::identity(),
+            paint_servers,
+            &mut target,
+        );
         let mut alpha = vec![0u8; w * h];
         for (i, slot) in alpha.iter_mut().enumerate() {
             let r = buf[i * 4] as f32;
@@ -3748,6 +4085,30 @@ fn collect_mask_items(
     }
 }
 
+/// Render a list of content items (shapes lowered from a `<mask>`, `<marker>`,
+/// or `<pattern>` subtree) under `base` into `target`, reusing the shape
+/// renderer so gradient/solid/pattern paint behaves identically to normal
+/// painting.  Each item's transform is content-relative; `base` maps content
+/// space into the target's device (or tile) space (R7/R9).
+fn render_content_items(
+    items: &[MaskItem],
+    base: Transform,
+    paint_servers: &PaintServerTable,
+    target: &mut RasterTarget<'_>,
+) {
+    for item in items {
+        render_shape(
+            &item.geometry,
+            &base.concat(item.transform),
+            &item.style,
+            item.length_bases,
+            item.path_length,
+            paint_servers,
+            target,
+        );
+    }
+}
+
 /// Multiply a premultiplied RGBA buffer in place by a coverage mask (all four
 /// channels scale, preserving premultiplication).
 fn apply_mask_to_offscreen(buf: &mut [u8], mask: &ClipMask, w: usize, h: usize) {
@@ -3761,6 +4122,494 @@ fn apply_mask_to_offscreen(buf: &mut [u8], mask: &ClipMask, w: usize, h: usize) 
             buf[idx] = ((buf[idx] as u16 * m + 127) / 255) as u8;
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// R9: markers (start/mid/end symbols placed on path vertices)
+// ---------------------------------------------------------------------------
+
+/// `markerUnits` (R9). `strokeWidth` scales marker content by the referencing
+/// element's stroke width; `userSpaceOnUse` leaves it at 1:1.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MarkerUnits {
+    StrokeWidth,
+    UserSpaceOnUse,
+}
+
+/// `orient` (R9). `auto` aligns to the vertex tangent, `auto-start-reverse`
+/// additionally flips the start marker, and a fixed angle is in radians.
+#[derive(Clone, Copy)]
+enum MarkerOrient {
+    Auto,
+    AutoStartReverse,
+    Angle(f64),
+}
+
+/// Which path vertex a marker sits on.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MarkerRole {
+    Start,
+    Mid,
+    End,
+}
+
+/// A resolved `<marker>` definition: its lowered content plus viewport/orient
+/// parameters (R9).
+struct MarkerDef {
+    items: Vec<MaskItem>,
+    marker_w: f64,
+    marker_h: f64,
+    ref_x: f64,
+    ref_y: f64,
+    view_box: Option<[f64; 4]>,
+    aspect: svg_core::SvgPreserveAspectRatio,
+    units: MarkerUnits,
+    orient: MarkerOrient,
+    overflow_hidden: bool,
+}
+
+/// A raw marker vertex during extraction: position plus optional incoming and
+/// outgoing tangent directions (before role assignment / angle resolution).
+type MarkerRawVertex = ((f64, f64), Option<(f64, f64)>, Option<(f64, f64)>);
+
+/// One path vertex with its auto-orient tangent angle and role.
+struct MarkerVertex {
+    pos: (f64, f64),
+    angle: f64,
+    role: MarkerRole,
+}
+
+/// One placed marker instance: the content→device transform, the device-space
+/// viewport rect (for overflow clipping), and which resolved def to draw.
+struct MarkerPlacement {
+    def_index: usize,
+    content_to_device: Transform,
+    viewport_corners: Vec<(f32, f32)>,
+    overflow_hidden: bool,
+}
+
+/// All markers resolved for one shape.
+struct MarkerSet {
+    defs: Vec<MarkerDef>,
+    placements: Vec<MarkerPlacement>,
+}
+
+fn parse_marker_orient(value: Option<&str>) -> MarkerOrient {
+    match value.map(str::trim) {
+        Some("auto") => MarkerOrient::Auto,
+        Some("auto-start-reverse") => MarkerOrient::AutoStartReverse,
+        Some(v) => MarkerOrient::Angle(parse_angle_radians(v).unwrap_or(0.0)),
+        None => MarkerOrient::Angle(0.0),
+    }
+}
+
+/// Parse an SVG `<angle>` (number with optional deg/grad/rad unit; bare numbers
+/// are degrees) into radians.
+fn parse_angle_radians(value: &str) -> Option<f64> {
+    let v = value.trim();
+    let lower = v.to_ascii_lowercase();
+    let (num, to_rad): (&str, fn(f64) -> f64) = if let Some(n) = lower.strip_suffix("grad") {
+        (n, |g| g * std::f64::consts::PI / 200.0)
+    } else if let Some(n) = lower.strip_suffix("rad") {
+        (n, |r| r)
+    } else if let Some(n) = lower.strip_suffix("deg") {
+        (n, f64::to_radians)
+    } else {
+        (lower.as_str(), f64::to_radians)
+    };
+    num.trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|n| n.is_finite())
+        .map(to_rad)
+}
+
+fn marker_ref(attrs: &[(String, String)], which: &str) -> Option<String> {
+    final_style_property(attrs, which)
+        .and_then(local_url_reference)
+        .map(str::to_owned)
+        .or_else(|| {
+            final_style_property(attrs, "marker")
+                .and_then(local_url_reference)
+                .map(str::to_owned)
+        })
+}
+
+fn resolve_marker(
+    scene: &SvgScene,
+    marker_id: &str,
+    diagnostics: &mut Vec<PendingDiagnostic>,
+) -> Option<MarkerDef> {
+    let node = scene
+        .references
+        .by_xml_id
+        .get(marker_id)
+        .and_then(|id| scene.references.nodes_by_id.get(id));
+    let Some(SvgNode::Unsupported {
+        tag,
+        attrs,
+        children,
+        ..
+    }) = node
+    else {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "marker.unresolved",
+            message: "marker references an unavailable local id; no marker was drawn",
+        });
+        return None;
+    };
+    if tag != "marker" {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "marker.unresolved",
+            message: "marker target is not a marker element; no marker was drawn",
+        });
+        return None;
+    }
+    let len = |key: &str| attr_get(attrs, key).and_then(svg_core::parse_length);
+    let marker_w = len("markerwidth")
+        .map(|l| l.value)
+        .filter(|v| *v > 0.0)
+        .unwrap_or(3.0);
+    let marker_h = len("markerheight")
+        .map(|l| l.value)
+        .filter(|v| *v > 0.0)
+        .unwrap_or(3.0);
+    let ref_x = len("refx").map(|l| l.value).unwrap_or(0.0);
+    let ref_y = len("refy").map(|l| l.value).unwrap_or(0.0);
+    let view_box = parse_view_box(attrs);
+    let aspect =
+        svg_core::parse_preserve_aspect_ratio(attr_get(attrs, "preserveaspectratio").unwrap_or(""));
+    let units = match attr_get(attrs, "markerunits").map(|v| v.trim().to_ascii_lowercase()) {
+        Some(s) if s == "userspaceonuse" => MarkerUnits::UserSpaceOnUse,
+        _ => MarkerUnits::StrokeWidth,
+    };
+    let orient = parse_marker_orient(attr_get(attrs, "orient"));
+    // SVG markers default to overflow:hidden (content clipped to the viewport).
+    let overflow_hidden = !attr_get(attrs, "overflow").is_some_and(|v| {
+        let v = v.trim();
+        v.eq_ignore_ascii_case("visible") || v.eq_ignore_ascii_case("auto")
+    });
+    let content_bases = match view_box {
+        Some([_, _, w, h]) if w > 0.0 && h > 0.0 => SvgLengthBases::new(w.abs(), h.abs()),
+        _ => SvgLengthBases::new(marker_w, marker_h),
+    };
+    let root_style = Style::default();
+    let mut items = Vec::new();
+    collect_mask_items(
+        children,
+        Transform::identity(),
+        content_bases,
+        &root_style,
+        &scene.stylesheet,
+        &mut items,
+    );
+    items.truncate(MAX_MARKER_CONTENT_ITEMS);
+    Some(MarkerDef {
+        items,
+        marker_w,
+        marker_h,
+        ref_x,
+        ref_y,
+        view_box,
+        aspect,
+        units,
+        orient,
+        overflow_hidden,
+    })
+}
+
+/// `Some(v)` if `v` has non-negligible length, else `None`.
+fn nonzero_dir(d: (f64, f64)) -> Option<(f64, f64)> {
+    if d.0.hypot(d.1) > 1.0e-9 {
+        Some(d)
+    } else {
+        None
+    }
+}
+
+/// Tangent directions (initial, final) and endpoint of one path segment.
+fn segment_tangents(from: (f64, f64), seg: &PathSegment) -> ((f64, f64), (f64, f64), (f64, f64)) {
+    let sub = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0, a.1 - b.1);
+    let pick = |cands: &[(f64, f64)]| {
+        cands
+            .iter()
+            .copied()
+            .find(|d| nonzero_dir(*d).is_some())
+            .unwrap_or(*cands.last().unwrap())
+    };
+    match seg {
+        PathSegment::Line { to } => {
+            let d = sub(*to, from);
+            (d, d, *to)
+        }
+        PathSegment::Cubic { ctrl1, ctrl2, to } => {
+            let init = pick(&[sub(*ctrl1, from), sub(*ctrl2, from), sub(*to, from)]);
+            let finl = pick(&[sub(*to, *ctrl2), sub(*to, *ctrl1), sub(*to, from)]);
+            (init, finl, *to)
+        }
+        PathSegment::Quadratic { ctrl, to } => {
+            let init = pick(&[sub(*ctrl, from), sub(*to, from)]);
+            let finl = pick(&[sub(*to, *ctrl), sub(*to, from)]);
+            (init, finl, *to)
+        }
+        PathSegment::Arc { to, .. } => {
+            let d = sub(*to, from);
+            (d, d, *to)
+        }
+    }
+}
+
+/// Auto-orient angle (radians) at a vertex from its incoming/outgoing tangents.
+fn auto_marker_angle(
+    in_dir: Option<(f64, f64)>,
+    out_dir: Option<(f64, f64)>,
+    role: MarkerRole,
+) -> f64 {
+    let angle = |d: (f64, f64)| d.1.atan2(d.0);
+    let unit = |d: (f64, f64)| {
+        let l = d.0.hypot(d.1);
+        (d.0 / l, d.1 / l)
+    };
+    match role {
+        MarkerRole::Start => out_dir.or(in_dir).map(angle).unwrap_or(0.0),
+        MarkerRole::End => in_dir.or(out_dir).map(angle).unwrap_or(0.0),
+        MarkerRole::Mid => match (in_dir, out_dir) {
+            (Some(i), Some(o)) => {
+                let (i, o) = (unit(i), unit(o));
+                let s = (i.0 + o.0, i.1 + o.1);
+                nonzero_dir(s).map(angle).unwrap_or_else(|| angle(o))
+            }
+            (Some(i), None) => angle(i),
+            (None, Some(o)) => angle(o),
+            (None, None) => 0.0,
+        },
+    }
+}
+
+/// Assign Start/Mid/End roles by global position and compute auto angles.
+fn finalize_marker_vertices(raw: Vec<MarkerRawVertex>) -> Vec<MarkerVertex> {
+    let n = raw.len();
+    raw.into_iter()
+        .enumerate()
+        .map(|(i, (pos, in_dir, out_dir))| {
+            let role = if i == 0 {
+                MarkerRole::Start
+            } else if i + 1 == n {
+                MarkerRole::End
+            } else {
+                MarkerRole::Mid
+            };
+            MarkerVertex {
+                pos,
+                angle: auto_marker_angle(in_dir, out_dir, role),
+                role,
+            }
+        })
+        .collect()
+}
+
+/// Extract marker vertices (with tangents) from a markable geometry. Markers
+/// apply only to `line`/`polyline`/`polygon`/`path`; other shapes yield none.
+fn marker_vertices(geometry: &ShapeGeometry) -> Vec<MarkerVertex> {
+    let mut raw: Vec<MarkerRawVertex> = Vec::new();
+    match geometry {
+        ShapeGeometry::Line { from, to } => {
+            let from = (from.0 as f64, from.1 as f64);
+            let to = (to.0 as f64, to.1 as f64);
+            let d = nonzero_dir((to.0 - from.0, to.1 - from.1));
+            raw.push((from, None, d));
+            raw.push((to, d, None));
+        }
+        ShapeGeometry::Poly { points, closed } => {
+            let pts: Vec<(f64, f64)> = points.iter().map(|&(x, y)| (x as f64, y as f64)).collect();
+            push_polyline_vertices(&pts, *closed, &mut raw);
+        }
+        ShapeGeometry::Path { data } => {
+            for sub in &data.subpaths {
+                if raw.len() >= MAX_MARKER_PLACEMENTS {
+                    break;
+                }
+                let mut sv: Vec<MarkerRawVertex> = vec![(sub.start, None, None)];
+                let mut from = sub.start;
+                for seg in &sub.segments {
+                    let (init, finl, end) = segment_tangents(from, seg);
+                    if let Some(last) = sv.last_mut() {
+                        last.2 = last.2.or(nonzero_dir(init));
+                    }
+                    sv.push((end, nonzero_dir(finl), None));
+                    from = end;
+                }
+                if sub.closed {
+                    let d = nonzero_dir((sub.start.0 - from.0, sub.start.1 - from.1));
+                    if let Some(last) = sv.last_mut() {
+                        last.2 = last.2.or(d);
+                    }
+                    if let Some(first) = sv.first_mut() {
+                        first.1 = first.1.or(d);
+                    }
+                }
+                raw.extend(sv);
+            }
+        }
+        _ => {}
+    }
+    raw.truncate(MAX_MARKER_PLACEMENTS);
+    finalize_marker_vertices(raw)
+}
+
+fn push_polyline_vertices(pts: &[(f64, f64)], closed: bool, raw: &mut Vec<MarkerRawVertex>) {
+    if pts.is_empty() {
+        return;
+    }
+    let mut sv: Vec<MarkerRawVertex> = vec![(pts[0], None, None)];
+    for pair in pts.windows(2) {
+        let d = nonzero_dir((pair[1].0 - pair[0].0, pair[1].1 - pair[0].1));
+        if let Some(last) = sv.last_mut() {
+            last.2 = d;
+        }
+        sv.push((pair[1], d, None));
+    }
+    if closed {
+        if let (Some(first), Some(last)) = (pts.first(), pts.last()) {
+            let d = nonzero_dir((first.0 - last.0, first.1 - last.1));
+            if let Some(v) = sv.last_mut() {
+                v.2 = v.2.or(d);
+            }
+            if let Some(v) = sv.first_mut() {
+                v.1 = v.1.or(d);
+            }
+        }
+    }
+    raw.extend(sv);
+}
+
+fn push_marker_def(
+    scene: &SvgScene,
+    opt_id: Option<String>,
+    defs: &mut Vec<MarkerDef>,
+    diagnostics: &mut Vec<PendingDiagnostic>,
+) -> Option<usize> {
+    let id = opt_id?;
+    let def = resolve_marker(scene, &id, diagnostics)?;
+    defs.push(def);
+    Some(defs.len() - 1)
+}
+
+fn marker_placement(
+    def: &MarkerDef,
+    def_index: usize,
+    vertex: &MarkerVertex,
+    stroke_w: f64,
+    node_xform: &Transform,
+) -> MarkerPlacement {
+    let angle = match def.orient {
+        MarkerOrient::Angle(a) => a,
+        MarkerOrient::Auto => vertex.angle,
+        MarkerOrient::AutoStartReverse => {
+            if vertex.role == MarkerRole::Start {
+                vertex.angle + std::f64::consts::PI
+            } else {
+                vertex.angle
+            }
+        }
+    };
+    let mut m = Transform::translate(vertex.pos.0, vertex.pos.1)
+        .multiply(Transform::rotate(angle.to_degrees()));
+    if def.units == MarkerUnits::StrokeWidth {
+        m = m.multiply(Transform::scale(stroke_w, stroke_w));
+    }
+    let (content_to_user, viewport_to_user) = if let Some(vb) = def.view_box {
+        let vb_ts =
+            svg_core::viewbox_transform(vb, [0.0, 0.0, def.marker_w, def.marker_h], def.aspect)
+                .unwrap_or_else(Transform::identity);
+        let (rx, ry) = vb_ts.apply(def.ref_x, def.ref_y);
+        let m = m.multiply(Transform::translate(-rx, -ry));
+        (m.multiply(vb_ts), m)
+    } else {
+        let m = m.multiply(Transform::translate(-def.ref_x, -def.ref_y));
+        (m, m)
+    };
+    let content_to_device = node_xform.concat(content_to_user);
+    let viewport_to_device = node_xform.concat(viewport_to_user);
+    let corners = vec![
+        viewport_to_device.apply_f32(0.0, 0.0),
+        viewport_to_device.apply_f32(def.marker_w as f32, 0.0),
+        viewport_to_device.apply_f32(def.marker_w as f32, def.marker_h as f32),
+        viewport_to_device.apply_f32(0.0, def.marker_h as f32),
+    ];
+    MarkerPlacement {
+        def_index,
+        content_to_device,
+        viewport_corners: corners,
+        overflow_hidden: def.overflow_hidden,
+    }
+}
+
+/// Resolve and place start/mid/end markers for a shape. Returns `None` when the
+/// shape is not markable or no marker references resolve. Bounded by
+/// `MAX_MARKER_PLACEMENTS` with a `limit.marker_count` diagnostic on truncation.
+fn build_markers(
+    scene: &SvgScene,
+    attrs: &[(String, String)],
+    style: &Style,
+    length_bases: SvgLengthBases,
+    geometry: &ShapeGeometry,
+    node_xform: &Transform,
+    diagnostics: &mut Vec<PendingDiagnostic>,
+) -> Option<Box<MarkerSet>> {
+    let start_ref = marker_ref(attrs, "marker-start");
+    let mid_ref = marker_ref(attrs, "marker-mid");
+    let end_ref = marker_ref(attrs, "marker-end");
+    if start_ref.is_none() && mid_ref.is_none() && end_ref.is_none() {
+        return None;
+    }
+    let vertices = marker_vertices(geometry);
+    if vertices.is_empty() {
+        return None;
+    }
+    let mut defs = Vec::new();
+    let start_i = push_marker_def(scene, start_ref, &mut defs, diagnostics);
+    let mid_i = push_marker_def(scene, mid_ref, &mut defs, diagnostics);
+    let end_i = push_marker_def(scene, end_ref, &mut defs, diagnostics);
+    if defs.is_empty() {
+        return None;
+    }
+    let stroke_w = resolve_stroke_length(style.stroke_width, length_bases)
+        .filter(|w| *w > 0.0)
+        .unwrap_or(1.0);
+    let mut placements = Vec::new();
+    let mut truncated = false;
+    for vertex in &vertices {
+        let def_index = match vertex.role {
+            MarkerRole::Start => start_i,
+            MarkerRole::Mid => mid_i,
+            MarkerRole::End => end_i,
+        };
+        let Some(def_index) = def_index else {
+            continue;
+        };
+        if placements.len() >= MAX_MARKER_PLACEMENTS {
+            truncated = true;
+            break;
+        }
+        placements.push(marker_placement(
+            &defs[def_index],
+            def_index,
+            vertex,
+            stroke_w,
+            node_xform,
+        ));
+    }
+    if truncated {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "limit.marker_count",
+            message: "marker placements exceeded the renderer limit; remaining markers skipped",
+        });
+    }
+    if placements.is_empty() {
+        return None;
+    }
+    Some(Box::new(MarkerSet { defs, placements }))
 }
 
 // ---------------------------------------------------------------------------
@@ -4337,6 +5186,8 @@ enum DrawCommand {
         length_bases: SvgLengthBases,
         path_length: Option<f64>,
         clip: Option<ClipDef>,
+        /// R9 start/mid/end markers resolved + placed on this shape's vertices.
+        markers: Option<Box<MarkerSet>>,
         diagnostics: Vec<PendingDiagnostic>,
         source: SvgRenderSource,
     },
@@ -4512,6 +5363,17 @@ impl DisplayList {
                                 &mut diagnostics,
                             )
                         });
+                        let markers = geometry.as_ref().and_then(|geometry| {
+                            build_markers(
+                                scene,
+                                shape_node.attrs(),
+                                &item.style,
+                                item.length_bases,
+                                geometry,
+                                &node_xform,
+                                &mut diagnostics,
+                            )
+                        });
                         DrawCommand::Shape {
                             geometry,
                             transform: node_xform,
@@ -4519,6 +5381,7 @@ impl DisplayList {
                             length_bases: item.length_bases,
                             path_length: parsed_path_length(shape_node.attrs()),
                             clip,
+                            markers,
                             diagnostics,
                             source,
                         }
@@ -4617,12 +5480,15 @@ impl DisplayList {
                     length_bases,
                     path_length,
                     clip,
+                    markers,
                     diagnostics,
                     source,
                 } => {
                     emit_diagnostics(diagnostics, *source, report);
                     for (property, id) in style.paint_server_references() {
-                        if !self.paint_servers.servers.contains_key(id) {
+                        if !self.paint_servers.servers.contains_key(id)
+                            && !self.paint_servers.patterns.contains_key(id)
+                        {
                             report.warning_at(
                                 "paint.unresolved_server",
                                 format!(
@@ -4691,6 +5557,58 @@ impl DisplayList {
                         report.rendered();
                     } else {
                         report.skipped();
+                    }
+                    // R9: draw resolved markers on this shape's vertices, each
+                    // clipped to its viewport rect (overflow:hidden) intersected
+                    // with the ancestor clip.
+                    if let Some(set) = markers {
+                        for placement in &set.placements {
+                            let def = &set.defs[placement.def_index];
+                            let marker_clip = placement.overflow_hidden.then(|| {
+                                ClipDef {
+                                    shapes: vec![ClipShape {
+                                        device_subpaths: vec![placement.viewport_corners.clone()],
+                                        fill_rule: FillRule::Nonzero,
+                                    }],
+                                    nested: None,
+                                }
+                                .build_mask(w, h)
+                            });
+                            let combined =
+                                combine_clips(effective_clip.as_ref(), marker_clip.as_ref());
+                            match offscreens.last_mut() {
+                                Some(off) => {
+                                    let mut target = RasterTarget {
+                                        buf: &mut off.buf,
+                                        width: w,
+                                        height: h,
+                                        premultiplied: true,
+                                        clip: combined.as_ref(),
+                                    };
+                                    render_content_items(
+                                        &def.items,
+                                        placement.content_to_device,
+                                        &self.paint_servers,
+                                        &mut target,
+                                    );
+                                }
+                                None => {
+                                    let mut target = RasterTarget {
+                                        buf,
+                                        width: w,
+                                        height: h,
+                                        premultiplied: false,
+                                        clip: combined.as_ref(),
+                                    };
+                                    render_content_items(
+                                        &def.items,
+                                        placement.content_to_device,
+                                        &self.paint_servers,
+                                        &mut target,
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
                 DrawCommand::Image {
@@ -8329,11 +9247,12 @@ mod tests {
 
     #[test]
     fn render_report_flags_unsupported_feature_buckets() {
-        // clipPath (R4) and filter (R7) now render; patterns remain unsupported.
+        // clipPath (R4), filter (R7), and pattern (R9) all render now — none
+        // should appear as unsupported feature buckets.
         let svg = r##"<svg viewBox="0 0 20 20">
 <defs>
   <clipPath id="c"><rect width="10" height="10"/></clipPath>
-  <pattern id="p" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="2" height="2"/></pattern>
+  <pattern id="p" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="2" height="2" fill="#ff0000"/></pattern>
   <filter id="f"><feGaussianBlur stdDeviation="1"/></filter>
 </defs>
 <rect width="20" height="20" fill="url(#p)" clip-path="url(#c)" filter="url(#f)"/>
@@ -8346,14 +9265,19 @@ mod tests {
             .map(|u| u.feature.as_str())
             .collect();
 
-        // clipPath (R4) and filter (R7) render → not unsupported buckets.
+        // clipPath (R4), filter (R7), and pattern (R9) render → no unsupported.
         assert!(!features.contains(&"clipPath"));
         assert!(!features.contains(&"clip-path attribute"));
         assert!(!features.contains(&"filter"));
         assert!(!features.contains(&"filter attribute"));
-        // Patterns remain explicitly unsupported.
-        assert!(features.contains(&"pattern"));
-        assert_eq!(output.report.fidelity, SvgRenderFidelity::Low);
+        assert!(!features.contains(&"pattern"));
+        // No `paint.unresolved_server` warning for a resolvable pattern.
+        assert!(!output
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.code == "paint.unresolved_server"));
+        assert!(output.report.rendered_element_count >= 1);
     }
 
     #[test]
@@ -9128,7 +10052,10 @@ mod tests {
     }
 
     #[test]
-    fn gradient_cycles_and_patterns_remain_explicit_diagnostics() {
+    fn gradient_cycles_are_diagnosed_and_patterns_resolve() {
+        // The gradient href cycle is still diagnosed; the pattern (R9) now
+        // resolves as a paint server rather than landing in the unsupported
+        // bucket, even when it has no renderable content.
         let svg = r##"<svg viewBox="0 0 10 10">
 <defs>
 <linearGradient id="a" href="#b"/><linearGradient id="b" href="#a"/>
@@ -9144,14 +10071,18 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning.code == "reference.gradient_cycle"));
-        let pattern = output
+        // Pattern is resolved: not an unsupported feature, no unresolved-server.
+        assert!(!output
             .report
             .unsupported_features
             .iter()
-            .find(|feature| feature.feature == "pattern")
-            .expect("pattern diagnostic");
-        assert!(pattern.message.contains("patternunits"));
-        assert!(pattern.message.contains("patterntransform"));
+            .any(|feature| feature.feature == "pattern"));
+        assert!(!output
+            .report
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "paint.unresolved_server"
+                && warning.message.contains("#p")));
     }
 
     #[test]
@@ -9191,7 +10122,7 @@ mod tests {
     }
 
     #[test]
-    fn gradients_are_deterministic_high_fidelity_while_patterns_are_not() {
+    fn gradients_and_patterns_render_deterministically_and_high_fidelity() {
         let gradient = r##"<svg viewBox="0 0 12 4"><defs>
 <linearGradient id="g"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient>
 </defs><rect width="12" height="4" fill="url(#g)"/></svg>"##;
@@ -9201,21 +10132,27 @@ mod tests {
         assert_eq!(first.report.fidelity, SvgRenderFidelity::High);
         assert_eq!(first.report.unsupported_feature_count, 0);
 
+        // R9: patterns now tile and render (not diagnosed-transparent), so the
+        // fill is no longer flagged unsupported and produces real pixels.
         let pattern = r##"<svg viewBox="0 0 12 4"><defs>
-<pattern id="p" width="2" height="2" patternUnits="userSpaceOnUse"><rect width="1" height="1"/></pattern>
+<pattern id="p" width="2" height="2" patternUnits="userSpaceOnUse"><rect width="1" height="1" fill="#ff0000"/></pattern>
 </defs><rect width="12" height="4" fill="url(#p)"/></svg>"##;
-        let output = rasterize_with_report(pattern, 12, 4).unwrap();
-        assert_eq!(output.report.fidelity, SvgRenderFidelity::Low);
-        assert!(output
+        let pfirst = rasterize_with_report(pattern, 12, 4).unwrap();
+        let psecond = rasterize_with_report(pattern, 12, 4).unwrap();
+        assert_eq!(pfirst.image.pixels, psecond.image.pixels);
+        assert!(!pfirst
             .report
             .unsupported_features
             .iter()
             .any(|feature| feature.feature == "pattern"));
-        assert!(output
+        assert!(!pfirst
             .report
             .warnings
             .iter()
             .any(|warning| warning.code == "paint.unresolved_server"));
+        // The tile (a red square in the top-left of each 2x2 cell) actually paints.
+        assert_eq!(pixel(&pfirst.image, 0, 0), [255, 0, 0, 255]);
+        assert_eq!(pixel(&pfirst.image, 1, 0), [0, 0, 0, 0]);
     }
 
     #[test]
@@ -9967,6 +10904,113 @@ mod tests {
                 .any(|w| w.code == "vector_effect.unsupported"),
             "unsupported vector-effect value must be diagnosed"
         );
+    }
+
+    // --- R9: markers ---------------------------------------------------------
+
+    #[test]
+    fn markers_render_on_start_mid_end_vertices() {
+        // 2x2 red markers centred (refX/refY=1) on every vertex of a 3-point
+        // polyline; check a red pixel lands at each vertex.
+        let svg = r##"<svg viewBox="0 0 12 4"><defs><marker id="m" markerWidth="2" markerHeight="2" refX="1" refY="1" markerUnits="userSpaceOnUse"><rect width="2" height="2" fill="#ff0000"/></marker></defs><polyline points="1,2 6,2 11,2" fill="none" stroke="#0000ff" stroke-width="1" marker-start="url(#m)" marker-mid="url(#m)" marker-end="url(#m)"/></svg>"##;
+        let out = rasterize_with_report(svg, 12, 4).unwrap();
+        for vx in [1usize, 6, 11] {
+            assert_eq!(
+                pixel(&out.image, vx.min(11), 1),
+                [255, 0, 0, 255],
+                "marker missing at vertex x={vx}"
+            );
+        }
+        assert!(out
+            .report
+            .warnings
+            .iter()
+            .all(|w| w.code != "marker.unresolved"));
+    }
+
+    #[test]
+    fn auto_orient_marker_renders_and_is_deterministic() {
+        let svg = r##"<svg viewBox="0 0 8 8"><defs><marker id="a" markerWidth="3" markerHeight="3" refX="0" refY="1.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0 L3 1.5 L0 3 Z" fill="#00ff00"/></marker></defs><line x1="1" y1="4" x2="5" y2="4" stroke="#000000" stroke-width="1" marker-end="url(#a)"/></svg>"##;
+        let a = rasterize(svg, 8, 8).unwrap();
+        let b = rasterize(svg, 8, 8).unwrap();
+        assert_eq!(a.pixels, b.pixels, "marker render must be deterministic");
+        // The green arrowhead tip lands near the line end (x≈5, y≈4).
+        assert_eq!(pixel(&a, 5, 4), [0, 255, 0, 255]);
+    }
+
+    #[test]
+    fn missing_marker_reference_is_diagnosed_not_fatal() {
+        let svg = r##"<svg viewBox="0 0 8 8"><line x1="0" y1="4" x2="8" y2="4" stroke="#0000ff" stroke-width="2" marker-end="url(#nope)"/></svg>"##;
+        let out = rasterize_with_report(svg, 8, 8).unwrap();
+        assert!(out
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.code == "marker.unresolved"));
+        // The line itself still renders.
+        assert!(out.report.rendered_element_count >= 1);
+    }
+
+    #[test]
+    fn marker_units_userspaceonuse_ignores_stroke_width() {
+        // userSpaceOnUse markers are NOT scaled by stroke-width; a 2x2 marker
+        // stays 2 device px wide regardless of a thick stroke.
+        let svg = r##"<svg viewBox="0 0 8 8"><defs><marker id="m" markerWidth="2" markerHeight="2" refX="0" refY="0" markerUnits="userSpaceOnUse"><rect width="2" height="2" fill="#ff0000"/></marker></defs><line x1="1" y1="1" x2="6" y2="1" stroke="#0000ff" stroke-width="4" marker-start="url(#m)"/></svg>"##;
+        let out = rasterize(svg, 8, 8).unwrap();
+        // Marker placed at (1,1), spanning device x 1..3, y 1..3 (2px, not 8px).
+        assert_eq!(pixel(&out, 1, 1), [255, 0, 0, 255]);
+        assert_eq!(pixel(&out, 2, 2), [255, 0, 0, 255]);
+        assert_eq!(pixel(&out, 4, 1), [0, 0, 255, 255]); // beyond marker → blue stroke
+    }
+
+    // --- R9: pattern robustness ----------------------------------------------
+
+    #[test]
+    fn pattern_href_cycle_is_bounded_and_diagnosed() {
+        let svg = r##"<svg viewBox="0 0 8 8"><defs>
+<pattern id="a" href="#b" width="2" height="2" patternUnits="userSpaceOnUse"/>
+<pattern id="b" href="#a" width="2" height="2" patternUnits="userSpaceOnUse"><rect width="1" height="1" fill="#ff0000"/></pattern>
+</defs><rect width="8" height="8" fill="url(#a)"/></svg>"##;
+        let out = rasterize_with_report(svg, 8, 8).unwrap();
+        assert!(out
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.code == "reference.pattern_cycle"));
+    }
+
+    #[test]
+    fn self_referential_pattern_content_terminates() {
+        // A pattern whose own content paints with itself must not recurse
+        // forever — the inner reference is dropped to transparent.
+        let svg = r##"<svg viewBox="0 0 8 8"><defs>
+<pattern id="p" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="4" height="4" fill="url(#p)"/></pattern>
+</defs><rect width="8" height="8" fill="url(#p)"/></svg>"##;
+        let out = rasterize(svg, 8, 8).unwrap();
+        // Fully transparent (the only content paints with the removed pattern).
+        assert_eq!(pixel(&out, 4, 4), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn oversized_pattern_tile_is_capped_without_panic() {
+        // A huge tile under a large scale would blow memory if uncapped; the
+        // tile pixel budget clamps it and the render still completes.
+        let svg = r##"<svg viewBox="0 0 64 64"><defs>
+<pattern id="p" width="5000" height="5000" patternUnits="userSpaceOnUse"><rect width="2500" height="2500" fill="#00ff00"/></pattern>
+</defs><rect width="64" height="64" fill="url(#p)"/></svg>"##;
+        let out = rasterize(svg, 64, 64).unwrap();
+        assert_eq!(out.size, [64, 64]);
+    }
+
+    #[test]
+    fn pattern_object_bounding_box_tiles_render() {
+        let svg = r##"<svg viewBox="0 0 4 4"><defs>
+<pattern id="p" width="0.5" height="0.5" patternUnits="objectBoundingBox" patternContentUnits="objectBoundingBox"><rect width="0.25" height="0.5" fill="#0000ff"/></pattern>
+</defs><rect width="4" height="4" fill="url(#p)"/></svg>"##;
+        let out = rasterize(svg, 4, 4).unwrap();
+        assert_eq!(pixel(&out, 0, 0), [0, 0, 255, 255]);
+        assert_eq!(pixel(&out, 1, 0), [0, 0, 0, 0]);
+        assert_eq!(pixel(&out, 2, 0), [0, 0, 255, 255]);
     }
 
     // --- R8.1: in-repo fuzz harness + memory/CPU cap regressions ------------

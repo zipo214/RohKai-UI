@@ -192,9 +192,10 @@ Current limits:
   markers) `data:` images are decoded and rendered through the R4 clip/compositing
   pipeline. Progressive/arithmetic/CMYK/12-bit JPEG and external sources are
   diagnosed rather than rendered.
-- No pattern rendering, markers, or blend modes. (Alpha/luminance masks and
-  filter tier-1 — blur/offset/flood/merge/colorMatrix/dropShadow — render via the
-  R4 offscreen pipeline as of R7; tier 2/3 filter primitives are diagnosed.)
+- No blend modes. (Markers and pattern tiling render as of R9; alpha/luminance
+  masks and filter tier-1 — blur/offset/flood/merge/colorMatrix/dropShadow —
+  render via the R4 offscreen pipeline as of R7; tier 2/3 filter primitives are
+  diagnosed.)
 - Text imports as editable chunked labels (positioned spans become separate
   grouped labels with per-chunk anchor/baseline diagnostics); raster text
   rendering (vector-outline snapshot) is deferred, so the rasterizer still reports
@@ -207,8 +208,8 @@ Current limits:
   shape bounding boxes, nested clip intersection, nested-`<svg>` overflow).
   objectBoundingBox clip units on a group element have no single bounding box and
   are diagnosed/skipped rather than approximated.
-- No `vector-effect`, markers, exact SVG `arcs` line-join geometry, or SVG 2
-  context-sensitive stroke semantics.
+- No exact SVG `arcs` line-join geometry or SVG 2 context-sensitive stroke
+  semantics. (`vector-effect: non-scaling-stroke` and markers ship in R9.)
 - No broad external reference-renderer conformance corpus. RohKai has a small,
   dependency-free ASCII golden suite for current fills, transforms, opacity,
   anti-aliased diagonals, compound fill rules, and dashed strokes.
@@ -387,14 +388,14 @@ need all of it immediately, but this is the map.
 | Basic shapes | Full geometry and transforms | Supported subset with affine transforms, anti-aliased fill/stroke, and transformed stroke-bound tests | Add reusable exact fill/path bounds and more extreme-coordinate tests | P0/P1 |
 | Paths | Full grammar, fill rules, stroke geometry | Full command grammar; retained curves/arcs; nonzero/evenodd fills; local-space cap/join/miter/dash stroke meshes | Exact arc extrema, SVG `arcs` join, vector effects, markers | P1/P3 |
 | Gradients | Linear/radial with units, transforms, spread, href | Linear/radial fills and strokes support stops/opacity, both units, transforms, all spread modes, href inheritance, currentColor/CSS stops, deterministic sampling, limits, diagnostics, and goldens | Add color-space/gamma policy and broader conformance fixtures | P2 |
-| Patterns | Tiled nested content | Unsupported/diagnosed | Implement after scene IR | P3 |
+| Patterns | Tiled nested content | Tiled via offscreen (R9): patternUnits/patternContentUnits/viewBox/patternTransform/href, bounded tile pixels, cycle-safe | Closed (gamma/colour-space tuning later) | P3 |
 | Images | Embedded PNG/JPEG and secure external policy | PNG (zlib/unfilter, types 0/2/3/4/6, 8/16-bit) and baseline JPEG (Huffman/IDCT/YCbCr, 4:4:4/4:2:2/4:2:0, restart) `data:` decoded + rendered through R4 clip/compositing; external refs fail-closed | Progressive JPEG; broader format/corpus | P2 |
 | `defs`/`use` | Id resolution and expansion | Importer and rasterizer support bounded local symbol/use expansion with cycles, depth/node limits, duplicate-ID diagnostics, and source-order stability | Extend references only as later phases require | P1 |
 | Clips | Actual clipping stack | clipPath rendered: clip-rule, transforms, both clipPathUnits (shape bbox), nested intersection, cycle/depth caps, plus nested-`<svg>` overflow clipping (R4) | objectBoundingBox-on-group; clip on text/image when those land | P2 |
 | Masks | Alpha/luminance masks | Alpha + luminance masks rendered through the R4 offscreen (shape/gradient mask content, `mask-type`, bounded by item/offscreen caps) | objectBoundingBox content units; mask region clipping | P3 |
 | Filters | Primitive graph | Tier-1 graph on R4 offscreen (premultiplied, capped): blur/offset/flood/merge/colorMatrix/dropShadow; unsupported primitives partial + diagnosed | Tier 2/3 primitives; full filter-region clipping | P4 |
 | Text | Full layout/shaping | Editable chunked multi-label import (positioned spans → grouped labels, per-chunk anchor/baseline diagnostics); raster text skipped | Vector-outline snapshot / raster text; shaping/bidi/textPath | P3/P4 |
-| Markers | Arrowheads and symbols on paths | Unsupported | Add after stroke geometry | P3 |
+| Markers | Arrowheads and symbols on paths | Rendered (R9): marker-start/mid/end, orient auto/auto-start-reverse/angle, markerUnits, viewBox/refX/refY + overflow clip, bounded count | Closed | P3 |
 | Antialiasing | High-quality coverage | Deterministic 8x8 coverage; winding/parity fills and unioned stroke coverage are separate | Tune quality/performance and add gamma-aware compositing | P1/P2 |
 | Compositing | Correct premultiplied alpha/groups | Premultiplied-alpha offscreen compositing for isolated group opacity (no double-darken, halo-free); straight-RGBA base buffer + output (R4) | Gamma-correct base pipeline; blend modes | P1 |
 | Tests | Golden corpus + fuzz + oracles | Per-feature ASCII golden corpus + pixel-exact unit tests across R0-R7, an ignored benchmark, and a dev-only deterministic reference-oracle stand-in | Broader licensed corpus + fuzzing (future) | P0/P1 |
@@ -801,9 +802,9 @@ deferred; **extra-roadmap** = a real gap the roadmap never represented.
 | Filter color-interpolation (linearRGB) | filters run in sRGB premultiplied | filters default `color-interpolation-filters: linearRGB` | P1 | conformance | extra-roadmap | implement (R10) |
 | Filter region precision | region = whole canvas | bbox-based `-10%..110%` + x/y/w/h filterUnits | P1 | implementation/conformance | partially (R7 noted approx) | implement (R10) |
 | Filters tier 2/3 | identity passthrough + diagnostic | feComposite/feBlend/feTile/feMorphology/feComponentTransfer/feImage/feTurbulence/feDisplacementMap | P2/P3 | implementation | intra-roadmap deferred | tier-2 implement (R10); tier-3 defer |
-| Patterns | diagnosed transparent | full tiling (patternUnits/contentUnits/viewBox/transform) | P1/P2 | implementation | intra-roadmap deferred | implement (R9/R10) |
-| Markers | none | marker-start/mid/end, orient, markerUnits, viewBox | P1 | implementation | extra-roadmap | implement (R9) |
-| vector-effect=non-scaling-stroke | none | supported | P2 | implementation | extra-roadmap | implement (R9) |
+| Patterns | tiled via offscreen (R9) | full tiling (patternUnits/contentUnits/viewBox/transform) | P1/P2 | implementation | intra-roadmap deferred | DONE (R9); colour-space tuning later |
+| Markers | marker-start/mid/end rendered (R9) | marker-start/mid/end, orient, markerUnits, viewBox | P1 | implementation | extra-roadmap | DONE (R9) |
+| vector-effect=non-scaling-stroke | supported (R9) | supported | P2 | implementation | extra-roadmap | DONE (R9) |
 | Raster text / textPath | import-only chunks; raster skips | full glyph layout + textPath | P1 | implementation | intra-roadmap deferred (R6 ph3) | implement editable-first + vector snapshot (R11) |
 | Namespace model | prefixes stripped (`xlink:href`→`href`) | real xmlns/qualified-name model | P1 | architecture/conformance | extra-roadmap | implement bounded model (R12) |
 | Malformed-document recovery | hard-reject on several constructs | lenient recovery + diagnostics | P1 | robustness | extra-roadmap | implement recovery policy (R12) |
@@ -838,11 +839,23 @@ deferred; **extra-roadmap** = a real gap the roadmap never represented.
   workflow (still zero-dep — no cargo-fuzz/libfuzzer). The R8.1 sweep is already
   env-configurable (`ROHKAI_FUZZ_ITERS`); R8.2 is only needed when a continuous
   deep-fuzz job is wanted. Prompt: `R8.2-deep-fuzz-ci-coverage.goal.md`.
-- **R9 — Markers, vector-effect, patterns** (P1/P2; depends R1 stroke + R3 paint +
-  R4 IR): marker placement on path vertices (start/mid/end, orient incl.
-  `auto`/`auto-start-reverse`, markerUnits, marker viewBox); `vector-effect:
-  non-scaling-stroke`; pattern tiling via the offscreen pipeline (patternUnits/
-  patternContentUnits/viewBox/patternTransform, bounded tile count).
+- **R9 — Markers, vector-effect, patterns** — ✅ DONE (P1/P2; depends R1 stroke +
+  R3 paint + R4 IR): all three pillars ship in `src/canvas/svg_rasterizer.rs`
+  (embedded verbatim into exports, so in-app == export). (1) Marker placement on
+  path/line/polyline/polygon vertices: `marker-start/mid/end` (+ `marker`
+  shorthand), `orient` `auto`/`auto-start-reverse`/`<angle>` from segment
+  tangents, `markerUnits` `strokeWidth`/`userSpaceOnUse`, `viewBox`/`refX`/`refY`/
+  `markerWidth`/`markerHeight` with overflow-clip, bounded by
+  `MAX_MARKER_PLACEMENTS`/`MAX_MARKER_CONTENT_ITEMS` (`limit.marker_count`,
+  `marker.unresolved`). (2) `vector-effect: non-scaling-stroke` (shipped in
+  61f3d66). (3) Pattern tiling via the offscreen pipeline:
+  `patternUnits`/`patternContentUnits`/`viewBox`/`patternTransform`/`href`
+  inheritance, one tile rendered then repeated across the fill bbox, bounded by
+  `MAX_PATTERN_TILE_PIXELS`/`MAX_PATTERN_CONTENT_ITEMS`/`MAX_PATTERN_REFERENCE_DEPTH`
+  with content-self-reference and href-cycle (`reference.pattern_cycle`) guards.
+  Goldens: `r9_marker_start_mid_end`, `r9_marker_auto_orient`,
+  `r9_pattern_userspace_tile`, `r9_pattern_objectbbox_tile`,
+  `r9_non_scaling_stroke`. No new dependencies.
 - **R10 — Filter correctness & tier-2** (P1/P2; depends R7): linearRGB
   color-interpolation-filters; precise filter-region computation + clipping;
   feComposite, feBlend (+ mix-blend-mode), feComponentTransfer, feMorphology;
@@ -884,16 +897,16 @@ deferred; **extra-roadmap** = a real gap the roadmap never represented.
   structured diagnostics + source preservation.
 - **Editor-grade: achieved.** In-app report UI, source viewer, rendered/source
   toggle, round-trip source preservation, honest fidelity scoring.
-- **Application-grade: approaching.** Deterministic, bounded, diagnosed rendering
-  of most static SVG (geometry, gradients, clips, masks, filter tier-1, PNG+JPEG
-  images). Blockers to "achieved": markers, patterns, vector-effect (R9) and
-  raster text (R11) — features common in real-world UI/diagram SVGs.
+- **Application-grade: achieved.** Deterministic, bounded, diagnosed rendering of
+  most static SVG (geometry, gradients, clips, masks, filter tier-1, PNG+JPEG
+  images, plus markers/patterns/vector-effect as of R9 — features common in
+  real-world UI/diagram SVGs). Remaining for full coverage: raster text (R11).
 - **Renderer-grade (resvg/librsvg-class): not yet.** R8.1 (W3C-subset conformance
-  corpus + fuzzing + precision policy) is **done**; still requires R9-R12:
-  markers/patterns/vector-effect (R9), linearRGB filters + precise regions (R10),
-  raster text (R11), namespace model + malformed recovery (R12). Until then,
-  "renderer-grade" is not claimed.
+  corpus + fuzzing + precision policy) and R9 (markers/patterns/vector-effect)
+  are **done**; still requires R10-R12: linearRGB filters + precise regions
+  (R10), raster text (R11), namespace model + malformed recovery (R12). Until
+  then, "renderer-grade" is not claimed.
 
 Next maturity step (application → renderer grade): **R8.1 (conformance/fuzz) ✅ →
-R9 (markers/patterns/vector-effect) → R10 (filter correctness) → R11 (raster
-text) → R12 (namespace/robustness/a11y)**. R8.1 complete; R9 is next.
+R9 (markers/patterns/vector-effect) ✅ → R10 (filter correctness) → R11 (raster
+text) → R12 (namespace/robustness/a11y)**. R8.1 and R9 complete; R10 is next.

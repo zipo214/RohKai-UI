@@ -3273,6 +3273,26 @@ mod tests {
         }
     }
 
+    /// R9 invariant: markers, non-scaling-stroke, and pattern tiling all render
+    /// in the export-embedded rasterizer (same verbatim source as in-app), not
+    /// merely diagnostics — so exported apps render them identically.
+    #[test]
+    fn embedded_rasterizer_includes_r9_render_paths() {
+        for marker in [
+            "fn build_markers",           // marker resolution + placement
+            "fn marker_placement",        // marker viewport/orient transform
+            "fn build_pattern_sampler",   // pattern tile rendering
+            "fn build_pattern_def",       // pattern href inheritance
+            "fn effective_device_stroke", // vector-effect non-scaling-stroke
+            "PaintSampler::Pattern",      // pattern paint sampling
+        ] {
+            assert!(
+                SVG_RASTERIZER_SOURCE.contains(marker),
+                "embedded rasterizer missing R9 render path: {marker}"
+            );
+        }
+    }
+
     /// Always-run smoke: the fixture generates the required files and its source
     /// contains every feature-matrix marker.  Fast (no compilation).
     #[test]

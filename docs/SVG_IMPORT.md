@@ -158,9 +158,17 @@ textures at runtime.
   `feDropShadow`) through the R4 offscreen pipeline (R7). Filter tier 2/3
   primitives pass through with a `filter.unsupported_primitive` partial-output
   diagnostic; missing mask/filter refs warn and leave the element rendered.
+- Image-mode rasterization renders **markers** (`marker-start`/`marker-mid`/
+  `marker-end` + `marker` shorthand, `orient` `auto`/`auto-start-reverse`/angle,
+  `markerUnits`, `viewBox`/`refX`/`refY` with overflow clip), **patterns** (tiled
+  via the offscreen pipeline — `patternUnits`/`patternContentUnits`/`viewBox`/
+  `patternTransform`/`href`), and `vector-effect: non-scaling-stroke` (R9). Tile
+  pixels and marker placements are bounded; cyclic/missing references diagnose
+  (`reference.pattern_cycle`, `marker.unresolved`, `limit.marker_count`) and
+  never panic.
 - Image-mode rasterization emits structured diagnostics for the remaining
-  unsupported renderer buckets such as patterns, markers, text, vector effects,
-  and unavailable paint-server references.
+  unsupported renderer buckets such as text, blend modes, and unavailable
+  paint-server references.
   Invalid fill-rule/stroke declarations produce source-spanned warnings and
   preserve inherited/default behavior. Stroke complexity limits report
   truncation explicitly.
@@ -205,12 +213,13 @@ RohKai rejects or ignores unsafe SVG features:
   `DOCTYPE`, custom entities, scripts, non-XML processing instructions, external
   hrefs or non-local `url(...)` references, excessive tag count, excessive path
   commands, or excessive raster dimensions.
-- Animation, `foreignObject`, `textPath`, patterns, filter tier 2/3 primitives,
+- Animation, `foreignObject`, `textPath`, filter tier 2/3 primitives,
   unavailable paint-server references, and complex CSS selectors are reported
   as unsupported or approximated with structured diagnostics. Linear/radial
-  gradients, `clipPath` clipping, masks (alpha/luminance), and filter tier-1 are
-  supported in Image-mode rendering but remain non-editable, diagnosed
-  placeholders in component import mode.
+  gradients, `clipPath` clipping, masks (alpha/luminance), filter tier-1,
+  markers, patterns, and `vector-effect: non-scaling-stroke` (R9) are supported
+  in Image-mode rendering but remain non-editable, diagnosed placeholders in
+  component import mode.
   `clip-path` is applied in Image-mode rendering (R4); unresolved/cyclic/too-deep
   clip references and objectBoundingBox-on-group are diagnosed and skipped.
 
@@ -302,8 +311,8 @@ cargo clippy -- -D warnings
 - Text shaping and font metrics
 - Masks (clips are supported as of R4)
 - objectBoundingBox clip units on a `<g>` (no single bounding box)
-- Editable gradient/pattern conversion during component import
-- Pattern rasterization
+- Editable gradient/pattern conversion during component import (Image-mode
+  pattern *rasterization* ships in R9; editable conversion is still future work)
 - Full Image export parity for unsupported SVG features
 - Full `tspan` positioning and per-span styling
 - Text-on-path layout

@@ -380,6 +380,44 @@ pub fn fixtures() -> Vec<GoldenFixture> {
             golden: "...BB...\n...BB...\n...BB...\n...BB...\n...BB...\n...BB...\n...BB...\n...BB...",
         },
         GoldenFixture {
+            // R9: a 2x2 userSpaceOnUse <marker> drawn on every vertex of a
+            // 3-point polyline (marker-start/mid/end), refX/refY centring the
+            // red square on each vertex over the blue stroke.
+            name: "r9_marker_start_mid_end",
+            svg: r##"<svg viewBox="0 0 12 4"><defs><marker id="m" markerWidth="2" markerHeight="2" refX="1" refY="1" markerUnits="userSpaceOnUse"><rect width="2" height="2" fill="#ff0000"/></marker></defs><polyline points="1,2 6,2 11,2" fill="none" stroke="#0000ff" stroke-width="1" marker-start="url(#m)" marker-mid="url(#m)" marker-end="url(#m)"/></svg>"##,
+            width: 12,
+            height: 4,
+            golden: "............\nRRoooRRoooRR\nRRoooRRoooRR\n............",
+        },
+        GoldenFixture {
+            // R9: orient="auto" rotates the marker to the segment tangent; a
+            // right-pointing green triangle at the end of a horizontal line.
+            name: "r9_marker_auto_orient",
+            svg: r##"<svg viewBox="0 0 8 8"><defs><marker id="a" markerWidth="3" markerHeight="3" refX="0" refY="1.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0 L3 1.5 L0 3 Z" fill="#00ff00"/></marker></defs><line x1="1" y1="4" x2="5" y2="4" stroke="#000000" stroke-width="1" marker-end="url(#a)"/></svg>"##,
+            width: 8,
+            height: 8,
+            golden: "........\n........\n.....o..\n.ooooGoo\n.ooooGoo\n.....o..\n........\n........",
+        },
+        GoldenFixture {
+            // R9: userSpaceOnUse pattern tiling — a 2x2 tile with two opposite
+            // red cells repeats into a checkerboard across the fill.
+            name: "r9_pattern_userspace_tile",
+            svg: r##"<svg viewBox="0 0 8 4"><defs><pattern id="p" width="2" height="2" patternUnits="userSpaceOnUse"><rect width="1" height="1" fill="#ff0000"/><rect x="1" y="1" width="1" height="1" fill="#ff0000"/></pattern></defs><rect width="8" height="4" fill="url(#p)"/></svg>"##,
+            width: 8,
+            height: 4,
+            golden: "R.R.R.R.\n.R.R.R.R\nR.R.R.R.\n.R.R.R.R",
+        },
+        GoldenFixture {
+            // R9: objectBoundingBox pattern (+ objectBoundingBox content units) —
+            // tile = half the bbox; content fills the left half of each tile, so
+            // the fill becomes vertical blue stripes.
+            name: "r9_pattern_objectbbox_tile",
+            svg: r##"<svg viewBox="0 0 4 4"><defs><pattern id="p" width="0.5" height="0.5" patternUnits="objectBoundingBox" patternContentUnits="objectBoundingBox"><rect width="0.25" height="0.5" fill="#0000ff"/></pattern></defs><rect width="4" height="4" fill="url(#p)"/></svg>"##,
+            width: 4,
+            height: 4,
+            golden: "B.B.\nB.B.\nB.B.\nB.B.",
+        },
+        GoldenFixture {
             name: "unsafe_external_href_rejected",
             svg: r##"<svg viewBox="0 0 4 4"><image href="https://example.invalid/a.png" width="4" height="4"/></svg>"##,
             width: 4,
