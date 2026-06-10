@@ -7,6 +7,29 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-10 — SVG R11 complete: raster text + textPath (bundled Hershey font)
+
+On `dev`. **R11 done** (commit e8eae08). Image-mode rasterizer now renders
+`<text>`/`<tspan>`/`<textPath>` as a vector-outline snapshot; editable component
+import (R6, svg_import.rs) untouched. Key pieces, all in `svg_rasterizer.rs`
+(export-embedded verbatim): `HERSHEY_SIMPLEX` (public-domain stroked font, ASCII
+32..=126, 30 units/em, `^` simplified); parser now captures `<text>` inner
+markup to the MATCHING close tag (`SvgNode::Text.content` — old code cut at
+first `</`); `scan_text_runs` (one tspan level x/y/dx/dy, deeper flattened +
+diags); `lower_text_command` lays out runs in user space and emits ONE stroked
+`DrawCommand::Shape` (PathData of glyph polylines) → full reuse of stroke
+pipeline/clips/masks/filters/gradients; `ArcLengthPath` places textPath glyphs
+by arc length with midpoint-tangent rotation. Style gained inherited `font_size`
++ `text_anchor`. Honesty: every text render emits `text.raster_snapshot`
+(→ Medium fidelity, intentional); tofu + diags for non-ASCII/bidi/combining;
+`MAX_TEXT_GLYPHS` cap. `DrawCommand::UnsupportedText` removed; the one test
+asserting text-unsupported was flipped (justified in DEVLOG). **Test-writing
+heads-up:** the 0.67px glyph stroke AA-splits across pixel columns when a stem
+straddles a boundary — assert alpha>50, not >100/200. Gate green: 327 tests /
+fmt / clippy --all-targets / scripts / launch smoke. **Next: R12** (namespace
+model + malformed recovery + a11y metadata — final open lane); read
+`docs/svg-goal-plan-prompts/R12-*.goal.md` first.
+
 ## 2026-06-10 — SVG R10 complete: filter correctness + tier-2 + blend modes
 
 On `dev`. **R10 done**, shipped as four verified+committed increments (each ends

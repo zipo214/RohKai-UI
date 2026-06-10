@@ -171,8 +171,17 @@ textures at runtime.
   pixels and marker placements are bounded; cyclic/missing references diagnose
   (`reference.pattern_cycle`, `marker.unresolved`, `limit.marker_count`) and
   never panic.
+- Image-mode rasterization renders **text** (`<text>`/`<tspan>`/`<textPath>`)
+  as a vector-outline snapshot via a bundled public-domain Hershey simplex
+  stroked font (R11): ASCII coverage, inherited font-size, whole-run
+  `text-anchor`, x/y/dx/dy tspan runs, and arc-length `textPath` placement.
+  Every rendered text carries an honest `text.raster_snapshot` warning
+  (font-family substituted, approximate metrics); non-ASCII renders tofu boxes
+  with `text.glyph_unsupported`; bidi/combining marks are diagnosed
+  (`text.bidi_unsupported` / `text.shaping_unsupported`), never silently wrong.
+  Glyph count is bounded (`limit.text_glyphs`).
 - Image-mode rasterization emits structured diagnostics for the remaining
-  unsupported renderer buckets such as text, tier-3 filter primitives, and
+  unsupported renderer buckets such as tier-3 filter primitives and
   unavailable paint-server references.
   Invalid fill-rule/stroke declarations produce source-spanned warnings and
   preserve inherited/default behavior. Stroke complexity limits report
@@ -218,12 +227,13 @@ RohKai rejects or ignores unsafe SVG features:
   `DOCTYPE`, custom entities, scripts, non-XML processing instructions, external
   hrefs or non-local `url(...)` references, excessive tag count, excessive path
   commands, or excessive raster dimensions.
-- Animation, `foreignObject`, `textPath`, tier-3 filter primitives,
+- Animation, `foreignObject`, tier-3 filter primitives,
   unavailable paint-server references, and complex CSS selectors are reported
   as unsupported or approximated with structured diagnostics. Linear/radial
   gradients, `clipPath` clipping, masks (alpha/luminance), filter tier-1 + tier-2
-  (linearRGB, precise regions, `mix-blend-mode`) (R7/R10), markers, patterns, and
-  `vector-effect: non-scaling-stroke` (R9) are supported in Image-mode rendering
+  (linearRGB, precise regions, `mix-blend-mode`) (R7/R10), markers, patterns,
+  `vector-effect: non-scaling-stroke` (R9), and raster text + `textPath` via the
+  bundled vector font (R11) are supported in Image-mode rendering
   but remain non-editable, diagnosed placeholders in component import mode.
   `clip-path` is applied in Image-mode rendering (R4); unresolved/cyclic/too-deep
   clip references and objectBoundingBox-on-group are diagnosed and skipped.
@@ -258,11 +268,14 @@ Current behavior keeps text editable (TEXT_IMPORT_PLAN phases 1-2):
   explicit `text.tspan_adjust` / `text.tspan_style` diagnostics.
 - `text-anchor` (start/middle/end) and `dominant-baseline` are applied per chunk;
   unsupported baselines are approximated with a `text.baseline` diagnostic.
-- Raster text rendering, `textPath`, bidi, and shaping remain deferred; text-heavy
-  SVGs are still not reported as high fidelity.
+- Image-mode rendering draws text via the bundled Hershey simplex vector font
+  with `textPath` support (R11, TEXT_IMPORT_PLAN phase 3); the editable import
+  above stays the component-import default. Bidi and shaping remain deferred
+  (diagnosed tofu); text-heavy SVGs are still not reported as high fidelity
+  (the `text.raster_snapshot` approximation warning keeps fidelity honest).
 
-Remaining text work is in `docs/TEXT_IMPORT_PLAN.md` (phase 3+): an optional
-vector-outline snapshot mode and an owned shaping engine only if needed.
+Remaining text work is in `docs/TEXT_IMPORT_PLAN.md` (phase 4): an owned
+shaping engine only if the product proves it needs one.
 
 ## Validation
 
@@ -300,7 +313,7 @@ Full project verification is still:
 ```powershell
 cargo check
 cargo test
-cargo clippy -- -D warnings
+cargo clippy --all-targets -- -D warnings
 ```
 
 ## Known Unsupported Features
@@ -320,4 +333,5 @@ cargo clippy -- -D warnings
   pattern *rasterization* ships in R9; editable conversion is still future work)
 - Full Image export parity for unsupported SVG features
 - Full `tspan` positioning and per-span styling
-- Text-on-path layout
+- Text-on-path layout in *component import* mode (Image-mode `textPath`
+  rendering ships in R11 via the bundled vector font)

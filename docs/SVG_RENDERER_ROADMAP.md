@@ -199,9 +199,13 @@ Current limits:
   `mix-blend-mode` (separable modes) render as of R10. Tier-3 filter primitives
   (turbulence/displacement/convolution/lighting/tile/image) remain diagnosed.
 - Text imports as editable chunked labels (positioned spans become separate
-  grouped labels with per-chunk anchor/baseline diagnostics); raster text
-  rendering (vector-outline snapshot) is deferred, so the rasterizer still reports
-  `<text>` in the `text` unsupported bucket.
+  grouped labels with per-chunk anchor/baseline diagnostics). The rasterizer
+  renders `<text>`/`<tspan>`/`<textPath>` as a vector-outline snapshot via the
+  bundled public-domain Hershey simplex stroked font (R11): ASCII coverage,
+  whole-run text-anchor, x/y/dx/dy runs, arc-length textPath. Every rendered
+  text carries an honest `text.raster_snapshot` approximation warning; non-ASCII
+  renders tofu boxes with diagnostics; bidi/shaping are diagnosed, never
+  silently wrong.
 - No full CSS media/import/pseudo/attribute/combinator selector model.
 - No gamma-correct compositing pipeline. (Premultiplied-alpha compositing and
   isolated group opacity are implemented for layer compositing; the base buffer
@@ -396,7 +400,7 @@ need all of it immediately, but this is the map.
 | Clips | Actual clipping stack | clipPath rendered: clip-rule, transforms, both clipPathUnits (shape bbox), nested intersection, cycle/depth caps, plus nested-`<svg>` overflow clipping (R4) | objectBoundingBox-on-group; clip on text/image when those land | P2 |
 | Masks | Alpha/luminance masks | Alpha + luminance masks rendered through the R4 offscreen (shape/gradient mask content, `mask-type`, bounded by item/offscreen caps) | objectBoundingBox content units; mask region clipping | P3 |
 | Filters | Primitive graph | Tier-1 + tier-2 graph on R4 offscreen (premultiplied, capped): blur/offset/flood/merge/colorMatrix/dropShadow (R7) + composite/blend/componentTransfer/morphology (R10), in linearRGB by default with precise filter-region clipping (R10); tier-3 primitives partial + diagnosed | Tier-3 primitives (turbulence/displacement/convolution/lighting/tile/image) | P4 |
-| Text | Full layout/shaping | Editable chunked multi-label import (positioned spans → grouped labels, per-chunk anchor/baseline diagnostics); raster text skipped | Vector-outline snapshot / raster text; shaping/bidi/textPath | P3/P4 |
+| Text | Full layout/shaping | Editable chunked multi-label import (R6) + raster vector-outline snapshot via bundled Hershey simplex font with textPath (R11): ASCII coverage, anchored runs, arc-length placement, honest approximation diagnostics | Real font-file glyphs, shaping/bidi, per-glyph position lists | P3/P4 |
 | Markers | Arrowheads and symbols on paths | Rendered (R9): marker-start/mid/end, orient auto/auto-start-reverse/angle, markerUnits, viewBox/refX/refY + overflow clip, bounded count | Closed | P3 |
 | Antialiasing | High-quality coverage | Deterministic 8x8 coverage; winding/parity fills and unioned stroke coverage are separate | Tune quality/performance and add gamma-aware compositing | P1/P2 |
 | Compositing | Correct premultiplied alpha/groups | Premultiplied-alpha offscreen compositing for isolated group opacity (no double-darken, halo-free); straight-RGBA base buffer + output (R4) | Gamma-correct base pipeline; blend modes | P1 |
@@ -622,11 +626,11 @@ Tasks:
   chunk; `dominant-baseline` middle/central/hanging applied, others approximated
   with a `text.baseline` diagnostic. `text.missing_font` flags placeholder
   metrics.
-- [ ] **Deferred:** optional vector-outline snapshot mode (raster text rendering)
-  — the rasterizer still reports `<text>` as the `text` unsupported bucket. Will
-  be added only after editable text + source preservation are proven, per
-  TEXT_IMPORT_PLAN phase 3. `textPath`, bidi, and full shaping/kerning/ligatures
-  remain deferred with explicit diagnostics.
+- [x] Vector-outline snapshot mode (raster text rendering) — **landed in R11**:
+  the rasterizer renders `<text>`/`<tspan>`/`<textPath>` via the bundled
+  public-domain Hershey simplex stroked font with honest approximation
+  diagnostics. Bidi and full shaping/kerning/ligatures remain deferred with
+  explicit diagnostics (tofu + warnings, never silently wrong).
 - Defer owned shaping engine until the product proves it needs one.
 
 Acceptance:
@@ -634,9 +638,9 @@ Acceptance:
 - [x] Text-heavy SVGs no longer collapse into misleading single labels without
   detailed warnings: positioned spans become separate grouped labels with
   provenance and per-chunk diagnostics.
-- [ ] Users can choose editable approximation vs visual snapshot mode — editable
-  import is done; the visual snapshot toggle is deferred to the R6 follow-on / R8
-  report UI.
+- [x] Users can choose editable approximation vs visual snapshot mode — editable
+  import is the component-import default (R6); choosing Image mode renders the
+  visual snapshot via the bundled vector font (R11), source preserved.
 
 ### Phase R7 — Masks And Filters
 
@@ -706,8 +710,9 @@ Acceptance:
   in-app.
 
 **SVG renderer roadmap R0–R8 complete.** Remaining work is explicitly deferred:
-baseline-JPEG follow-ups (progressive JPEG), the R6 vector-outline snapshot /
-raster text rendering, and filter tier 2/3 — all tracked above and diagnosed at
+baseline-JPEG follow-ups (progressive JPEG) and filter tier 3 — the R6
+vector-outline snapshot landed in R11 and filter tier 2 landed in R10; the rest
+is tracked above and diagnosed at
 runtime. Animation, scripting, and external network/file loading stay out of
 scope per the secure-static profile.
 
@@ -807,7 +812,7 @@ deferred; **extra-roadmap** = a real gap the roadmap never represented.
 | Patterns | tiled via offscreen (R9) | full tiling (patternUnits/contentUnits/viewBox/transform) | P1/P2 | implementation | intra-roadmap deferred | DONE (R9); colour-space tuning later |
 | Markers | marker-start/mid/end rendered (R9) | marker-start/mid/end, orient, markerUnits, viewBox | P1 | implementation | extra-roadmap | DONE (R9) |
 | vector-effect=non-scaling-stroke | supported (R9) | supported | P2 | implementation | extra-roadmap | DONE (R9) |
-| Raster text / textPath | import-only chunks; raster skips | full glyph layout + textPath | P1 | implementation | intra-roadmap deferred (R6 ph3) | implement editable-first + vector snapshot (R11) |
+| Raster text / textPath | rendered (R11): bundled Hershey simplex vector font, ASCII coverage, anchored runs, arc-length textPath, honest diagnostics | full glyph layout + textPath | P1 | implementation | intra-roadmap deferred (R6 ph3) | DONE (R11); real font files + shaping/bidi remain out of scope |
 | Namespace model | prefixes stripped (`xlink:href`→`href`) | real xmlns/qualified-name model | P1 | architecture/conformance | extra-roadmap | implement bounded model (R12) |
 | Malformed-document recovery | hard-reject on several constructs | lenient recovery + diagnostics | P1 | robustness | extra-roadmap | implement recovery policy (R12) |
 | Accessibility metadata | dropped | `title`/`desc`/`aria-*`/`role` exposed | P2 | editor/diagnostics | extra-roadmap | implement title/desc extraction (R12) |
@@ -873,10 +878,22 @@ deferred; **extra-roadmap** = a real gap the roadmap never represented.
   feConvolveMatrix/lighting) stay identity + `filter.unsupported_primitive`.
   Goldens per primitive + region clip + mix-blend; linearRGB proven by a
   pixel-exact unit test. No new dependencies.
-- **R11 — Raster text & textPath** (P1; depends R6): editable-first stays; add an
-  optional vector-outline snapshot render path (own glyph-outline extraction, no
-  external font/shaping crate) and textPath layout; explicit diagnostics for
-  unshaped/bidi cases. Heavy — gate on real product need.
+- **R11 — Raster text & textPath** — ✅ DONE (P1; depends R6), in
+  `src/canvas/svg_rasterizer.rs` (embedded verbatim into exports). Editable-first
+  import (R6) unchanged; Image mode renders the vector-outline snapshot via a
+  bundled public-domain Hershey simplex stroked font (`HERSHEY_SIMPLEX`, ASCII
+  32..=126, `^` simplified; 30 units/em, cap height 0.70em, stroke font_size/15).
+  The parser captures `<text>` inner markup; `scan_text_runs` produces flat runs
+  (one `<tspan>` level with x/y/dx/dy; deeper nesting/styling flattened with
+  diagnostics); `lower_text_command` lays out runs in user space (inherited
+  font-size, whole-run text-anchor) and emits one stroked-glyph Shape command, so
+  clips/masks/filters/opacity/gradients apply to text like shapes. `textPath`
+  places glyphs by arc length (startOffset units/percent, midpoint-tangent
+  rotation, glyphs beyond path end dropped per spec). Honesty: every rendered
+  text emits `text.raster_snapshot`; unknown glyphs → tofu +
+  `text.glyph_unsupported`; bidi/combining → diagnosed tofu, never silently
+  wrong. Bounded by `MAX_TEXT_GLYPHS` (`limit.text_glyphs`). Goldens: word,
+  anchored, textPath-on-diagonal. No new dependencies.
 - **R12 — XML/namespace & robustness** (P1; depends R0): real bounded namespace
   model (qualified names, xmlns scoping, foreign-namespace skip with diagnostics);
   malformed-document recovery policy (recover-and-diagnose instead of hard reject
@@ -912,15 +929,19 @@ deferred; **extra-roadmap** = a real gap the roadmap never represented.
   toggle, round-trip source preservation, honest fidelity scoring.
 - **Application-grade: achieved.** Deterministic, bounded, diagnosed rendering of
   most static SVG (geometry, gradients, clips, masks, PNG+JPEG images,
-  markers/patterns/vector-effect (R9), and linearRGB filter tier-1+tier-2 with
-  precise regions + mix-blend-mode (R10) — features common in real-world UI/
-  diagram SVGs). Remaining for full coverage: raster text (R11).
+  markers/patterns/vector-effect (R9), linearRGB filter tier-1+tier-2 with
+  precise regions + mix-blend-mode (R10), and raster text/textPath via the
+  bundled vector font (R11) — features common in real-world UI/diagram SVGs).
 - **Renderer-grade (resvg/librsvg-class): not yet.** R8.1 (W3C-subset conformance
-  corpus + fuzzing + precision policy), R9 (markers/patterns/vector-effect), and
-  R10 (linearRGB filters + precise regions + tier-2 + blend modes) are **done**;
-  still requires R11-R12: raster text (R11), namespace model + malformed recovery
-  (R12). Until then, "renderer-grade" is not claimed.
+  corpus + fuzzing + precision policy), R9 (markers/patterns/vector-effect),
+  R10 (linearRGB filters + precise regions + tier-2 + blend modes), and R11
+  (raster text + textPath, approximate bundled-font glyphs) are **done**; still
+  requires R12 (namespace model + malformed recovery + a11y) — and true
+  renderer-grade text would additionally need real font-file glyph rendering and
+  shaping, which stay out of scope per the zero-dependency profile. Until then,
+  "renderer-grade" is not claimed.
 
 Next maturity step (application → renderer grade): **R8.1 (conformance/fuzz) ✅ →
 R9 (markers/patterns/vector-effect) ✅ → R10 (filter correctness) ✅ → R11 (raster
-text) → R12 (namespace/robustness/a11y)**. R8.1, R9, and R10 complete; R11 is next.
+text) ✅ → R12 (namespace/robustness/a11y)**. R8.1 and R9-R11 complete; R12 is
+next (the final open lane).

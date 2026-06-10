@@ -2,6 +2,92 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-10 — SVG R11 complete: raster text + textPath (post-R8 lane 4/5)
+
+### Context Reviewed Before Editing
+- `docs/svg-goal-plan-prompts/R11-raster-text-textpath.goal.md` (lane spec);
+  `svg-zero-dep` skill; `docs/TEXT_IMPORT_PLAN.md`
+- `src/canvas/svg_rasterizer.rs`: XmlParser is_text branch (content skipped!),
+  SvgNode::Text (attrs only), DisplayList UnsupportedText path, Style model,
+  stroke pipeline (stroke_polyline/render_shape), flatten_path_data
+- `src/svg_import.rs` R6 TextChunk model (NOT reused — rasterizer must stay
+  std-only/self-contained for export embedding)
+
+### Glyph-set decision (lane requirement: derive + report)
+Bundled **Hershey simplex** (Allen V. Hershey, US Naval Weapons Laboratory —
+public domain), embedded as `HERSHEY_SIMPLEX: [&[i8]; 95]` inside
+`svg_rasterizer.rs` (it must live in that file: export embeds it verbatim under
+the single-`crate::` contract; an `include_str!` data file would break the
+exported copy). Coverage: ASCII 32..=126 only; `^` is a simplified caret
+substitute. Metrics: y-up, baseline 0, cap height 21 units, descender −7;
+30 units = 1 em (cap = 0.70 em); stroke width 2 units = font_size/15, round
+caps/joins. Everything else renders a tofu box + diagnostic. Transcription risk
+of individual glyph data is bounded by goldens for tested glyphs and by the
+deterministic/bounded contract for the rest.
+
+### Changes (all in `src/canvas/svg_rasterizer.rs` unless noted; commit e8eae08)
+- Parser: `<text>`/`<tspan>` capture raw inner markup to the *matching* close
+  tag into new `SvgNode::Text.content` (old `consume_until("</")` cut nested
+  tspans at the first `</`).
+- `scan_text_runs`: flat TextRuns from plain text + one `<tspan>` level
+  (x/y/dx/dy); deeper nesting → `text.tspan_nested_flattened`; styled tspans →
+  `text.tspan_style_ignored`; `<textPath>` extracted (href, startOffset, text).
+- Style: inherited `font_size` (SvgLength) + `text_anchor` parsed via
+  apply_declaration (presentation attrs, CSS, inline style all work).
+- `lower_text_command`: resolves font-size, applies whole-run text-anchor,
+  x/y position lists approximated by first value (+ diagnostic), lays glyphs in
+  user space, and emits ONE stroked-glyph `DrawCommand::Shape`
+  (`ShapeGeometry::Path` of polyline subpaths) — full reuse of the stroke
+  pipeline, R4 clip, masks/filters (via shape_layer), opacity, and gradient
+  paint (text fill drives the glyph stroke paint; `stroke_opacity` =
+  fill_opacity).
+- textPath: referenced path lowered to user-space polylines
+  (`user_space_subpaths`), `ArcLengthPath` arc-length table, glyph origin at
+  pen distance with midpoint-tangent rotation; startOffset user units +
+  percent; glyphs beyond path end not rendered (per SVG); missing href →
+  `textpath.unresolved`.
+- Honesty/diagnostics: `text.raster_snapshot` on every rendered text element
+  (font-family substituted, approximate metrics → Medium fidelity by design);
+  `text.glyph_unsupported` (tofu), `text.bidi_unsupported`,
+  `text.shaping_unsupported` (combining marks), `limit.text_glyphs`
+  (MAX_TEXT_GLYPHS = 4096/element).
+- `DrawCommand::UnsupportedText` removed; `<text>` flips unsupported→rendered.
+
+### Justified test changes
+- `render_report_counts_rendered_skipped_and_text_limitations` previously
+  asserted `<text>` lands in the `text` unsupported bucket with zero warnings;
+  it now asserts the rendered count includes text, no `text` unsupported
+  bucket, and the source-spanned `text.raster_snapshot` warning (fidelity stays
+  Medium — same honest outcome, new mechanism).
+
+### Tests / goldens
+Goldens: `r11_text_word` ("Hi", legible H+i), `r11_text_anchor_middle`,
+`r11_textpath_diagonal` (glyphs rotated along a rising diagonal). Unit tests:
+determinism + snapshot diagnostic + no unsupported bucket, tofu (CJK), bidi
+(Hebrew), tspan dy offset + unresolved textPath, glyph-cap bound. Export-parity
+`embedded_rasterizer_includes_r11_render_paths`. Editable-first regression: all
+svg_import tests unchanged and green. Note for future text tests: the ~0.67px
+glyph stroke AA-splits across two pixel columns when a stem straddles a pixel
+boundary — assert alpha > 50.
+
+### Verification
+- `cargo fmt --check` clean; `cargo check` clean; `cargo test` **327 pass / 6
+  ignored / 0 fail**; `cargo clippy --all-targets -- -D warnings` clean;
+  `validate-svg-import.ps1` + `check-text-encoding.ps1` pass; `cargo run`
+  launch smoke OK (first attempt hit a transient console interrupt
+  0xC000013A, clean re-run). No new dependencies.
+
+### Risks / Follow-ups
+- Glyph fidelity: bundled stroked font ≠ requested font-family; metrics are
+  approximate by design and diagnosed. Real font-file glyph rendering/shaping
+  stays out of scope (zero-dependency profile).
+- Per-glyph x/y position lists approximated by first value; per-tspan styling
+  ignored (both diagnosed).
+- textPath uses the first+subsequent flattened subpaths concatenated; multi-
+  subpath start offsets are approximate across subpath joins.
+- **Next: R12** — namespace model, malformed-document recovery, title/desc
+  a11y extraction (final open lane).
+
 ## 2026-06-10 — SVG R10 complete: filter correctness + tier-2 + blend (post-R8 lane 3/5)
 
 ### Context Reviewed Before Editing

@@ -20,8 +20,11 @@ of truth whenever text layout exceeds RohKai's editable placeholder model.
   diagnostic) are handled per chunk. `text.missing_font` flags placeholder
   metrics.
 - Bounds use deterministic placeholder metrics rather than real font metrics.
-- Raster text rendering (vector-outline snapshot), `textPath`, complex shaping,
-  bidi layout, and full font handling are not implemented (phase 3+).
+- Raster text rendering (vector-outline snapshot) and `textPath` landed in SVG
+  renderer lane R11: Image mode renders text via a bundled public-domain Hershey
+  simplex stroked font (ASCII coverage, honest `text.raster_snapshot`
+  diagnostics). Complex shaping, bidi layout, and real font-file handling remain
+  not implemented (diagnosed tofu, never silently wrong).
 
 ## Desired Designer Behavior
 
@@ -57,7 +60,9 @@ clone in the next pass.
 
 1. Robust `tspan` parser and span metadata. **(done)**
 2. Multi-label grouped import for positioned spans. **(done)**
-3. Optional vector-outline snapshot mode for visual comparison. **(deferred)**
+3. Optional vector-outline snapshot mode for visual comparison. **(done — R11:
+   Image-mode rasterizer renders text via the bundled Hershey simplex vector
+   font with textPath; editable import stays the component-import default.)**
 4. RohKai-owned text layout/shaping engine only if the editable workflow still
    needs it after phases 1-3. **(deferred)**
 
