@@ -2,6 +2,2344 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-07 — SVG R8.1: Conformance + Security Hardening (post-R8 lane 1/5)
+
+### Context Reviewed Before Editing
+- `CLAUDE.md`/`AGENTS.md` SVG roadmap step protocol; `svg-zero-dep` skill
+- `docs/svg-goal-plan-prompts/R8.1-conformance-security-hardening.goal.md`
+- `docs/SVG_RENDERER_ROADMAP.md` Post-R8 gap matrix + lanes
+- `src/canvas/svg_rasterizer.rs` (decoders: `decode_png`/`decode_jpeg`/`inflate`/
+  `base64_decode`/`parse_path_d`/`rasterize_or_fallback`; caps; bench/oracle),
+  `src/canvas/svg_golden.rs` (golden harness + fixtures)
+
+### Changes
+- Generated paste-ready post-R8 goal prompts (R8.1, R9–R12, each ≤4000 chars) +
+  README run-order; added the auto-read "SVG renderer roadmap step protocol" to
+  CLAUDE.md and AGENTS.md. (commit `8f52a8e`)
+- **Fuzz harness** (in `svg_rasterizer.rs` test module): deterministic xorshift
+  PRNG (`fuzz_rng`), bounded byte mutator (`fuzz_mutate`), `fuzz_drive` runs each
+  mutated buffer through rasterize_or_fallback / parse_path_d / decode_png /
+  decode_jpeg / inflate asserting no-panic + bounded output, over a checked-in
+  seed corpus (`tests/fixtures/svg_fuzz/seed.svg` + `seed_path.txt` + the PNG/JPEG
+  payload consts). `fuzz_smoke_decoders_never_panic` (always-run, 64 iters) +
+  `fuzz_decoders_no_panic_bounded` (ignored, 8k iters, validated at 50k).
+- **Curated W3C-1.1 subset goldens** (9) in `svg_golden.rs`: currentColor, rgb(),
+  fill-opacity, `<use>`, nested-group transform, polyline, circle, ellipse,
+  `mask-type="alpha"`. Crisp predictions matched the renderer exactly; AA disc
+  signatures baked from captured output.
+- **Memory-cap regressions**: oversized canvas request clamped (not allocated),
+  oversized document rejected, path-token flood → empty default, inflate output
+  ceiling honored.
+- **Docs**: new `docs/SVG_PRECISION_AND_BENCH.md` (coverage grid, nearest
+  sampling, premultiplied/sRGB vs linearRGB boundary — flags filters-run-in-sRGB
+  as the R10 gap; benchmark budgets + methodology). Flipped R8.1 gap rows + lane
+  bullet + maturity assessment in the roadmap; updated feature-evaluation.
+
+### Verification
+- `cargo fmt --check`, `cargo check`, `cargo test` (302 pass / 6 ignored),
+  `cargo clippy --all-targets -- -D warnings`, `cargo test -- --ignored`
+  (fuzz + bench + oracle), validate-svg-import.ps1, check-text-encoding.ps1.
+
+### Risks / Follow-ups
+- Goldens for circle/ellipse are renderer-defined (golden workflow): they catch
+  regressions, not absolute AA correctness. Crisp goldens validate correctness.
+- Next lane: **R9** (markers/vector-effect/patterns). Read its goal prompt first.
+
+## 2026-06-06 — SVG R8: Conformance, Benchmark, Report UI (roadmap R0–R8 closed)
+
+### Context Reviewed Before Editing
+- `CLAUDE.md`, low-token preflight, `.agents/skills/svg-zero-dep/SKILL.md`
+- `docs/SVG_RENDERER_ROADMAP.md` R8, `docs/svg-goal-plan-prompts/R8-*`
+- `src/canvas/svg_rasterizer.rs` (SvgRenderReport/fidelity/warning/unsupported,
+  rasterize_with_report), `src/panels/properties.rs` show_image + svg_source,
+  `src/panels/mod.rs`, `src/canvas/svg_golden.rs`
+
+### Changes
+- New `src/panels/svg_report.rs`: `report_summary(&SvgRenderReport)` — a pure,
+  unit-tested mapping to display rows (fidelity / rendered / skipped / warnings /
+  unsupported) plus per-diagnostic `(code/feature, message[+byte-span])` lines;
+  `show_report(ui, src)` renders it with a rendered-report / SVG-source toggle
+  (egui temp memory) and a read-only source viewer.
+- Wired the report panel into `panels::properties::show_image` for the selected
+  SVG Image widget (computes `rasterize_with_report` at a fixed 256px; reuses the
+  existing report, no new computation). Registered the module in `panels/mod.rs`.
+- Golden corpus: added a crisp polygon-geometry golden (`polygon_square_fill`).
+- Benchmark: `#[ignore] raster_benchmark_complex_scene_within_budget` measures
+  parse+scene+raster of a 200-rect gradient/clip/stroke 256px scene (eprintln
+  timing; generous hang guard — measures, doesn't gate). Joins the existing
+  ignored 512px fill smoke.
+- Dev-only oracle: `#[ignore] reference_oracle_scene_is_deterministic` — external
+  reference renderers stay CI-artifact/dev-only, never runtime deps; in-repo
+  stand-in asserts deterministic output. (Avoided banned crate names in `src/` so
+  `validate-svg-import.ps1`'s dependency-policy grep stays green.)
+
+### Verification
+- `cargo test`: 297 passed, 5 ignored (R8 benchmark + oracle + prior 3). The 3
+  svg_report unit tests assert the report→rows mapping incl. byte-span provenance.
+- Ignored R8 tests pass when run with `--ignored` (benchmark ~6.5s/200 rects debug).
+- `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
+  `scripts/validate-svg-import.ps1`, `scripts/check-text-encoding.ps1`: clean.
+  Ignored all-built-in exported-project `cargo check`: passes.
+
+### Remaining Risks / Follow-Ups
+- SVG renderer roadmap **R0–R8 closed**. Deferred + runtime-diagnosed: progressive
+  JPEG, R6 vector-outline snapshot / raster text, filter tier 2/3.
+- Post-roadmap: broader licensed conformance corpus + fuzzing; a true external
+  reference-oracle remains a CI-artifact step, never a runtime dependency.
+- Report panel re-rasterizes the selected Image at 256px each frame (cheap,
+  selection-scoped); could cache by source hash if it ever shows up in profiles.
+
+## 2026-06-06 — SVG R7: Masks + Filters Tier-1 (on the R4 offscreen pipeline)
+
+### Context Reviewed Before Editing
+- `CLAUDE.md`, low-token preflight, `.agents/skills/svg-zero-dep/SKILL.md`
+- `docs/SVG_RENDERER_ROADMAP.md` R7, `docs/svg-goal-plan-prompts/R7-masks-filters.goal.md`
+- `src/canvas/svg_rasterizer.rs` R4 layer/offscreen machinery (LayerRaw,
+  ResolvedLayer, layer_for_group, execute layer stack, Offscreen,
+  composite_offscreen, RasterTarget, render_shape, ClipMask), parser
+  classification (`unsupported_tag_feature`, `is_container_tag`, build_items)
+
+### Changes
+- Masks (`mask="url(#id)"`, alpha + luminance via `mask-type`): `resolve_mask` +
+  `collect_mask_items` lower the `<mask>` subtree to `MaskItem`s; `MaskDef::
+  build_alpha` renders them through `render_shape` into a premultiplied buffer and
+  reduces to a coverage alpha (luminance = 0.2125R+0.7154G+0.0721B on the
+  premultiplied buffer, or the alpha channel). Applied by multiplying the masked
+  element's isolated offscreen (`apply_mask_to_offscreen`).
+- Filters tier-1: `FilterGraph`/`FilterPrimitive`/`FilterKind`/`FilterInput`.
+  `parse_filter` reads the `<filter>` primitives; `FilterGraph::apply` runs them
+  on the premultiplied source-graphic offscreen with named results and
+  `in`/`SourceGraphic`/`SourceAlpha`. Primitives: `feGaussianBlur` (separable
+  triple box-blur, `MAX_BLUR_RADIUS`-capped), `feOffset`, `feFlood`,
+  `feMerge`(+`feMergeNode`), `feColorMatrix` (matrix/saturate/luminanceToAlpha),
+  `feDropShadow`. Color matrix unpremultiplies → matrix → repremultiplies.
+- Layer plumbing: `LayerRaw`/`ResolvedLayer` gained `mask_ref`/`filter_ref`;
+  `needs_offscreen` now also true for mask/filter; `LayerFrame<'a>` borrows the
+  `&ResolvedLayer` so `EndLayer` applies filter then mask before
+  `composite_offscreen`. Shapes carrying mask/filter get a synthetic layer
+  (`shape_layer`) emitted by `build_items`.
+- Parser: retain `fe*` primitive elements + skip `mask`/`filter` defs in scene
+  build (like `clipPath`); add `femerge` to `is_container_tag`. Removed the now
+  dead `PendingDiagnostic::Unsupported` variant (mask/filter attrs are applied,
+  not diagnosed).
+
+### Verification
+- `cargo test`: 293 passed, 3 ignored (3 new goldens: luminance mask, feOffset,
+  feFlood+feMerge; 8 unit tests: alpha mask, missing-mask diagnostic, gaussian
+  blur softening, colorMatrix saturate grayscale, dropShadow, unsupported-
+  primitive partial, huge-blur-bounded, mask+filter determinism).
+- Ignored all-built-in exported-project `cargo check`: passed (single `crate::`
+  import contract intact; masks/filters render in the embedded copy too).
+- `cargo fmt --check`, `cargo clippy -- -D warnings`,
+  `scripts/validate-svg-import.ps1`, `scripts/check-text-encoding.ps1`: clean.
+
+### Remaining Risks / Follow-Ups
+- Filter tier 2/3 (`feComposite`/`feBlend`/`feComponentTransfer`/`feMorphology`/
+  `feTile`/`feImage`/`feDisplacementMap`/`feTurbulence`/convolution/lighting) pass
+  through as identity with `filter.unsupported_primitive`.
+- Filter region is the whole canvas (already bounded) rather than the precise
+  filter-region rect; `maskContentUnits=objectBoundingBox` approximated in user
+  space. Blur is a box approximation, not an exact Gaussian.
+- Next: R8 (reference corpus, benchmarks, report UI + source viewer).
+
+## 2026-06-06 — SVG R6: Editable Text Import (chunked multi-label, phases 1-2)
+
+### Context Reviewed Before Editing
+- `CLAUDE.md`, low-token preflight, `.agents/skills/svg-zero-dep/SKILL.md`,
+  project-model skill
+- `docs/TEXT_IMPORT_PLAN.md`, `docs/SVG_RENDERER_ROADMAP.md` R6,
+  `docs/svg-goal-plan-prompts/R6-text-import-rendering.goal.md`
+- `src/svg_import.rs` (text_widget/flatten_text, resolve_style text fields,
+  metadata_for, normalize_widgets), `src/project/schema.rs` SvgImportMetadata
+
+### Changes
+- Added a `TextChunk` model to `svg_import.rs`: `<text>`/`<tspan>` split into
+  chunks at every absolutely-positioned span (`x`/`y`). `text_widget` →
+  `text_widgets` returning `Vec<WidgetInstance>` (one Label per non-empty chunk);
+  `flatten_text` → `tspan_text` (warning-free subtree concat) + `build_text_label`
+  (per-chunk placement, anchor, baseline, fill, provenance).
+- Each chunk carries per-chunk font size, anchor, baseline, fill, source node,
+  and warning flags. Relative/styled spans flatten into the current chunk with
+  `text.tspan_adjust` / `text.tspan_style` diagnostics; absolute spans start a new
+  chunk → new label.
+- `text-anchor` start/middle/end and `dominant-baseline` middle/central/hanging
+  applied per chunk; other baselines approximated with `text.baseline`.
+  `text.missing_font` flags placeholder metrics. `textPath` stays
+  unsupported-diagnosed.
+- Schema: added `SvgImportMetadata::text_group: Option<String>`
+  (`#[serde(default)]`, backward-compatible) tying a text element's chunk labels
+  together; single-chunk text stays ungrouped (None).
+- `import_node` "text" branch extends widgets with all chunk labels.
+
+### Verification
+- `cargo test`: 285 passed, 3 ignored (6 new R6 tests: grouped multi-label split,
+  single-label no-group, relative anchor shift, baseline diagnostic, determinism,
+  textPath deferred). Updated the `tspan_text` real-world fixture expectation
+  (now 2 labels; `text.tspan_adjust` + `text.tspan_style`).
+- Ignored all-built-in exported-project `cargo check`: passed (schema field is
+  serde-default backward-compatible).
+- `cargo fmt --check`, `cargo clippy -- -D warnings`,
+  `scripts/validate-svg-import.ps1`, `scripts/check-text-encoding.ps1`: clean.
+
+### Remaining Risks / Follow-Ups
+- Raster text rendering (vector-outline snapshot) deferred — rasterizer still
+  buckets `<text>` as unsupported (TEXT_IMPORT_PLAN phase 3).
+- Interleaved direct-text-after-tspan merges into the element's first chunk (the
+  Node model concatenates direct text); rare, documented approximation.
+- Placeholder font metrics (no real font measurement); textPath, bidi, shaping
+  deferred. Owned shaping engine only if phases 1-3 prove insufficient.
+- Next: R7 masks/filters.
+
+## 2026-06-06 — SVG R5 Follow-on: Baseline JPEG Decoder
+
+### Context Reviewed Before Editing
+- `CLAUDE.md`, low-token preflight, `.agents/skills/svg-zero-dep/SKILL.md`
+- `docs/jpegdecoder roadmap.md` (design note), `docs/SVG_RENDERER_ROADMAP.md` R5
+- `src/canvas/svg_rasterizer.rs` PNG decoder + image path (`decode_image_href`,
+  `DrawCommand::Image`, R4 clip/premultiplied pipeline), `src/codegen/export.rs`
+  embedding contract
+
+### Changes
+- Implemented a zero-dependency baseline JPEG decoder in `svg_rasterizer.rs`:
+  marker scan (SOI/APPn/DQT/DHT/SOF0/SOF1/DRI/SOS/EOI, others skipped), quant
+  tables (8/16-bit), canonical JPEG Huffman tables (Annex F decode), MSB-first
+  entropy bit reader with `0xFF00` de-stuffing, DC-diff + AC run-length (zigzag)
+  block decode, dequantization, separable 8×8 float IDCT, nearest chroma
+  upsampling, and YCbCr→RGB. Supports 8-bit, 1 or 3 components, arbitrary integer
+  sampling factors (4:4:4 / 4:2:2 / 4:2:0 …) and restart intervals.
+- `decode_image_href` now routes `FF D8` to `decode_jpeg`; replaced the
+  `JpegDeferred` error with `MalformedJpeg` (`image.decode_failed`) and
+  `UnsupportedJpeg` (`image.unsupported_jpeg`); `NotPng` → `NotImage`.
+  Progressive/arithmetic/lossless/12-bit/CMYK are diagnosed unsupported.
+- JPEG draws through the existing R4 clip/premultiplied image path (same
+  `DrawCommand::Image`), so clipping, opacity, preserveAspectRatio, and export
+  embedding are shared with PNG. No new `crate::` refs; std-only.
+
+### Verification
+- `cargo test`: 279 passed, 3 ignored. 6 JPEG tests: baseline 4:4:4 color,
+  4:2:0 chroma-subsampled two-region, true 1-component grayscale, determinism,
+  progressive-unsupported, malformed-not-panicking. Fixtures: 4:4:4 / 4:2:0 from
+  ffmpeg's mjpeg encoder (ground truth); the 1-component grayscale JPEG was
+  hand-encoded (flat block, Annex-K Huffman tables) since ffmpeg emitted
+  3-component gray.
+- Ignored all-built-in exported-project `cargo check`: passed (decoder embedded;
+  single `crate::` import contract intact).
+- `cargo fmt --check`, `cargo clippy -- -D warnings` (fixed rust-1.95
+  is_none_or / is_multiple_of / resize / collapsible-match lints across the PNG
+  and JPEG code), `scripts/validate-svg-import.ps1`,
+  `scripts/check-text-encoding.ps1`: clean.
+
+### Remaining Risks / Follow-Ups
+- Deferred JPEG: progressive, arithmetic, lossless, 12-bit, CMYK/4-component.
+- Float IDCT (clarity over speed); integer/AAN IDCT is a future optimization.
+- Nearest chroma upsampling and nearest image sampling (deterministic, not
+  smoothed). Broader reference-image corpus is future conformance (R8).
+- Next: R6 text import.
+
+## 2026-06-06 — SVG R5: Embedded PNG Raster Images (JPEG Deferred)
+
+### Context Reviewed Before Editing
+- `CLAUDE.md`, low-token preflight, `.agents/skills/svg-zero-dep/SKILL.md`
+- `docs/SVG_RENDERER_ROADMAP.md` (R5 source of truth),
+  `docs/svg-goal-plan-prompts/R5-embedded-raster-images.goal.md`
+- `src/canvas/svg_rasterizer.rs` (SvgNode model, scene build, DisplayList
+  build/execute, R4 clip/premultiplied pipeline, RasterTarget, caps),
+  `src/svg_core.rs` (viewbox_transform/preserveAspectRatio, Affine2D),
+  `src/svg_import.rs` image placeholder + data-URI cap, `src/codegen/export.rs`
+  embedding contract
+
+### Decision
+- Implement zero-dependency PNG `data:` decode now; defer baseline JPEG to a
+  tracked follow-on (detected and reported `image.jpeg_unsupported`). PNG is
+  lossless/bounded and covers the bulk of embedded design-tool images; JPEG is a
+  larger, separate lossy pipeline (Huffman + IDCT + YCbCr).
+
+### Changes
+- Added a from-scratch image decoder to `svg_rasterizer.rs`: base64 decode, zlib
+  wrapper, DEFLATE inflate (stored/fixed/dynamic Huffman, puff-style canonical
+  decoder), PNG chunk parse (IHDR/PLTE/tRNS/IDAT/IEND), scanline unfilter
+  (None/Sub/Up/Average/Paeth), and RGBA8 expansion for color types 0/2/3/4/6 at
+  bit depth 8 and 16 (truncated). Interlace and sub-byte depths are diagnosed.
+- `<image>` lowers to `DrawCommand::Image` (or `ImageSkipped` with a specific
+  code) in `DisplayList::build`; `execute` draws via nearest-neighbour sampling
+  through the R4 clip/premultiplied `RasterTarget`, clipped to the destination
+  rect (slice overflow) plus any `clip-path`, faded by element opacity.
+- Placement reuses `svg_core::viewbox_transform` for `preserveAspectRatio`.
+  Security: pixel cap (`MAX_IMAGE_PIXELS`), inflate-byte cap
+  (`MAX_IMAGE_DECODE_BYTES`), bounded chunk reads; external references remain
+  fail-closed at the existing document gate.
+- Refreshed the stale `unsupported_tag_feature("image")` message.
+
+### Verification
+- `cargo test`: 274 passed, 3 ignored (14 new R5 tests: RGBA/RGB/palette+tRNS/
+  gray decode, nearest-neighbour scale, clip, opacity, determinism,
+  JPEG-deferred, interlaced, oversize, truncated, external document gate,
+  stored-block inflate). PNG fixtures minted with real zlib (python) to exercise
+  the dynamic-Huffman inflate path.
+- Ignored all-built-in exported-project `cargo check`: passed (decoder embedded;
+  single `crate::` import rewrite contract intact).
+- `cargo fmt --check`, `cargo clippy -- -D warnings`,
+  `scripts/validate-svg-import.ps1`, `scripts/check-text-encoding.ps1`: clean.
+
+### Remaining Risks / Follow-Ups
+- Baseline JPEG decode deferred (tracked R5 follow-on); progressive JPEG out of
+  scope.
+- Sub-byte (1/2/4-bit) and interlaced PNG are diagnosed, not decoded.
+- Nearest-neighbour sampling (no bilinear) — deterministic but not smoothed.
+- Component import keeps `<image>` as an editable placeholder by design.
+- Next: R6 text import (or the JPEG follow-on).
+
+## 2026-06-06 — SVG R4: Clipping, Viewport Overflow, Premultiplied Compositing, Group Opacity
+
+### Context Reviewed Before Editing
+- `CLAUDE.md`, low-token preflight, `.agents/skills/svg-zero-dep/SKILL.md`
+- `docs/SVG_RENDERER_ROADMAP.md` (R4 source of truth), `docs/SVG_IMPORT.md`,
+  `docs/feature-evaluation/svg-import-renderer.md`
+- `src/canvas/svg_rasterizer.rs` (full: SvgScene→DisplayList→execute, coverage,
+  blend, paint sampler, references), `src/svg_core.rs` (Affine2D/inverse,
+  viewbox), `src/canvas/svg_golden.rs`, `src/codegen/export.rs` embedding +
+  `embedded_svg_sources_keep_single_import_rewrite_contract`, and
+  `src/canvas/interaction.rs` Image preview path.
+
+### Derived Render/Export Path Matrix
+- Pixel-flow source of truth: `SvgScene{items}` (flat preorder) → `DisplayList`
+  (`build` lowers, `execute` rasters) → `render_shape` → `coverage_scan`/
+  `rasterize_coverage` → `blend_pixel`. Single shared coverage scan now also
+  feeds clip masks.
+- Both paint paths are one source: in-app `interaction.rs` →
+  `svg_rasterizer::rasterize_or_fallback`; export embeds `svg_rasterizer.rs`
+  verbatim into `mod rohkai_svg` (only rewrite: `crate::svg_core`→
+  `super::svg_core`). No app-only support is possible by construction.
+
+### Changes (`src/canvas/svg_rasterizer.rs` unless noted)
+- Layer model: `SvgSceneItem` gained `layer: Option<LayerRaw>` + `is_layer_end`;
+  scene flattening emits begin/end markers for groups and nested-`<svg>` that
+  need clip/opacity/overflow. `DisplayList` gained `DrawCommand::BeginLayer`/
+  `EndLayer`; `execute` maintains a clip + offscreen layer stack.
+- clipPath rendering: `resolve_clip` (reuses the shared first-id-wins reference
+  table; bounded `MAX_CLIP_DEPTH`, cycle detection), `collect_clip_shapes`
+  (per-child transforms, nested `<g>`, `clip-rule` nonzero/evenodd),
+  clipPathUnits userSpaceOnUse + objectBoundingBox (shape bbox via
+  `geometry_local_bounds`), clipPath-of-clipPath intersection. clipPath defs no
+  longer render directly or emit a `clipPath` unsupported bucket.
+- Nested-`<svg>` overflow clipping: `overflow_clip_shape` builds a device rect
+  from the pre-viewport transform captured in `LayerRaw`; combined with any
+  group clip-path via `ClipDef.nested`.
+- Premultiplied compositing: `ClipMask` + `coverage_scan` refactor;
+  `RasterTarget` now carries `premultiplied` + `clip`; `blend_pixel_premultiplied`
+  and `composite_offscreen` composite isolated offscreens once at group opacity.
+  Base buffer and emitted `ColorImage` stay straight RGBA, so non-grouped output
+  is byte-stable.
+- Group opacity/isolation: `<g opacity>` / `isolation:isolate` allocate a
+  premultiplied offscreen (bounded by `MAX_OFFSCREEN_DEPTH`/`MAX_OFFSCREEN_BYTES`,
+  `limit.offscreen_buffer` on truncation). `opacity` made non-inherited in
+  `Style::inherit_parts` (the double-darken fix).
+- Diagnostics: removed "clip-path attribute" unsupported; added `clip.unresolved`,
+  `reference.clip_cycle`, `limit.clip_depth`, `clip.object_bounding_box`,
+  `limit.offscreen_buffer`.
+- Export (`src/codegen/export.rs`): no new `crate::` refs (rewrite contract
+  intact); added `embedded_rasterizer_includes_r4_render_paths` invariant test.
+
+### Golden Justification
+- `unsupported_clip_diagnosed_not_applied` (expected full `RRRR`) renamed to
+  `rect_clip_path_applied` with golden `RR..`: clip is now applied, which is
+  provably more correct than the prior diagnosed-only behavior. Added goldens:
+  `path_clip_nonzero`, `path_clip_evenodd_hole`, `transformed_clip_child`,
+  `object_bounding_box_clip`, `nested_svg_overflow_clip`,
+  `translucent_group_no_double_darken`. All other goldens unchanged (byte-stable).
+
+### Verification
+- `cargo fmt --check` clean; `cargo check` clean; `cargo clippy -- -D warnings`
+  zero warnings.
+- `cargo test`: 260 passed, 0 failed, 3 ignored (added 11 R4 unit tests +
+  7 R4 goldens + 1 export invariant test).
+- Ignored export cargo checks: `export_compile_fixture_cargo_check` and
+  `all_builtin_widgets_export_cargo_check` both pass → embedded R4 rasterizer
+  compiles standalone (export parity).
+- `scripts/validate-svg-import.ps1` pass; `scripts/check-text-encoding.ps1` OK.
+- `cargo run` launch smoke: app launched (PID alive), exited cleanly (exit 0);
+  clip preview correctness covered by
+  `clip_path_renders_visibly_clipped_high_fidelity`.
+
+### Risks / Follow-ups
+- Root `<svg opacity>` no longer cascades to children (opacity is now
+  non-inherited per SVG); a root-level group composite is not implemented. Minor;
+  documented in roadmap limits.
+- objectBoundingBox clipPathUnits on a `<g>` has no single bbox → diagnosed and
+  skipped, not approximated.
+- Isolated offscreens are full raster size; deep nesting is bounded by depth/byte
+  caps with a visible diagnostic and graceful (non-isolated) degrade.
+- Next: R5 embedded raster images (zero-dependency PNG/JPEG decision).
+
+## 2026-06-06 — SVG R2 Shared Semantics And R3 Paint Servers
+
+### Context Reviewed Before Editing
+- `AGENTS.md`, low-token preflight with devlog, current dirty `dev` status
+- `.agents/skills/svg-zero-dep/SKILL.md`
+- `docs/SVG_RENDERER_ROADMAP.md`, `docs/SVG_IMPORT.md`,
+  `docs/CODE_COOP.md`, and renderer/export embedding contracts
+- Importer/rasterizer style, local-reference, scene/display-list, coverage,
+  golden, diagnostics, and export fixture code
+
+### Changes
+- Added shared bounded tier-1 CSS declarations/selectors/cascade to `svg_core`:
+  element/class/ID compound selectors, grouped selectors, specificity/source
+  order, rule/declaration budgets, and complex-selector diagnostics.
+- Unified importer/rasterizer `currentColor`, style precedence, shared checked
+  transform parsing, color/number/length/path microsyntax, and malformed
+  fallback behavior.
+- Added stable bounded raster `defs`/`symbol`/`use` expansion with symbol
+  viewBox mapping, inherited style, duplicate-ID first-wins behavior,
+  cycle/depth/node limits, and source-spanned diagnostics.
+- Added owned paint-server IR and deterministic linear/radial gradient fills
+  and strokes: stop color/opacity, CSS/currentColor stops,
+  objectBoundingBox/userSpaceOnUse, gradient transforms, pad/reflect/repeat,
+  focal radial geometry, and bounded href inheritance.
+- Kept fill winding/parity and stroke union coverage separate while sampling
+  paint per covered pixel. Added malformed units/transform/spread/length/stop
+  diagnostics and unresolved paint-reference warnings.
+- Upgraded patterns to explicit transparent unsupported paint servers whose
+  diagnostics preserve exact supplied pattern attributes.
+- Replaced the obsolete transparent-gradient golden with linear, radial,
+  repeat-spread, and single-stop goldens; added focused semantics,
+  determinism/fidelity, reference, malformed-input, CSS, and cycle tests.
+- Kept both embedded renderer sources std-only and preserved the single-import
+  export rewrite contract.
+
+### Verification
+- R2 boundary before R3: 238 tests passed, 3 ignored; strict clippy,
+  dependency/encoding policy, embedding contract, and ignored all-widget
+  exported-project compile passed.
+- Final full suite: 248 passed, 3 ignored.
+- SVG validation: importer 19 passed; rasterizer 53 passed and 1 ignored
+  performance smoke; all 4 golden harness tests passed.
+- Explicit 512x512 anti-aliased fill performance smoke passed in about 0.17s
+  on this machine against the 5-second debug budget.
+- `cargo fmt --check`, `cargo check`, and
+  `cargo clippy -- -D warnings`: clean.
+- Dependency policy, UTF-8 encoding policy, embedding-source contract, and
+  `scripts/validate-svg-import.ps1`: clean.
+- Ignored all-built-in exported-project `cargo check`: passed with the embedded
+  shared `svg_core` and SVG rasterizer.
+- Launch smoke: the current debug app remained alive for 5 seconds.
+
+### Remaining Risks / Follow-Ups
+- Component import intentionally keeps gradients editable only as diagnosed
+  approximations; Image-mode rendering is the high-fidelity fallback.
+- Patterns, clips, masks, filters, text, embedded raster images, isolated group
+  compositing, and nested viewport overflow clipping remain later phases.
+- R4 is next: clip stack, nested overflow, premultiplied-alpha internals, and
+  isolated group opacity/compositing.
+
+## 2026-06-06 — SVG R1 Stroke Geometry, Coverage, And Dashes
+
+### Context Reviewed Before Editing
+- `AGENTS.md`, low-token preflight, and current git status on `dev`
+- `.agents/skills/svg-zero-dep/SKILL.md`
+- `docs/SVG_RENDERER_ROADMAP.md`, `docs/SVG_IMPORT.md`,
+  `docs/CODE_COOP.md`, and the current renderer/export embedding paths
+- Existing path parser, fill rules, display list, raster limits, golden harness,
+  and the ignored all-built-in exported-project compile fixture
+
+### Changes
+- Replaced flattened-only path storage with retained line, quadratic, cubic,
+  arc, subpath, and explicit-close semantics. Curve flattening now measures
+  tolerance after the final device transform.
+- Added inherited stroke width, cap, join, miter-limit, dash-array,
+  dash-offset, and positive `pathLength` handling using shared SVG lengths.
+- Replaced device-space segment quads with bounded local-space stroke meshes
+  transformed as complete geometry. Implemented butt/round/square caps;
+  miter, miter-clip, round, and bevel joins; and a diagnosed miter-clip
+  approximation for SVG `arcs` joins.
+- Added signed dash phase, odd-list repetition, continuity through vertices,
+  closed-seam merging, zero-length round/square output, and `pathLength`
+  calibration.
+- Added deterministic 8x8 subpixel coverage with two separate semantics:
+  winding/parity accumulation for nonzero/evenodd fills and union coverage for
+  stroke primitives. Translucent stroke joins now composite once.
+- Added local/device stroke bounds, raster destination context, dash/run/
+  primitive/vertex caps, and source-spanned `limit.stroke_complexity` warnings
+  when bounded work truncates.
+- Enforced exported-source embedding: the rasterizer may contain only the one
+  known `crate::svg_core` import, and embedded `svg_core` remains free of
+  crate-local references.
+- Added analytical tests for transformed widths/bounds, caps, miter limits,
+  nonuniform transforms, anti-aliased edges, self-intersecting evenodd fills,
+  opacity union, dash phase/seams/pathLength, malformed declarations, limits,
+  and determinism.
+- Added three focused ASCII goldens: anti-aliased diagonal fill, dashed
+  round-cap stroke, and self-intersecting evenodd fill.
+- Updated renderer/import/roadmap/feature-evaluation documentation so R1 claims
+  match implementation and R2 is the next phase.
+
+### Verification
+- Full suite: 230 passed, 3 ignored.
+- SVG rasterizer: 41 passed, 1 ignored performance smoke.
+- Explicit 512x512 anti-aliased fill performance smoke: passed in about 0.13s
+  on this machine against a 5-second debug budget.
+- SVG golden suite: 4 harness tests passed with all fixtures matching.
+- Ignored all-built-in exported-project `cargo check`: passed, including the
+  embedded SVG renderer path.
+- `cargo fmt --check`, `cargo check`, and
+  `cargo clippy -- -D warnings`: clean.
+- Dependency policy, UTF-8 encoding policy, and
+  `scripts/validate-svg-import.ps1`: clean.
+- Launch smoke: current debug binary remained alive for 5 seconds.
+
+### Remaining Risks / Follow-Ups
+- SVG `arcs` line joins are approximated, not exact.
+- Gamma-aware/group compositing, vector effects, markers, nested viewport
+  clipping, paint servers, text, filters, clips, and masks remain later phases.
+- R2 should centralize shared style/reference behavior without weakening the
+  completed R1 geometry and export-embedding invariants.
+
+## 2026-06-06 — SVG R1 Nonzero And Evenodd Fill Rules
+
+### Context Reviewed Before Editing
+- `AGENTS.md` and low-token preflight
+- `.agents/skills/svg-zero-dep/SKILL.md`
+- `docs/SVG_RENDERER_ROADMAP.md`, `docs/SVG_IMPORT.md`,
+  `docs/CODE_COOP.md`, and current git status
+- Raster style inheritance, display-list lowering, path flattening, compound
+  scan conversion, renderer diagnostics, and golden fixtures
+
+### Changes
+- Added inherited `FillRule` state with SVG-correct `nonzero` default and
+  explicit `evenodd` support from presentation attributes and inline styles.
+- Removed the obsolete unsupported-feature diagnostic for valid fill-rule
+  declarations.
+- Added source-spanned `style.invalid_fill_rule` warnings; invalid declarations
+  retain inherited/default behavior.
+- Replaced pairwise even-odd path filling with a deterministic crossing sweep
+  that groups coincident intersections and evaluates either winding count or
+  parity for every scanline interval.
+- Applied fill rules to compound paths and other closed geometry while keeping
+  the path-command/point/raster safety caps intact.
+- Added analytical tests for same-direction contours, opposite-direction
+  contours, inheritance, inline-style precedence, and malformed values.
+- Added nonzero and evenodd fixtures to the golden renderer corpus and updated
+  roadmap, current behavior, architecture, code index, and feature evaluation.
+
+### Verification
+- Focused SVG rasterizer tests: 26 passed.
+- SVG golden tests: 4 passed with the expanded fixture set.
+- Full suite: 214 passed, 2 ignored.
+- `cargo fmt --check`: clean.
+- `cargo check`: clean.
+- `cargo clippy -- -D warnings`: clean.
+- `scripts/check-text-encoding.ps1`: clean.
+- `scripts/check-dependency-policy.ps1`: clean.
+- `scripts/validate-svg-import.ps1`: clean.
+- Launch smoke: an existing June 5 RohKai process held the default debug
+  executable open, so the current tree was built into `target/smoke`; that
+  isolated binary stayed alive for 5 seconds.
+
+### Risks / Follow-ups
+- Fill edges remain hard coverage until the R1 antialiasing slice.
+- Stroke geometry still uses segment quads and does not yet implement
+  linecap/linejoin/miter/dash semantics.
+- Exact geometric/stroke bounds remain a later R1 item.
+
+## 2026-06-06 — SVG R1 PreserveAspectRatio And Nested Viewports
+
+### Context Reviewed Before Editing
+- `AGENTS.md` and low-token preflight
+- `.agents/skills/svg-zero-dep/SKILL.md`
+- `.agents/skills/project-model/SKILL.md`
+- `docs/SVG_RENDERER_ROADMAP.md`, `docs/SVG_IMPORT.md`,
+  `docs/CODE_COOP.md`, and current git status
+- `src/svg_core.rs`, `src/svg_import.rs`, and
+  `src/canvas/svg_rasterizer.rs`
+
+### Changes
+- Added shared parsing and transform construction for all SVG
+  `preserveAspectRatio` alignments, `meet`, `slice`, `none`, and optional
+  `defer` recognition.
+- Applied the shared mapping to importer root/nested viewport state and
+  rasterizer root/nested `<svg>` scene traversal.
+- Added per-scene-item viewport length bases so nested percentages resolve
+  against the nested user coordinate system rather than the root viewport.
+- Added analytical renderer tests that recover the full alpha bounds and probe
+  interior/exterior pixels for root meet/none/max alignment, nested viewport
+  alignment, and percentage geometry.
+- Removed an incorrect coupling between SVG viewport dimensions and RohKai's
+  20px minimum editable-placeholder size.
+- Corrected polygon and path filling to use pixel-center horizontal coverage,
+  eliminating an extra endpoint column while preserving existing goldens.
+- Updated the SVG roadmap, current-behavior docs, architecture, code index,
+  feature evaluation, and CoOp handoff. Nested viewport overflow clipping
+  remains explicitly deferred to R4.
+
+### Verification
+- Focused shared-core tests: 12 passed.
+- Focused SVG importer tests: 18 passed.
+- Focused SVG rasterizer tests: 22 passed.
+- SVG golden tests: 4 passed.
+- Full suite: 210 passed, 2 ignored.
+- `cargo fmt --check`: clean.
+- `cargo check`: clean.
+- `cargo clippy -- -D warnings`: clean.
+- `scripts/check-text-encoding.ps1`: clean.
+- `scripts/check-dependency-policy.ps1`: clean.
+- `scripts/validate-svg-import.ps1`: clean.
+- Launch smoke: debug RohKai process stayed alive for 5 seconds.
+
+### Risks / Follow-ups
+- Nested viewport coordinate mapping is complete for this phase, but overflow
+  clipping is not implemented and remains an R4 clipping task.
+- `defer` is parsed and preserved in the shared value model; referenced-image
+  behavior that gives it meaning is outside this slice.
+- The next R1 slice is explicit `nonzero`/`evenodd` fill-rule support, followed
+  by stroke tessellation and antialiasing.
+
+## 2026-06-06 — SVG R0 Metadata, Lengths, And Owned Display List
+
+### Context Reviewed Before Editing
+- `AGENTS.md` and preflight context with devlog
+- `.agents/skills/svg-zero-dep/SKILL.md`
+- `.agents/skills/project-model/SKILL.md`
+- `.agents/skills/task-decomposition/SKILL.md`
+- `docs/SVG_RENDERER_ROADMAP.md`, `docs/SVG_IMPORT.md`,
+  `docs/CODE_COOP.md`, and current git status
+- `src/svg_core.rs`, `src/svg_import.rs`, and
+  `src/canvas/svg_rasterizer.rs`
+
+### Changes
+- Added shared strict SVG length parsing/resolution for unitless/px,
+  percentages, `in`, `cm`, `mm`, `Q`, `pt`, `pc`, `em`, `ex`, and `rem`.
+  Importer dimensions/geometry and rasterizer dimensions/geometry now use the
+  same `svg_core` implementation.
+- Added stable preorder `SvgNodeId` values and exact source byte spans to
+  represented rasterizer nodes.
+- Added independently bounded local-ID and reference-use tables with
+  deterministic first-ID-wins duplicate behavior, resolved/unresolved fragment
+  metadata, limit warnings, and structured rejection of non-local references.
+- Added node ID/source-span provenance to renderer warnings and unsupported
+  feature diagnostics.
+- Replaced borrowed XML-node display commands with an owned render-ready IR.
+  Display-list construction now lowers shape lengths, point/path geometry,
+  inherited style, transforms, diagnostics, and provenance; raster execution
+  does not inspect XML nodes or raw shape attributes.
+- Updated SVG roadmap, current-behavior docs, architecture, code index, and
+  agent handoff notes. R0 is complete; R1 geometry quality is next.
+
+### Verification
+- Focused shared-core tests: 9 passed.
+- Focused SVG importer tests: 17 passed.
+- Focused SVG rasterizer tests: 20 passed.
+- Full suite: 204 passed, 2 ignored.
+- `cargo fmt --check`: clean.
+- `cargo check`: clean.
+- `cargo clippy -- -D warnings`: clean.
+- `scripts/check-text-encoding.ps1`: clean.
+- `scripts/check-dependency-policy.ps1`: clean.
+- `scripts/validate-svg-import.ps1`: clean, including golden and source
+  preservation fixtures.
+- Launch smoke: debug RohKai process stayed alive for 5 seconds.
+
+### Risks / Follow-ups
+- The reference table is metadata and diagnostics infrastructure. Actual
+  raster `<use>`/`symbol` expansion, cycle handling during expansion, and paint
+  server resolution remain R2 work.
+- Font-relative units currently use the explicit default length context
+  (`16px` em/rem and `8px` ex) until R6 supplies real font metrics.
+- R1 should now improve fill rules, stroke geometry, curve tolerances, and
+  anti-aliasing without reopening XML traversal.
+
+## 2026-06-06 — SVG Roadmap Authority Consolidation
+
+### Docs Reviewed Before Editing
+- `AGENTS.md` and low-token preflight
+- `.agents/skills/svg-zero-dep/SKILL.md`
+- `docs/ROADMAP.md`
+- `docs/SVG_RENDERER_ROADMAP.md`
+- `docs/SVG_IMPORT.md`
+- `docs/TEXT_IMPORT_PLAN.md`
+- SVG and remaining-roadmap feature evaluations
+
+### Changes
+- Declared `docs/SVG_RENDERER_ROADMAP.md` the sole detailed authority for SVG
+  import maturity, SVG Image rasterization, SVG text, diagnostics,
+  conformance, and SVG-facing editor UX.
+- Converted Stage 7.x and Stage 9 SVG sections into historical snapshots with
+  explicit mappings instead of competing active checklists.
+- Assigned all text/tspan execution to R6 and report/source-viewer UX to R8.
+- Added the next execution order: close R0 metadata/traversal, share SVG
+  lengths, then complete R1 and R2 before R3-R8.
+- Explicitly separated Stage 15's proposed general RohKai renderer from the SVG
+  rasterizer roadmap.
+- Added an explicit `Current Active Work` roadmap heading and updated preflight
+  to prefer it, replacing the misleading behavior that labeled the final
+  numbered stage (deferred Stage 15) as current.
+- Mirrored the active-work clarification in `AGENTS.md` and `CLAUDE.md`.
+- Marked the roadmap source-of-truth reconciliation items complete and updated
+  feature evaluations, architecture, and code index to point to the same
+  authority.
+
+### Verification
+- Documentation diff and duplicate-check review completed.
+- Preflight now reports
+  `Current Active Work — Pre-Release Depth And SVG R0 Closure`.
+- AGENTS/CLAUDE mirrored guidance and skill drift checks: clean.
+- `cargo fmt --check`: clean.
+- `cargo check`: clean.
+- `scripts/check-text-encoding.ps1`: clean.
+- SVG dependency policy check: clean.
+
+### Risks / Follow-ups
+- The detailed renderer roadmap still contains derivative task lists beneath
+  R0-R8. They are implementation notes, not independent phases.
+- Stage 15 still needs a future explicit product/architecture activation
+  decision; this pass intentionally did not activate it.
+
+## 2026-06-06 — Lazare Structured Ranges And Editor Viewport
+
+### Docs Reviewed Before Editing
+- `AGENTS.md` and preflight context with `-IncludeDevlog`
+- `.agents/skills/project-model/SKILL.md`
+- `.agents/skills/codegen-rules/SKILL.md`
+- `.agents/skills/canvas-patterns/SKILL.md`
+- `docs/ROADMAP.md`, `docs/CODE_COOP.md`, `docs/ARCHITECTURE.md`,
+  `docs/CODE_INDEX.md`, and the Lazare feature evaluation
+
+### Architectural Correction
+- The June 5 padding/clip-rect approach was not a complete clipping fix.
+  TextEdit's glyph clip cannot simultaneously provide readable glyph spacing
+  and a fully visible border at panel edges. That earlier claim is superseded
+  by a separate editor viewport and decoration gutter backed by exact source
+  ranges.
+
+### Changes
+- Added `codegen/source_map.rs` and `egui_emitter::emit_document()`: generated
+  code now carries exact byte and line ranges for every widget. Widget ranges
+  exclude the `CentralPanel` preamble and neighboring blocks.
+- Extended Lazare parser results with source ranges for valid edited code and
+  structural incomplete-block diagnostics.
+- Rebuilt the code surface around a no-wrap-by-default TextEdit with horizontal
+  and vertical scrolling, an optional Wrap toggle, inset text, and decoration
+  painting clipped to the outer viewport rather than the glyph clip.
+- Canvas `selected` is the only highlight set. Multi-selection produces
+  independent outlines; deselection clears them. Ctrl+double-click/Tracé uses
+  a one-frame navigation target instead of duplicated highlight state.
+- Added explicit generated, valid-edit, and invalid-edit states. Invalid edits
+  stay visible and never partially mutate `UiTree`; empty code clears widgets;
+  deleting every widget block while retaining the canonical project preamble
+  also clears widgets; duplicate pasted blocks receive fresh UUIDs, placement
+  offsets, canonical regeneration, and active selection.
+- Replaced utility-window input block lists with canvas response, top-layer,
+  focus, and keyboard-ownership checks. Floating windows no longer leak pointer
+  or keyboard actions into the canvas.
+- Added visual separation before generated top-level widget blocks so selection
+  outlines do not crowd the preamble or adjacent blocks.
+
+### Verification
+- Focused generated/parser source-range tests: passed
+- Every built-in canonical widget block parses without structural errors
+- Focused code-editor geometry/multi-selection tests: passed
+- Focused canvas input-ownership tests: passed
+- Fresh rebuilt-binary visual check: generated state remained valid; selected
+  Button mapped to line 3; preamble remained outside the outline; all four
+  perimeter edges remained visible in the narrow right panel
+- `cargo fmt --check`: clean
+- `cargo check`: clean
+- `cargo test`: 195 passed, 2 ignored
+- `cargo clippy -- -D warnings`: clean
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1`:
+  OK
+
+### Risks / Follow-ups
+- TextEdit remains the editing engine. Search, symbols, precise cursor
+  placement, clickable diagnostic navigation, diff view, and explicit
+  generated/user-region ownership remain IDE-depth work.
+- Handler range storage exists as a future-ready type; handler indexing is not
+  yet produced by the live emitter.
+
+## 2026-06-05 — Code Highlight Outline And Launcher Trace
+
+> Superseded on June 6: padding and painting inside TextEdit's clip improved the
+> symptom but did not solve the architectural clipping conflict. The current
+> implementation uses structured source ranges and a separate decoration
+> viewport/gutter.
+
+### Docs Reviewed Before Editing
+- Preflight context (`scripts/preflight-context.ps1`)
+- `docs/CODE_COOP.md`
+- `src/panels/code_preview.rs`
+- egui 0.29.1 `TextEditOutput` and `Galley` source in the local Cargo cache
+
+### Changes
+- Replaced the generated-code selection highlight from TextEdit span
+  background coloring with a foreground outline drawn from
+  `TextEditOutput.galley` rows.
+- Follow-up after visual inspection: the outline now uses row glyph mesh bounds
+  instead of full row allocation bounds, so it hugs actual code width instead of
+  spanning the editor row. The translucent fill was removed; selection is an
+  outline-only decoration.
+- Follow-up after right-edge clipping inspection: outline geometry is inset from
+  the raw TextEdit clip rect before painting so the full perimeter remains
+  visible at the right/bottom panel boundary.
+- Follow-up after text-clipping inspection: the code editor now has real inner
+  padding, the outline expands outside glyph mesh bounds, and the border remains
+  outline-only so selected code stays readable.
+- Floating utility windows now block canvas input while open, preventing shortcut
+  window scroll from zooming the canvas and Rust Wiring drag from starting
+  rubber-band selection behind the window.
+- View menu now exposes Preview Mode directly in addition to the F5 shortcut.
+- The outline is clipped to `TextEditOutput.text_clip_rect` before painting and
+  uses `ui.painter_at(output.text_clip_rect)`, so selected-code decoration
+  cannot spill outside the visible code editor area.
+- Added a regression test proving expanded outline geometry is clipped to the
+  visible TextEdit clip rect.
+- Updated `scripts/run.ps1` to print source path, branch, commit, and dirty
+  state before launching, plus `-CheckOnly` for verifying the launcher path
+  without opening the app.
+
+### Verification
+- `cargo fmt --check`: clean
+- `cargo test code_preview -- --nocapture`: 4 passed
+- `cargo check`: clean
+- `cargo test`: 187 passed, 2 ignored
+- `cargo clippy -- -D warnings`: clean
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1`:
+  OK
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\run.ps1 -CheckOnly`:
+  reports `D:\dev\rohkai`, branch `dev`, and current commit.
+
+### Risks / Follow-ups
+- The outline now follows TextEdit's real visible layout, but it is still one
+  rectangular outline around each selected block. A future dedicated code editor
+  can add true token/range decorations, minimap markers, and precise scroll-to
+  cursor behavior.
+
+## 2026-06-05 — Layout Depth Follow-Up: Spacers, Ownership, Parser, Stretch
+
+### Docs Reviewed Before Editing
+- Preflight context (`scripts/preflight-context.ps1 -IncludeDevlog`)
+- `.agents/skills/project-model/SKILL.md`
+- `.agents/skills/canvas-patterns/SKILL.md`
+- `.agents/skills/codegen-rules/SKILL.md`
+- `docs/ROADMAP.md`
+- `docs/CODE_COOP.md`
+- Recent layout entries in `docs/DEVLOG.md`
+
+### Changes
+- Added layout-aware spacer behavior in `UiTree::reflow_layouts()`:
+  `VerticalSpacer` flexes inside `VLayout`, `HorizontalSpacer` flexes inside
+  `HLayout`, and generated live/export code emits matching `ui.add_space(...)`.
+- Added `WidgetProps.layout_stretch` as a first-slice container fill/stretch
+  policy. When disabled, stack/grid layouts preserve child size hints while
+  still assigning deterministic canvas rects.
+- Fixed group/ungroup behavior for layout-owned children so Frames replace or
+  expand in the parent `children` list instead of orphaning layout ownership.
+- Added `UiTree::move_child_within_parent()` and a first-slice GridLayout slot
+  reorder UI in Properties.
+- Extended Lazare parser output to preserve one-level layout hierarchy from
+  generated `ui.vertical`, `ui.horizontal`, and `egui::Grid::new(...).show(...)`
+  closures.
+- Updated roadmap, architecture, code index, feature evaluation, Code CoOp, and
+  agent project-model skills to reflect the new source-of-truth fields and
+  first-slice completion status.
+
+### Verification
+- `cargo check`: clean
+- `cargo test layout -- --nocapture`: 18 passed
+- Focused spacer/parser/grid-reorder/live-export tests: passed
+- `cargo test export_compile_fixture_cargo_check -- --ignored --nocapture`: passed
+- `cargo test all_builtin_widgets_export_cargo_check -- --ignored --nocapture`: passed
+- `cargo fmt --check`: clean
+- `cargo test`: 186 passed, 2 ignored
+- `cargo clippy -- -D warnings`: clean
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1`:
+  OK
+- `cargo run` smoke: launched and stopped after 8 seconds
+
+### Risks / Follow-ups
+- Layouts are still not Qt/Lazarus parity: per-child policies, alignment,
+  named grid slots, drag-to-slot editing, and multi-level hierarchy round-trip
+  remain open.
+- Grid slot UI currently shows row/column plus short UUID controls; it is a
+  functional reorder slice, not the final visual slot editor.
+
+## 2026-06-04 — Layout Properties And Outline Hierarchy Slice
+
+### Docs Reviewed Before Editing
+- Preflight context (`scripts/preflight-context.ps1`)
+- `.agents/skills/project-model/SKILL.md`
+- `.agents/skills/canvas-patterns/SKILL.md`
+- `.agents/skills/codegen-rules/SKILL.md`
+- `docs/ROADMAP.md`
+- `src/project/schema.rs`, `src/project/ui_tree.rs`,
+  `src/panels/properties.rs`, `src/panels/outline.rs`,
+  `src/canvas/interaction.rs`, `src/codegen/egui_emitter.rs`,
+  `src/codegen/export.rs`
+
+### Changes Made
+- Added persisted layout properties on `WidgetProps`:
+  `layout_spacing: f32` and `grid_columns: usize`.
+- `UiTree::reflow_layouts()` now uses `inner_margin`, `layout_spacing`, and
+  `grid_columns` instead of hardcoded spacing/column values.
+- `validate_and_repair()` clamps layout margins, gaps, and grid columns to safe
+  values.
+- Properties panel now exposes child count, margin, gap, and GridLayout columns
+  for layout containers; edits reflow immediately through the existing
+  validate/repair path.
+- Canvas GridLayout preview now draws vertical grid guides from
+  `props.grid_columns` and row guides from owned-child count.
+- Live codegen and export now use each GridLayout's `grid_columns` value for
+  `ui.end_row()` boundaries.
+- Layers/Outline now builds an explicit hierarchy row model: owned children are
+  displayed directly under their parent instead of appearing in flat draw order
+  with incidental indentation.
+- Updated architecture, code index, feature evaluation, roadmap, Code CoOp, and
+  mirrored project-model skills for Codex/Claude.
+
+### Verification
+- `cargo check`: clean
+- `cargo test layout -- --nocapture`: 10 passed
+- `cargo test outline -- --nocapture`: 1 passed
+- `cargo test export_compile_fixture_cargo_check -- --ignored --nocapture`:
+  passed
+- `cargo fmt --check`: clean
+- `cargo test`: 177 passed, 2 ignored
+- `cargo clippy -- -D warnings`: clean
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1`:
+  clean
+- `cargo test all_builtin_widgets_export_cargo_check -- --ignored --nocapture`:
+  passed
+- `cargo run --quiet` smoke: launched and stopped after 8 seconds
+
+### Remaining Gaps
+- Layout alignment, fill/stretch, per-child policies, layout-aware spacers, and
+  GridLayout row policies remain open.
+- Outline drag-reorder still changes draw order, not parent/slot membership.
+- Lazare parser still does not round-trip layout-owned hierarchy from edited
+  code.
+
+## 2026-06-04 — GridLayout Direct-Child Ownership Slice
+
+### Docs Reviewed Before Editing
+- Preflight context (`scripts/preflight-context.ps1`)
+- `.agents/skills/project-model/SKILL.md`
+- `.agents/skills/canvas-patterns/SKILL.md`
+- `.agents/skills/codegen-rules/SKILL.md`
+- `docs/ROADMAP.md`
+- `src/project/ui_tree.rs`, `src/canvas/interaction.rs`,
+  `src/codegen/egui_emitter.rs`, `src/codegen/export.rs`
+
+### Changes Made
+- Generalized layout attachment/reflow from stack layouts to direct layout
+  containers: `VLayout`, `HLayout`, and `GridLayout`.
+- GridLayout now owns direct child widgets when dropped/released inside the
+  container, detaches them when dragged outside, and reflows them row-major into
+  a default 3-column grid.
+- Palette click, template add/drop, drag release, resize, and validation/repair
+  now use the shared layout reflow path.
+- Live codegen emits GridLayout children inside `egui::Grid::new(...).show(...)`
+  with `ui.end_row()` boundaries.
+- Export emits GridLayout children through the existing layout-child handler
+  machinery, and the generated-project compile fixture now covers a
+  GridLayout-owned child with a `Result` handler.
+- Updated `docs/ROADMAP.md` and `docs/CODE_COOP.md` to mark only the direct-child
+  GridLayout slice complete.
+
+### Verification
+- `cargo check`: clean
+- `cargo test gridlayout -- --nocapture`: 3 passed
+- `cargo test layout -- --nocapture`: 10 passed
+- `cargo test export_compile_fixture_generates_required_files_and_matrix -- --nocapture`:
+  passed
+- `cargo test export_compile_fixture_cargo_check -- --ignored --nocapture`:
+  passed
+- `cargo fmt --check`: clean
+- `cargo test`: 176 passed, 2 ignored
+- `cargo clippy -- -D warnings`: clean
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1`:
+  clean
+- `cargo run --quiet` smoke: launched and stopped after 8 seconds
+
+### Remaining Gaps
+- Grid columns/rows are not user-configurable yet; this slice uses a default
+  3-column row-major grid.
+- Spacing, padding, alignment, stretch/fill, layout-aware spacers, per-child
+  policies, and cell/slot inspector controls remain open.
+- Lazare parser round-trip and richer Layers/Outline hierarchy operations remain
+  open.
+
+## 2026-06-04 — HLayout Stack Ownership Slice
+
+### Docs Reviewed Before Editing
+- Preflight context (`scripts/preflight-context.ps1`)
+- `.agents/skills/project-model/SKILL.md`
+- `.agents/skills/canvas-patterns/SKILL.md`
+- `.agents/skills/codegen-rules/SKILL.md`
+- `docs/ROADMAP.md`
+- `src/project/ui_tree.rs`, `src/canvas/interaction.rs`,
+  `src/codegen/egui_emitter.rs`, `src/codegen/export.rs`
+
+### Changes Made
+- Generalized the VLayout source-of-truth path into
+  `UiTree::attach_to_stack_layout_at()` and `UiTree::reflow_stack_layouts()`.
+- HLayout now owns direct child widgets when dropped/released inside the
+  container, detaches them when dragged outside, and reflows them horizontally
+  with equal widths inside the container's margin.
+- Palette click, palette drag, template add/drop, drag release, resize, and
+  validation/repair now use the shared stack-layout reflow path.
+- Live codegen emits HLayout children inside `ui.horizontal(|ui| { ... })`.
+- Export emits HLayout children inside `ui.horizontal(|ui| { ... })`, preserves
+  child handler dispatch, and the generated-project compile fixture now covers a
+  HLayout-owned child with a `Result` handler.
+- Updated `docs/ROADMAP.md` and `docs/CODE_COOP.md` to mark only the
+  VLayout/HLayout stack-layout slice complete.
+
+### Verification
+- `cargo check`: clean
+- `cargo test attach_to_hlayout_reflows_children_horizontally -- --nocapture`:
+  passed
+- `cargo test hlayout -- --nocapture`: 3 passed
+- `cargo test export_compile_fixture_generates_required_files_and_matrix -- --nocapture`:
+  passed
+- `cargo test export_compile_fixture_cargo_check -- --ignored --nocapture`:
+  passed
+- `cargo fmt --check`: clean
+- `cargo test`: 173 passed, 2 ignored
+- `cargo clippy -- -D warnings`: clean
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1`:
+  clean
+- `cargo run --quiet` smoke: launched and stopped after 8 seconds
+
+### Remaining Gaps
+- GridLayout does not yet own/reflow children into cells.
+- Spacing, padding, alignment, stretch/fill, and per-child layout policies remain
+  default/implicit.
+- Layout-aware spacers, Lazare parser round-trip, and richer Layers/Outline
+  hierarchy operations remain open.
+
+## 2026-06-04 — VLayout Real Ownership Vertical Slice
+
+### Docs Reviewed Before Editing
+- Preflight context (`scripts/preflight-context.ps1`)
+- `.agents/skills/project-model/SKILL.md`
+- `.agents/skills/canvas-patterns/SKILL.md`
+- `.agents/skills/codegen-rules/SKILL.md`
+- `docs/ROADMAP.md`
+- `src/project/ui_tree.rs`, `src/canvas/interaction.rs`,
+  `src/codegen/egui_emitter.rs`, `src/codegen/export.rs`
+
+### Changes Made
+- Added `UiTree::attach_to_vlayout_at()` and `UiTree::reflow_vlayouts()` so
+  VLayout child ownership/reflow lives in the project model rather than canvas
+  glue.
+- VLayout now attaches direct child widgets when they are dropped/released inside
+  the container and detaches them when dragged outside.
+- VLayout resize reflows direct children immediately.
+- Palette click, palette drag, and template add/drop paths now route new
+  non-VLayout widgets through VLayout attachment when their center lands inside a
+  VLayout.
+- Live codegen emits VLayout children sequentially inside
+  `ui.vertical(|ui| { ... })` instead of an empty layout closure.
+- Export emits VLayout children sequentially inside the `ui.vertical` closure and
+  preserves child event dispatch through the existing handler registry.
+- The generated-project compile fixture now includes a VLayout-owned child
+  button, proving the exported nested layout path compiles.
+- Updated `docs/ROADMAP.md` to mark only the VLayout vertical slice done while
+  keeping HLayout/GridLayout, layout properties, layout-aware spacers, parser
+  round-trip, and deeper outline semantics open.
+
+### Verification
+- `cargo check`: clean
+- `cargo test vlayout -- --nocapture`: 4 passed
+- `cargo test export_compile_fixture_generates_required_files_and_matrix -- --nocapture`: passed
+- `cargo test export_compile_fixture_cargo_check -- --ignored --nocapture`: passed
+
+### Remaining Gaps
+- HLayout and GridLayout do not yet own/reflow children.
+- Spacing, padding, alignment, stretch/fill, and per-child layout policies remain
+  default/implicit.
+- Lazare parser does not yet reconstruct layout-child hierarchy from edited code.
+- Layers/Outline still needs richer layout hierarchy controls.
+
+## 2026-06-04 — Pre-Release Reliability Gate + SVG Export/Golden Hardening
+
+### Docs Reviewed Before Editing
+- Preflight context (`scripts/preflight-context.ps1`)
+- `.agents/skills/codegen-rules/SKILL.md`
+- `.agents/skills/svg-zero-dep/SKILL.md`
+- `docs/ROADMAP.md`, `docs/SVG_IMPORT.md`, `docs/SVG_RENDERER_ROADMAP.md`
+- `src/codegen/export.rs`, `src/canvas/svg_rasterizer.rs`,
+  `src/canvas/svg_golden.rs`, `scripts/validate-svg-import.ps1`
+
+### Changes Made
+- Added a Pre-Release Depth Consolidation Gate to `docs/ROADMAP.md`, focused on
+  source-of-truth cleanup, reliability proofs, and depth-before-breadth work
+  before new feature families or Stage 15 renderer expansion.
+- Verified the all-built-in-widget generated-project fixture. The fast smoke
+  passed, but the ignored real generated-crate `cargo check` exposed a concrete
+  SVG Image export bug.
+- Fixed generated SVG Image export by embedding `svg_core` alongside the
+  embedded `rohkai_svg` rasterizer module, adapting the embedded rasterizer's
+  import path for generated `app.rs`, and calling
+  `rohkai_svg::rasterize_or_fallback()` so egui receives a `ColorImage`.
+- Added unit assertions so Image export requires `mod svg_core`,
+  `mod rohkai_svg`, `use super::svg_core::{self, Rgba};`, and
+  `rasterize_or_fallback()`.
+- Expanded the dependency-free SVG golden harness with path fill, stroke,
+  opacity, unsupported gradient, unsupported clip, and unsafe external href
+  buckets.
+- Wired `scripts/validate-svg-import.ps1` to run `cargo test svg_golden`.
+- Reconciled SVG roadmap/source-of-truth docs: display-list split and golden
+  harness are complete; source spans, reference tables, stable node ids, richer
+  diagnostic provenance, text, layout, gradients, clips, and masks remain future
+  SVG work.
+
+### Verification
+- `cargo test image_widget_export_embeds_svg_renderer -- --nocapture`: passed
+- `cargo test svg_golden -- --nocapture`: passed
+- `cargo test all_builtin_widgets_export_generates_required_files_and_matrix -- --nocapture`: passed
+- `cargo test all_builtin_widgets_export_cargo_check -- --ignored --nocapture`: passed
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\validate-svg-import.ps1`: passed
+- `cargo check`: clean
+- `cargo test`: 166 passed, 0 failed, 2 ignored
+
+### Remaining Gaps
+- SVG source spans, reference-table/node-id provenance, full `preserveAspectRatio`,
+  nonzero fill, stroke joins/caps/dashes, antialiasing, gradients, clips/masks,
+  embedded image decode, and robust SVG text remain future renderer/importer work.
+- Broader repo source-of-truth cleanup still needs a commit/PR hygiene pass.
+
+## 2026-06-03 — Lazare Code Panel QoL + Release Compile-Proof Expansion
+
+### Docs Reviewed Before Editing
+- Preflight context (`scripts/preflight-context.ps1`)
+- `.agents/skills/project-model/SKILL.md`
+- `docs/CODE_COOP.md`, `docs/PROMPT_CONTRACT.md`, `docs/ROADMAP.md`
+- `src/panels/code_preview.rs`, `src/codegen/parser.rs`,
+  `src/project/ui_tree.rs`, `src/app.rs`
+- `src/codegen/export.rs`, `src/codegen/rust_wiring.rs`
+
+### Changes Made
+- Replaced the selected-widget copied preview block in the code panel with an
+  inline `TextEdit` layouter highlight. The actual editable generated code now
+  receives a subtle teal background while preserving normal readable text.
+- Added `UiTree::clear_widgets()` and wired blank/deleted code-buffer edits to
+  clear canvas widgets, then resync the panel to canonical empty generated code.
+- Added focused tests for highlight range detection and `UiTree::clear_widgets`.
+- Tightened left panel usability: lower hard width cap, collapse only on cramped
+  widths, and one stable scroll region for Palette, Properties, Layers,
+  Components, and Templates.
+- Expanded the generated-export compile fixture to cover FilePicker/rfd, mpsc
+  channel fields, iterator methods, a simple local trait binding, and state
+  bindings in addition to top-level/nested event + async paths.
+- The expanded compile fixture exposed a real export bug: iterator pipelines
+  emitted invalid Rust item signatures (`fn name(&self) -> Vec<_>`). Fixed export
+  to emit `fn name(&self) -> impl IntoIterator + '_` and collect through
+  `Vec<_>` internally.
+- Simple trait bindings now emit a local trait declaration before the impl, so
+  standalone generated projects compile for local/simple trait names.
+- Updated `docs/PROMPT_CONTRACT.md`, `docs/ROADMAP.md`, and
+  `docs/feature-evaluation/rust-centric-visual-features.md` to reflect the
+  inline-highlight rule and expanded compile-proof coverage.
+
+### Verification
+- `cargo fmt --check`: clean
+- `cargo check`: clean
+- `cargo test`: 162 passed, 0 failed, 1 ignored
+- `cargo clippy -- -D warnings`: clean
+- `cargo test export_compile_fixture_cargo_check -- --ignored`: passed
+- `scripts/check-text-encoding.ps1`: OK
+- `cargo run` smoke: launched and was stopped after 8 seconds
+
+### Remaining Gaps
+- Exact TextEdit scroll-to-line/cursor positioning remains a future enhancement;
+  the selected block is now highlighted inline, but scrolling is still best-effort.
+- The compile fixture remains opt-in because it invokes Cargo on a generated
+  eframe/egui project.
+- Stage 15 renderer/high-risk work intentionally untouched.
+
+### Follow-up Correction (same session)
+- User feedback clarified that the left panel did not need a strict width cap;
+  the problem was content organization. Restored a much wider resizable cap while
+  preserving tabs and stable scroll.
+- Replaced the first inline highlight implementation's per-line background fill
+  with a TextEdit layouter-native subtle span background. A later hand-painted
+  outlined rectangle was rejected because it estimated character width and row
+  height, producing offset highlights under egui's real line spacing/wrapping.
+  An underline-only variant was also rejected as too visually noisy. Future
+  code-panel highlights should stay layout-native unless RohKai gets a dedicated
+  code editor widget with true glyph/block rect APIs.
+- Tightened the highlighted code range so it starts at the selected widget's
+  `egui::Area::new(...)` line and stops at that block's closing `});`; it no
+  longer includes the `egui::CentralPanel::default()` preamble.
+- Code highlight state now follows the full canvas selection set: multi-select
+  highlights every selected widget block, and deselecting clears the code
+  highlight.
+- Rubber-band selection now previews candidate widgets while dragging and
+  requests a repaint after release so multi-selection appears immediately on the
+  canvas.
+- Added a left-panel `Stack` toggle: tabs remain, but users can show Palette,
+  Properties, Layers/Outline, Components, and Templates together as collapsible
+  sections in the same scrolling left panel.
+- Renamed/helped the Layers view as "Layers / Outline" in UI copy. Current
+  behavior is draw-order outline of existing canvas widgets; adding items still
+  happens through Palette/Templates.
+- Improved Lazare paste semantics:
+  - pasted orphan known-widget lines (for example an `egui::Button::new(...)`
+    line) now create a widget immediately;
+  - pasted duplicate generated blocks with the same `widget_<uuid>` now create a
+    fresh duplicate widget instead of mutating the original twice;
+  - newly-created paste results canonicalize the code buffer immediately so the
+    next frame has stable fresh UUIDs.
+- Added parser regression tests for duplicate pasted blocks and orphan pasted
+  button lines.
+- Verification after correction: `cargo fmt --check`, `cargo check`,
+  `cargo test` (164 passed, 1 ignored), `cargo clippy -- -D warnings`, and
+  `scripts/check-text-encoding.ps1` all clean. `cargo run` smoke launched and was
+  stopped after 8 seconds.
+
+---
+
+## 2026-06-03 — Generated-Export Compile Proof (cargo check fixture)
+
+### Docs Reviewed Before Editing
+- `docs/PROMPT_CONTRACT.md`, `docs/CODE_COOP.md`,
+  `docs/feature-evaluation/rust-centric-visual-features.md`, `docs/ROADMAP.md`
+- `src/codegen/export.rs`, `src/codegen/rust_wiring.rs`,
+  `src/codegen/field_collector.rs`, `src/project/schema.rs`
+
+### Derivation (before coding)
+- Export fn writing files: `export::write_project(tree, dest)` → `project_files(tree)`.
+- Files required for `cargo check`: `Cargo.toml`, `src/main.rs`, `src/app.rs`.
+- External deps: always `eframe`/`egui` 0.29 (cached in rohkai's lockfile); `rfd`
+  only for FilePicker; Custom descriptor deps. Fixture uses eframe+egui only.
+- Temp dir without crates: `std::env::temp_dir()` + pid/nanos, `std::process::Command`
+  `cargo check`, shared `CARGO_TARGET_DIR`, `std::fs::remove_dir_all` cleanup.
+- Feature matrix: top Button Click + DoubleClick, nested TextInput LostFocus,
+  nested Slider DragStopped, async Plain, async Result, ≥1 binding.
+- Feasibility: real `cargo check` fixture IS implementable with std only → proceeded.
+
+### Changes Made (`src/codegen/export.rs` tests)
+- `compile_fixture_tree()` — fixture UiTree covering the full matrix (6 widgets:
+  Button[Click+DoubleClick], async-Plain Button, async-Result Button, Frame with
+  TextInput[LostFocus] + Slider[DragStopped] children; bindings `name: String`,
+  `vol: f32`).
+- `unique_temp_dir(tag)` — std-only unique temp path (pid + nanos).
+- `export_compile_fixture_cargo_check` (`#[ignore]`) — `write_project` to temp,
+  `cargo check --quiet` via `std::process::Command` with shared `CARGO_TARGET_DIR`;
+  panics with stderr on failure; cleans up on success.
+- `export_compile_fixture_generates_required_files_and_matrix` (always-run smoke) —
+  asserts the three files exist + every matrix marker present, no compilation.
+- `button_click_and_double_click_both_emitted_no_suppression` — locks the ordering
+  decision: both gates emitted off one response, Click not suppressed (egui-native).
+
+### Verification
+- `cargo fmt --check`: clean
+- `cargo check`: clean
+- `cargo test`: 159 passed, 0 failed, 1 ignored
+- **Ignored compile fixture run manually**: `cargo test export_compile_fixture_cargo_check
+  -- --ignored` → **1 passed in 29.87s** (generated crate compiles against cached deps).
+- `cargo clippy -- -D warnings`: clean (project gate)
+- `scripts/check-text-encoding.ps1`: OK
+
+### Decision: ignored vs non-ignored
+Kept `#[ignore]` (30s vs the 0.02s default suite — too slow for every `cargo test`),
+paired with the fast always-run smoke, per the goal's item 6.
+
+### Remaining Gaps (honest)
+- Compile fixture is opt-in (`--ignored`); no CI wiring for it yet.
+- Fixture covers event/async; does not yet include channels / iterator pipelines /
+  trait impls.
+- Worker body is a user TODO stub; no status-widget binding, cancellation,
+  progress streaming, or typed task I/O.
+
+---
+
+## 2026-06-03 — Nested/Frame-Child Event Export Parity
+
+### Docs Reviewed Before Editing
+- `docs/PROMPT_CONTRACT.md`, `docs/CODE_COOP.md`,
+  `docs/feature-evaluation/rust-centric-visual-features.md`, `docs/ROADMAP.md`
+- `src/project/schema.rs`, `src/panels/properties.rs`, `src/codegen/export.rs`,
+  `src/codegen/rust_wiring.rs`
+
+### Derived event/export path matrix (before coding)
+- Source of truth: `WidgetKind::supported_events()` (exhaustive).
+- UI surface: `properties.rs::show_event_handler` (same for top-level or nested).
+- Top-level export: `gen_app_rs` arms → `event_dispatch_block` (already full parity).
+- Nested/frame-child export: `export_child_line` (from Frame arm) — **the gap**.
+- Custom/template: `Custom(_)` is not in `supported_events` (no events); templates
+  reuse the normal paths. Live `egui_emitter` is the canvas preview, not export.
+- Feasibility: every event-capable child kind CAN support its events via
+  `ui.put(...)`/`ui.radio_value(...)` Response or `allocate_ui_at_rect(combo)`.
+  No kind excluded → proceeded.
+
+### Problem
+`export_child_line` rendered Frame children with no event handlers: Button child
+emitted an empty `.clicked() {}`; TextInput/Slider/etc. emitted the widget with no
+handler; ComboBox/FontComboBox children were dead `Label` placeholders. A nested
+widget could show event rows in Properties that export silently ignored.
+
+### Changes Made (`src/codegen/export.rs`)
+- New `export_child_event_dispatch(child, resp_expr, registry)`: binds
+  `let child_response = <resp_expr>;` then one `if child_response.<method>() { <handler_call> }`
+  per wired event, routed through `rust_wiring::handler_call()` + registry.
+- New `export_child_combo(...)`: renders a real interactive `egui::ComboBox` at the
+  child rect via `allocate_ui_at_rect`, returns an inner `changed` bool, gates the
+  handler on `child_combo.inner == Some(true)`.
+- Rewrote child arms Button/TextInput/TextArea/Slider/SpinBox/Checkbox/RadioButton
+  to use the dispatcher; ComboBox/FontComboBox use `export_child_combo`.
+- Threaded `handler_registry` into `export_child_line` + its Frame call site.
+- Handler collection already iterates all `tree.widgets` (children included), so the
+  central registry, conflict detection, and async task contract already covered
+  child handlers — only the call site was missing.
+
+### Event ordering decision (documented)
+Button `Click` and `DoubleClick` are wired independently and both fire per egui's
+native semantics (single `clicked()` on first release, `double_clicked()` on the
+second click). Click is intentionally NOT suppressed — same as top-level.
+
+### Tests (+9 → 157)
+- `every_supported_event_is_exported_in_nested_child`: nested invariant over every
+  `(kind, event)` pair (Result-mode `if let Err` routing proof + per-event gate +
+  child-dispatch-path check).
+- 6 focused nested: Button Click, Button DoubleClick, TextInput LostFocus, Slider
+  DragStopped (async), SpinBox DragStopped, Checkbox Change.
+- `nested_combo_change_routes_through_interactive_combo`: proves the child renders a
+  real combo (not a dead label) and routes On Change.
+- `conflict_between_top_level_and_nested_child_is_detected_and_normalized`.
+
+### Verification
+- `cargo fmt --check`: clean
+- `cargo check`: clean (no warnings)
+- `cargo test`: 157 passed, 0 failed (+9 vs prior 148)
+- `cargo clippy -- -D warnings`: clean (project gate)
+- `scripts/check-text-encoding.ps1`: OK
+
+### Remaining Gaps (honest)
+- No full `cargo build` compile fixture on generated output — proof is in-process
+  generated-code string assertions only.
+- Worker body is a user TODO stub; no status-widget binding, cancellation,
+  progress streaming, or typed task I/O.
+
+---
+
+## 2026-06-03 — Prompt Contract Standard For Agent Goals
+
+### Docs Reviewed Before Editing
+- `AGENTS.md`, `CLAUDE.md`
+- `docs/CODE_INDEX.md`, `docs/CODE_COOP.md`, `docs/DEVLOG.md`
+
+### Problem
+Recent Claude goal prompts produced real work, but repeatedly stopped at a local
+surface: explicit widget lists instead of derived sets, primary events instead of
+all events, and top-level export instead of nested export. The missing ingredient
+was not just more words; it was a required pre-coding decomposition step.
+
+### Changes Made
+- Added `docs/PROMPT_CONTRACT.md`, a reusable skeleton for inter-agent goals.
+- The skeleton requires agents to derive the source-of-truth set from code,
+  enumerate UI/runtime/export/nested/custom paths, stop before editing if any
+  required path is excluded, and add invariant tests that fail on drift.
+- Added pointers to the contract in `AGENTS.md`, `CLAUDE.md`, and
+  `docs/CODE_INDEX.md`.
+- Added a `docs/CODE_COOP.md` handoff note for future agents.
+
+### Verification
+- `scripts/check-text-encoding.ps1`: OK
+- `cargo fmt --check`: clean
+
+### Follow-ups
+- Use this contract for the next Claude prompt, especially if closing the
+  remaining nested/frame child export event gap.
+
+---
+
+## 2026-06-02 — FULL Event Export Parity (primary + secondary)
+
+### Docs Reviewed Before Editing
+- `docs/CODE_COOP.md`, `docs/feature-evaluation/rust-centric-visual-features.md`,
+  `docs/ROADMAP.md`
+- `src/project/schema.rs`, `src/panels/properties.rs`, `src/codegen/export.rs`,
+  `src/codegen/rust_wiring.rs`, `src/codegen/egui_emitter.rs` (reference pattern)
+
+### Problem
+The prior patch fixed only PRIMARY event parity. Export wired `primary_event()`
+only, so secondary events stayed exposed in Properties but ignored by export:
+Button DoubleClick, TextInput/TextArea LostFocus, Slider/SpinBox DragStopped.
+
+### Complete (WidgetKind, WidgetEvent) → egui method matrix (now all exported)
+- Button: Click→`clicked()`, DoubleClick→`double_clicked()`
+- TextInput: Change→`changed()`, LostFocus→`lost_focus()`
+- TextArea: Change→`changed()`, LostFocus→`lost_focus()`
+- Slider: Change→`changed()`, DragStopped→`drag_stopped()`
+- SpinBox: Change→`changed()`, DragStopped→`drag_stopped()`
+- Checkbox: Change→`changed()`
+- RadioButton: Change→`changed()` (radio_value marks changed)
+- ComboBox: Change→inner `combo_changed`
+- FontComboBox: Change→inner `font_combo.inner == Some(true)`
+
+### Changes Made
+- `src/codegen/export.rs`:
+  - Handler collection loop now iterates `w.kind.supported_events()` and reads
+    each event's field via new `event_field_handler` — conflict detection covers
+    all event fields, not just primary.
+  - New `event_egui_method` (event→Response predicate) and `event_dispatch_block`
+    (binds the `Response` once, emits one `if evt_response.<method>() { <handler_call> }`
+    per wired event; plain statement when no handler). Button/TextInput/TextArea/
+    Slider/SpinBox/Checkbox/RadioButton arms delegate to it; ComboBox/FontComboBox
+    keep their bespoke combo gates (Change-only). Every call routes through
+    `rust_wiring::handler_call()` + the central registry — no raw `self.h();`
+    except inside `handler_call()` output.
+  - egui 0.29 `double_clicked()`/`lost_focus()`/`drag_stopped()` verified against
+    `egui_emitter.rs` (the live preview already emits them) and `interaction.rs`.
+- `src/project/schema.rs`: `primary_event()` is now `#[cfg(test)]` — production no
+  longer needs a "primary" notion since export wires every event.
+
+### Tests
+- Rewrote the invariant: iterates EVERY `(kind, event)` pair from
+  `supported_events()`, Result mode, asserts the `if let Err(e) = self.h_evt()`
+  routing proof AND the correct per-event gate method. Fails if any supported
+  event lacks routing.
+- +5 focused secondary tests (Button DoubleClick, TextInput LostFocus, TextArea
+  LostFocus, Slider DragStopped, SpinBox DragStopped) — each Result or async.
+- +1 primary+secondary on one widget (Slider Change + DragStopped both wired off
+  one `evt_response`).
+- +1 conflict across event fields (Button Click async/Plain vs Button DoubleClick
+  sync/Result, same name) → conflict header + normalized call sites.
+
+### Verification
+- `cargo fmt --check`: clean
+- `cargo check`: clean (no warnings)
+- `cargo test`: 148 passed, 0 failed (+7 vs prior 141)
+- `cargo clippy -- -D warnings`: clean (project gate)
+- `cargo clippy --all-targets`: 3 lints, all PRE-EXISTING and not in touched files
+  (examples/hello_button, codegen/field_collector test helper, panels/templates.rs)
+- `scripts/check-text-encoding.ps1`: OK
+
+### Remaining Gaps (honest)
+- Container-child export (`export_child_line`) wires no events for nested widgets —
+  separate, pre-existing path affecting all events (not a secondary-event deferral).
+- No full `cargo build` compile fixture on generated output.
+- Worker body is a user TODO stub; no status-widget binding, cancellation,
+  progress streaming, or typed task I/O.
+
+---
+
+## 2026-06-02 — Properties/Export Event Parity (Codex Review)
+
+### Docs Reviewed Before Editing
+- `docs/CODE_COOP.md`, `docs/feature-evaluation/rust-centric-visual-features.md`
+- `src/panels/properties.rs`, `src/codegen/export.rs`,
+  `src/codegen/rust_wiring.rs`, `src/project/schema.rs`
+
+### Problem
+Codex found a correctness gap: the Properties panel exposes `On Change` for
+TextArea, SpinBox, and FontComboBox, but export emitted those widgets without
+invoking their `on_change` handlers. A user could wire a handler in the UI and the
+exported app would silently ignore it. Root cause: Properties and export each had
+their own `match w.kind` event list, and the two drifted.
+
+### Authoritative event-capable widget list (derived from `show_event_handler`)
+- Button → Click (primary), Double-click
+- TextInput → Change (primary), Lost Focus
+- TextArea → Change (primary), Lost Focus
+- Slider → Change (primary), Drag Stopped
+- SpinBox → Change (primary), Drag Stopped
+- Checkbox → Change
+- ComboBox → Change
+- FontComboBox → Change
+- RadioButton → Change
+
+### Changes Made
+- `src/project/schema.rs`: new `WidgetEvent` enum and `WidgetKind::supported_events()`
+  (exhaustive, wildcard-free match — the single source of truth), plus
+  `primary_event()` / `is_event_capable()`, and a `#[cfg(test)] EVENT_CAPABLE_KINDS`
+  enumeration the parity test walks. 4 new schema tests.
+- `src/panels/properties.rs`: `show_event_handler` derives its applicable-event
+  rows from `kind.supported_events()` through a new `event_ui_meta` mapper instead
+  of a local hard-coded match. Behavior preserved exactly (same fields/labels/hints).
+- `src/codegen/export.rs`:
+  - Handler collection now uses `w.kind.primary_event()` to pick Click vs Change
+    and to skip non-event kinds entirely.
+  - TextArea and SpinBox arms now emit `if <resp>.changed() { <handler_call> }`
+    using the central registry (mirrors TextInput/Slider).
+  - FontComboBox arm returns an inner `changed` bool from its `show_ui` closure,
+    binds `let font_combo = …` only when a handler exists, and gates the call on
+    `font_combo.inner == Some(true)`.
+  - Added a top-of-`app.rs` `!! HANDLER CONFLICTS DETECTED` summary block listing
+    every conflicting handler (in addition to the existing near-handler comment).
+  - Tests: +5 — an invariant test iterating `EVENT_CAPABLE_KINDS` and proving each
+    routes through `handler_call()` (via Result-mode `if let Err` wrapper that a
+    bare `self.h();` bypass cannot produce); focused TextArea (async Plain), SpinBox
+    (Result), FontComboBox (Result); and a FontComboBox-without-handler test proving
+    no dangling `font_combo` binding (would be an unused-var warning in the export).
+
+### Verification
+- `cargo fmt --check`: clean
+- `cargo check`: clean (no warnings)
+- `cargo test`: 141 passed, 0 failed (+9 vs prior 132)
+- `cargo clippy -- -D warnings`: clean
+- `scripts/check-text-encoding.ps1`: OK
+
+### Remaining Gaps (documented honestly in the eval doc)
+- Secondary events (double-click, lost-focus, drag-stopped) are exposed in
+  Properties but export wires only the primary event per kind.
+- No full `cargo build` compile fixture on generated output.
+- Worker body is a user TODO stub; no status-widget binding, cancellation,
+  progress streaming, or typed task I/O.
+
+---
+
+## 2026-06-02 — Async Wiring Gap Fixes (Codex Review)
+
+### Docs Reviewed Before Editing
+- `docs/CODE_COOP.md`, `docs/feature-evaluation/rust-centric-visual-features.md`
+- `src/codegen/rust_wiring.rs`, `src/codegen/export.rs`,
+  `src/panels/properties.rs`, `src/project/schema.rs`
+
+### Problem (four gaps from Codex review)
+1. No repaint scheduling while async tasks are in flight — exported apps stall waiting for user input.
+2. TextInput/Slider/Checkbox/ComboBox/RadioButton handler call sites bypassed `handler_call()`, losing async-launcher and Result/Option wrapping.
+3. Duplicate handler names silently used "first wins" with no conflict signal or call-site normalization.
+4. No combined test proving all three gap fixes work together.
+
+### Changes Made
+- `src/codegen/rust_wiring.rs`: added `async_repaint_block()` — emits a
+  `ctx.request_repaint_after(Duration::from_millis(16))` guard conditioned on
+  any `{h}_running` field being true. 3 new tests.
+- `src/codegen/export.rs`:
+  - Handler collection changed from `HashSet` + 3-tuple to `HashMap<name→usize>` +
+    4-tuple `(name, result, is_async, has_conflict)`. Conflict flag set when a
+    later widget shares the name with a different async/result mode.
+  - `handler_registry: HashMap<String, (HandlerResult, bool)>` built from first
+    definitions. All call sites — Button, TextInput, Slider, Checkbox, ComboBox,
+    RadioButton — look up their handler's mode from the registry rather than the
+    widget's own fields. This normalizes conflicting call sites to the registered mode.
+  - `// CODEGEN CONFLICT` comment emitted before a conflicted handler's stub.
+  - Repaint block inserted after drain blocks in `update()`.
+  - 4 new tests: repaint guard, non-button async launcher routing, conflict
+    warning + call-site normalization (2 call sites both normalize), combined
+    3-widget coherence fixture.
+
+### Verification
+- `cargo fmt --check`: clean
+- `cargo check`: clean
+- `cargo test`: 132 passed, 0 failed
+- `cargo clippy -- -D warnings`: clean
+- `scripts/check-text-encoding.ps1`: OK
+
+### Remaining Gaps (documented in eval doc)
+- Worker body is still a user TODO stub.
+- No full `cargo build` compile fixture on generated output.
+- `{h}_running`/`{h}_error` not auto-bound to a spinner/error label widget.
+- No cancellation or progress streaming.
+
+---
+
+## 2026-06-02 — Stage 11 Async Task Wiring: Resolve Overclaim
+
+### Docs Reviewed Before Editing
+- `docs/feature-evaluation/depth-model.md`
+- `docs/feature-evaluation/rust-centric-visual-features.md`
+- `docs/CODE_COOP.md`
+- `src/codegen/rust_wiring.rs`, `src/codegen/export.rs`,
+  `src/panels/properties.rs`, `src/project/schema.rs`
+
+### Problem
+Async task wiring was an overclaim: `async_handler` only generated a
+`std::thread::spawn` block with TODO comments — no real work call, no completion
+send, no receiver drain, no status/error.
+
+### Changes Made
+- `src/codegen/rust_wiring.rs`: new emitters `async_msg_type`,
+  `async_struct_fields`, `async_default_fields`, `async_launcher_method`,
+  `async_worker_fn`, `async_drain_block`; `handler_call` async branch now calls
+  the launcher (`self.{h}();`).
+- `src/codegen/export.rs`: moved handler collection above the `ExportedApp`
+  struct; emits async fields into struct + `Default`; emits the drain block at
+  the top of `update()`; emits launcher methods (async) vs plain stubs
+  (non-async) in `impl ExportedApp`; emits module-level worker fns.
+- Generated contract per async handler: `{h}_rx`/`{h}_running`/`{h}_error`
+  fields, launcher `fn {h}(&mut self)` (guards double-launch, spawns, sends
+  `{h}_worker()` over mpsc), free-fn worker (no `&mut self`), borrow-safe
+  `try_recv` drain recording status/error. MSG = `()` / `Result<(), String>` /
+  `Option<()>`.
+
+### Verification
+- `cargo fmt --check`, `cargo check`, `cargo clippy -- -D warnings` clean.
+- `cargo test` — 125 passing (9 new: rust_wiring async emitters + export async
+  paths + non-async regression).
+- `scripts/check-text-encoding.ps1` — OK.
+
+### Honesty / Risks
+- Reclassified to **Functional MVP**, not top-class. Worker body is a
+  user-filled stub; no status-widget auto-binding, cancellation, progress, or
+  generated-project compile fixture yet (token tests only).
+- Std-only (no tokio/new crates), preserving architecture rules.
+- Preserved all uncommitted Codex changes; did not touch SVG/WASM/DB/own
+  renderer/visual widget maker.
+
+### Follow-ups
+- Add a generated-project compile fixture for async Plain + Result.
+- Auto-bind `{h}_running`/`{h}_error` to a spinner/label widget.
+
+## 2026-06-02 — Remaining Roadmap Item Evaluation
+
+### Docs Reviewed Before Editing
+- `scripts/preflight-context.ps1` output
+- `docs/ROADMAP.md`
+- `docs/feature-evaluation/README.md`
+- latest `docs/CODE_COOP.md`
+
+### Changes Made
+- Added `docs/feature-evaluation/remaining-roadmap-items.md`.
+- Updated feature-evaluation README, Code Index, and Code CoOp to reference it.
+- Covered unchecked roadmap items with current implementation contracts,
+  insufficient existing surface, desired closure contracts, and closure criteria.
+
+### Findings
+- The largest planned gaps are Visual Widget Maker, SVG text/import maturity,
+  Formula Widget, WASM export, DB/data integration, and Own Renderer.
+- Several unchecked items have nearby MVPs that must not be confused with
+  closure: MathLabel vs Formula Widget, static views vs model/data views,
+  Guided Descriptor Builder vs Visual Widget Maker, SVG source preservation vs
+  robust `tspan`/report UI.
+- Roadmap has duplicate/stale SVG renderer checklist entries: Stage 9 marks
+  scene/display-list IR and golden harness complete while Stage 7.x still has
+  similar unchecked entries.
+
+### Verification
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1` — passed.
+- `cargo fmt --check` — passed.
+- `cargo check` — passed.
+
+### Risks / Follow-ups
+- Roadmap reconciliation is recommended before another agent implements SVG
+  renderer tasks, otherwise they may redo completed work or close future work
+  incorrectly.
+
+## 2026-06-02 — Stage 11 Rust-Centric Feature Evaluation
+
+### Docs Reviewed Before Editing
+- `scripts/preflight-context.ps1` output
+- `docs/STAGE11_PLAN.md`
+- `docs/ROADMAP.md`
+- latest `docs/CODE_COOP.md`
+- `docs/feature-evaluation/codegen-lazare-export.md`
+
+### Code Reviewed
+- `src/canvas/overlays.rs`
+- `src/codegen/rust_wiring.rs`
+- `src/codegen/export.rs`
+- `src/panels/rust_wiring.rs`
+- `src/panels/macro_palette.rs`
+- `src/panels/properties.rs`
+- `src/project/schema.rs`
+- Stage 11 integration in `src/app.rs`
+
+### Changes Made
+- Added `docs/feature-evaluation/rust-centric-visual-features.md`.
+- Updated `docs/feature-evaluation/README.md` and `docs/CODE_INDEX.md` to list
+  the new evaluation.
+- Updated Code CoOp with the Stage 11 evaluation summary.
+
+### Findings
+- Ownership overlay is a usable read-only feature because it derives from
+  `field_collector`.
+- Error-flow is a functional MVP: signatures/call sites change, but there is no
+  true propagation graph or UI error destination.
+- Channels and iterator pipelines are useful code-generation MVPs, but not
+  visually connected or type-validated systems.
+- Trait binding is raw Rust text insertion, not semantic trait binding.
+- Macro palette appends snippets to the code buffer, but is not cursor- or
+  handler-aware.
+- Async task wiring is the largest overclaim: current generated async code emits
+  a `std::thread::spawn` TODO block and does not call the handler or return
+  results through a channel.
+
+### Verification
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1` — passed.
+- `cargo fmt --check` — passed.
+- `cargo check` — passed.
+
+### Risks / Follow-ups
+- Stage 11 should not be treated as competitor-depth Rust visual programming
+  until generated-project compile fixtures, validation, runtime task/channel
+  behavior, and visual flow graphs exist.
+
+## 2026-06-02 — Feature Evaluation Documentation Set
+
+### Docs Reviewed Before Editing
+- `scripts/preflight-context.ps1` output
+- `docs/CODE_INDEX.md`
+- `docs/ROADMAP.md`
+- latest `docs/CODE_COOP.md`
+
+### Changes Made
+- Created `docs/feature-evaluation/`.
+- Added a shared feature-depth model covering Planned, Surface, Functional MVP,
+  Usable Product Feature, Competitive, and Top-Class levels.
+- Added area evaluations for:
+  - app shell and navigation
+  - canvas authoring
+  - widgets and components
+  - codegen, Lazare, and export
+  - SVG import and renderer
+  - custom widget system
+  - project infrastructure
+  - preferences, theming, and platform
+  - testing and quality gates
+- Updated Code Index and Code CoOp so future agents can find the new evaluation
+  docs without loading them during every preflight.
+
+### Verification
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1` — passed.
+- `cargo fmt --check` — passed.
+- `cargo check` — passed.
+
+### Risks / Follow-ups
+- These are qualitative evaluation docs, not executable tests. The next useful
+  step is a machine-readable feature-depth manifest that maps feature claims to
+  required evidence.
+
+## 2026-06-02 — Stage 10/14 Depth Remediation And Parity Audit
+
+### Docs Reviewed Before Editing
+- `scripts/preflight-context.ps1` output
+- `AGENTS.md` rules from session context
+- `docs/CODE_COOP.md`, `docs/ROADMAP.md`, `docs/CODE_INDEX.md`
+- `project-model` skill for `UiTree` mutation discipline
+- Relevant code: `src/codegen/export.rs`, `src/codegen/egui_emitter.rs`,
+  `src/codegen/kind_table.rs`, `src/widgets/computational.rs`,
+  `src/project/ui_tree.rs`, `src/panels/outline.rs`, `src/panels/component_tray.rs`,
+  `src/app.rs`
+
+### Changes Made
+- Fixed FilePicker export depth: generated projects that use `FilePicker` now
+  include `rfd = "0.14"` in `Cargo.toml`.
+- Fixed MathLabel codegen correctness: labels are passed as escaped Rust string
+  values into `format!`, so braces and quotes cannot break generated Rust.
+- Upgraded Chart from comment-only codegen to a minimal egui painter bar chart
+  bound to `Vec<f32>` state; default Chart instances bind `chart_values`.
+- Added `UiTree::move_to_index()` and routed outline drag reorder through it
+  instead of direct `widgets.swap`.
+- Split the left rail into bounded tabs: Palette, Props, Layers, Components,
+  Templates. `Ctrl+L` now opens the Layers tab.
+- Reworded Timer/StateMachine/HttpRequest generated comments and tests as
+  design-time MVP stubs rather than claiming runtime dispatch.
+- Updated Roadmap, Code CoOp, and Code Index with Feature Depth Status:
+  Full / Functional MVP / Design-time MVP / Planned.
+
+### Verification
+- `cargo check` — passed.
+- `cargo test` — 116/116 passed.
+- `cargo clippy -- -D warnings` — passed.
+
+### Risks / Follow-ups
+- Chart is now real but intentionally minimal: no axes, legends, multiple series,
+  tooltips, scaling modes, or editing workflow.
+- MathLabel is still a computed f32 label, not a formula widget.
+- Table/ListView/TreeView remain static option-backed widgets; model-bound data
+  views belong in future data integration work.
+- Timer/StateMachine/HttpRequest still need true runtime engines before they can
+  be called competitor-depth components.
+
+## 2026-05-26 — Comprehensive Code Review & Rayon Integration
+
+### Docs Reviewed Before Editing
+- `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`
+- `docs/ROADMAP.md`, `docs/ARCHITECTURE.md`, `docs/CODE_INDEX.md`
+- `docs/DEVLOG.md`, `docs/CODE_COOP.md`
+- `docs/SVG_IMPORT.md`, `docs/SVG_RENDERER_ROADMAP.md`
+- `src/project/ui_tree.rs`, `src/app.rs`, `src/main.rs`
+- `Cargo.toml`, `src/codegen/`, `src/canvas/`, `src/panels/`, `src/widgets/`
+- All test files (75 tests total)
+
+### Changes Made
+- Performed comprehensive code review across 7 categories (architecture, code quality,
+  testing, performance, security, documentation, dependencies).
+- Created 4 new recommendation documents with 9 actionable items across 3 groups:
+  - `docs/CLINE_REVIEW_AND_RECOMMENDATIONS.md` — executive summary and overview
+  - `docs/CLINE_RECOMMENDATIONS_GROUP1.md` — code quality & maintainability (3 items)
+  - `docs/CLINE_RECOMMENDATIONS_GROUP2.md` — testing & reliability (3 items)
+  - `docs/CLINE_RECOMMENDATIONS_GROUP3.md` — performance & architecture (3 items)
+- Added `rayon = "1"` to `Cargo.toml` as core dependency for app-wide parallelism.
+- Updated `docs/ROADMAP.md` with parallelism foundation tasks for Stage 9:
+  parallel SVG rasterization, parallel codegen, parallel export, parallel template
+  loading, and performance benchmarks.
+- Updated `docs/CODE_COOP.md` with session handoff note.
+
+### Verification
+- `cargo check` passes with zero warnings after adding rayon.
+- No app behavior changed — docs-only pass plus dependency addition.
+
+### Key Findings
+- Overall score: 9/10 — production-quality Rust code
+- Architecture: 9/10 — strong single-source-of-truth (UiTree) design
+- Code Quality: 9/10 — zero clippy warnings, clean formatting
+- Testing: 8/10 — 75 tests passing, good coverage (no UI integration tests)
+- Performance: 7/10 — good caching, but per-frame codegen and sequential SVG
+  rasterization are concerns for 100+ widget projects
+- Security: 9/10 — excellent SVG security, input validation throughout
+- Documentation: 8/10 — comprehensive docs, module-level docs could improve
+- Dependencies: 10/10 — minimal, well-chosen, mature crates
+
+### Risks / Follow-ups
+- Rayon is now a core dependency; future agents should consider parallel approaches
+  for expensive operations (SVG batch rasterization, codegen, export file writing).
+- 9 recommendations are ready for implementation when prioritized by user.
+- No urgent bugs found; the codebase is in excellent shape.
+
+## 2026-05-25 - Widget Maker Taxonomy Docs
+
+### Docs Reviewed Before Editing
+- `scripts/preflight-context.ps1`
+- latest `docs/CODE_COOP.md`
+- `docs/ROADMAP.md`
+- `docs/CODE_INDEX.md`
+- `src/panels/widget_builder.rs`
+
+### Changes Made
+- Added `docs/VISUAL_WIDGET_MAKER.md`.
+- Renamed the current builder concept in docs to Guided Descriptor Builder.
+- Clarified that the existing builder is a form over `WidgetDescriptor`, not a
+  true WYSIWYG widget construction tool.
+- Added a separate roadmap lane for the future Visual Widget Maker: internal
+  visual document, mini-canvas, primitives, exposed properties, deterministic
+  descriptor generation, and advanced-editor escape hatch.
+- Updated Code CoOp and Code Index with the distinction.
+
+### Verification
+- Docs-only pass. No Rust behavior changed.
+
+### Risks / Follow-ups
+- UI labels still say "Create Custom Widget"; a future UX pass may rename menu
+  labels to reduce confusion, while preserving discoverability.
+
+## 2026-05-25 - SVG Path Tokenizer Core Extraction
+
+### Docs Reviewed Before Coding
+- `scripts/preflight-context.ps1`
+- `.agents/skills/svg-zero-dep/SKILL.md`
+- latest `docs/CODE_COOP.md`
+- `src/svg_core.rs`, `src/svg_import.rs`, `src/canvas/svg_rasterizer.rs`
+- `docs/SVG_IMPORT.md`, `docs/SVG_RENDERER_ROADMAP.md`, `docs/ROADMAP.md`
+
+### Changes Made
+- Added `svg_core::SvgPathToken` and `svg_core::tokenize_path_data()`.
+- Shared path tokenization now handles compact syntax, adjacent decimals,
+  exponent notation, unknown command letters, and malformed fragments without
+  panics.
+- Replaced importer-local path tokens with the shared tokenizer while keeping
+  importer command limits, bounds semantics, malformed recovery, and unsupported
+  command diagnostics.
+- Replaced rasterizer-local path tokenization with the shared tokenizer while
+  keeping rasterizer flattening and fill/stroke behavior.
+- Added a rasterizer unsupported-command skip so broader shared command
+  recognition cannot stall on unknown path commands.
+- Updated SVG docs and coordination docs to reflect the shared path tokenizer.
+
+### Verification
+- `cargo fmt --check` passed.
+- `cargo check` passed.
+- `cargo test svg_core -- --nocapture` passed: 7/7.
+- `cargo test svg_import -- --nocapture` passed: 17/17.
+- `cargo test svg_rasterizer -- --nocapture` passed: 13/13.
+- `cargo test` passed: 75/75.
+- `cargo clippy -- -D warnings` passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\validate-svg-import.ps1`
+  passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1`
+  passed.
+
+### Risks / Follow-ups
+- Remaining duplicated SVG microsyntax candidate is length parsing. Keep it as a
+  separate pass because length percentages depend on viewport/property context.
+- Golden-image tests should still watch for tiny f64-to-f32 raster rounding
+  changes as renderer coverage grows.
+
+## 2026-05-25 - SVG Transform Core Extraction
+
+### Docs Reviewed Before Coding
+- `scripts/preflight-context.ps1`
+- `.agents/skills/svg-zero-dep/SKILL.md`
+- latest `docs/CODE_COOP.md`
+- `src/svg_core.rs`, `src/svg_import.rs`, `src/canvas/svg_rasterizer.rs`
+- `docs/SVG_IMPORT.md`, `docs/SVG_RENDERER_ROADMAP.md`, `docs/ROADMAP.md`
+
+### Changes Made
+- Added `svg_core::Affine2D` as the shared SVG affine transform type.
+- Moved matrix multiplication, translate/scale/rotate/skew construction,
+  rotate-about-point handling, finite/extreme checks, summaries, and
+  transform-list parsing into `svg_core`.
+- Replaced importer-local `Matrix` implementation with an alias to
+  `svg_core::Affine2D`.
+- Replaced rasterizer-local `Transform` implementation with an alias to
+  `svg_core::Affine2D` plus the shared `apply_f32` adapter for raster geometry.
+- Added `svg_core` tests for transform-list parsing and rotate-about-point.
+
+### Verification
+- `cargo fmt --check` passed.
+- `cargo test svg_core -- --nocapture` passed: 4/4.
+- `cargo test svg_import -- --nocapture` passed: 16/16.
+- `cargo test svg_rasterizer -- --nocapture` passed: 11/11.
+- `cargo check` passed.
+- `cargo test` passed: 69/69.
+- `cargo clippy -- -D warnings` passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\validate-svg-import.ps1` passed.
+
+### Risks / Follow-ups
+- Length parsing and path tokenization are still duplicated enough to deserve
+  future `svg_core` slices. Do those separately because path behavior is the
+  highest-risk SVG parser surface.
+
+## 2026-05-25 - SVG Core Microsyntax Extraction
+
+### Docs Reviewed Before Coding
+- `scripts/preflight-context.ps1`
+- `.agents/skills/svg-zero-dep/SKILL.md`
+- latest `docs/CODE_COOP.md`
+- `docs/SVG_IMPORT.md`, `docs/SVG_RENDERER_ROADMAP.md`, `docs/ROADMAP.md`
+- `src/svg_import.rs`, `src/canvas/svg_rasterizer.rs`
+
+### Changes Made
+- Added `src/svg_core.rs` as the shared zero-dependency SVG microsyntax module.
+- Moved shared SVG color parsing into `svg_core::parse_color` /
+  `svg_core::parse_rgb`.
+- Moved shared SVG numeric-list scanning into `svg_core::parse_numbers` /
+  `svg_core::parse_numbers_f32`.
+- Wired both `src/svg_import.rs` and `src/canvas/svg_rasterizer.rs` to use the
+  shared module, removing duplicate color tables and number scanners.
+- Added `svg_core` unit tests for compact number syntax and shared color forms.
+
+### Verification
+- `cargo fmt --check` passed.
+- `cargo test svg_core -- --nocapture` passed: 2/2.
+- `cargo test svg_import -- --nocapture` passed: 16/16.
+- `cargo test svg_rasterizer -- --nocapture` passed: 11/11.
+- `cargo check` passed.
+- `cargo test` passed: 67/67.
+- `cargo clippy -- -D warnings` passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\validate-svg-import.ps1` passed.
+
+### Risks / Follow-ups
+- Transform and path parsing still have duplication. The next cleanup slice
+  should move `Matrix`/`Transform` compatibility into `svg_core` without
+  changing importer bounds behavior or renderer pixel output.
+
+## 2026-05-25 - SVG Scene Boundary
+
+### Docs Reviewed Before Coding
+- `scripts/preflight-context.ps1`
+- `.agents/skills/svg-zero-dep/SKILL.md`
+- latest `docs/CODE_COOP.md`
+- `docs/SVG_IMPORT.md`, `docs/SVG_RENDERER_ROADMAP.md`, `docs/ROADMAP.md`
+- `src/canvas/svg_rasterizer.rs`
+
+### Dirty Worktree Check
+- Current dirty non-SVG work includes Claude's Widget Builder files:
+  `src/panels/widget_builder.rs`, `src/app.rs`, `src/panels/mod.rs`, and
+  `src/panels/descriptor_editor.rs`.
+- This SVG pass intentionally stayed in the rasterizer and docs. `cargo fmt`
+  may still mechanically touch already-dirty Rust files.
+
+### Changes Made
+- Added an internal `SvgScene` and `SvgSceneItem` layer between parsed XML-ish
+  nodes and raster drawing.
+- Scene items now carry accumulated transforms, resolved inherited style, and a
+  flag for unsupported ancestors before rendering starts.
+- Shape-level `transform` attributes now affect raster output, not just group
+  transforms.
+- Added tests for scene flattening and element-transform pixels.
+
+### Verification
+- `cargo fmt --check` passed.
+- `cargo test svg_rasterizer -- --nocapture` passed: 11/11.
+- `cargo check` passed.
+- `cargo test` passed: 65/65.
+- `cargo clippy -- -D warnings` passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\validate-svg-import.ps1` passed.
+- `cargo run` smoke launched and was stopped after 8 seconds.
+
+### Risks / Follow-ups
+- This is the first scene boundary, not the finished display-list IR. Source
+  spans, node IDs, reference tables, exact bounding boxes, and shared
+  importer/rasterizer microsyntax modules are still future work.
+
+## 2026-05-25 - SVG Renderer Parsed Diagnostics
+
+### Docs Reviewed Before Coding
+- `scripts/preflight-context.ps1`
+- `.agents/skills/svg-zero-dep/SKILL.md`
+- latest `docs/CODE_COOP.md`
+- `src/canvas/svg_rasterizer.rs`
+- `docs/SVG_IMPORT.md`, `docs/SVG_RENDERER_ROADMAP.md`
+
+### Changes Made
+- Added `SvgNode::Unsupported` so known unsupported renderer elements are
+  represented in the parsed tree instead of only source-scanned.
+- Moved renderer unsupported diagnostics for known elements and supported-node
+  attributes onto parsed nodes/attributes.
+- Added skipped-subtree accounting so unsupported definitions such as `defs`
+  and gradient children count toward skipped work without rendering.
+- Added tests proving SVG comments do not produce fake unsupported diagnostics
+  and unsupported definition children are counted as skipped.
+- Ran `cargo fmt`, which also formatted recent uncommitted guide/bezel files in
+  the working tree.
+
+### Verification
+- `cargo fmt --check` passed.
+- `cargo test svg_rasterizer -- --nocapture` passed: 9/9.
+- `cargo check` passed.
+- `cargo test` passed: 55/55.
+- `cargo clippy -- -D warnings` passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\validate-svg-import.ps1` passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1` passed.
+- `cargo run` smoke launched and was stopped after 8 seconds.
+
+### Risks / Follow-ups
+- Diagnostics are now parsed-node driven for known tags/attributes, but a full
+  `SvgScene` IR is still needed before report UI should rely on precise source
+  spans or resolved references.
+
+## 2026-05-24 — Stage 8 Close-out: Guide Snap, Lock Ratio, Canvas Bezel
+
+### Docs Reviewed
+- `docs/CODE_COOP.md` (prior Stage 8 entry for context)
+
+### Changes Made
+
+**`src/project/schema.rs`**
+- `AppProps.show_bezel: bool` — serde-default false, skip_serializing if false
+
+**`src/canvas/rulers.rs`**
+- `draw_bezel(ui, ctx, title)`: draws 22px mock macOS title bar above canvas rect
+  (grey background, three traffic-light circles at left, centered title text)
+- Skips draw if no vertical room (canvas near top panel edge)
+- `BEZEL_H: f32 = 22.0` constant
+
+**`src/canvas/interaction.rs`**
+- Guide snapping added after static widget alignment loop (~line 1582)
+- Iterates `tree.app_props.guides`; checks widget left/center/right vs Vertical guides,
+  top/center/bottom vs Horizontal guides; updates best_x/best_y and adj_x/adj_y
+- Snapped guide populates raw_guide_v/raw_guide_h → highlighted on canvas same as widget snaps
+
+**`src/app.rs`**
+- `SessionState.lock_aspect_ratio: bool` (default false)
+- Status bar: 🔒/🔓 toggle button after H DragValue; prev_w/prev_h snapshotted before
+  panel, ratio enforced after panel returns
+- View menu: "Show/Hide Canvas Bezel" toggle
+- Canvas section: calls `rulers::draw_bezel()` when `app_props.show_bezel`
+
+### Verification
+53/53 tests, zero clippy warnings, zero fmt issues.
+
+### Risks / Follow-ups
+- Bezel only shows when zoom/pan leaves ≥22px space above canvas — no room at 100% zoom
+  with large canvases filling the panel. Intentional: don't obscure canvas content.
+
+## 2026-05-24 — Stage 8: Rulers + Guides, Document Presets, Theming
+
+### Docs Reviewed
+- `docs/ROADMAP.md` (Stage 8 Future Considerations clusters)
+
+### Changes Made
+
+**`src/canvas/rulers.rs`** (new, ~280 lines)
+- `RulerCtx` bundle struct avoids too-many-arguments clippy lint
+- `handle_interaction()`: guide hover detection, drag, delete, ruler-click creation
+- `draw()`: ruler strip backgrounds, zoom-aware tick marks with labels, guide overlay lines
+- `canvas_origin()`: exported helper for coordinate mapping (reusable)
+
+**`src/canvas/interaction.rs`** — `show_rulers: bool` added to `CanvasSettings` (default false)
+
+**`src/canvas/mod.rs`** — `pub mod rulers` added
+
+**`src/project/schema.rs`**
+- `GuideOrientation` enum, `GuideRule` struct (id, orientation, position)
+- `ThemeSettings` struct (dark_mode, accent_color, base_font_size, global_corner_radius, spacing_scale) with serde defaults
+- `AppProps` extended: `resizable`, `min_size`, `max_size`, `theme: ThemeSettings`, `guides: Vec<GuideRule>` — all serde-defaulted for backward compat
+
+**`src/app.rs`**
+- `SessionState`: `hovered_guide`, `dragging_guide`, `theme_open`
+- `apply_theme()`: reads `AppProps.theme`, calls `ctx.set_visuals()` + optional `ctx.set_style()` every frame
+- `show_theme_window()`: floating window, dark/light toggle, RGB accent sliders, font/radius/spacing overrides
+- `cmd_save_theme()` / `cmd_load_theme()`: `.rktheme` file I/O
+- View menu: Show Rulers toggle, Clear All Guides, Theme…
+- Status bar: "▾ Preset" dropdown with 9 canvas size presets
+- Ctrl+R shortcut, rulers/guide wiring in CentralPanel
+- Delete key only deletes widgets when no guide is hovered
+
+**`src/codegen/export.rs`**
+- `gen_main_rs`: adds `.with_resizable()`, `.with_min_inner_size()`, `.with_max_inner_size()` when set
+- `gen_theme_setup()`: generates `ctx.set_visuals(...)` code block; skipped for default dark+teal
+
+### Verification
+- 53/53 tests, zero clippy warnings, `cargo fmt --check` clean
+- Commit: `3885ed1`
+
+### Risks / Follow-ups
+- Guide snapping to widget edges (deferred)
+- Canvas window bezel chrome (deferred — complex)
+
+---
+
+## 2026-05-24 — .rkwb Bundle Format + Expand SVG Inline Toggle
+
+### Docs Reviewed
+- `docs/ROADMAP.md` (Stage 7.x open items), `docs/CODE_COOP.md`
+
+### Changes Made
+
+**`src/codegen/widget_bundle.rs`** (new)
+- `WidgetBundle { format, schema_version, descriptors }` — JSON envelope for multiple descriptors
+- `from_descriptors`, `to_json`, `from_json` (validates format + version), `extract_to` (writes `<id>.rkwd` files)
+- `BundleError` enum with `Display` impl; no new crate dependency
+
+**`src/codegen/mod.rs`** — added `pub mod widget_bundle`
+
+**`src/app.rs`**
+- `cmd_export_widget_bundle`: rfd save dialog → serialize all loaded descriptors → write `.rkwb`
+- `cmd_import_widget_bundle`: rfd open dialog → parse bundle → `extract_to(widgets_dir)` → reload
+- Widgets menu: "Export Bundle…" + "Import Bundle…" entries added (with separators)
+
+**`src/project/schema.rs`** — `expand_svg_inline: bool` field on `WidgetInstance` (serde default false, skip if false)
+
+**`src/panels/properties.rs`** — checkbox "Expand SVG inline in code panel" in `show_image`, only visible when SVG source is loaded
+
+**`src/codegen/egui_emitter.rs`** — `svg_source_arg` helper; `image_preview_line` + `image_child_preview_line` call it; when `expand_svg_inline` is true, embeds raw string literal with correct hash count
+
+### Verification
+- 53/53 tests, zero clippy warnings, `cargo fmt --check` clean
+- Commit: `338ee65`
+
+### Risks / Follow-ups
+- SVG Import Maturity (tspan parser, importer report UI, etc.) — Codex track, deferred
+- Stage 7.x fully closed (Claude track). Stage 8 next.
+
+---
+
+## 2026-05-24 — Descriptor Editor UI Fixes + Widgets Menu
+
+### Docs Reviewed
+- `docs/CODE_COOP.md` (session handoff)
+
+### Changes Made
+
+**`src/panels/descriptor_editor.rs`**
+- Replaced all `desired_width(f32::INFINITY)` TextEdit calls with `desired_width(ui.available_width())` — root cause of window expanding to full RohKai width inside ScrollArea
+- Ran `cargo fmt` to fix one line-length violation in the same file
+
+**`src/app.rs`**
+- Added "Widgets" dropdown to `egui::menu::bar` (after File menu): New Descriptor, Import Definition, Reload Descriptors, and per-descriptor "Edit" entries
+- `show_descriptor_editor_window`: fixed save-message-cleared-same-frame bug — snapshot `was_saved` before calling `descriptor_editor::show()`, only trigger `cmd_reload_descriptors()` on false→true transition; save message now persists until next save overwrites it
+
+### Verification
+- 53/53 tests, zero clippy warnings, `cargo fmt --check` clean
+- Commit: `8b3932d`
+
+### Risks / Follow-ups
+- `.rkwb` bundle format deferred
+- SVG import maturity tracked separately (Codex domain)
+
+---
+
+## 2026-05-24 — In-app .rkwd Descriptor Editor
+
+### Docs Reviewed
+- `docs/CODE_COOP.md`, `docs/ROADMAP.md`
+- `src/codegen/widget_descriptor.rs`, `src/app.rs`, `src/panels/properties.rs`
+- `src/canvas/interaction.rs` (canvas preview rendering for Custom widgets)
+
+### Changes Made
+
+**`src/panels/descriptor_editor.rs`** (new, `1104547`)
+- `DescriptorEditorState`: holds draft `WidgetDescriptor`, original stem, save message, scratch buffers for add-row inputs
+- `show()`: floating `egui::Window`, horizontal split — left = form, right = live preview
+- Form: full coverage of all descriptor fields — ID/name/category, accent RGB + swatch, default size, properties (collapsible, type combo, Enum options), state fields, codegen templates (multiline), canvas_preview label_template, events list, cargo deps
+- Live preview: painted canvas box (accent fill, label_template expanded), read-only expanded `live_preview` + `export` templates updating every frame, property defaults table
+- Save: `serde_json::to_string_pretty` → `<binary_dir>/widgets/<id>.rkwd` → triggers auto-reload
+
+**`app.rs`**
+- `DescriptorState.editor: Option<DescriptorEditorState>` added
+- `widgets_dir()` static helper extracted (shared by editor + import cmd)
+- `cmd_new_descriptor()` / `cmd_edit_descriptor(id)` commands
+- `show_descriptor_editor_window()`: renders window, auto-reloads palette on save
+- File menu: "New Widget Descriptor…" item added
+
+**`properties.rs`**
+- `show_custom` gains "Edit descriptor" button (visible when descriptor loaded)
+- `PropertiesAction::EditDescriptor(String)` variant + routing in `app.rs`
+
+### Verification
+- 53/53 tests, zero clippy warnings, `cargo fmt --check` clean.
+
+### Risks / Follow-ups
+- No drag-to-reorder for properties list — deferred.
+- `.rkwb` bundle format still open.
+- Save silently overwrites existing file with same id — no conflict dialog.
+
+## 2026-05-24 — SVG Source Viewer Popup
+
+### Docs Reviewed
+- `docs/CODE_COOP.md`, `docs/ROADMAP.md` (7.x SVG Source Viewing section)
+- `src/panels/properties.rs`, `src/app.rs`
+
+### Changes Made
+
+**SVG source viewer** (`76b770e`)
+- `properties.rs`: `show_image` now returns `bool`; shows "View source" small button
+  beside "SVG source loaded" label. Fires `PropertiesAction::ShowSvgSource(id)`.
+- `app.rs`: `SessionState.svg_viewer_id: Option<Uuid>` added. New
+  `show_svg_source_window` renders `egui::Window` with read-only `TextEdit`,
+  monospace 11pt, byte count in title, "Copy all" clipboard button. X closes.
+- Roadmap: 7.x SVG Source Viewing first item checked ✅.
+- 7.x Descriptor Maturity: Import/Hot-reload/Lazare items checked ✅.
+
+### Verification
+- 53/53 tests, zero clippy warnings, `cargo fmt --check` clean.
+
+### Risks / Follow-ups
+- "Expand SVG inline" toggle (second 7.x item) deferred — low priority.
+- In-app `.rkwd` editor and `.rkwb` bundle still open.
+
+## 2026-05-24 — Stage 7.x: Lazare Custom Round-trip + Import Widget Definition
+
+### Docs Reviewed
+- `CLAUDE.md`, `docs/CODE_COOP.md` (latest note)
+- `src/codegen/parser.rs`, `src/codegen/egui_emitter.rs`, `src/codegen/widget_descriptor.rs`
+- `src/app.rs`, `widgets/ply-button.rkwd`
+
+### Changes Made
+
+**Lazare Custom round-trip** (`08867fd` — `parser.rs`)
+- Added fallback `else` branch at end of `parse_widget_line`: extracts first
+  string literal as `label` and first `&mut self.field` as `binding` from any
+  line that does not match a built-in egui pattern.
+- Guards prevent later lines (handler calls) from overwriting the values
+  captured from the constructor line.
+- Kind is intentionally left None so `apply_parsed` cannot overwrite
+  `WidgetKind::Custom`.
+- Two new tests: `custom_widget_label_and_binding_extracted_from_template_line`
+  and `custom_widget_first_line_wins_over_later_handler_call`.
+
+**Import Widget Definition dialog** (`08867fd` — `app.rs`)
+- `cmd_import_widget_definition`: opens rfd file dialog (`.rkwd` filter),
+  validates JSON + schema_version 1, copies to `<binary_dir>/widgets/`,
+  auto-reloads descriptors, shows success/error via `template_message`.
+- File menu: "Import Widget Definition…" item wired above "Reload Widget
+  Descriptors".
+
+### Verification
+- 53/53 tests, zero clippy warnings, `cargo fmt --check` clean.
+
+### Risks / Follow-ups
+- Import copies the file verbatim; no overwrite-conflict dialog (silently
+  replaces). Could add a confirmation prompt in a future polish pass.
+- Custom widget `descriptor_props` editing from the properties panel still
+  doesn't feed back into Lazare code sync ({{prop.KEY}} substitutions).
+
+## 2026-05-24 — SVG Renderer R0 Reporting
+
+### Docs Reviewed Before Coding
+- `scripts/preflight-context.ps1`
+- `.agents/skills/svg-zero-dep/SKILL.md`
+- `docs/CODE_COOP.md`
+- `docs/SVG_IMPORT.md`, `docs/SVG_RENDERER_ROADMAP.md`, `docs/ROADMAP.md`
+
+### Changes Made
+- Added `SvgRenderOutput` and `SvgRenderReport` to the zero-dependency
+  rasterizer while preserving `rasterize()` and `rasterize_or_fallback()`.
+- Added renderer diagnostics for rendered/skipped counts, unsupported feature
+  buckets, raster-size clamping, and conservative fidelity scoring.
+- Added tests for report counts, unsupported gradients/clips/filters, byte-level
+  deterministic output, and raster-size clamp warnings.
+- Wired SVG rasterizer tests into `scripts/validate-svg-import.ps1`.
+- Updated SVG docs and roadmap to record the completed R0 slice and remaining
+  scene/IR/golden-harness work.
+
+### Verification
+- `cargo fmt --check` passed.
+- `cargo check` passed.
+- `cargo test` passed: 51/51.
+- `cargo clippy -- -D warnings` passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1` passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-dependency-policy.ps1` passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\validate-svg-import.ps1` passed.
+- `cargo run` launched cleanly and was stopped after an 8-second smoke test.
+
+### Risks / Follow-ups
+- Renderer diagnostics are still source-scan based; the next step is a proper
+  `SvgScene` IR so diagnostics attach to resolved nodes.
+- Existing unrelated worktree changes were preserved.
+
+## 2026-05-24 — Track B + Track A: Handler Parity & Descriptor Hot-Reload
+
+### Docs Reviewed Before Coding
+- `CLAUDE.md`, `docs/CODE_COOP.md` (latest note)
+- `src/codegen/egui_emitter.rs`, `src/codegen/export.rs`, `src/panels/code_preview.rs`
+- `src/codegen/widget_descriptor.rs`, `src/app.rs`
+
+### Changes Made
+
+**Track B — Handler calling-convention unification** (`b2fe0af`)
+- `egui_emitter.rs`: all 6 handler call sites changed from `Self::{h}(&mut self.state);`
+  to `self.{h}();`, matching what `export.rs` already emitted.
+- `code_preview.rs`: Tracé stub signature changed from `fn h(state: &mut AppState)`
+  to `fn h(&mut self)` — stubs now compile unmodified in an exported project.
+- `export.rs` required no changes (was already correct).
+
+**Track A — Descriptor hot-reload** (`87e2e11`)
+- New `cmd_reload_descriptors()` on `RohKaiApp`: calls `load_from_widgets_dir()`,
+  replaces `self.descriptors.widgets` and `self.descriptors.errors` in-place.
+- File menu: "Reload Widget Descriptors" item wired to that command.
+- Drop/edit a `.rkwd` file in `widgets/`, click the menu item — palette updates
+  without an app restart.
+
+### Verification
+- 47/47 tests, zero clippy warnings, `cargo fmt --check` clean both commits.
+
+### Risks / Follow-ups
+- Hot-reload replaces the full descriptor list; existing canvas instances that
+  reference a Custom widget whose descriptor was deleted keep their snapshot
+  but lose palette access — acceptable for now.
+- Track A still has two remaining items: Import Widget Definition dialog, and
+  Lazare round-trip for Custom widgets (label/binding with descriptor template
+  awareness).
+
+## 2026-05-24 — Low-Token Docs Consolidation
+
+### Docs Reviewed Before Coding
+- `scripts/preflight-context.ps1`
+- `AGENTS.md`, `CLAUDE.md`
+- `.agents/commands/preflight.md`, `.claude/commands/preflight.md`
+- `docs/CODE_INDEX.md`, `docs/CODE_COOP.md`, `docs/PLATFORM_NOTES.md`
+- `docs/mojibake-remediation-plan-2026-05-24.md`
+
+### Changes Made
+- Consolidated preflight guidance so the script is procedural truth while
+  `AGENTS.md` and `CLAUDE.md` remain policy truth.
+- Changed preflight to omit the latest DEVLOG entry by default. Use
+  `-IncludeDevlog` for history/regression work.
+- Reduced both `/preflight` command docs to thin wrappers instead of duplicate
+  checklists.
+- Updated `docs/CODE_INDEX.md` for the app state split and shared
+  `field_collector`.
+- Folded mojibake prevention into `docs/PLATFORM_NOTES.md` and removed the
+  standalone remediation plan doc.
+- Added a newest-first Code CoOp note for this consolidation pass.
+
+### Verification
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\preflight-context.ps1` passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\preflight-context.ps1 -IncludeDevlog` passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1` passed.
+- `cargo fmt --check` passed.
+- `cargo check` passed.
+
+### Risks / Follow-ups
+- Older DEVLOG entries still mention the removed standalone mojibake plan as
+  historical context.
+- `docs/ARCHITECTURE.md` may still need a future structural refresh, but it is
+  no longer part of default preflight.
+
 ## 2026-05-24 — Mojibake Investigation + SVG Zoom Performance
 
 ### Docs Reviewed Before Coding

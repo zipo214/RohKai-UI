@@ -38,7 +38,13 @@ pub fn save(path: &Path, tree: &UiTree) -> Result<String, String> {
 /// Read a `.rohkai.json` file and deserialize into a `UiTree`.
 pub fn load(path: &Path) -> Result<UiTree, String> {
     let json = std::fs::read_to_string(path).map_err(|e| format!("Read error: {e}"))?;
-    let mut tree = match serde_json::from_str(&json).map_err(|e| format!("Parse error: {e}"))? {
+    deserialize(&json)
+}
+
+/// Deserialize a `UiTree` from a JSON string (versioned envelope or legacy bare tree).
+/// Used by both file load and the undo/redo stack.
+pub fn deserialize(json: &str) -> Result<UiTree, String> {
+    let mut tree = match serde_json::from_str(json).map_err(|e| format!("Parse error: {e}"))? {
         ProjectJson::Project(project) => {
             if project.schema_version > PROJECT_SCHEMA_VERSION {
                 return Err(format!(

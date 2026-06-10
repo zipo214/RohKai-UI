@@ -38,6 +38,14 @@ pub struct CanvasSettings {
     pub zoom: f32,
     /// Extra pan offset in screen pixels from the natural centred position.
     pub pan: egui::Vec2,
+    /// Whether the pixel ruler strips are visible (Ctrl+R toggle).
+    pub show_rulers: bool,
+    /// Set each frame by the caller when a ruler guide is being dragged;
+    /// suppresses rubber-band and widget drag so they don't co-fire.
+    pub guide_drag_active: bool,
+    /// Set each frame only while a true modal workflow blocks the entire canvas.
+    /// Floating windows are isolated through response/layer ownership instead.
+    pub input_blocked: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -62,6 +70,9 @@ impl Default for CanvasSettings {
             snap_step: 8.0,
             zoom: 1.0,
             pan: egui::Vec2::ZERO,
+            show_rulers: false,
+            guide_drag_active: false,
+            input_blocked: false,
         }
     }
 }
@@ -218,6 +229,9 @@ pub struct InteractionState {
     /// Inline label editing: (widget_id, current text buffer).
     /// Double-clicking a label-bearing widget on canvas starts this.
     pub inline_edit: Option<(Uuid, String)>,
+    /// Keyboard shortcuts target the canvas only after the user interacts with
+    /// the visible canvas surface. Clicking another panel/window clears this.
+    pub canvas_focused: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -229,29 +243,73 @@ pub fn kind_accent(kind: &WidgetKind) -> egui::Color32 {
         WidgetKind::Button => egui::Color32::from_rgb(52, 211, 153),
         WidgetKind::Label => egui::Color32::from_rgb(156, 163, 175),
         WidgetKind::TextInput => egui::Color32::from_rgb(96, 165, 250),
+        WidgetKind::TextArea => egui::Color32::from_rgb(56, 145, 240),
         WidgetKind::Slider => egui::Color32::from_rgb(251, 146, 60),
+        WidgetKind::SpinBox => egui::Color32::from_rgb(251, 170, 80),
         WidgetKind::Checkbox => egui::Color32::from_rgb(167, 139, 250),
         WidgetKind::Frame => egui::Color32::from_rgb(200, 200, 200),
         WidgetKind::ComboBox => egui::Color32::from_rgb(251, 191, 36),
+        WidgetKind::FontComboBox => egui::Color32::from_rgb(240, 180, 40),
         WidgetKind::RadioButton => egui::Color32::from_rgb(251, 113, 133),
         WidgetKind::ProgressBar => egui::Color32::from_rgb(34, 211, 238),
         WidgetKind::Image => egui::Color32::from_rgb(248, 113, 113),
+        WidgetKind::HorizontalSpacer => egui::Color32::from_rgb(100, 130, 100),
+        WidgetKind::VerticalSpacer => egui::Color32::from_rgb(100, 130, 100),
+        WidgetKind::GroupBox => egui::Color32::from_rgb(180, 180, 210),
+        WidgetKind::VLayout => egui::Color32::from_rgb(130, 200, 160),
+        WidgetKind::HLayout => egui::Color32::from_rgb(160, 200, 130),
+        WidgetKind::ScrollArea => egui::Color32::from_rgb(140, 180, 200),
+        WidgetKind::GridLayout => egui::Color32::from_rgb(160, 190, 150),
+        WidgetKind::TabWidget => egui::Color32::from_rgb(180, 150, 200),
+        WidgetKind::ToolButton => egui::Color32::from_rgb(72, 201, 173),
+        WidgetKind::CommandLinkButton => egui::Color32::from_rgb(92, 211, 163),
+        WidgetKind::DialogButtonBox => egui::Color32::from_rgb(52, 191, 143),
+        WidgetKind::MathLabel => egui::Color32::from_rgb(120, 200, 220),
+        WidgetKind::FilePicker => egui::Color32::from_rgb(116, 175, 240),
+        WidgetKind::Chart => egui::Color32::from_rgb(60, 200, 200),
+        WidgetKind::Table => egui::Color32::from_rgb(210, 180, 120),
+        WidgetKind::ListView => egui::Color32::from_rgb(200, 190, 130),
+        WidgetKind::TreeView => egui::Color32::from_rgb(190, 200, 120),
+        WidgetKind::StackedWidget => egui::Color32::from_rgb(170, 160, 210),
+        WidgetKind::ToolBox => egui::Color32::from_rgb(160, 170, 210),
         WidgetKind::Custom(_) => egui::Color32::from_rgb(150, 150, 220),
     }
 }
 
-fn kind_tag(kind: &WidgetKind) -> &'static str {
+pub fn kind_tag(kind: &WidgetKind) -> &'static str {
     match kind {
         WidgetKind::Button => "btn",
         WidgetKind::Label => "lbl",
         WidgetKind::TextInput => "txt",
+        WidgetKind::TextArea => "area",
         WidgetKind::Slider => "sldr",
+        WidgetKind::SpinBox => "spin",
         WidgetKind::Checkbox => "chk",
         WidgetKind::Frame => "frm",
         WidgetKind::ComboBox => "cmb",
+        WidgetKind::FontComboBox => "font",
         WidgetKind::RadioButton => "rad",
         WidgetKind::ProgressBar => "prg",
         WidgetKind::Image => "img",
+        WidgetKind::HorizontalSpacer => "h-sp",
+        WidgetKind::VerticalSpacer => "v-sp",
+        WidgetKind::GroupBox => "grp",
+        WidgetKind::VLayout => "v-lay",
+        WidgetKind::HLayout => "h-lay",
+        WidgetKind::ScrollArea => "scrl",
+        WidgetKind::GridLayout => "grid",
+        WidgetKind::TabWidget => "tabs",
+        WidgetKind::ToolButton => "tool",
+        WidgetKind::CommandLinkButton => "clnk",
+        WidgetKind::DialogButtonBox => "btns",
+        WidgetKind::MathLabel => "math",
+        WidgetKind::FilePicker => "file",
+        WidgetKind::Chart => "chrt",
+        WidgetKind::Table => "tbl",
+        WidgetKind::ListView => "list",
+        WidgetKind::TreeView => "tree",
+        WidgetKind::StackedWidget => "stk",
+        WidgetKind::ToolBox => "tbox",
         WidgetKind::Custom(_) => "cst",
     }
 }
@@ -684,6 +742,681 @@ fn draw_widget(
             );
         }
 
+        // TextArea: dark multi-line field
+        WidgetKind::TextArea => {
+            painter.rect_filled(rect, rounding, bg.unwrap_or(egui::Color32::from_gray(30)));
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(stroke_width, stroke_color),
+            );
+            let hint = if widget.props.placeholder.is_empty() {
+                widget.props.label.as_str()
+            } else {
+                widget.props.placeholder.as_str()
+            };
+            painter.text(
+                rect.left_top() + egui::vec2(6.0, label_size * 0.7),
+                egui::Align2::LEFT_TOP,
+                hint,
+                egui::FontId::proportional(label_size),
+                fg.unwrap_or(egui::Color32::from_gray(120)),
+            );
+            // Dashed lines to suggest multi-line
+            for i in 1..3_i32 {
+                let y = rect.min.y + i as f32 * (rect.height() / 3.5);
+                if y < rect.max.y - 4.0 {
+                    painter.line_segment(
+                        [
+                            egui::pos2(rect.min.x + 6.0, y),
+                            egui::pos2(rect.max.x - 6.0, y),
+                        ],
+                        egui::Stroke::new(0.5, egui::Color32::from_gray(55)),
+                    );
+                }
+            }
+        }
+
+        // SpinBox: dark field with +/- indicators
+        WidgetKind::SpinBox => {
+            painter.rect_filled(rect, rounding, bg.unwrap_or(egui::Color32::from_gray(30)));
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(stroke_width, stroke_color),
+            );
+            let val_str = format!("{:.1}", widget.props.default_value);
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                &val_str,
+                egui::FontId::proportional(label_size),
+                fg.unwrap_or(egui::Color32::from_gray(200)),
+            );
+            let arrow_x = rect.max.x - 8.0;
+            painter.text(
+                egui::pos2(arrow_x, rect.center().y - 4.0),
+                egui::Align2::RIGHT_CENTER,
+                "▲",
+                egui::FontId::proportional(tag_size),
+                accent,
+            );
+            painter.text(
+                egui::pos2(arrow_x, rect.center().y + 4.0),
+                egui::Align2::RIGHT_CENTER,
+                "▼",
+                egui::FontId::proportional(tag_size),
+                accent,
+            );
+        }
+
+        // FontComboBox: field + "Aa" glyph indicator
+        WidgetKind::FontComboBox => {
+            painter.rect_filled(rect, rounding, egui::Color32::from_gray(30));
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(stroke_width, stroke_color),
+            );
+            painter.text(
+                egui::pos2(rect.min.x + 6.0, rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                &widget.props.label,
+                egui::FontId::proportional(label_size),
+                fg.unwrap_or(egui::Color32::from_gray(200)),
+            );
+            painter.text(
+                egui::pos2(rect.max.x - 18.0, rect.center().y),
+                egui::Align2::RIGHT_CENTER,
+                "Aa",
+                egui::FontId::proportional(label_size),
+                accent,
+            );
+            painter.text(
+                egui::pos2(rect.max.x - 6.0, rect.center().y),
+                egui::Align2::RIGHT_CENTER,
+                "▾",
+                egui::FontId::proportional(label_size),
+                accent,
+            );
+        }
+
+        // HorizontalSpacer: thin dashed horizontal bar
+        WidgetKind::HorizontalSpacer => {
+            let mid_y = rect.center().y;
+            let dash_len = 6.0_f32;
+            let gap = 4.0_f32;
+            let mut x = rect.min.x;
+            while x < rect.max.x {
+                let x_end = (x + dash_len).min(rect.max.x);
+                painter.line_segment(
+                    [egui::pos2(x, mid_y), egui::pos2(x_end, mid_y)],
+                    egui::Stroke::new(1.5, accent),
+                );
+                x += dash_len + gap;
+            }
+            if flags.is_selected {
+                painter.rect_stroke(rect, 1.0, egui::Stroke::new(1.0, accent));
+            }
+        }
+
+        // VerticalSpacer: thin dashed vertical bar
+        WidgetKind::VerticalSpacer => {
+            let mid_x = rect.center().x;
+            let dash_len = 6.0_f32;
+            let gap = 4.0_f32;
+            let mut y = rect.min.y;
+            while y < rect.max.y {
+                let y_end = (y + dash_len).min(rect.max.y);
+                painter.line_segment(
+                    [egui::pos2(mid_x, y), egui::pos2(mid_x, y_end)],
+                    egui::Stroke::new(1.5, accent),
+                );
+                y += dash_len + gap;
+            }
+            if flags.is_selected {
+                painter.rect_stroke(rect, 1.0, egui::Stroke::new(1.0, accent));
+            }
+        }
+
+        // GroupBox: group frame with heading label top-left
+        WidgetKind::GroupBox => {
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(
+                    if flags.is_selected { stroke_width } else { 1.0 },
+                    stroke_color,
+                ),
+            );
+            let label_bg_rect = egui::Rect::from_min_size(
+                egui::pos2(rect.min.x + 8.0, rect.min.y - label_size * 0.6),
+                egui::vec2(
+                    widget.props.label.len() as f32 * label_size * 0.55 + 8.0,
+                    label_size,
+                ),
+            );
+            painter.rect_filled(label_bg_rect, 2.0, egui::Color32::from_gray(28));
+            painter.text(
+                egui::pos2(rect.min.x + 12.0, rect.min.y),
+                egui::Align2::LEFT_CENTER,
+                &widget.props.label,
+                egui::FontId::proportional(label_size),
+                fg.unwrap_or(accent),
+            );
+        }
+
+        // VLayout: container with ↕ arrow indicator
+        WidgetKind::VLayout => {
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(
+                    if flags.is_selected { stroke_width } else { 1.0 },
+                    stroke_color,
+                ),
+            );
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "↕",
+                egui::FontId::proportional(label_size * 1.5),
+                accent.linear_multiply(0.4),
+            );
+            painter.text(
+                rect.left_top() + egui::vec2(4.0, 2.0),
+                egui::Align2::LEFT_TOP,
+                &widget.props.label,
+                egui::FontId::proportional(tag_size),
+                accent.linear_multiply(0.7),
+            );
+        }
+
+        // HLayout: container with ↔ arrow indicator
+        WidgetKind::HLayout => {
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(
+                    if flags.is_selected { stroke_width } else { 1.0 },
+                    stroke_color,
+                ),
+            );
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "↔",
+                egui::FontId::proportional(label_size * 1.5),
+                accent.linear_multiply(0.4),
+            );
+            painter.text(
+                rect.left_top() + egui::vec2(4.0, 2.0),
+                egui::Align2::LEFT_TOP,
+                &widget.props.label,
+                egui::FontId::proportional(tag_size),
+                accent.linear_multiply(0.7),
+            );
+        }
+
+        // ScrollArea: container with scroll-bar indicator
+        WidgetKind::ScrollArea => {
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(
+                    if flags.is_selected { stroke_width } else { 1.0 },
+                    stroke_color,
+                ),
+            );
+            // Simulated scrollbar on right edge
+            let sb_w = 6.0_f32;
+            let sb_rect = egui::Rect::from_min_max(
+                egui::pos2(rect.max.x - sb_w - 2.0, rect.min.y + 4.0),
+                egui::pos2(rect.max.x - 2.0, rect.max.y - 4.0),
+            );
+            painter.rect_filled(sb_rect, 2.0, egui::Color32::from_gray(45));
+            let thumb_h = (sb_rect.height() * 0.35).max(8.0);
+            let thumb_rect = egui::Rect::from_min_size(sb_rect.min, egui::vec2(sb_w, thumb_h));
+            painter.rect_filled(thumb_rect, 2.0, accent.linear_multiply(0.6));
+            painter.text(
+                rect.left_top() + egui::vec2(4.0, 2.0),
+                egui::Align2::LEFT_TOP,
+                &widget.props.label,
+                egui::FontId::proportional(tag_size),
+                accent.linear_multiply(0.7),
+            );
+        }
+
+        // GridLayout: container with grid lines
+        WidgetKind::GridLayout => {
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(
+                    if flags.is_selected { stroke_width } else { 1.0 },
+                    stroke_color,
+                ),
+            );
+            let cols = widget.props.grid_columns.clamp(1, 12);
+            let rows = widget.children.len().div_ceil(cols).max(1);
+            for c in 1..cols {
+                let x = rect.min.x + (rect.width() * c as f32) / cols as f32;
+                painter.line_segment(
+                    [
+                        egui::pos2(x, rect.min.y + 2.0),
+                        egui::pos2(x, rect.max.y - 2.0),
+                    ],
+                    egui::Stroke::new(0.5, accent.linear_multiply(0.3)),
+                );
+            }
+            for r in 1..rows {
+                let y = rect.min.y + (rect.height() * r as f32) / rows as f32;
+                painter.line_segment(
+                    [
+                        egui::pos2(rect.min.x + 2.0, y),
+                        egui::pos2(rect.max.x - 2.0, y),
+                    ],
+                    egui::Stroke::new(0.5, accent.linear_multiply(0.3)),
+                );
+            }
+            painter.text(
+                rect.left_top() + egui::vec2(4.0, 2.0),
+                egui::Align2::LEFT_TOP,
+                &widget.props.label,
+                egui::FontId::proportional(tag_size),
+                accent.linear_multiply(0.7),
+            );
+        }
+
+        // TabWidget: container with tab header bar
+        WidgetKind::TabWidget => {
+            let tab_h = (label_size + 8.0).max(20.0);
+            // Tab bar background
+            let tab_bar_rect =
+                egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.min.y + tab_h));
+            painter.rect_filled(
+                tab_bar_rect,
+                egui::Rounding::same(rounding),
+                kind_fill(accent),
+            );
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(
+                    if flags.is_selected { stroke_width } else { 1.0 },
+                    stroke_color,
+                ),
+            );
+            // Draw tab labels from options
+            let tabs: Vec<&str> = widget.props.options.iter().map(String::as_str).collect();
+            let tab_w = if tabs.is_empty() {
+                60.0
+            } else {
+                (rect.width() / tabs.len() as f32).min(80.0)
+            };
+            for (i, tab_label) in tabs.iter().take(4).enumerate() {
+                let tx = rect.min.x + i as f32 * tab_w;
+                let is_first = i == 0;
+                let tab_rect =
+                    egui::Rect::from_min_size(egui::pos2(tx, rect.min.y), egui::vec2(tab_w, tab_h));
+                if is_first {
+                    painter.rect_filled(
+                        tab_rect,
+                        egui::Rounding::same(2.0),
+                        egui::Color32::from_gray(45),
+                    );
+                }
+                painter.text(
+                    tab_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    tab_label,
+                    egui::FontId::proportional(tag_size),
+                    if is_first {
+                        accent
+                    } else {
+                        egui::Color32::from_gray(150)
+                    },
+                );
+            }
+        }
+
+        // ToolButton: compact square button
+        WidgetKind::ToolButton => {
+            painter.rect_filled(rect, rounding, bg.unwrap_or(egui::Color32::from_gray(58)));
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(stroke_width, stroke_color),
+            );
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                &widget.props.label,
+                egui::FontId::proportional(label_size),
+                fg.unwrap_or(egui::Color32::WHITE),
+            );
+        }
+
+        // CommandLinkButton: title + description on a raised surface
+        WidgetKind::CommandLinkButton => {
+            painter.rect_filled(
+                rect,
+                rounding.max(4.0),
+                bg.unwrap_or(egui::Color32::from_gray(52)),
+            );
+            painter.rect_stroke(
+                rect,
+                rounding.max(4.0),
+                egui::Stroke::new(stroke_width, accent),
+            );
+            painter.text(
+                rect.left_top() + egui::vec2(10.0, 8.0),
+                egui::Align2::LEFT_TOP,
+                &widget.props.label,
+                egui::FontId::proportional(label_size + 1.0),
+                fg.unwrap_or(egui::Color32::WHITE),
+            );
+            if !widget.props.placeholder.is_empty() {
+                painter.text(
+                    rect.left_top() + egui::vec2(10.0, 8.0 + label_size + 4.0),
+                    egui::Align2::LEFT_TOP,
+                    &widget.props.placeholder,
+                    egui::FontId::proportional(label_size - 1.0),
+                    egui::Color32::from_gray(160),
+                );
+            }
+        }
+
+        // DialogButtonBox: right-aligned row of buttons from options
+        WidgetKind::DialogButtonBox => {
+            let n = widget.props.options.len().max(1);
+            let btn_w = 64.0_f32.min((rect.width() - 8.0) / n as f32);
+            let gap = 6.0;
+            let mut x = rect.max.x - 4.0;
+            for opt in widget.props.options.iter().rev() {
+                let b_rect = egui::Rect::from_min_max(
+                    egui::pos2(x - btn_w, rect.center().y - 12.0),
+                    egui::pos2(x, rect.center().y + 12.0),
+                );
+                painter.rect_filled(b_rect, 3.0, egui::Color32::from_gray(58));
+                painter.rect_stroke(b_rect, 3.0, egui::Stroke::new(1.0, accent));
+                painter.text(
+                    b_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    opt,
+                    egui::FontId::proportional(label_size - 1.0),
+                    egui::Color32::WHITE,
+                );
+                x -= btn_w + gap;
+            }
+        }
+
+        // MathLabel: computed-value display with fx glyph
+        WidgetKind::MathLabel => {
+            painter.rect_filled(rect, rounding, bg.unwrap_or(egui::Color32::from_gray(28)));
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(stroke_width, stroke_color),
+            );
+            painter.text(
+                rect.left_center() + egui::vec2(6.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                format!("ƒ {} =", widget.props.label),
+                egui::FontId::proportional(label_size),
+                fg.unwrap_or(egui::Color32::from_gray(200)),
+            );
+            painter.text(
+                rect.right_center() - egui::vec2(6.0, 0.0),
+                egui::Align2::RIGHT_CENTER,
+                "0.0",
+                egui::FontId::monospace(label_size),
+                accent,
+            );
+        }
+
+        // FilePicker: browse button + path field
+        WidgetKind::FilePicker => {
+            let btn_w = 64.0_f32.min(rect.width() * 0.4);
+            let btn_rect =
+                egui::Rect::from_min_max(rect.min, egui::pos2(rect.min.x + btn_w, rect.max.y));
+            painter.rect_filled(btn_rect, rounding, egui::Color32::from_gray(58));
+            painter.rect_stroke(btn_rect, rounding, egui::Stroke::new(1.0, accent));
+            painter.text(
+                btn_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "Browse…",
+                egui::FontId::proportional(label_size - 1.0),
+                egui::Color32::WHITE,
+            );
+            let field_rect =
+                egui::Rect::from_min_max(egui::pos2(btn_rect.max.x + 4.0, rect.min.y), rect.max);
+            painter.rect_filled(field_rect, rounding, egui::Color32::from_gray(30));
+            painter.text(
+                field_rect.left_center() + egui::vec2(4.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                "(no file selected)",
+                egui::FontId::proportional(label_size - 1.0),
+                egui::Color32::from_gray(120),
+            );
+        }
+
+        // Chart: axes + sample bars
+        WidgetKind::Chart => {
+            painter.rect_filled(rect, rounding, bg.unwrap_or(egui::Color32::from_gray(24)));
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(stroke_width, stroke_color),
+            );
+            // axes
+            let pad = 8.0;
+            let origin = egui::pos2(rect.min.x + pad, rect.max.y - pad);
+            painter.line_segment(
+                [origin, egui::pos2(rect.max.x - pad, rect.max.y - pad)],
+                egui::Stroke::new(1.0, egui::Color32::from_gray(90)),
+            );
+            painter.line_segment(
+                [origin, egui::pos2(rect.min.x + pad, rect.min.y + pad)],
+                egui::Stroke::new(1.0, egui::Color32::from_gray(90)),
+            );
+            // sample bars
+            let bars = [0.4_f32, 0.7, 0.5, 0.9, 0.6];
+            let area_w = rect.width() - pad * 2.0;
+            let area_h = rect.height() - pad * 2.0;
+            let bw = area_w / (bars.len() as f32 * 1.5);
+            for (i, &v) in bars.iter().enumerate() {
+                let bx = rect.min.x + pad + i as f32 * bw * 1.5 + bw * 0.25;
+                let bh = area_h * v;
+                let b_rect = egui::Rect::from_min_max(
+                    egui::pos2(bx, rect.max.y - pad - bh),
+                    egui::pos2(bx + bw, rect.max.y - pad),
+                );
+                painter.rect_filled(b_rect, 1.0, accent);
+            }
+            painter.text(
+                rect.left_top() + egui::vec2(4.0, 2.0),
+                egui::Align2::LEFT_TOP,
+                &widget.props.label,
+                egui::FontId::proportional(tag_size),
+                accent.linear_multiply(0.8),
+            );
+        }
+
+        // Table: header row + grid lines
+        WidgetKind::Table => {
+            painter.rect_filled(rect, rounding, bg.unwrap_or(egui::Color32::from_gray(26)));
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(stroke_width, stroke_color),
+            );
+            let cols = widget.props.options.len().max(1);
+            let col_w = rect.width() / cols as f32;
+            let header_h = (label_size + 6.0).min(rect.height());
+            // header background
+            let header_rect =
+                egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.min.y + header_h));
+            painter.rect_filled(header_rect, rounding, kind_fill(accent));
+            for (i, col) in widget.props.options.iter().enumerate() {
+                let cx = rect.min.x + i as f32 * col_w;
+                painter.text(
+                    egui::pos2(cx + 4.0, rect.min.y + header_h * 0.5),
+                    egui::Align2::LEFT_CENTER,
+                    col,
+                    egui::FontId::proportional(tag_size),
+                    accent,
+                );
+                if i > 0 {
+                    painter.line_segment(
+                        [egui::pos2(cx, rect.min.y), egui::pos2(cx, rect.max.y)],
+                        egui::Stroke::new(0.5, egui::Color32::from_gray(55)),
+                    );
+                }
+            }
+            // row lines
+            let mut y = rect.min.y + header_h;
+            while y < rect.max.y {
+                painter.line_segment(
+                    [egui::pos2(rect.min.x, y), egui::pos2(rect.max.x, y)],
+                    egui::Stroke::new(0.5, egui::Color32::from_gray(45)),
+                );
+                y += header_h;
+            }
+        }
+
+        // ListView: vertical list of items
+        WidgetKind::ListView => {
+            painter.rect_filled(rect, rounding, bg.unwrap_or(egui::Color32::from_gray(28)));
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(stroke_width, stroke_color),
+            );
+            let row_h = label_size + 6.0;
+            let mut y = rect.min.y + 2.0;
+            for (i, item) in widget.props.options.iter().enumerate() {
+                if y + row_h > rect.max.y {
+                    break;
+                }
+                if i == 0 {
+                    let sel_rect = egui::Rect::from_min_max(
+                        egui::pos2(rect.min.x + 1.0, y),
+                        egui::pos2(rect.max.x - 1.0, y + row_h),
+                    );
+                    painter.rect_filled(sel_rect, 1.0, kind_fill(accent));
+                }
+                painter.text(
+                    egui::pos2(rect.min.x + 6.0, y + row_h * 0.5),
+                    egui::Align2::LEFT_CENTER,
+                    item,
+                    egui::FontId::proportional(label_size - 1.0),
+                    if i == 0 {
+                        accent
+                    } else {
+                        egui::Color32::from_gray(190)
+                    },
+                );
+                y += row_h;
+            }
+        }
+
+        // TreeView: indented nodes with ▸ markers
+        WidgetKind::TreeView => {
+            painter.rect_filled(rect, rounding, bg.unwrap_or(egui::Color32::from_gray(28)));
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(stroke_width, stroke_color),
+            );
+            let row_h = label_size + 6.0;
+            let mut y = rect.min.y + 2.0;
+            for (i, node) in widget.props.options.iter().enumerate() {
+                if y + row_h > rect.max.y {
+                    break;
+                }
+                let indent = if i == 0 { 0.0 } else { 14.0 };
+                let marker = if i == 0 { "▾" } else { "•" };
+                painter.text(
+                    egui::pos2(rect.min.x + 6.0 + indent, y + row_h * 0.5),
+                    egui::Align2::LEFT_CENTER,
+                    format!("{marker} {node}"),
+                    egui::FontId::proportional(label_size - 1.0),
+                    egui::Color32::from_gray(190),
+                );
+                y += row_h;
+            }
+        }
+
+        // StackedWidget: page container showing active page tab
+        WidgetKind::StackedWidget => {
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(
+                    if flags.is_selected { stroke_width } else { 1.0 },
+                    stroke_color,
+                ),
+            );
+            let label = widget
+                .props
+                .options
+                .first()
+                .map(String::as_str)
+                .unwrap_or("Page 1");
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                format!("▣ {label}"),
+                egui::FontId::proportional(label_size),
+                accent.linear_multiply(0.7),
+            );
+            painter.text(
+                rect.left_top() + egui::vec2(4.0, 2.0),
+                egui::Align2::LEFT_TOP,
+                &widget.props.label,
+                egui::FontId::proportional(tag_size),
+                accent.linear_multiply(0.7),
+            );
+        }
+
+        // ToolBox: vertical collapsing section headers
+        WidgetKind::ToolBox => {
+            painter.rect_stroke(
+                rect,
+                rounding,
+                egui::Stroke::new(
+                    if flags.is_selected { stroke_width } else { 1.0 },
+                    stroke_color,
+                ),
+            );
+            let sec_h = label_size + 8.0;
+            let mut y = rect.min.y;
+            for (i, sec) in widget.props.options.iter().enumerate() {
+                if y + sec_h > rect.max.y {
+                    break;
+                }
+                let hdr_rect = egui::Rect::from_min_max(
+                    egui::pos2(rect.min.x, y),
+                    egui::pos2(rect.max.x, y + sec_h),
+                );
+                painter.rect_filled(hdr_rect, 1.0, kind_fill(accent));
+                let marker = if i == 0 { "▾" } else { "▸" };
+                painter.text(
+                    egui::pos2(rect.min.x + 6.0, y + sec_h * 0.5),
+                    egui::Align2::LEFT_CENTER,
+                    format!("{marker} {sec}"),
+                    egui::FontId::proportional(label_size - 1.0),
+                    accent,
+                );
+                y += sec_h;
+                // leave gap for the first (expanded) section
+                if i == 0 {
+                    y += sec_h;
+                }
+            }
+        }
+
         // Custom: accent box with descriptor name or label.
         WidgetKind::Custom(_) => {
             let custom_accent = widget
@@ -785,7 +1518,24 @@ fn draw_widget(
     }
 
     // Subtle white overlay for child widgets (shows they belong to a group)
-    if flags.is_child && widget.kind != WidgetKind::Frame && widget.kind != WidgetKind::Image {
+    let is_container = matches!(
+        widget.kind,
+        WidgetKind::Frame
+            | WidgetKind::GroupBox
+            | WidgetKind::VLayout
+            | WidgetKind::HLayout
+            | WidgetKind::ScrollArea
+            | WidgetKind::GridLayout
+            | WidgetKind::TabWidget
+            | WidgetKind::Image
+            | WidgetKind::Table
+            | WidgetKind::ListView
+            | WidgetKind::TreeView
+            | WidgetKind::StackedWidget
+            | WidgetKind::ToolBox
+            | WidgetKind::Chart
+    );
+    if flags.is_child && !is_container {
         painter.rect_filled(
             rect,
             rounding,
@@ -793,11 +1543,29 @@ fn draw_widget(
         );
     }
 
-    // Kind tag (bottom-right) — not on Frame, Label, or Image
-    if widget.kind != WidgetKind::Frame
-        && widget.kind != WidgetKind::Label
-        && widget.kind != WidgetKind::Image
-    {
+    // Kind tag (bottom-right) — not on Frame-like containers, Label, spacers, or Image
+    let is_container_or_spacer = matches!(
+        widget.kind,
+        WidgetKind::Frame
+            | WidgetKind::GroupBox
+            | WidgetKind::VLayout
+            | WidgetKind::HLayout
+            | WidgetKind::ScrollArea
+            | WidgetKind::GridLayout
+            | WidgetKind::TabWidget
+            | WidgetKind::HorizontalSpacer
+            | WidgetKind::VerticalSpacer
+            | WidgetKind::Label
+            | WidgetKind::Image
+            | WidgetKind::Table
+            | WidgetKind::ListView
+            | WidgetKind::TreeView
+            | WidgetKind::StackedWidget
+            | WidgetKind::ToolBox
+            | WidgetKind::Chart
+            | WidgetKind::DialogButtonBox
+    );
+    if !is_container_or_spacer {
         painter.text(
             rect.right_bottom() - egui::vec2(3.0, 2.0),
             egui::Align2::RIGHT_BOTTOM,
@@ -838,6 +1606,18 @@ fn draw_svg_placeholder(
 // Main handler
 // ---------------------------------------------------------------------------
 
+fn canvas_owns_pointer(modal_blocked: bool, contains_pointer: bool, top_layer: bool) -> bool {
+    !modal_blocked && contains_pointer && top_layer
+}
+
+fn canvas_owns_keyboard(
+    modal_blocked: bool,
+    canvas_focused: bool,
+    wants_keyboard_input: bool,
+) -> bool {
+    !modal_blocked && canvas_focused && !wants_keyboard_input
+}
+
 pub fn handle(
     ui: &mut egui::Ui,
     tree: &mut UiTree,
@@ -850,25 +1630,52 @@ pub fn handle(
     // Clear per-frame signals
     state.double_clicked_widget = None;
     settings.snap_step = settings.snap_step.max(MIN_SNAP_STEP);
+    let modal_blocked = settings.input_blocked;
 
     let (resp, painter) = ui.allocate_painter(ui.available_size(), egui::Sense::click_and_drag());
 
     // -------------------------------------------------------------------
     // Input collection
     // -------------------------------------------------------------------
-    let pointer = ui.input(|i| i.pointer.interact_pos());
-    let just_pressed = ui.input(|i| i.pointer.primary_pressed());
-    let primary_released = ui.input(|i| i.pointer.primary_released());
-    let is_down = ui.input(|i| i.pointer.primary_down());
+    let raw_pointer = ui.input(|i| i.pointer.interact_pos());
+    let pointer_owned = raw_pointer.is_some_and(|pos| {
+        canvas_owns_pointer(
+            modal_blocked,
+            resp.contains_pointer(),
+            ui.ctx().layer_id_at(pos) == Some(resp.layer_id),
+        )
+    });
+    let any_pointer_pressed = ui.input(|i| i.pointer.any_pressed());
+    if any_pointer_pressed {
+        state.canvas_focused = pointer_owned;
+    }
+    let keyboard_owned = canvas_owns_keyboard(
+        modal_blocked,
+        state.canvas_focused,
+        ui.ctx().wants_keyboard_input(),
+    );
+    let pointer = pointer_owned.then_some(raw_pointer).flatten();
+    let just_pressed = pointer_owned && ui.input(|i| i.pointer.primary_pressed());
+    let primary_released = pointer_owned && ui.input(|i| i.pointer.primary_released());
+    let is_down = pointer_owned && ui.input(|i| i.pointer.primary_down());
     let shift_held = ui.input(|i| i.modifiers.shift);
     let ctrl_held = ui.input(|i| i.modifiers.ctrl);
-    let right_clicked = ui.input(|i| i.pointer.secondary_clicked());
-    let middle_down = ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
-    let mouse_delta = ui.input(|i| i.pointer.delta());
-    let scroll_y = ui.input(|i| i.raw_scroll_delta.y);
-    let key_g = ui.input(|i| i.key_pressed(egui::Key::G));
-    let key_0 = ui.input(|i| ctrl_held && i.key_pressed(egui::Key::Num0));
-    let double_clicked = resp.double_clicked();
+    let right_clicked = pointer_owned && ui.input(|i| i.pointer.secondary_clicked());
+    let middle_down =
+        pointer_owned && ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
+    let mouse_delta = if pointer_owned {
+        ui.input(|i| i.pointer.delta())
+    } else {
+        egui::Vec2::ZERO
+    };
+    let scroll_y = if pointer_owned {
+        ui.input(|i| i.raw_scroll_delta.y)
+    } else {
+        0.0
+    };
+    let key_g = keyboard_owned && ui.input(|i| i.key_pressed(egui::Key::G));
+    let key_0 = keyboard_owned && ui.input(|i| ctrl_held && i.key_pressed(egui::Key::Num0));
+    let double_clicked = pointer_owned && resp.double_clicked();
 
     // -------------------------------------------------------------------
     // Shortcuts
@@ -974,6 +1781,22 @@ pub fn handle(
         .flat_map(|w| w.children.iter().copied())
         .collect();
 
+    let rubber_preview: HashSet<Uuid> =
+        if let (Some(band_start), Some(pos), true) = (state.rubber_band, pointer, is_down) {
+            let band_rect = egui::Rect::from_two_pos(band_start, pos);
+            if band_rect.width() > 4.0 || band_rect.height() > 4.0 {
+                tree.widgets
+                    .iter()
+                    .filter(|widget| band_rect.intersects(crect(widget, origin, zoom)))
+                    .map(|widget| widget.id)
+                    .collect()
+            } else {
+                HashSet::new()
+            }
+        } else {
+            HashSet::new()
+        };
+
     // -------------------------------------------------------------------
     // Draw widgets (parents first, then their children as sub-pass)
     // -------------------------------------------------------------------
@@ -982,8 +1805,11 @@ pub fn handle(
             continue; // drawn inside parent Frame below
         }
         let rect = crect(widget, origin, zoom);
-        let is_sel = selected.contains(&widget.id);
-        let has_sel_child = widget.children.iter().any(|&cid| selected.contains(&cid));
+        let is_sel = selected.contains(&widget.id) || rubber_preview.contains(&widget.id);
+        let has_sel_child = widget
+            .children
+            .iter()
+            .any(|&cid| selected.contains(&cid) || rubber_preview.contains(&cid));
         draw_widget(
             &painter,
             widget,
@@ -1003,7 +1829,7 @@ pub fn handle(
         for &child_id in &widget.children {
             if let Some(child) = tree.widgets.iter().find(|w| w.id == child_id) {
                 let child_rect = crect(child, origin, zoom);
-                let child_sel = selected.contains(&child.id);
+                let child_sel = selected.contains(&child.id) || rubber_preview.contains(&child.id);
                 draw_widget(
                     &painter,
                     child,
@@ -1025,50 +1851,52 @@ pub fn handle(
     // -------------------------------------------------------------------
     // Inline label edit overlay
     // -------------------------------------------------------------------
-    if let Some((edit_id, ref mut edit_buf)) = state.inline_edit {
-        if let Some(widget) = tree.widgets.iter().find(|w| w.id == edit_id) {
-            let rect = crect(widget, origin, zoom);
-            let accent = kind_accent(&widget.kind);
-            // Frosted overlay behind the text edit
-            painter.rect_filled(
-                rect,
-                3.0,
-                egui::Color32::from_rgba_unmultiplied(20, 20, 20, 220),
-            );
-            painter.rect_stroke(rect, 3.0, egui::Stroke::new(1.5, accent));
+    if pointer_owned {
+        if let Some((edit_id, ref mut edit_buf)) = state.inline_edit {
+            if let Some(widget) = tree.widgets.iter().find(|w| w.id == edit_id) {
+                let rect = crect(widget, origin, zoom);
+                let accent = kind_accent(&widget.kind);
+                // Frosted overlay behind the text edit
+                painter.rect_filled(
+                    rect,
+                    3.0,
+                    egui::Color32::from_rgba_unmultiplied(20, 20, 20, 220),
+                );
+                painter.rect_stroke(rect, 3.0, egui::Stroke::new(1.5, accent));
 
-            // Place a TextEdit widget at the widget rect
-            let te_resp = ui.put(
-                rect,
-                egui::TextEdit::singleline(edit_buf)
-                    .font(egui::FontId::proportional(
-                        (12.0 * zoom * text_settings.label_scale).clamp(8.0, 24.0),
-                    ))
-                    .frame(false)
-                    .text_color(egui::Color32::WHITE),
-            );
-            te_resp.request_focus();
+                // Place a TextEdit widget at the widget rect
+                let te_resp = ui.put(
+                    rect,
+                    egui::TextEdit::singleline(edit_buf)
+                        .font(egui::FontId::proportional(
+                            (12.0 * zoom * text_settings.label_scale).clamp(8.0, 24.0),
+                        ))
+                        .frame(false)
+                        .text_color(egui::Color32::WHITE),
+                );
+                te_resp.request_focus();
 
-            // Commit on Enter or focus loss; Escape cancels
-            let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
-            let escape_pressed = ui.input(|i| i.key_pressed(egui::Key::Escape));
-            let focus_lost = !te_resp.has_focus() && !te_resp.gained_focus();
+                // Commit on Enter or focus loss; Escape cancels
+                let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let escape_pressed = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                let focus_lost = !te_resp.has_focus() && !te_resp.gained_focus();
 
-            if enter_pressed || (focus_lost && !escape_pressed) {
-                // Commit: update label in tree
-                if let Some(w) = tree.get_mut(edit_id) {
-                    if !edit_buf.is_empty() {
-                        w.props.label = edit_buf.clone();
+                if enter_pressed || (focus_lost && !escape_pressed) {
+                    // Commit: update label in tree
+                    if let Some(w) = tree.get_mut(edit_id) {
+                        if !edit_buf.is_empty() {
+                            w.props.label = edit_buf.clone();
+                        }
                     }
+                    state.inline_edit = None;
+                } else if escape_pressed {
+                    // Cancel: discard
+                    state.inline_edit = None;
                 }
-                state.inline_edit = None;
-            } else if escape_pressed {
-                // Cancel: discard
+            } else {
+                // Widget was removed while editing
                 state.inline_edit = None;
             }
-        } else {
-            // Widget was removed while editing
-            state.inline_edit = None;
         }
     }
 
@@ -1231,7 +2059,17 @@ pub fn handle(
                         w.id = Uuid::new_v4();
                         w.rect.x = (w.rect.x - min_x + offset_x).max(0.0);
                         w.rect.y = (w.rect.y - min_y + offset_y).max(0.0);
+                        let id = w.id;
+                        let center = (w.rect.x + w.rect.w * 0.5, w.rect.y + w.rect.h * 0.5);
                         tree.add(w);
+                        if !matches!(
+                            tree.widgets.iter().find(|w| w.id == id).map(|w| &w.kind),
+                            Some(
+                                WidgetKind::VLayout | WidgetKind::HLayout | WidgetKind::GridLayout
+                            )
+                        ) {
+                            tree.attach_to_layout_at(id, center);
+                        }
                     }
                 }
             }
@@ -1240,8 +2078,13 @@ pub fn handle(
 
     // -------------------------------------------------------------------
     // Mouse-down — resize / select / rubber-band
+    // Guide drags have exclusive priority: suppress canvas interaction entirely.
     // -------------------------------------------------------------------
-    if just_pressed && state.context_menu.is_none() {
+    if settings.guide_drag_active {
+        state.rubber_band = None;
+        state.drag = None;
+    }
+    if just_pressed && !settings.guide_drag_active && state.context_menu.is_none() {
         if let Some(pos) = pointer {
             if resp.rect.contains(pos) {
                 let mut started_resize = false;
@@ -1485,6 +2328,7 @@ pub fn handle(
             if let Some(w) = tree.get_mut(resize_id) {
                 w.rect = new_rect;
             }
+            tree.reflow_layouts();
             ui.ctx().set_cursor_icon(cursor);
         }
     }
@@ -1570,6 +2414,36 @@ pub fn handle(
                                     let x_min = nx.min(sw.rect.x);
                                     let x_max = (nx + nw).max(sw.rect.x + sw.rect.w);
                                     raw_guide_h = Some((sy, x_min, x_max));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Guide snapping — snap widget edges/center to ruler guide lines
+                for (_, nx, ny, nw, nh) in &pos_list {
+                    let dxs = [*nx, nx + nw * 0.5, nx + nw];
+                    let dys = [*ny, ny + nh * 0.5, ny + nh];
+                    for g in &tree.app_props.guides {
+                        match g.orientation {
+                            crate::project::schema::GuideOrientation::Vertical => {
+                                for &dx in &dxs {
+                                    let d = (dx - g.position).abs();
+                                    if d < best_x {
+                                        best_x = d;
+                                        adj_x = g.position - dx;
+                                        raw_guide_v = Some((g.position, *ny, ny + nh));
+                                    }
+                                }
+                            }
+                            crate::project::schema::GuideOrientation::Horizontal => {
+                                for &dy in &dys {
+                                    let d = (dy - g.position).abs();
+                                    if d < best_y {
+                                        best_y = d;
+                                        adj_y = g.position - dy;
+                                        raw_guide_h = Some((g.position, *nx, nx + nw));
+                                    }
                                 }
                             }
                         }
@@ -1699,15 +2573,38 @@ pub fn handle(
     // Release — rubber-band finalise
     // -------------------------------------------------------------------
     if !is_down {
+        if let Some(ds) = &state.drag {
+            let dragged_ids: Vec<Uuid> = ds.start_rects.iter().map(|(id, _)| *id).collect();
+            for id in dragged_ids {
+                let Some(widget) = tree.widgets.iter().find(|w| w.id == id) else {
+                    continue;
+                };
+                if matches!(
+                    widget.kind,
+                    WidgetKind::VLayout | WidgetKind::HLayout | WidgetKind::GridLayout
+                ) {
+                    continue;
+                }
+                let center = (
+                    widget.rect.x + widget.rect.w * 0.5,
+                    widget.rect.y + widget.rect.h * 0.5,
+                );
+                tree.attach_to_layout_at(id, center);
+            }
+        }
         if let (Some(band_start), Some(pos)) = (state.rubber_band, pointer) {
             let band_rect = egui::Rect::from_two_pos(band_start, pos);
             if band_rect.width() > 4.0 || band_rect.height() > 4.0 {
+                let before_len = selected.len();
                 for widget in &tree.widgets {
                     if band_rect.intersects(crect(widget, origin, zoom))
                         && !selected.contains(&widget.id)
                     {
                         selected.push(widget.id);
                     }
+                }
+                if selected.len() != before_len {
+                    ui.ctx().request_repaint();
                 }
             }
         }
@@ -1736,7 +2633,7 @@ pub fn handle(
     // -------------------------------------------------------------------
     // Keyboard nudge
     // -------------------------------------------------------------------
-    if !selected.is_empty() {
+    if keyboard_owned && !selected.is_empty() {
         let nudge = if settings.snap_enabled {
             settings.snap_step.max(MIN_SNAP_STEP)
         } else {
@@ -1765,5 +2662,26 @@ pub fn handle(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod input_ownership_tests {
+    use super::{canvas_owns_keyboard, canvas_owns_pointer};
+
+    #[test]
+    fn floating_window_layer_blocks_canvas_pointer() {
+        assert!(canvas_owns_pointer(false, true, true));
+        assert!(!canvas_owns_pointer(false, true, false));
+        assert!(!canvas_owns_pointer(false, false, true));
+        assert!(!canvas_owns_pointer(true, true, true));
+    }
+
+    #[test]
+    fn text_focus_and_modals_block_canvas_keyboard() {
+        assert!(canvas_owns_keyboard(false, true, false));
+        assert!(!canvas_owns_keyboard(false, true, true));
+        assert!(!canvas_owns_keyboard(false, false, false));
+        assert!(!canvas_owns_keyboard(true, true, false));
     }
 }

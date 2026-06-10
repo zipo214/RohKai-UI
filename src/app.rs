@@ -18,6 +18,15 @@ struct PendingSvgImport {
     svg_text: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LeftPanelTab {
+    Palette,
+    Properties,
+    Layers,
+    Components,
+    Templates,
+}
+
 // ---------------------------------------------------------------------------
 // RohKaiApp state sub-structs
 // ---------------------------------------------------------------------------
@@ -34,14 +43,48 @@ pub struct SessionState {
     pub interaction: InteractionState,
     pub selected: Vec<Uuid>,
     pub canvas_settings: CanvasSettings,
-    /// Widget id highlighted in the code panel (Lazare double-click).
-    pub highlighted_code_id: Option<Uuid>,
-    /// When true, code panel scrolls to the highlighted line once.
-    pub scroll_to_code: bool,
+    /// One-shot widget navigation request from Ctrl+double-click/Tracé.
+    pub code_navigation_target: Option<Uuid>,
     /// Tracé: if Some(name), code panel scrolls to fn {name} and inserts a stub if absent.
     pub scroll_to_handler: Option<String>,
     /// Last known screen rect of the canvas panel — used for visible-centre placement.
     pub last_canvas_rect: egui::Rect,
+    /// SVG source viewer: widget id whose source is currently displayed, if any.
+    pub svg_viewer_id: Option<Uuid>,
+    /// Guide currently under the pointer (for highlight + drag/delete).
+    pub hovered_guide: Option<Uuid>,
+    /// Guide currently being dragged.
+    pub dragging_guide: Option<Uuid>,
+    /// Whether the theme settings window is open.
+    pub theme_open: bool,
+    /// Lock canvas W:H ratio when editing canvas size in the status bar.
+    pub lock_aspect_ratio: bool,
+    /// Whether the document outline (layers) panel is visible.
+    pub show_outline: bool,
+    /// Whether the keyboard shortcut reference window is open.
+    pub shortcuts_open: bool,
+    /// Whether the project files (tree + viewer) window is open.
+    pub project_tree_open: bool,
+    /// Selected file path in the project tree viewer.
+    pub selected_project_file: Option<String>,
+    /// Selected design-time component in the tray, if any.
+    pub selected_component: Option<Uuid>,
+    /// Active section in the compact left rail.
+    pub left_panel_tab: LeftPanelTab,
+    /// Show multiple left-panel sections together instead of one active tab.
+    pub left_panel_stack: bool,
+    /// Whether preview mode is active (F5 toggle).
+    pub preview_mode: bool,
+    /// Live runtime values for preview mode widgets.
+    pub preview_state: crate::canvas::preview::PreviewState,
+    /// Stage 11 — ownership overlay toggle.
+    pub show_ownership: bool,
+    /// Stage 11 — error-flow overlay toggle.
+    pub show_error_flow: bool,
+    /// Stage 11 — Rust wiring editor window open.
+    pub rust_wiring_open: bool,
+    /// Stage 11 — macro palette window open.
+    pub macro_palette_open: bool,
 }
 
 impl Default for SessionState {
@@ -50,10 +93,27 @@ impl Default for SessionState {
             interaction: InteractionState::default(),
             selected: Vec::new(),
             canvas_settings: CanvasSettings::default(),
-            highlighted_code_id: None,
-            scroll_to_code: false,
+            code_navigation_target: None,
             scroll_to_handler: None,
             last_canvas_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)),
+            svg_viewer_id: None,
+            hovered_guide: None,
+            dragging_guide: None,
+            theme_open: false,
+            lock_aspect_ratio: false,
+            show_outline: true,
+            shortcuts_open: false,
+            project_tree_open: false,
+            selected_project_file: None,
+            selected_component: None,
+            left_panel_tab: LeftPanelTab::Palette,
+            left_panel_stack: false,
+            preview_mode: false,
+            preview_state: crate::canvas::preview::PreviewState::default(),
+            show_ownership: false,
+            show_error_flow: false,
+            rust_wiring_open: false,
+            macro_palette_open: false,
         }
     }
 }
@@ -84,15 +144,19 @@ pub struct CodePanelState {
     pub status: CodeStatus,
     pub last_generated: String,
     pub split_ratio: f32,
+    pub wrap_code: bool,
+    pub editor_has_focus: bool,
 }
 
 impl Default for CodePanelState {
     fn default() -> Self {
         Self {
             buffer: String::new(),
-            status: CodeStatus::Live,
+            status: CodeStatus::Generated,
             last_generated: String::new(),
             split_ratio: 0.6,
+            wrap_code: false,
+            editor_has_focus: false,
         }
     }
 }
@@ -101,6 +165,10 @@ impl Default for CodePanelState {
 pub struct DescriptorState {
     pub widgets: Vec<crate::codegen::widget_descriptor::WidgetDescriptor>,
     pub errors: Vec<String>,
+    /// In-app descriptor editor — Some while window is open.
+    pub editor: Option<crate::panels::descriptor_editor::DescriptorEditorState>,
+    /// Beginner widget builder — Some while window is open.
+    pub builder: Option<crate::panels::widget_builder::WidgetBuilderState>,
 }
 
 // ---------------------------------------------------------------------------
@@ -118,6 +186,9 @@ pub struct RohKaiApp {
     base_pixels_per_point: f32,
     dirty_cache: bool,
     dirty_cache_checked_at: f64,
+    undo: crate::project::undo::UndoStack,
+    /// Suppresses undo recording for the frame after an undo/redo restore.
+    undo_suppress_record: bool,
 }
 
 impl RohKaiApp {
@@ -156,6 +227,8 @@ impl RohKaiApp {
             descriptors: DescriptorState {
                 widgets: widget_descriptors,
                 errors: descriptor_errors,
+                editor: None,
+                builder: None,
             },
             svg_texture_cache: crate::canvas::interaction::SvgTextureCache::default(),
             pending_command: None,
@@ -163,6 +236,8 @@ impl RohKaiApp {
             base_pixels_per_point,
             dirty_cache: false,
             dirty_cache_checked_at: 0.0,
+            undo: crate::project::undo::UndoStack::new(),
+            undo_suppress_record: false,
         }
     }
 
@@ -172,6 +247,31 @@ impl RohKaiApp {
             Some(snap) => current != *snap,
             None => !self.project.ui_tree.widgets.is_empty(),
         }
+    }
+
+    fn set_preview_mode(&mut self, enabled: bool) {
+        if self.session.preview_mode == enabled {
+            return;
+        }
+        self.session.preview_mode = enabled;
+        if enabled {
+            self.session.preview_state =
+                crate::canvas::preview::PreviewState::init_from_tree(&self.project.ui_tree);
+        }
+    }
+
+    /// Re-seed preview state from the current tree when preview mode is active.
+    /// Must be called after any replacement of `self.project.ui_tree` (new /
+    /// open / undo) so live preview bindings never go stale.
+    fn refresh_preview_state(&mut self) {
+        if self.session.preview_mode {
+            self.session.preview_state =
+                crate::canvas::preview::PreviewState::init_from_tree(&self.project.ui_tree);
+        }
+    }
+
+    fn canvas_modal_blocked(&self) -> bool {
+        self.pending_command.is_some() || self.pending_svg_import.is_some()
     }
 
     fn cached_dirty(&mut self, ctx: &egui::Context) -> bool {
@@ -217,9 +317,47 @@ impl RohKaiApp {
         self.project.saved_json = None;
         self.session.selected.clear();
         self.messages.last_error = None;
-        self.session.highlighted_code_id = None;
+        self.session.code_navigation_target = None;
         self.dirty_cache = false;
         self.dirty_cache_checked_at = 0.0;
+        self.reset_undo_baseline();
+        self.refresh_preview_state();
+    }
+
+    /// Re-seed the undo stack to the current tree, clearing history.
+    fn reset_undo_baseline(&mut self) {
+        let json = crate::project::io::serialize(&self.project.ui_tree).unwrap_or_default();
+        self.undo.reset(json);
+        self.undo_suppress_record = true;
+    }
+
+    /// Apply a restored snapshot (from undo/redo) to the live tree.
+    fn apply_undo_snapshot(&mut self, json: String) {
+        match crate::project::io::deserialize(&json) {
+            Ok(tree) => {
+                self.project.ui_tree = tree;
+                // Drop selections that no longer exist.
+                let live: std::collections::HashSet<Uuid> =
+                    self.project.ui_tree.widgets.iter().map(|w| w.id).collect();
+                self.session.selected.retain(|id| live.contains(id));
+                self.dirty_cache_checked_at = 0.0;
+                self.undo_suppress_record = true;
+                self.refresh_preview_state();
+            }
+            Err(e) => self.messages.last_error = Some(format!("Undo restore failed: {e}")),
+        }
+    }
+
+    fn cmd_undo(&mut self) {
+        if let Some(json) = self.undo.undo() {
+            self.apply_undo_snapshot(json);
+        }
+    }
+
+    fn cmd_redo(&mut self) {
+        if let Some(json) = self.undo.redo() {
+            self.apply_undo_snapshot(json);
+        }
     }
 
     fn cmd_open(&mut self) {
@@ -235,9 +373,11 @@ impl RohKaiApp {
                     self.project.current_file = Some(path);
                     self.session.selected.clear();
                     self.messages.last_error = None;
-                    self.session.highlighted_code_id = None;
+                    self.session.code_navigation_target = None;
                     self.dirty_cache = false;
                     self.dirty_cache_checked_at = 0.0;
+                    self.reset_undo_baseline();
+                    self.refresh_preview_state();
                 }
                 Err(e) => self.messages.last_error = Some(e),
             }
@@ -348,6 +488,191 @@ impl RohKaiApp {
             }
             Err(e) => {
                 self.messages.template_message = Some((false, format!("SVG read failed: {e}")));
+            }
+        }
+    }
+
+    fn cmd_reload_descriptors(&mut self) {
+        let (widgets, errors) = crate::codegen::widget_descriptor::load_from_widgets_dir();
+        self.descriptors.widgets = widgets;
+        self.descriptors.errors = errors;
+    }
+
+    fn widgets_dir() -> Option<std::path::PathBuf> {
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("widgets")))
+    }
+
+    fn cmd_new_descriptor(&mut self) {
+        self.descriptors.editor =
+            Some(crate::panels::descriptor_editor::DescriptorEditorState::new_blank());
+    }
+
+    fn cmd_new_widget_builder(&mut self) {
+        self.descriptors.builder = Some(crate::panels::widget_builder::WidgetBuilderState::new());
+    }
+
+    fn cmd_edit_descriptor(&mut self, id: &str) {
+        let state = if let Some(d) = self.descriptors.widgets.iter().find(|d| d.id == id) {
+            crate::panels::descriptor_editor::DescriptorEditorState::from_descriptor(d)
+        } else {
+            crate::panels::descriptor_editor::DescriptorEditorState::new_blank()
+        };
+        self.descriptors.editor = Some(state);
+    }
+
+    fn cmd_import_widget_definition(&mut self) {
+        let Some(src_path) = rfd::FileDialog::new()
+            .set_title("Import Widget Definition")
+            .add_filter("RohKai Widget Descriptor", &["rkwd"])
+            .pick_file()
+        else {
+            return;
+        };
+
+        // Read and validate before copying.
+        let raw = match std::fs::read_to_string(&src_path) {
+            Ok(s) => s,
+            Err(e) => {
+                self.messages.template_message = Some((false, format!("Could not read file: {e}")));
+                return;
+            }
+        };
+        let descriptor: crate::codegen::widget_descriptor::WidgetDescriptor =
+            match serde_json::from_str(&raw) {
+                Ok(d) => d,
+                Err(e) => {
+                    self.messages.template_message =
+                        Some((false, format!("Invalid .rkwd JSON: {e}")));
+                    return;
+                }
+            };
+        if descriptor.schema_version != 1 {
+            self.messages.template_message = Some((
+                false,
+                format!(
+                    "Unsupported schema_version {} (expected 1)",
+                    descriptor.schema_version
+                ),
+            ));
+            return;
+        }
+
+        // Determine destination: <binary_dir>/widgets/<filename>.rkwd
+        let dest_dir = match std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("widgets")))
+        {
+            Some(d) => d,
+            None => {
+                self.messages.template_message =
+                    Some((false, "Could not determine binary path".to_owned()));
+                return;
+            }
+        };
+        if let Err(e) = std::fs::create_dir_all(&dest_dir) {
+            self.messages.template_message =
+                Some((false, format!("Could not create widgets/ dir: {e}")));
+            return;
+        }
+        let file_name = src_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| format!("{}.rkwd", descriptor.id.replace('.', "-")));
+        let dest_path = dest_dir.join(&file_name);
+        if let Err(e) = std::fs::copy(&src_path, &dest_path) {
+            self.messages.template_message = Some((false, format!("Copy failed: {e}")));
+            return;
+        }
+
+        // Reload so the new descriptor is immediately available.
+        let (widgets, errors) = crate::codegen::widget_descriptor::load_from_widgets_dir();
+        self.descriptors.widgets = widgets;
+        self.descriptors.errors = errors;
+        self.messages.template_message = Some((
+            true,
+            format!("Imported \"{}\" successfully", descriptor.name),
+        ));
+    }
+
+    fn cmd_export_widget_bundle(&mut self) {
+        if self.descriptors.widgets.is_empty() {
+            self.messages.template_message =
+                Some((false, "No descriptors loaded to bundle.".to_owned()));
+            return;
+        }
+        let Some(dest) = rfd::FileDialog::new()
+            .set_title("Export Widget Bundle")
+            .set_file_name("widgets.rkwb")
+            .add_filter("RohKai Widget Bundle", &["rkwb"])
+            .save_file()
+        else {
+            return;
+        };
+        let bundle = crate::codegen::widget_bundle::WidgetBundle::from_descriptors(
+            &self.descriptors.widgets,
+        );
+        match bundle.to_json() {
+            Ok(json) => match std::fs::write(&dest, json) {
+                Ok(()) => {
+                    let n = bundle.descriptors.len();
+                    self.messages.template_message = Some((
+                        true,
+                        format!("Exported {n} descriptor(s) to {}", dest.display()),
+                    ));
+                }
+                Err(e) => {
+                    self.messages.template_message = Some((false, format!("Write failed: {e}")));
+                }
+            },
+            Err(e) => {
+                self.messages.template_message = Some((false, format!("Serialization error: {e}")));
+            }
+        }
+    }
+
+    fn cmd_import_widget_bundle(&mut self) {
+        let Some(src) = rfd::FileDialog::new()
+            .set_title("Import Widget Bundle")
+            .add_filter("RohKai Widget Bundle", &["rkwb"])
+            .pick_file()
+        else {
+            return;
+        };
+        let raw = match std::fs::read_to_string(&src) {
+            Ok(s) => s,
+            Err(e) => {
+                self.messages.template_message = Some((false, format!("Could not read file: {e}")));
+                return;
+            }
+        };
+        let bundle = match crate::codegen::widget_bundle::WidgetBundle::from_json(&raw) {
+            Ok(b) => b,
+            Err(e) => {
+                self.messages.template_message = Some((false, format!("Invalid bundle: {e}")));
+                return;
+            }
+        };
+        let dest_dir = match Self::widgets_dir() {
+            Some(d) => d,
+            None => {
+                self.messages.template_message =
+                    Some((false, "Could not determine binary path".to_owned()));
+                return;
+            }
+        };
+        match bundle.extract_to(&dest_dir) {
+            Ok(ids) => {
+                let n = ids.len();
+                let (widgets, errors) = crate::codegen::widget_descriptor::load_from_widgets_dir();
+                self.descriptors.widgets = widgets;
+                self.descriptors.errors = errors;
+                self.messages.template_message =
+                    Some((true, format!("Imported {n} descriptor(s) from bundle")));
+            }
+            Err(e) => {
+                self.messages.template_message = Some((false, format!("Extract failed: {e}")));
             }
         }
     }
@@ -511,6 +836,45 @@ impl RohKaiApp {
         ctx.set_pixels_per_point(self.base_pixels_per_point * self.prefs.user_settings.ui_scale);
     }
 
+    fn apply_theme(&self, ctx: &egui::Context) {
+        let theme = &self.project.ui_tree.app_props.theme;
+        let mut visuals = if theme.dark_mode {
+            egui::Visuals::dark()
+        } else {
+            egui::Visuals::light()
+        };
+        let [r, g, b] = theme.accent_color;
+        let accent = egui::Color32::from_rgb(r, g, b);
+        visuals.hyperlink_color = accent;
+        visuals.selection.bg_fill = egui::Color32::from_rgba_premultiplied(r, g, b, 90);
+        if let Some(rounding) = theme.global_corner_radius {
+            let r = egui::Rounding::same(rounding);
+            visuals.widgets.noninteractive.rounding = r;
+            visuals.widgets.inactive.rounding = r;
+            visuals.widgets.hovered.rounding = r;
+            visuals.widgets.active.rounding = r;
+            visuals.widgets.open.rounding = r;
+        }
+        // Rebuild the style from defaults every time (carrying the themed
+        // visuals) so clearing overrides — "Reset defaults" or loading a theme
+        // without font/spacing overrides — restores the base egui style.
+        let mut style = egui::Style {
+            visuals,
+            ..Default::default()
+        };
+        if let Some(fs) = theme.base_font_size {
+            for font_id in style.text_styles.values_mut() {
+                font_id.size = fs;
+            }
+        }
+        if let Some(scale) = theme.spacing_scale {
+            let base = 4.0 * scale;
+            style.spacing.item_spacing = egui::vec2(base * 2.0, base);
+            style.spacing.button_padding = egui::vec2(base * 1.5, base * 0.5);
+        }
+        ctx.set_style(style);
+    }
+
     fn save_user_settings(&mut self) {
         self.prefs.user_settings.sanitize();
         match crate::settings::save(&self.prefs.settings_path, &self.prefs.user_settings) {
@@ -635,6 +999,360 @@ impl RohKaiApp {
         self.prefs.open = open;
     }
 
+    fn show_svg_source_window(&mut self, ctx: &egui::Context) {
+        let Some(id) = self.session.svg_viewer_id else {
+            return;
+        };
+        let svg = self
+            .project
+            .ui_tree
+            .widgets
+            .iter()
+            .find(|w| w.id == id)
+            .and_then(|w| w.svg_source.as_deref())
+            .unwrap_or("")
+            .to_owned();
+
+        let mut open = true;
+        let byte_count = svg.len();
+        egui::Window::new(format!("SVG Source — {byte_count} bytes"))
+            .id(egui::Id::new("svg_source_viewer"))
+            .open(&mut open)
+            .resizable(true)
+            .default_size([600.0, 400.0])
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("Read-only. Copy text to use elsewhere.")
+                            .small()
+                            .weak(),
+                    );
+                    if ui.small_button("Copy all").clicked() {
+                        ui.output_mut(|o| o.copied_text = svg.clone());
+                    }
+                });
+                ui.separator();
+                egui::ScrollArea::both()
+                    .id_salt("svg_src_scroll")
+                    .auto_shrink([false; 2])
+                    .show(ui, |ui| {
+                        // Read-only: pass a temporary clone so the source is never mutated.
+                        let mut display = svg.clone();
+                        ui.add(
+                            egui::TextEdit::multiline(&mut display)
+                                .font(egui::FontId::monospace(11.0))
+                                .desired_width(f32::INFINITY)
+                                .interactive(false),
+                        );
+                    });
+            });
+
+        if !open {
+            self.session.svg_viewer_id = None;
+        }
+    }
+
+    fn show_descriptor_editor_window(&mut self, ctx: &egui::Context) {
+        // Snapshot save_msg state BEFORE show() so we can detect a new save.
+        let was_saved = self
+            .descriptors
+            .editor
+            .as_ref()
+            .and_then(|s| s.save_msg.as_ref())
+            .map(|(ok, _)| *ok)
+            .unwrap_or(false);
+
+        let Some(state) = self.descriptors.editor.as_mut() else {
+            return;
+        };
+        let widgets_dir = Self::widgets_dir();
+        let still_open = crate::panels::descriptor_editor::show(ctx, state, widgets_dir);
+        if !still_open {
+            self.descriptors.editor = None;
+            return;
+        }
+        // Reload palette only on a fresh successful save (save_msg transitioned to ok).
+        let now_saved = self
+            .descriptors
+            .editor
+            .as_ref()
+            .and_then(|s| s.save_msg.as_ref())
+            .map(|(ok, _)| *ok)
+            .unwrap_or(false);
+        if now_saved && !was_saved {
+            self.cmd_reload_descriptors();
+        }
+    }
+
+    fn show_widget_builder_window(&mut self, ctx: &egui::Context) {
+        // Snapshot save_msg state BEFORE show() so we detect a new save.
+        let was_saved = self
+            .descriptors
+            .builder
+            .as_ref()
+            .and_then(|s| s.save_msg.as_ref())
+            .map(|(ok, _)| *ok)
+            .unwrap_or(false);
+
+        // Read one-shot signal before any mutable borrow to avoid split-borrow.
+        let open_adv = self
+            .descriptors
+            .builder
+            .as_ref()
+            .is_some_and(|b| b.open_advanced_requested);
+
+        let Some(state) = self.descriptors.builder.as_mut() else {
+            return;
+        };
+        let widgets_dir = Self::widgets_dir();
+        let still_open = crate::panels::widget_builder::show(ctx, state, widgets_dir);
+        if !still_open {
+            self.descriptors.builder = None;
+            return;
+        }
+
+        // Reload palette on fresh save.
+        let now_saved = self
+            .descriptors
+            .builder
+            .as_ref()
+            .and_then(|s| s.save_msg.as_ref())
+            .map(|(ok, _)| *ok)
+            .unwrap_or(false);
+        if now_saved && !was_saved {
+            self.cmd_reload_descriptors();
+        }
+
+        // Advanced handoff: copy draft into editor and close builder atomically.
+        if open_adv {
+            let draft = self.descriptors.builder.take().unwrap().draft;
+            self.descriptors.editor = Some(
+                crate::panels::descriptor_editor::DescriptorEditorState::from_descriptor(&draft),
+            );
+        }
+    }
+
+    fn show_project_tree_window(&mut self, ctx: &egui::Context) {
+        if !self.session.project_tree_open {
+            return;
+        }
+        // Generate the in-memory project file list (same source as disk export).
+        let files = crate::codegen::export::project_files(&self.project.ui_tree);
+        let mut open = self.session.project_tree_open;
+        let action = crate::panels::project_tree::show(
+            ctx,
+            &mut open,
+            &files,
+            &self.project.ui_tree.app_props.assets,
+            &mut self.session.selected_project_file,
+        );
+        self.session.project_tree_open = open;
+
+        match action {
+            crate::panels::project_tree::ProjectTreeAction::AddAsset => {
+                if let Some(path) = rfd::FileDialog::new().pick_file() {
+                    let name = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("asset")
+                        .to_owned();
+                    let kind = crate::panels::project_tree::classify_asset(&name);
+                    self.project.ui_tree.app_props.assets.push(
+                        crate::project::schema::AssetEntry {
+                            id: Uuid::new_v4(),
+                            name,
+                            source_path: path.display().to_string(),
+                            kind,
+                        },
+                    );
+                }
+            }
+            crate::panels::project_tree::ProjectTreeAction::RemoveAsset(id) => {
+                self.project.ui_tree.app_props.assets.retain(|a| a.id != id);
+            }
+            crate::panels::project_tree::ProjectTreeAction::None => {}
+        }
+    }
+
+    fn show_theme_window(&mut self, ctx: &egui::Context) {
+        if !self.session.theme_open {
+            return;
+        }
+        let mut open = true;
+        // Collect mutable state before the closure to avoid split-borrow issues.
+        let dark = self.project.ui_tree.app_props.theme.dark_mode;
+        let [r0, g0, b0] = self.project.ui_tree.app_props.theme.accent_color;
+        let swatch = egui::Color32::from_rgb(r0, g0, b0);
+        let has_font0 = self
+            .project
+            .ui_tree
+            .app_props
+            .theme
+            .base_font_size
+            .is_some();
+        let has_rounding0 = self
+            .project
+            .ui_tree
+            .app_props
+            .theme
+            .global_corner_radius
+            .is_some();
+        let has_spacing0 = self.project.ui_tree.app_props.theme.spacing_scale.is_some();
+
+        let mut save_clicked = false;
+        let mut load_clicked = false;
+        let mut reset_clicked = false;
+
+        egui::Window::new("Theme Settings")
+            .id(egui::Id::new("theme_window"))
+            .open(&mut open)
+            .default_size([300.0, 400.0])
+            .resizable(false)
+            .constrain(false)
+            .show(ctx, |ui| {
+                let theme = &mut self.project.ui_tree.app_props.theme;
+
+                ui.label(egui::RichText::new("Mode").small().weak());
+                ui.horizontal(|ui| {
+                    if ui.selectable_label(dark, "Dark").clicked() {
+                        theme.dark_mode = true;
+                    }
+                    if ui.selectable_label(!dark, "Light").clicked() {
+                        theme.dark_mode = false;
+                    }
+                });
+
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("Accent color").small().weak());
+                let [r, g, b] = &mut theme.accent_color;
+                ui.horizontal(|ui| {
+                    ui.painter().rect_filled(
+                        egui::Rect::from_min_size(ui.cursor().min, egui::vec2(20.0, 20.0)),
+                        3.0,
+                        swatch,
+                    );
+                    ui.add_space(24.0);
+                    ui.label(egui::RichText::new("R").small().weak());
+                    ui.add(egui::DragValue::new(r).range(0u8..=255u8).speed(1.0));
+                    ui.label(egui::RichText::new("G").small().weak());
+                    ui.add(egui::DragValue::new(g).range(0u8..=255u8).speed(1.0));
+                    ui.label(egui::RichText::new("B").small().weak());
+                    ui.add(egui::DragValue::new(b).range(0u8..=255u8).speed(1.0));
+                });
+
+                ui.add_space(6.0);
+                ui.separator();
+                ui.label(egui::RichText::new("Typography").small().weak());
+                let mut has_font = has_font0;
+                ui.checkbox(&mut has_font, "Override base font size");
+                if has_font {
+                    let fs = theme.base_font_size.get_or_insert(14.0);
+                    ui.add(
+                        egui::DragValue::new(fs)
+                            .range(8.0..=32.0)
+                            .suffix("pt")
+                            .speed(0.5),
+                    );
+                } else {
+                    theme.base_font_size = None;
+                }
+
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Shape").small().weak());
+                let mut has_rounding = has_rounding0;
+                ui.checkbox(&mut has_rounding, "Override corner radius");
+                if has_rounding {
+                    let cr = theme.global_corner_radius.get_or_insert(4.0);
+                    ui.add(
+                        egui::DragValue::new(cr)
+                            .range(0.0..=32.0)
+                            .suffix("px")
+                            .speed(0.5),
+                    );
+                } else {
+                    theme.global_corner_radius = None;
+                }
+
+                let mut has_spacing = has_spacing0;
+                ui.checkbox(&mut has_spacing, "Override spacing scale");
+                if has_spacing {
+                    let ss = theme.spacing_scale.get_or_insert(1.0);
+                    ui.add(egui::DragValue::new(ss).range(0.5..=3.0).speed(0.05));
+                } else {
+                    theme.spacing_scale = None;
+                }
+
+                ui.add_space(6.0);
+                ui.separator();
+                ui.horizontal(|ui| {
+                    save_clicked = ui.button("Save .rktheme…").clicked();
+                    load_clicked = ui.button("Load .rktheme…").clicked();
+                    reset_clicked = ui.button("Reset defaults").clicked();
+                });
+            });
+        if !open {
+            self.session.theme_open = false;
+        }
+        if save_clicked {
+            self.cmd_save_theme();
+        }
+        if load_clicked {
+            self.cmd_load_theme();
+        }
+        if reset_clicked {
+            self.project.ui_tree.app_props.theme = Default::default();
+        }
+    }
+
+    fn cmd_save_theme(&mut self) {
+        let Some(dest) = rfd::FileDialog::new()
+            .set_title("Save Theme")
+            .set_file_name("theme.rktheme")
+            .add_filter("RohKai Theme", &["rktheme"])
+            .save_file()
+        else {
+            return;
+        };
+        let theme = &self.project.ui_tree.app_props.theme;
+        match serde_json::to_string_pretty(theme) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&dest, json) {
+                    self.messages.template_message = Some((false, format!("Save failed: {e}")));
+                } else {
+                    self.messages.template_message = Some((true, "Theme saved".to_owned()));
+                }
+            }
+            Err(e) => {
+                self.messages.template_message = Some((false, format!("Serialize error: {e}")));
+            }
+        }
+    }
+
+    fn cmd_load_theme(&mut self) {
+        let Some(src) = rfd::FileDialog::new()
+            .set_title("Load Theme")
+            .add_filter("RohKai Theme", &["rktheme"])
+            .pick_file()
+        else {
+            return;
+        };
+        match std::fs::read_to_string(&src) {
+            Ok(raw) => match serde_json::from_str(&raw) {
+                Ok(theme) => {
+                    self.project.ui_tree.app_props.theme = theme;
+                    self.messages.template_message = Some((true, "Theme loaded".to_owned()));
+                }
+                Err(e) => {
+                    self.messages.template_message =
+                        Some((false, format!("Invalid theme file: {e}")));
+                }
+            },
+            Err(e) => {
+                self.messages.template_message = Some((false, format!("Read error: {e}")));
+            }
+        }
+    }
+
     fn show_pending_command_dialog(&mut self, ctx: &egui::Context) {
         let Some(command) = self.pending_command else {
             return;
@@ -692,6 +1410,7 @@ fn setup_fonts(ctx: &egui::Context) {
 
 impl eframe::App for RohKaiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.apply_theme(ctx);
         self.apply_ui_scale(ctx);
         let now = ctx.input(|i| i.time);
         if self.messages.export_message.is_some() {
@@ -718,6 +1437,38 @@ impl eframe::App for RohKaiApp {
         let ctrl_shift_g =
             ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::G));
         let ctrl_g = ctx.input(|i| i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(Key::G));
+        let ctrl_r = ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::R));
+        let ctrl_l = ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::L));
+        let f5 = ctx.input(|i| i.key_pressed(Key::F5));
+        let f1 = ctx.input(|i| i.key_pressed(Key::F1));
+        // Undo: Ctrl+Z. Redo: Ctrl+Y or Ctrl+Shift+Z.
+        let ctrl_z = ctx.input(|i| i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(Key::Z));
+        let ctrl_redo = ctx.input(|i| {
+            i.modifiers.ctrl
+                && (i.key_pressed(Key::Y) || (i.modifiers.shift && i.key_pressed(Key::Z)))
+        });
+        // Don't hijack Ctrl+Z/Y while a TextEdit (code editor, property fields,
+        // etc.) owns the keyboard — that would roll the UiTree instead of the
+        // text-edit's own undo.
+        let text_input_focused = ctx.wants_keyboard_input();
+        if ctrl_z && !text_input_focused {
+            self.cmd_undo();
+        } else if ctrl_redo && !text_input_focused {
+            self.cmd_redo();
+        }
+        if ctrl_r {
+            self.session.canvas_settings.show_rulers = !self.session.canvas_settings.show_rulers;
+        }
+        if ctrl_l {
+            self.session.left_panel_tab = LeftPanelTab::Layers;
+            self.session.show_outline = true;
+        }
+        if f5 {
+            self.set_preview_mode(!self.session.preview_mode);
+        }
+        if f1 {
+            self.session.shortcuts_open = !self.session.shortcuts_open;
+        }
 
         if ctrl_n {
             self.request_destructive_command(PendingCommand::New);
@@ -824,6 +1575,14 @@ impl eframe::App for RohKaiApp {
                         self.cmd_export();
                         ui.close_menu();
                     }
+                    if ui
+                        .button("Project Files…")
+                        .on_hover_text("Browse the generated project tree and manage assets")
+                        .clicked()
+                    {
+                        self.session.project_tree_open = true;
+                        ui.close_menu();
+                    }
                     ui.separator();
                     if ui
                         .add_enabled(
@@ -844,10 +1603,214 @@ impl eframe::App for RohKaiApp {
                         self.cmd_import_svg_template();
                         ui.close_menu();
                     }
+                    if ui
+                        .button("Import Widget Definition…")
+                        .on_hover_text("Copy a .rkwd file into widgets/ and reload")
+                        .clicked()
+                    {
+                        self.cmd_import_widget_definition();
+                        ui.close_menu();
+                    }
+                    if ui
+                        .button("Reload Widget Descriptors")
+                        .on_hover_text("Rescan widgets/ folder for .rkwd files — no restart needed")
+                        .clicked()
+                    {
+                        self.cmd_reload_descriptors();
+                        ui.close_menu();
+                    }
+                    if ui
+                        .button("Create Custom Widget…")
+                        .on_hover_text("Guided builder for new custom widgets")
+                        .clicked()
+                    {
+                        self.cmd_new_widget_builder();
+                        ui.close_menu();
+                    }
+                    if ui
+                        .button("New Widget Descriptor…")
+                        .on_hover_text("Open the in-app .rkwd editor to create a new widget type")
+                        .clicked()
+                    {
+                        self.cmd_new_descriptor();
+                        ui.close_menu();
+                    }
                     ui.separator();
                     if ui.button("Preferences…").clicked() {
                         self.prefs.draft = self.prefs.user_settings.clone();
                         self.prefs.open = true;
+                        ui.close_menu();
+                    }
+                });
+
+                // Edit menu
+                ui.menu_button("Edit", |ui| {
+                    if ui
+                        .add_enabled(
+                            self.undo.can_undo(),
+                            egui::Button::new("Undo").shortcut_text("Ctrl+Z"),
+                        )
+                        .clicked()
+                    {
+                        self.cmd_undo();
+                        ui.close_menu();
+                    }
+                    if ui
+                        .add_enabled(
+                            self.undo.can_redo(),
+                            egui::Button::new("Redo").shortcut_text("Ctrl+Y"),
+                        )
+                        .clicked()
+                    {
+                        self.cmd_redo();
+                        ui.close_menu();
+                    }
+                });
+
+                // Widgets menu
+                ui.menu_button("Widgets", |ui| {
+                    if ui
+                        .button("Create Custom Widget…")
+                        .on_hover_text("Guided builder for new custom widgets")
+                        .clicked()
+                    {
+                        self.cmd_new_widget_builder();
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui
+                        .button("New Descriptor…")
+                        .on_hover_text("Open the in-app .rkwd editor to create a new widget type")
+                        .clicked()
+                    {
+                        self.cmd_new_descriptor();
+                        ui.close_menu();
+                    }
+                    if ui
+                        .button("Import Definition…")
+                        .on_hover_text("Copy a .rkwd file into widgets/ and reload")
+                        .clicked()
+                    {
+                        self.cmd_import_widget_definition();
+                        ui.close_menu();
+                    }
+                    if ui
+                        .button("Reload Descriptors")
+                        .on_hover_text("Rescan widgets/ folder for .rkwd files")
+                        .clicked()
+                    {
+                        self.cmd_reload_descriptors();
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui
+                        .button("Export Bundle…")
+                        .on_hover_text("Save all loaded descriptors as a .rkwb bundle")
+                        .clicked()
+                    {
+                        self.cmd_export_widget_bundle();
+                        ui.close_menu();
+                    }
+                    if ui
+                        .button("Import Bundle…")
+                        .on_hover_text("Load all descriptors from a .rkwb bundle")
+                        .clicked()
+                    {
+                        self.cmd_import_widget_bundle();
+                        ui.close_menu();
+                    }
+                    if !self.descriptors.widgets.is_empty() {
+                        ui.separator();
+                        let ids: Vec<(String, String)> = self
+                            .descriptors
+                            .widgets
+                            .iter()
+                            .map(|d| (d.id.clone(), d.name.clone()))
+                            .collect();
+                        for (id, name) in ids {
+                            if ui.button(format!("Edit \"{name}\"")).clicked() {
+                                self.cmd_edit_descriptor(&id);
+                                ui.close_menu();
+                            }
+                        }
+                    }
+                });
+
+                // View menu
+                ui.menu_button("View", |ui| {
+                    let preview_label = if self.session.preview_mode {
+                        "Exit Preview Mode  [F5]"
+                    } else {
+                        "Enter Preview Mode  [F5]"
+                    };
+                    if ui.button(preview_label).clicked() {
+                        self.set_preview_mode(!self.session.preview_mode);
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    let ruler_label = if self.session.canvas_settings.show_rulers {
+                        "Hide Rulers  [Ctrl+R]"
+                    } else {
+                        "Show Rulers  [Ctrl+R]"
+                    };
+                    if ui.button(ruler_label).clicked() {
+                        self.session.canvas_settings.show_rulers =
+                            !self.session.canvas_settings.show_rulers;
+                        ui.close_menu();
+                    }
+                    if ui.button("Clear All Guides").clicked() {
+                        self.project.ui_tree.app_props.guides.clear();
+                        ui.close_menu();
+                    }
+                    let bezel_label = if self.project.ui_tree.app_props.show_bezel {
+                        "Hide Canvas Bezel"
+                    } else {
+                        "Show Canvas Bezel"
+                    };
+                    if ui.button(bezel_label).clicked() {
+                        self.project.ui_tree.app_props.show_bezel =
+                            !self.project.ui_tree.app_props.show_bezel;
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    // Stage 11 — Rust-centric views
+                    let own_label = if self.session.show_ownership {
+                        "Hide Ownership Overlay"
+                    } else {
+                        "Show Ownership Overlay"
+                    };
+                    if ui.button(own_label).clicked() {
+                        self.session.show_ownership = !self.session.show_ownership;
+                        ui.close_menu();
+                    }
+                    let err_label = if self.session.show_error_flow {
+                        "Hide Error-Flow Overlay"
+                    } else {
+                        "Show Error-Flow Overlay"
+                    };
+                    if ui.button(err_label).clicked() {
+                        self.session.show_error_flow = !self.session.show_error_flow;
+                        ui.close_menu();
+                    }
+                    if ui
+                        .button("Rust Wiring…")
+                        .on_hover_text("Channels, iterator pipelines, trait impls")
+                        .clicked()
+                    {
+                        self.session.rust_wiring_open = true;
+                        ui.close_menu();
+                    }
+                    if ui
+                        .button("Macro Palette…")
+                        .on_hover_text("Insert common Rust macros into the code panel")
+                        .clicked()
+                    {
+                        self.session.macro_palette_open = true;
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("Theme…").clicked() {
+                        self.session.theme_open = true;
                         ui.close_menu();
                     }
                 });
@@ -897,13 +1860,39 @@ impl eframe::App for RohKaiApp {
                     }
                     None => {}
                 }
+
+                // Shortcut reference toggle
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .small_button("?")
+                        .on_hover_text("Keyboard shortcuts  [F1]")
+                        .clicked()
+                    {
+                        self.session.shortcuts_open = !self.session.shortcuts_open;
+                    }
+                });
             });
         });
 
         // ---------------------------------------------------------------
         // Bottom status bar — canvas size + grid snap
         // ---------------------------------------------------------------
+        let prev_canvas_w = self.project.ui_tree.app_props.win_w;
+        let prev_canvas_h = self.project.ui_tree.app_props.win_h;
+        // Presets set both dimensions explicitly, so they must bypass the
+        // aspect-ratio correction below (which assumes a single DragValue edit).
+        let mut preset_applied = false;
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
+            if self.session.preview_mode {
+                ui.centered_and_justified(|ui| {
+                    ui.label(
+                        egui::RichText::new("PREVIEW MODE  —  F5 to exit")
+                            .color(egui::Color32::from_rgb(251, 191, 36))
+                            .small(),
+                    );
+                });
+                return;
+            }
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("W").small().weak());
                 ui.add(
@@ -917,6 +1906,40 @@ impl eframe::App for RohKaiApp {
                         .speed(1.0)
                         .range(100.0..=4000.0),
                 );
+                let lock_icon = if self.session.lock_aspect_ratio {
+                    "🔒"
+                } else {
+                    "🔓"
+                };
+                if ui
+                    .small_button(lock_icon)
+                    .on_hover_text("Lock aspect ratio")
+                    .clicked()
+                {
+                    self.session.lock_aspect_ratio = !self.session.lock_aspect_ratio;
+                }
+                // Canvas preset picker
+                ui.menu_button("▾ Preset", |ui| {
+                    const PRESETS: &[(&str, f32, f32)] = &[
+                        ("1920 × 1080 (FHD)", 1920.0, 1080.0),
+                        ("2560 × 1440 (QHD)", 2560.0, 1440.0),
+                        ("1366 × 768 (HD)", 1366.0, 768.0),
+                        ("1280 × 720 (720p)", 1280.0, 720.0),
+                        ("800 × 600 (default)", 800.0, 600.0),
+                        ("375 × 812 (iPhone SE)", 375.0, 812.0),
+                        ("390 × 844 (iPhone 14)", 390.0, 844.0),
+                        ("414 × 896 (iPhone XS Max)", 414.0, 896.0),
+                        ("768 × 1024 (iPad)", 768.0, 1024.0),
+                    ];
+                    for (label, w, h) in PRESETS {
+                        if ui.button(*label).clicked() {
+                            self.project.ui_tree.app_props.win_w = *w;
+                            self.project.ui_tree.app_props.win_h = *h;
+                            preset_applied = true;
+                            ui.close_menu();
+                        }
+                    }
+                });
                 ui.separator();
                 let (snap_text, snap_color) = if self.session.canvas_settings.snap_enabled {
                     ("Grid: ON", egui::Color32::from_rgb(52, 211, 153))
@@ -980,23 +2003,43 @@ impl eframe::App for RohKaiApp {
             });
         });
 
+        // Enforce aspect ratio after DragValue edits (presets bypass this).
+        if self.session.lock_aspect_ratio
+            && !preset_applied
+            && prev_canvas_w > 0.0
+            && prev_canvas_h > 0.0
+        {
+            let cur_w = self.project.ui_tree.app_props.win_w;
+            let cur_h = self.project.ui_tree.app_props.win_h;
+            let ratio = prev_canvas_w / prev_canvas_h;
+            if (cur_w - prev_canvas_w).abs() > 0.001 {
+                self.project.ui_tree.app_props.win_h = (cur_w / ratio).clamp(100.0, 4000.0);
+            } else if (cur_h - prev_canvas_h).abs() > 0.001 {
+                self.project.ui_tree.app_props.win_w = (cur_h * ratio).clamp(100.0, 4000.0);
+            }
+        }
+
         // ---------------------------------------------------------------
-        // Right panel: generated code
+        // Right panel: generated code (hidden in preview mode)
         // ---------------------------------------------------------------
-        crate::panels::code_preview::show(
-            ctx,
-            &mut self.project.ui_tree,
-            CodePreviewArgs {
-                highlighted_id: self.session.highlighted_code_id,
-                scroll_to: &mut self.session.scroll_to_code,
-                scroll_to_handler: &mut self.session.scroll_to_handler,
-                code_buffer: &mut self.code.buffer,
-                code_status: &mut self.code.status,
-                last_generated: &mut self.code.last_generated,
-                split_ratio: &mut self.code.split_ratio,
-                code_font_size: self.prefs.user_settings.code_font_size,
-            },
-        );
+        if !self.session.preview_mode {
+            crate::panels::code_preview::show(
+                ctx,
+                &mut self.project.ui_tree,
+                CodePreviewArgs {
+                    selected_ids: &mut self.session.selected,
+                    navigation_target: &mut self.session.code_navigation_target,
+                    scroll_to_handler: &mut self.session.scroll_to_handler,
+                    code_buffer: &mut self.code.buffer,
+                    code_status: &mut self.code.status,
+                    last_generated: &mut self.code.last_generated,
+                    split_ratio: &mut self.code.split_ratio,
+                    wrap_code: &mut self.code.wrap_code,
+                    editor_has_focus: &mut self.code.editor_has_focus,
+                    code_font_size: self.prefs.user_settings.code_font_size,
+                },
+            );
+        } // end !preview_mode gate for code panel
 
         // ---------------------------------------------------------------
         // Left panel — returns (palette_drag, template_action) to process outside
@@ -1004,10 +2047,17 @@ impl eframe::App for RohKaiApp {
         let window_w = ctx.screen_rect().width();
         let left_full = window_w >= 580.0;
 
+        let mut outline_action = crate::panels::outline::OutlineAction::None;
+        let mut tray_action = crate::panels::component_tray::TrayAction::None;
+        let preview_mode = self.session.preview_mode;
+        let selected_component = self.session.selected_component;
+
         let (palette_click, palette_drag, tmpl_action, props_action) =
             egui::SidePanel::left("left_panel")
+                .resizable(left_full)
                 .min_width(if left_full { 160.0 } else { 28.0 })
-                .max_width(if left_full { f32::INFINITY } else { 28.0 })
+                .default_width(if left_full { 280.0 } else { 28.0 })
+                .max_width(if left_full { 520.0 } else { 28.0 })
                 .show(ctx, |ui| {
                     if !left_full {
                         ui.centered_and_justified(|ui| {
@@ -1021,35 +2071,256 @@ impl eframe::App for RohKaiApp {
                         );
                     }
 
-                    let (palette_click, palette_drag) =
-                        crate::panels::palette::show_content(ui, &self.descriptors.widgets);
-                    ui.add_space(4.0);
+                    let ctrl_held_inner = ui.input(|i| i.modifiers.ctrl);
 
-                    let shift_held = ui.input(|i| i.modifiers.shift);
-                    let mut props_action = crate::panels::properties::PropertiesAction::None;
-                    egui::CollapsingHeader::new("Properties")
-                        .default_open(true)
-                        .show(ui, |ui| {
-                            props_action = crate::panels::properties::show_content(
-                                ui,
-                                &mut self.project.ui_tree,
-                                &mut self.session.selected,
-                                shift_held,
-                                &self.descriptors.widgets,
-                            );
-                        });
+                    if preview_mode {
+                        // In preview mode: show outline only (read-only).
+                        ui.label(
+                            egui::RichText::new("PREVIEW MODE")
+                                .small()
+                                .color(egui::Color32::from_rgb(251, 191, 36)),
+                        );
+                        ui.separator();
+                        egui::CollapsingHeader::new("Layers")
+                            .default_open(true)
+                            .show(ui, |ui| {
+                                outline_action = crate::panels::outline::show_content(
+                                    ui,
+                                    &self.project.ui_tree,
+                                    &self.session.selected,
+                                    ctrl_held_inner,
+                                    true, // read-only in preview
+                                );
+                            });
+                        return (
+                            None,
+                            None,
+                            crate::panels::templates::TemplateAction::None,
+                            crate::panels::properties::PropertiesAction::None,
+                        );
+                    }
 
-                    ui.add_space(4.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.selectable_value(
+                            &mut self.session.left_panel_tab,
+                            LeftPanelTab::Palette,
+                            "Palette",
+                        );
+                        ui.selectable_value(
+                            &mut self.session.left_panel_tab,
+                            LeftPanelTab::Properties,
+                            "Props",
+                        );
+                        ui.selectable_value(
+                            &mut self.session.left_panel_tab,
+                            LeftPanelTab::Layers,
+                            "Layers",
+                        );
+                        ui.selectable_value(
+                            &mut self.session.left_panel_tab,
+                            LeftPanelTab::Components,
+                            "Components",
+                        );
+                        ui.selectable_value(
+                            &mut self.session.left_panel_tab,
+                            LeftPanelTab::Templates,
+                            "Templates",
+                        );
+                        ui.separator();
+                        ui.toggle_value(&mut self.session.left_panel_stack, "Stack")
+                            .on_hover_text("Show multiple sections together in this left panel");
+                    });
                     ui.separator();
 
+                    let mut palette_click = None;
+                    let mut palette_drag = None;
+                    let mut props_action = crate::panels::properties::PropertiesAction::None;
                     let mut tmpl_action = crate::panels::templates::TemplateAction::None;
-                    egui::CollapsingHeader::new("Templates")
-                        .default_open(true)
+
+                    egui::ScrollArea::vertical()
+                        .id_salt("left_panel_tab_scroll")
+                        .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            tmpl_action = crate::panels::templates::show(
-                                ui,
-                                &mut self.messages.template_message,
-                            );
+                            ui.set_max_width(ui.available_width());
+                            let show_palette = |ui: &mut egui::Ui,
+                                                palette_click: &mut Option<WidgetInstance>,
+                                                palette_drag: &mut Option<WidgetInstance>| {
+                                ui.label(egui::RichText::new("Palette").strong());
+                                ui.add_space(2.0);
+                                (*palette_click, *palette_drag) =
+                                    crate::panels::palette::show_content(
+                                        ui,
+                                        &self.descriptors.widgets,
+                                    );
+                            };
+
+                            if self.session.left_panel_stack {
+                                egui::CollapsingHeader::new("Palette")
+                                    .default_open(true)
+                                    .show(ui, |ui| {
+                                        (palette_click, palette_drag) =
+                                            crate::panels::palette::show_content(
+                                                ui,
+                                                &self.descriptors.widgets,
+                                            );
+                                    });
+                                egui::CollapsingHeader::new("Properties")
+                                    .default_open(!self.session.selected.is_empty())
+                                    .show(ui, |ui| {
+                                        let shift_held = ui.input(|i| i.modifiers.shift);
+                                        props_action = crate::panels::properties::show_content(
+                                            ui,
+                                            &mut self.project.ui_tree,
+                                            &mut self.session.selected,
+                                            shift_held,
+                                            &self.descriptors.widgets,
+                                        );
+                                    });
+                                egui::CollapsingHeader::new("Layers / Outline")
+                                    .default_open(true)
+                                    .show(ui, |ui| {
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "Shows canvas widgets in draw order. Add items from Palette or Templates.",
+                                            )
+                                            .small()
+                                            .weak(),
+                                        );
+                                        outline_action = crate::panels::outline::show_content(
+                                            ui,
+                                            &self.project.ui_tree,
+                                            &self.session.selected,
+                                            ctrl_held_inner,
+                                            false,
+                                        );
+                                    });
+                                egui::CollapsingHeader::new("Components")
+                                    .default_open(false)
+                                    .show(ui, |ui| {
+                                        if self.project.ui_tree.app_props.components.is_empty() {
+                                            ui.label(
+                                                egui::RichText::new("No components yet.")
+                                                    .small()
+                                                    .weak(),
+                                            );
+                                        }
+                                        tray_action = crate::panels::component_tray::show_tray(
+                                            ui,
+                                            &self.project.ui_tree.app_props.components,
+                                            selected_component,
+                                        );
+                                        if let Some(sel) = selected_component {
+                                            if let Some(comp) = self
+                                                .project
+                                                .ui_tree
+                                                .app_props
+                                                .components
+                                                .iter_mut()
+                                                .find(|c| c.id == sel)
+                                            {
+                                                ui.separator();
+                                                crate::panels::component_tray::show_config(
+                                                    ui, comp,
+                                                );
+                                            }
+                                        }
+                                    });
+                                egui::CollapsingHeader::new("Templates")
+                                    .default_open(false)
+                                    .show(ui, |ui| {
+                                        tmpl_action = crate::panels::templates::show(
+                                            ui,
+                                            &mut self.messages.template_message,
+                                        );
+                                    });
+                            } else {
+                                match self.session.left_panel_tab {
+                                    LeftPanelTab::Palette => {
+                                        show_palette(ui, &mut palette_click, &mut palette_drag);
+                                    }
+                                    LeftPanelTab::Properties => {
+                                        let shift_held = ui.input(|i| i.modifiers.shift);
+                                        let code_pending = matches!(
+                                            self.code.status,
+                                            crate::panels::code_preview::CodeStatus::ValidEdit
+                                                | crate::panels::code_preview::CodeStatus::InvalidEdit(_)
+                                        );
+                                        if code_pending {
+                                            ui.label(
+                                                egui::RichText::new(
+                                                    "Code edits pending; Properties will resync code",
+                                                )
+                                                .small()
+                                                .color(egui::Color32::from_rgb(234, 179, 8)),
+                                            );
+                                            ui.separator();
+                                        }
+                                        props_action = crate::panels::properties::show_content(
+                                            ui,
+                                            &mut self.project.ui_tree,
+                                            &mut self.session.selected,
+                                            shift_held,
+                                            &self.descriptors.widgets,
+                                        );
+                                    }
+                                    LeftPanelTab::Layers => {
+                                        ui.label(egui::RichText::new("Layers / Outline").strong());
+                                        ui.label(
+                                            egui::RichText::new(
+                                                "Canvas widgets in draw order. Add from Palette/Templates.",
+                                            )
+                                            .small()
+                                            .weak(),
+                                        );
+                                        ui.add_space(2.0);
+                                        outline_action = crate::panels::outline::show_content(
+                                            ui,
+                                            &self.project.ui_tree,
+                                            &self.session.selected,
+                                            ctrl_held_inner,
+                                            false,
+                                        );
+                                    }
+                                    LeftPanelTab::Components => {
+                                        ui.label(egui::RichText::new("Components").strong());
+                                        if self.project.ui_tree.app_props.components.is_empty() {
+                                            ui.label(
+                                                egui::RichText::new("No components yet.")
+                                                    .small()
+                                                    .weak(),
+                                            );
+                                        }
+                                        tray_action = crate::panels::component_tray::show_tray(
+                                            ui,
+                                            &self.project.ui_tree.app_props.components,
+                                            selected_component,
+                                        );
+                                        if let Some(sel) = selected_component {
+                                            if let Some(comp) = self
+                                                .project
+                                                .ui_tree
+                                                .app_props
+                                                .components
+                                                .iter_mut()
+                                                .find(|c| c.id == sel)
+                                            {
+                                                ui.separator();
+                                                crate::panels::component_tray::show_config(
+                                                    ui, comp,
+                                                );
+                                            }
+                                        }
+                                    }
+                                    LeftPanelTab::Templates => {
+                                        ui.label(egui::RichText::new("Templates").strong());
+                                        ui.add_space(2.0);
+                                        tmpl_action = crate::panels::templates::show(
+                                            ui,
+                                            &mut self.messages.template_message,
+                                        );
+                                    }
+                                }
+                            }
                         });
 
                     (palette_click, palette_drag, tmpl_action, props_action)
@@ -1057,8 +2328,94 @@ impl eframe::App for RohKaiApp {
                 .inner;
 
         // Tracé — properties panel requested scroll-to-handler
-        if let crate::panels::properties::PropertiesAction::ScrollToHandler(name) = props_action {
-            self.session.scroll_to_handler = Some(name);
+        match props_action {
+            crate::panels::properties::PropertiesAction::ScrollToHandler(name) => {
+                self.session.scroll_to_handler = Some(name);
+            }
+            crate::panels::properties::PropertiesAction::ShowSvgSource(id) => {
+                self.session.svg_viewer_id = Some(id);
+            }
+            crate::panels::properties::PropertiesAction::EditDescriptor(desc_id) => {
+                self.cmd_edit_descriptor(&desc_id);
+            }
+            crate::panels::properties::PropertiesAction::None => {}
+        }
+
+        // Outline (layers) panel actions.
+        match outline_action {
+            crate::panels::outline::OutlineAction::Select(id) => {
+                self.session.selected.clear();
+                self.session.selected.push(id);
+            }
+            crate::panels::outline::OutlineAction::AddToSelection(id) => {
+                if self.session.selected.contains(&id) {
+                    self.session.selected.retain(|&x| x != id);
+                } else {
+                    self.session.selected.push(id);
+                }
+            }
+            crate::panels::outline::OutlineAction::ReorderTo { id, to_idx } => {
+                self.project.ui_tree.move_to_index(id, to_idx);
+            }
+            crate::panels::outline::OutlineAction::CenterOn(id) => {
+                // Adjust pan so the widget is centred in the canvas panel.
+                if let Some(w) = self.project.ui_tree.widgets.iter().find(|w| w.id == id) {
+                    let zoom = self.session.canvas_settings.zoom;
+                    let widget_cx = w.rect.x + w.rect.w / 2.0;
+                    let widget_cy = w.rect.y + w.rect.h / 2.0;
+                    self.session.canvas_settings.pan =
+                        egui::vec2(-widget_cx * zoom, -widget_cy * zoom);
+                }
+            }
+            crate::panels::outline::OutlineAction::None => {}
+        }
+
+        // Component tray actions
+        match tray_action {
+            crate::panels::component_tray::TrayAction::Select(id) => {
+                self.session.selected_component = if self.session.selected_component == Some(id) {
+                    None
+                } else {
+                    Some(id)
+                };
+            }
+            crate::panels::component_tray::TrayAction::Add(kind) => {
+                let name = match kind {
+                    crate::project::schema::ComponentKind::Timer => "timer",
+                    crate::project::schema::ComponentKind::DataSource => "data_source",
+                    crate::project::schema::ComponentKind::Lifecycle => "lifecycle",
+                    crate::project::schema::ComponentKind::StateMachine => "state_machine",
+                    crate::project::schema::ComponentKind::HttpRequest => "http_request",
+                };
+                let count = self.project.ui_tree.app_props.components.len() + 1;
+                let new_id = Uuid::new_v4();
+                let interval_ms = if kind == crate::project::schema::ComponentKind::Timer {
+                    Some(1000)
+                } else {
+                    None
+                };
+                self.project.ui_tree.app_props.components.push(
+                    crate::project::schema::DesignComponent {
+                        id: new_id,
+                        kind,
+                        name: format!("{name}_{count}"),
+                        interval_ms,
+                        handler: String::new(),
+                    },
+                );
+                self.session.selected_component = Some(new_id);
+            }
+            crate::panels::component_tray::TrayAction::Remove(id) => {
+                self.project
+                    .ui_tree
+                    .app_props
+                    .components
+                    .retain(|c| c.id != id);
+                if self.session.selected_component == Some(id) {
+                    self.session.selected_component = None;
+                }
+            }
+            crate::panels::component_tray::TrayAction::None => {}
         }
 
         // Palette click → place at viewport center (accounting for zoom/pan)
@@ -1071,7 +2428,21 @@ impl eframe::App for RohKaiApp {
             let cy = (-pan.y / zoom + win_h / 2.0).clamp(0.0, win_h);
             instance.rect.x = (cx - instance.rect.w / 2.0).max(0.0);
             instance.rect.y = (cy - instance.rect.h / 2.0).max(0.0);
+            let id = instance.id;
+            let center = (
+                instance.rect.x + instance.rect.w * 0.5,
+                instance.rect.y + instance.rect.h * 0.5,
+            );
+            let is_layout_container = matches!(
+                instance.kind,
+                crate::project::schema::WidgetKind::VLayout
+                    | crate::project::schema::WidgetKind::HLayout
+                    | crate::project::schema::WidgetKind::GridLayout
+            );
             self.project.ui_tree.add(instance);
+            if !is_layout_container {
+                self.project.ui_tree.attach_to_layout_at(id, center);
+            }
         }
 
         // Palette drag — set interaction.template_drag for canvas drop next frame
@@ -1091,7 +2462,18 @@ impl eframe::App for RohKaiApp {
                     w.id = Uuid::new_v4();
                     w.rect.x = (w.rect.x - min_x + cx).max(0.0);
                     w.rect.y = (w.rect.y - min_y + cy).max(0.0);
+                    let id = w.id;
+                    let center = (w.rect.x + w.rect.w * 0.5, w.rect.y + w.rect.h * 0.5);
+                    let is_layout_container = matches!(
+                        w.kind,
+                        crate::project::schema::WidgetKind::VLayout
+                            | crate::project::schema::WidgetKind::HLayout
+                            | crate::project::schema::WidgetKind::GridLayout
+                    );
                     self.project.ui_tree.add(w);
+                    if !is_layout_container {
+                        self.project.ui_tree.attach_to_layout_at(id, center);
+                    }
                 }
             }
             crate::panels::templates::TemplateAction::BeginDrag(instances) => {
@@ -1103,8 +2485,64 @@ impl eframe::App for RohKaiApp {
         // ---------------------------------------------------------------
         // Canvas
         // ---------------------------------------------------------------
+        let canvas_modal_blocked = self.canvas_modal_blocked();
+        let canvas_keyboard_owned = !canvas_modal_blocked
+            && self.session.interaction.canvas_focused
+            && !ctx.wants_keyboard_input();
+        let delete_pressed =
+            canvas_keyboard_owned && ctx.input(|i| i.key_pressed(egui::Key::Delete));
+        let has_hovered_guide = self.session.hovered_guide.is_some();
         egui::CentralPanel::default().show(ctx, |ui| {
             self.session.last_canvas_rect = ui.max_rect();
+            let panel_rect = ui.max_rect();
+
+            // --- Preview mode ---
+            if self.session.preview_mode {
+                let exited = crate::canvas::preview::render(
+                    ui,
+                    &self.project.ui_tree,
+                    &mut self.session.preview_state,
+                    panel_rect,
+                    &mut self.svg_texture_cache,
+                );
+                if exited {
+                    self.set_preview_mode(false);
+                }
+                return;
+            }
+
+            // --- Design mode ---
+            let zoom = self.session.canvas_settings.zoom;
+            let pan = self.session.canvas_settings.pan;
+            let canvas_size = [
+                self.project.ui_tree.app_props.win_w,
+                self.project.ui_tree.app_props.win_h,
+            ];
+
+            // Guide interaction runs before canvas (uses raw pointer input).
+            let ruler_ctx = crate::canvas::rulers::RulerCtx {
+                show_rulers: self.session.canvas_settings.show_rulers,
+                zoom,
+                pan,
+                canvas_size,
+                panel_rect,
+            };
+            if canvas_modal_blocked {
+                self.session.hovered_guide = None;
+                self.session.dragging_guide = None;
+            } else {
+                crate::canvas::rulers::handle_interaction(
+                    ui,
+                    &mut self.project.ui_tree.app_props.guides,
+                    &mut self.session.hovered_guide,
+                    &mut self.session.dragging_guide,
+                    &ruler_ctx,
+                    delete_pressed && has_hovered_guide,
+                );
+            }
+
+            self.session.canvas_settings.guide_drag_active = self.session.dragging_guide.is_some();
+            self.session.canvas_settings.input_blocked = canvas_modal_blocked;
             crate::canvas::interaction::handle(
                 ui,
                 &mut self.project.ui_tree,
@@ -1117,6 +2555,48 @@ impl eframe::App for RohKaiApp {
                 },
                 &mut self.svg_texture_cache,
             );
+
+            // Rulers and guide lines drawn on top of canvas content.
+            crate::canvas::rulers::draw(
+                ui,
+                &self.project.ui_tree.app_props.guides,
+                self.session.hovered_guide,
+                &ruler_ctx,
+            );
+
+            // Canvas bezel — mock OS title bar chrome above the canvas rect.
+            if self.project.ui_tree.app_props.show_bezel {
+                crate::canvas::rulers::draw_bezel(
+                    ui,
+                    &ruler_ctx,
+                    &self.project.ui_tree.app_props.title,
+                );
+            }
+
+            // Stage 11 — Rust-centric overlays (read-only).
+            if self.session.show_ownership || self.session.show_error_flow {
+                let origin =
+                    crate::canvas::rulers::canvas_origin(canvas_size, zoom, pan, panel_rect);
+                let painter = ui.painter_at(panel_rect);
+                if self.session.show_ownership {
+                    crate::canvas::overlays::draw_ownership(
+                        &painter,
+                        &self.project.ui_tree,
+                        origin,
+                        zoom,
+                        panel_rect,
+                    );
+                }
+                if self.session.show_error_flow {
+                    crate::canvas::overlays::draw_error_flow(
+                        &painter,
+                        &self.project.ui_tree,
+                        origin,
+                        zoom,
+                        panel_rect,
+                    );
+                }
+            }
         });
 
         // Prune SVG texture cache for widgets removed from canvas.
@@ -1136,14 +2616,13 @@ impl eframe::App for RohKaiApp {
 
         // Lazare double-click → highlight code panel
         if let Some(id) = self.session.interaction.double_clicked_widget {
-            self.session.highlighted_code_id = Some(id);
-            self.session.scroll_to_code = true;
+            self.session.code_navigation_target = Some(id);
         }
 
         // ---------------------------------------------------------------
-        // Delete key
+        // Delete key — widgets (when no guide was hovered at frame start)
         // ---------------------------------------------------------------
-        if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
+        if delete_pressed && !has_hovered_guide {
             let ids: Vec<Uuid> = self.session.selected.drain(..).collect();
             for id in ids {
                 self.project.ui_tree.remove(id);
@@ -1152,5 +2631,49 @@ impl eframe::App for RohKaiApp {
 
         self.show_pending_command_dialog(ctx);
         self.show_preferences_window(ctx);
+        self.show_svg_source_window(ctx);
+        self.show_descriptor_editor_window(ctx);
+        self.show_widget_builder_window(ctx);
+        self.show_theme_window(ctx);
+        self.show_project_tree_window(ctx);
+        crate::panels::shortcuts::show(ctx, &mut self.session.shortcuts_open);
+
+        // Stage 11 — Rust wiring editor + macro palette.
+        crate::panels::rust_wiring::show(
+            ctx,
+            &mut self.session.rust_wiring_open,
+            &mut self.project.ui_tree.app_props.rust_wiring,
+        );
+        if let Some(snippet) =
+            crate::panels::macro_palette::show(ctx, &mut self.session.macro_palette_open)
+        {
+            // Append the macro snippet to the live code buffer.
+            if !self.code.buffer.ends_with('\n') && !self.code.buffer.is_empty() {
+                self.code.buffer.push('\n');
+            }
+            self.code.buffer.push_str(&snippet);
+            self.code.buffer.push('\n');
+        }
+
+        // ---------------------------------------------------------------
+        // Undo/redo commit boundary
+        //
+        // Record a snapshot only when the pointer is up (so an in-progress
+        // drag/resize coalesces into ONE undo step on release) and we are not
+        // restoring from undo this frame.  `record()` de-dups identical states,
+        // so idle frames are free.  Skipped in preview mode (no edits there).
+        // ---------------------------------------------------------------
+        if self.undo_suppress_record {
+            // Re-seed `current` to the restored/baseline tree without history churn.
+            let json = crate::project::io::serialize(&self.project.ui_tree).unwrap_or_default();
+            self.undo.sync_current(json);
+            self.undo_suppress_record = false;
+        } else if !self.session.preview_mode {
+            let pointer_down = ctx.input(|i| i.pointer.any_down());
+            if !pointer_down {
+                let json = crate::project::io::serialize(&self.project.ui_tree).unwrap_or_default();
+                self.undo.record(json);
+            }
+        }
     }
 }

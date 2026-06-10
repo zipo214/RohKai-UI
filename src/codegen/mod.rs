@@ -1,8 +1,12 @@
+pub mod component_state;
 pub mod egui_emitter;
 pub mod export;
 pub mod field_collector;
 pub mod kind_table;
 pub mod parser;
 pub mod rust;
+pub mod rust_wiring;
+pub mod source_map;
 pub mod state_emitter;
+pub mod widget_bundle;
 pub mod widget_descriptor;

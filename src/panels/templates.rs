@@ -100,41 +100,6 @@ pub fn load_template(path: &Path) -> Result<Vec<WidgetInstance>, String> {
     serde_json::from_str(&json).map_err(|e| format!("parse: {e}"))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::project::schema::{Rect, WidgetKind, WidgetProps};
-
-    #[test]
-    fn imported_svg_preserves_original_source_next_to_template() {
-        let dir = std::env::temp_dir().join(format!("rohkai_svg_test_{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let widgets = vec![WidgetInstance {
-            id: uuid::Uuid::new_v4(),
-            kind: WidgetKind::Frame,
-            rect: Rect {
-                x: 1.0,
-                y: 2.0,
-                w: 30.0,
-                h: 40.0,
-            },
-            props: WidgetProps::default(),
-            state_binding: None,
-            ..Default::default()
-        }];
-        let svg = "<svg><rect width=\"10\" height=\"10\"/></svg>";
-        let template_path =
-            save_imported_svg_template_in_dir(&dir, "some icon", &widgets, svg).unwrap();
-
-        assert!(template_path.ends_with("some_icon.rktp"));
-        assert_eq!(
-            std::fs::read_to_string(dir.join("some_icon.svg")).unwrap(),
-            svg
-        );
-        let _ = std::fs::remove_dir_all(dir);
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Action returned to the caller each frame
 // ---------------------------------------------------------------------------
@@ -233,4 +198,39 @@ pub fn show(ui: &mut egui::Ui, template_message: &mut Option<(bool, String)>) ->
     }
 
     action
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::schema::{Rect, WidgetKind, WidgetProps};
+
+    #[test]
+    fn imported_svg_preserves_original_source_next_to_template() {
+        let dir = std::env::temp_dir().join(format!("rohkai_svg_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let widgets = vec![WidgetInstance {
+            id: uuid::Uuid::new_v4(),
+            kind: WidgetKind::Frame,
+            rect: Rect {
+                x: 1.0,
+                y: 2.0,
+                w: 30.0,
+                h: 40.0,
+            },
+            props: WidgetProps::default(),
+            state_binding: None,
+            ..Default::default()
+        }];
+        let svg = "<svg><rect width=\"10\" height=\"10\"/></svg>";
+        let template_path =
+            save_imported_svg_template_in_dir(&dir, "some icon", &widgets, svg).unwrap();
+
+        assert!(template_path.ends_with("some_icon.rktp"));
+        assert_eq!(
+            std::fs::read_to_string(dir.join("some_icon.svg")).unwrap(),
+            svg
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

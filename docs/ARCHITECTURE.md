@@ -22,14 +22,60 @@ All panels read from it; the canvas mutates it in-place through `tree.get_mut(id
 
 | Type | Purpose |
 |---|---|
-| `WidgetKind` | Enum for built-in widgets: Button, Label, TextInput, Slider, Checkbox, Frame, ComboBox, RadioButton, ProgressBar |
-| `WidgetProps` | `label: String`, `min: f32`, `max: f32` (shared across kinds) |
+| `WidgetKind` | Enum, grouped by era. Core: Button, Label, TextInput, Slider, Checkbox, Frame, ComboBox, RadioButton, ProgressBar, Image, Custom(String). Stage 9: TextArea, SpinBox, FontComboBox, HorizontalSpacer, VerticalSpacer, GroupBox, VLayout, HLayout, ScrollArea, GridLayout, TabWidget. Stage 10: ToolButton, CommandLinkButton, DialogButtonBox, MathLabel, FilePicker, Chart, Table, ListView, TreeView, StackedWidget, ToolBox. The canonical list is `widgets::ALL_KINDS`. |
+| `WidgetProps` | Per-widget content and behaviour knobs (see table below) |
 | `Rect` | `{ x, y, w, h }` in canvas-local pixels; default `(20, 20, 120, 32)` |
-| `WidgetInstance` | `{ id: Uuid, kind, rect, props, state_binding, children, import_metadata }` |
-| `UiTree` | `{ widgets: Vec<WidgetInstance>, app_props }` |
+| `WidgetInstance` | Full widget node (see table below) |
+| `UiTree` | `{ widgets: Vec<WidgetInstance>, app_props: AppProps }` |
 
-`state_binding` is the Rust field name emitted into generated code. `None` → placeholder
-comment `/* TODO: set binding */` in output.
+`Custom(String)` holds the descriptor id (e.g. `"ply.button"`).
+`Image` holds SVG source in `WidgetInstance.svg_source`.
+
+#### WidgetProps fields
+
+| Field | Type | Used by |
+|---|---|---|
+| `label` | `String` | all |
+| `min`, `max`, `default_value` | `f32` | Slider, ProgressBar |
+| `options` | `Vec<String>` | ComboBox |
+| `step` | `Option<f32>` | Slider |
+| `show_value` | `bool` | Slider |
+| `orientation` | `Orientation` | Slider |
+| `placeholder` | `String` | TextInput |
+| `password_mode` | `bool` | TextInput |
+| `max_length` | `Option<usize>` | TextInput |
+| `radio_value` | `String` | RadioButton |
+| `group_binding` | `String` | RadioButton |
+| `show_percentage` | `bool` | ProgressBar |
+| `animated` | `bool` | ProgressBar |
+| `inner_margin` | `f32` | Frame, VLayout, HLayout, GridLayout |
+| `stroke_color` | `Option<[u8; 3]>` | Frame |
+| `stroke_width` | `f32` | Frame |
+| `layout_spacing` | `f32` | VLayout, HLayout, GridLayout |
+| `layout_stretch` | `bool` | VLayout, HLayout, GridLayout |
+| `grid_columns` | `usize` | GridLayout |
+
+#### WidgetInstance fields (beyond id/kind/rect/props)
+
+| Field | Type | Purpose |
+|---|---|---|
+| `state_binding` | `Option<String>` | Rust AppState field name; `None` → placeholder comment |
+| `children` | `Vec<Uuid>` | Frame/layout owned child widget IDs |
+| `import_metadata` | `Option<SvgImportMetadata>` | SVG import provenance |
+| `tooltip` | `Option<String>` | `.on_hover_text(...)` codegen |
+| `enabled` | `Option<bool>` | `ui.set_enabled(false)` codegen |
+| `fg_color` | `Option<[u8; 3]>` | Foreground/text color |
+| `bg_color` | `Option<[u8; 3]>` | Background/fill color override |
+| `corner_radius` | `Option<f32>` | Widget corner rounding |
+| `font_size` | `Option<f32>` | Override font size (pt) |
+| `text_align` | `Option<TextAlign>` | Left / Center / Right |
+| `label_binding` | `Option<String>` | Bound-mode label from AppState |
+| `custom_props` | `Vec<CustomProp>` | User-added state fields |
+| `on_click` | `String` | Click handler name (Button) |
+| `on_change` | `String` | Change handler name (interactive widgets) |
+| `svg_source` | `Option<String>` | Raw SVG text for Image widgets |
+| `expand_svg_inline` | `bool` | Embed full SVG in live code panel |
+| `descriptor_*` | various | Snapshotted `.rkwd` metadata for Custom widgets |
 
 ### Persistence
 
@@ -89,18 +135,43 @@ Fill is the accent darkened to ~15% (`r*3/20, g*3/20, b*3/20`).
 
 ```
 src/codegen/
-  egui_emitter.rs   — emits egui update() body
-  state_emitter.rs  — emits AppState struct
-  mod.rs            — re-exports
+  egui_emitter.rs      — emits egui update() body (live preview)
+  export.rs            — emits complete standalone Rust project
+  state_emitter.rs     — emits AppState struct
+  field_collector.rs   — shared AppState field collection for live preview,
+                         export, and descriptor state fields (single source of truth)
+  parser.rs            — Lazare reverse path: parses edited code back into UiTree
+  source_map.rs        — byte/line spans for generated and parsed code ownership
+  kind_table.rs        — field types and widget metadata for codegen (binding types,
+                         event applicability, state field rules per WidgetKind)
+  widget_descriptor.rs — .rkwd descriptor types, loader, template engine, validation
+  widget_bundle.rs     — .rkwb bundle (multi-descriptor JSON envelope)
+  rust.rs              — Rust string/binding helpers (string_literal, field_binding)
+  rust_wiring.rs       — Stage 11: mpsc channel fields, iterator-pipeline methods,
+                         trait-impl blocks, async/Result-aware handler signatures +
+                         call sites (std-only — no tokio)
+  mod.rs               — re-exports
 ```
 
 Both emitters are **pure functions**: `emit(tree: &UiTree) -> String`.
 They are called every frame in `panels::code_preview::show` and their output is
 displayed in the right panel. No caching; strings are regenerated each repaint.
 
+`field_collector.rs` is the single source of truth for which widgets contribute
+AppState fields, their Rust types, and their default expressions. Both
+`state_emitter` and `export` call it instead of duplicating logic.
+
 `parser.rs` performs the reverse Lazare path for supported generated-code edits:
 it parses widget markers and selected egui calls back into `UiTree`, reporting
-diagnostics without mutating the canvas on invalid edits.
+diagnostics without mutating the canvas on invalid edits. Successful parsed
+widgets retain byte/line source ranges so code decorations remain mapped after
+valid manual edits.
+
+`source_map.rs` defines the generated-code document contract. `emit_document`
+returns complete text plus exact widget spans derived while emitting, rather
+than searching the finished string for UUIDs. `panels::code_preview` uses those
+spans, or parser spans for edited text, to paint selection decorations in a
+separate viewport gutter outside TextEdit's glyph clip.
 
 ### `egui_emitter::emit`
 
@@ -144,19 +215,16 @@ Only widgets with a non-`None` `state_binding` appear in the struct.
 
 ## App structure (`src/app.rs`)
 
-`RohKaiApp` owns:
+`RohKaiApp` is decomposed into focused sub-structs:
 
-| Field | Type | Purpose |
+| Sub-struct | Key fields | Purpose |
 |---|---|---|
-| `ui_tree` | `UiTree` | Single source of truth |
-| `interaction` | `InteractionState` | Drag/resize transient state |
-| `selected` | `Vec<Uuid>` | Current selection, ordered with last as primary/key object |
-| `current_file` | `Option<PathBuf>` | Open file path |
-| `saved_json` | `Option<String>` | Snapshot for dirty detection |
-| `last_error` | `Option<String>` | Displayed in menu bar |
-| `canvas_settings` | `CanvasSettings` | Snap toggle, snap step, pan, zoom |
-| `user_settings` | `UserSettings` | Persisted user Preferences: UI scale, code font size, canvas text scale |
-| `preferences_draft` | `UserSettings` | Modal draft edited by File -> Preferences before OK/Apply |
+| `ProjectState` | `ui_tree`, `current_file`, `saved_json` | Persistent document — single source of truth + file path + dirty snapshot |
+| `SessionState` | `interaction`, `selected`, `canvas_settings`, `dragging_guide`, `hovered_guide`, `lock_aspect_ratio` | Per-session canvas interaction and view state (not persisted) |
+| `MessageState` | `last_error`, `export_message`, `template_message` | One-frame status messages for the status bar |
+| `PreferencesState` | `user_settings`, `draft`, `settings_path` | Live + draft user preferences, persistence path |
+| `CodePanelState` | `buffer`, `status`, `last_generated`, `split_ratio`, `wrap_code`, `editor_has_focus` | Lazare code panel — editable buffer, generated/valid/invalid state, wrapping preference, and focus ownership |
+| `DescriptorState` | `widgets`, `errors`, `editor`, `builder` | Loaded `.rkwd` descriptors, load errors, in-app editor state, beginner builder state |
 
 Layout per frame:
 
@@ -173,6 +241,37 @@ Keyboard shortcuts: `Ctrl+N` new, `Ctrl+O` open, `Ctrl+S` save, `Ctrl+Shift+S` s
 
 ---
 
+## SVG subsystem
+
+```text
+src/
+  svg_import.rs         — SVG → WidgetInstance template importer (zero new dependencies)
+  svg_core.rs           — shared SVG microsyntax module: CSS color parsing, numeric-list
+                          parsing (e.g. viewBox/points/d tokens), affine transform
+                          decomposition, path command tokenization, and length/unit
+                          parsing/resolution plus preserveAspectRatio/viewBox
+                          mapping. Used by both svg_import.rs and
+                          canvas/svg_rasterizer.rs to avoid duplication.
+  canvas/
+    svg_rasterizer.rs   — zero-dependency SVG rasterizer for canvas Image preview;
+                          stable source-spanned node IDs, bounded local references,
+                          SvgSceneItem flattening, and an owned display list with
+                          lowered geometry/style/transform/diagnostic state.
+                          Root and nested SVG viewports carry independent length
+                          bases and full preserveAspectRatio transforms; inherited
+                          nonzero/evenodd fill rules reach compound-path scan
+                          conversion through the resolved Style.
+                          Supported subset — not full resvg/usvg equivalence.
+```
+
+SVG work is a **zero-new-crate zone**: no `resvg`, `usvg`, `tiny-skia`, or substitute
+renderer chains. All SVG behavior is implemented in RohKai source files.
+`docs/SVG_RENDERER_ROADMAP.md` is the detailed SVG execution authority.
+Stage 15's proposed general RohKai renderer is a separate architecture track
+and does not describe the SVG rasterizer.
+
+---
+
 ## Platform layer
 
 No custom platform layer. File dialogs use `rfd::FileDialog` (cross-platform).
@@ -182,3 +281,9 @@ console window in release builds on Windows.
 The application icon is **generated at runtime** in `main.rs`: `generate_icon()` rasterises
 the Greek letters ρϗ into a 256×256 RGBA buffer using `ab_glyph` with the embedded
 NotoSans font. No separate icon asset file.
+
+### Planned: `src/platform/` (Stage 15 prep)
+
+`src/platform/thread_pool.rs` is reserved for Stage 15's own renderer scheduler.
+Until then, parallel work uses `rayon` (approved dependency). Do not create
+`src/platform/` before Stage 15 scope is active.

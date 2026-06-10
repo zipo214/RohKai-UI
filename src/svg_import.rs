@@ -1,10 +1,13 @@
 use crate::project::schema::{Rect, SvgImportMetadata, WidgetInstance, WidgetKind, WidgetProps};
+use crate::svg_core;
 use std::collections::HashMap;
 use std::fmt;
 use uuid::Uuid;
 
 const MIN_PLACEHOLDER_SIZE: f64 = 20.0;
 const ARC_TOLERANCE_PX: f64 = 0.5;
+const MAX_CSS_RULES: usize = 4_096;
+const MAX_CSS_DECLARATIONS: usize = 16_384;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub enum SvgImportMode {
@@ -374,32 +377,22 @@ fn deterministic_source_uuid(
 fn parse_svg_dimensions(svg: &str) -> (f32, f32) {
     // Try viewBox="min-x min-y width height"
     if let Some(vb) = extract_attr(svg, "viewBox").or_else(|| extract_attr(svg, "viewbox")) {
-        let nums: Vec<f32> = vb
-            .split_whitespace()
-            .chain(vb.split(','))
-            .filter_map(|s| s.trim().parse().ok())
-            .collect();
+        let nums = svg_core::parse_numbers(vb);
         if nums.len() >= 4 {
-            let w = nums[2].max(1.0);
-            let h = nums[3].max(1.0);
+            let w = nums[2].max(1.0) as f32;
+            let h = nums[3].max(1.0) as f32;
             return (w, h);
         }
     }
     // Try width/height attributes
     let w = extract_attr(svg, "width")
-        .and_then(|v| {
-            v.trim_end_matches(|c: char| !c.is_ascii_digit())
-                .parse()
-                .ok()
-        })
+        .and_then(|v| parse_length(v, 400.0))
+        .map(|value| value as f32)
         .unwrap_or(400.0_f32)
         .max(1.0);
     let h = extract_attr(svg, "height")
-        .and_then(|v| {
-            v.trim_end_matches(|c: char| !c.is_ascii_digit())
-                .parse()
-                .ok()
-        })
+        .and_then(|v| parse_length(v, 300.0))
+        .map(|value| value as f32)
         .unwrap_or(300.0_f32)
         .max(1.0);
     (w, h)
@@ -501,109 +494,7 @@ struct Tag {
     self_closing: bool,
 }
 
-#[derive(Clone, Copy, Debug)]
-struct Matrix {
-    a: f64,
-    b: f64,
-    c: f64,
-    d: f64,
-    e: f64,
-    f: f64,
-}
-
-impl Matrix {
-    const IDENTITY: Self = Self {
-        a: 1.0,
-        b: 0.0,
-        c: 0.0,
-        d: 1.0,
-        e: 0.0,
-        f: 0.0,
-    };
-
-    fn multiply(self, other: Self) -> Self {
-        Self {
-            a: self.a * other.a + self.c * other.b,
-            b: self.b * other.a + self.d * other.b,
-            c: self.a * other.c + self.c * other.d,
-            d: self.b * other.c + self.d * other.d,
-            e: self.a * other.e + self.c * other.f + self.e,
-            f: self.b * other.e + self.d * other.f + self.f,
-        }
-    }
-
-    fn translate(x: f64, y: f64) -> Self {
-        Self {
-            e: x,
-            f: y,
-            ..Self::IDENTITY
-        }
-    }
-
-    fn scale(x: f64, y: f64) -> Self {
-        Self {
-            a: x,
-            d: y,
-            ..Self::IDENTITY
-        }
-    }
-
-    fn rotate(deg: f64) -> Self {
-        let (sin, cos) = deg.to_radians().sin_cos();
-        Self {
-            a: cos,
-            b: sin,
-            c: -sin,
-            d: cos,
-            e: 0.0,
-            f: 0.0,
-        }
-    }
-
-    fn skew_x(deg: f64) -> Self {
-        Self {
-            c: deg.to_radians().tan(),
-            ..Self::IDENTITY
-        }
-    }
-
-    fn skew_y(deg: f64) -> Self {
-        Self {
-            b: deg.to_radians().tan(),
-            ..Self::IDENTITY
-        }
-    }
-
-    fn apply(self, x: f64, y: f64) -> (f64, f64) {
-        (
-            self.a * x + self.c * y + self.e,
-            self.b * x + self.d * y + self.f,
-        )
-    }
-
-    fn is_finite(self) -> bool {
-        self.a.is_finite()
-            && self.b.is_finite()
-            && self.c.is_finite()
-            && self.d.is_finite()
-            && self.e.is_finite()
-            && self.f.is_finite()
-    }
-
-    fn is_extreme(self) -> bool {
-        const EXTREME: f64 = 1_000_000.0;
-        [self.a, self.b, self.c, self.d, self.e, self.f]
-            .into_iter()
-            .any(|value| value.abs() > EXTREME)
-    }
-
-    fn summary(self) -> String {
-        format!(
-            "matrix({:.4} {:.4} {:.4} {:.4} {:.4} {:.4})",
-            self.a, self.b, self.c, self.d, self.e, self.f
-        )
-    }
-}
+type Matrix = svg_core::Affine2D;
 
 #[derive(Clone, Copy)]
 struct ParseState {
@@ -700,13 +591,9 @@ struct Style {
     font_size: Option<f64>,
     text_anchor: Option<String>,
     dominant_baseline: Option<String>,
+    color: Option<String>,
     fill: Option<String>,
     stroke: Option<String>,
-}
-
-struct ClassRule {
-    class_name: String,
-    decls: Vec<(String, String)>,
 }
 
 fn scan_svg(svg: &str, ctx: &mut ImportContext) -> Result<Vec<Node>, SvgImportError> {
@@ -934,8 +821,8 @@ fn attr<'a>(tag: &'a Tag, key: &str) -> Option<&'a str> {
 fn collect_style_rules(
     nodes: &[Node],
     ctx: &mut ImportContext,
-) -> Result<Vec<ClassRule>, SvgImportError> {
-    let mut out = Vec::new();
+) -> Result<svg_core::SvgCssStyleSheet, SvgImportError> {
+    let mut out = svg_core::SvgCssStyleSheet::default();
     for node in nodes.iter().filter(|n| n.tag.name == "style") {
         if node.text.len() > ctx.limits.max_style_bytes {
             return Err(SvgImportError::new(
@@ -943,47 +830,66 @@ fn collect_style_rules(
                 format!("style block exceeded {} bytes", ctx.limits.max_style_bytes),
             ));
         }
-        for block in node.text.split('}') {
-            let Some((selector, body)) = block.split_once('{') else {
-                continue;
-            };
-            let selector = selector.trim();
-            if selector.starts_with('.') && selector[1..].chars().all(is_css_ident_char) {
-                out.push(ClassRule {
-                    class_name: selector[1..].to_owned(),
-                    decls: parse_decls(body),
-                });
-            } else if !selector.is_empty() {
-                ctx.unsupported("complex CSS selector", Some(node));
-            }
+        let remaining_rules = MAX_CSS_RULES.saturating_sub(out.rules.len());
+        let used_declarations = out
+            .rules
+            .iter()
+            .map(|rule| rule.declarations.len())
+            .sum::<usize>();
+        let remaining_declarations = MAX_CSS_DECLARATIONS.saturating_sub(used_declarations);
+        let mut parsed =
+            svg_core::parse_css_stylesheet(&node.text, remaining_rules, remaining_declarations);
+        let order_offset = out.rules.len();
+        for rule in &mut parsed.rules {
+            rule.source_order += order_offset;
         }
+        if parsed.unsupported_selector_count > 0 {
+            ctx.unsupported("complex CSS selector", Some(node));
+        }
+        if parsed.malformed_rule_count > 0 || parsed.dropped_declaration_count > 0 {
+            ctx.warn(
+                "css.malformed_rule",
+                "malformed or unsupported CSS declarations were ignored",
+                Some(node),
+                SvgWarningSeverity::Warning,
+            );
+        }
+        if parsed.dropped_rule_count > 0
+            || out.rules.len() + parsed.rules.len() >= MAX_CSS_RULES
+            || used_declarations
+                + parsed
+                    .rules
+                    .iter()
+                    .map(|rule| rule.declarations.len())
+                    .sum::<usize>()
+                >= MAX_CSS_DECLARATIONS
+        {
+            ctx.warn(
+                "limit.css_rules",
+                "CSS rules or declarations exceeded importer safety limits",
+                Some(node),
+                SvgWarningSeverity::Warning,
+            );
+        }
+        out.unsupported_selector_count += parsed.unsupported_selector_count;
+        out.malformed_rule_count += parsed.malformed_rule_count;
+        out.dropped_rule_count += parsed.dropped_rule_count;
+        out.dropped_declaration_count += parsed.dropped_declaration_count;
+        out.rules.extend(parsed.rules);
     }
     Ok(out)
-}
-
-fn is_css_ident_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, '_' | '-')
-}
-
-fn parse_decls(style: &str) -> Vec<(String, String)> {
-    style
-        .split(';')
-        .filter_map(|decl| {
-            let (name, value) = decl.split_once(':')?;
-            Some((name.trim().to_ascii_lowercase(), value.trim().to_owned()))
-        })
-        .collect()
 }
 
 fn resolve_style(
     node: &Node,
     inherited: &Style,
-    rules: &[ClassRule],
+    sheet: &svg_core::SvgCssStyleSheet,
     ctx: &mut ImportContext,
 ) -> Style {
     let mut style = inherited.clone();
 
     for key in [
+        "color",
         "fill",
         "stroke",
         "stroke-width",
@@ -999,19 +905,47 @@ fn resolve_style(
         }
     }
 
-    if let Some(classes) = attr(&node.tag, "class") {
-        for class_name in classes.split_whitespace() {
-            for rule in rules.iter().filter(|r| r.class_name == class_name) {
-                for (key, value) in &rule.decls {
-                    apply_style_decl(&mut style, key, value);
-                }
-            }
+    let element = node.tag.name.as_str();
+    let id = attr(&node.tag, "id");
+    let classes = attr(&node.tag, "class").unwrap_or("");
+    let mut matches: Vec<_> = sheet
+        .rules
+        .iter()
+        .filter_map(|rule| {
+            rule.matching_specificity(element, id, classes)
+                .map(|specificity| (specificity, rule.source_order, rule))
+        })
+        .collect();
+    matches.sort_by_key(|(specificity, order, _)| (*specificity, *order));
+    for (_, _, rule) in matches {
+        for declaration in &rule.declarations {
+            apply_style_decl(&mut style, &declaration.name, &declaration.value);
         }
     }
 
     if let Some(inline) = attr(&node.tag, "style") {
-        for (key, value) in parse_decls(inline) {
-            apply_style_decl(&mut style, &key, &value);
+        let (declarations, dropped) =
+            svg_core::parse_style_declarations(inline, MAX_CSS_DECLARATIONS);
+        if dropped > 0 {
+            ctx.warn(
+                "css.invalid_inline_declaration",
+                "malformed or unsupported inline style declarations were ignored",
+                Some(node),
+                SvgWarningSeverity::Warning,
+            );
+        }
+        for declaration in declarations {
+            apply_style_decl(&mut style, &declaration.name, &declaration.value);
+        }
+    }
+
+    let current_color = style.color.clone().unwrap_or_else(|| "black".to_owned());
+    for paint in [&mut style.fill, &mut style.stroke] {
+        if paint
+            .as_deref()
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("currentcolor"))
+        {
+            *paint = Some(current_color.clone());
         }
     }
 
@@ -1032,6 +966,7 @@ fn apply_style_decl(style: &mut Style, key: &str, value: &str) {
         "font-size" => style.font_size = parse_length(value, 16.0),
         "text-anchor" => style.text_anchor = Some(value.trim().to_owned()),
         "dominant-baseline" => style.dominant_baseline = Some(value.trim().to_owned()),
+        "color" => style.color = Some(value.trim().to_owned()),
         "fill" => style.fill = Some(value.trim().to_owned()),
         "stroke" => style.stroke = Some(value.trim().to_owned()),
         _ => {}
@@ -1042,7 +977,7 @@ fn apply_style_decl(style: &mut Style, key: &str, value: &str) {
 fn import_node(
     node_id: usize,
     nodes: &[Node],
-    rules: &[ClassRule],
+    rules: &svg_core::SvgCssStyleSheet,
     id_index: &HashMap<String, usize>,
     parent_state: ParseState,
     inherited_style: Style,
@@ -1112,10 +1047,11 @@ fn import_node(
             node, nodes, rules, id_index, state, style, use_stack, widgets, ctx,
         )?,
         "text" => {
-            if let Some(widget) = text_widget(node, nodes, state, &style, ctx) {
-                widgets.push(widget);
-            } else {
+            let chunks = text_widgets(node, nodes, state, &style, ctx);
+            if chunks.is_empty() {
                 ctx.skip();
+            } else {
+                widgets.extend(chunks);
             }
         }
         name if is_supported_shape(name) => {
@@ -1183,31 +1119,51 @@ fn diagnose_descendants(node: &Node, nodes: &[Node], ctx: &mut ImportContext) {
 }
 
 fn update_viewport(node: &Node, state: &mut ParseState) {
+    let parent_w = state.viewport_w;
+    let parent_h = state.viewport_h;
+    let x = attr(&node.tag, "x")
+        .and_then(|value| parse_length(value, parent_w))
+        .unwrap_or(0.0);
+    let y = attr(&node.tag, "y")
+        .and_then(|value| parse_length(value, parent_h))
+        .unwrap_or(0.0);
     let width = attr(&node.tag, "width")
-        .and_then(|v| parse_length(v, state.viewport_w))
-        .unwrap_or(state.viewport_w);
+        .and_then(|value| parse_length(value, parent_w))
+        .unwrap_or(parent_w);
     let height = attr(&node.tag, "height")
-        .and_then(|v| parse_length(v, state.viewport_h))
-        .unwrap_or(state.viewport_h);
-    state.viewport_w = width.max(MIN_PLACEHOLDER_SIZE);
-    state.viewport_h = height.max(MIN_PLACEHOLDER_SIZE);
+        .and_then(|value| parse_length(value, parent_h))
+        .unwrap_or(parent_h);
+    let width = width.max(0.0);
+    let height = height.max(0.0);
 
     if let Some(view_box) = attr(&node.tag, "viewBox").or_else(|| attr(&node.tag, "viewbox")) {
         if let Some(nums) = parse_numbers(view_box).filter(|n| n.len() >= 4) {
-            let sx = state.viewport_w / nums[2].abs().max(1.0);
-            let sy = state.viewport_h / nums[3].abs().max(1.0);
-            let view_transform =
-                Matrix::scale(sx, sy).multiply(Matrix::translate(-nums[0], -nums[1]));
-            state.transform = state.transform.multiply(view_transform);
+            let aspect_ratio = svg_core::parse_preserve_aspect_ratio(
+                attr(&node.tag, "preserveaspectratio").unwrap_or(""),
+            );
+            if let Some(view_transform) = svg_core::viewbox_transform(
+                [nums[0], nums[1], nums[2], nums[3]],
+                [x, y, width, height],
+                aspect_ratio,
+            ) {
+                state.transform = state.transform.multiply(view_transform);
+                state.viewport_w = nums[2].abs();
+                state.viewport_h = nums[3].abs();
+                return;
+            }
         }
     }
+
+    state.transform = state.transform.multiply(Matrix::translate(x, y));
+    state.viewport_w = width;
+    state.viewport_h = height;
 }
 
 #[allow(clippy::too_many_arguments)]
 fn expand_use(
     node: &Node,
     nodes: &[Node],
-    rules: &[ClassRule],
+    rules: &svg_core::SvgCssStyleSheet,
     id_index: &HashMap<String, usize>,
     mut state: ParseState,
     style: Style,
@@ -1456,14 +1412,36 @@ fn image_ref_allowed(
     true
 }
 
-fn text_widget(
+/// One independently positioned SVG text chunk (TEXT_IMPORT_PLAN phase 1).
+/// Each non-empty chunk becomes one editable RohKai `Label`, grouped with its
+/// siblings via `SvgImportMetadata::text_group`.
+struct TextChunk {
+    x: f64,
+    y: f64,
+    text: String,
+    font_size: f64,
+    anchor: Option<String>,
+    baseline: Option<String>,
+    fill: Option<String>,
+    /// Node index of the element that owns this chunk (`text` or `tspan`), for
+    /// per-chunk provenance.
+    source_node: usize,
+    warning_flags: Vec<String>,
+}
+
+/// Import an SVG `<text>` element into one or more editable `Label` widgets:
+/// the text is split into chunks at every absolutely-positioned `<tspan>` so
+/// positioned spans become separate, grouped labels instead of collapsing into
+/// one misleading label. Relative/styled spans flatten into the surrounding
+/// chunk with explicit diagnostics; `textPath`/bidi/shaping stay deferred.
+fn text_widgets(
     node: &Node,
     nodes: &[Node],
     state: ParseState,
     style: &Style,
     ctx: &mut ImportContext,
-) -> Option<WidgetInstance> {
-    let mut warning_flags = Vec::new();
+) -> Vec<WidgetInstance> {
+    let mut shared_flags = Vec::new();
     if attr(&node.tag, "font-family").is_none() {
         ctx.warn(
             "text.missing_font",
@@ -1471,53 +1449,185 @@ fn text_widget(
             Some(node),
             SvgWarningSeverity::Info,
         );
-        warning_flags.push("missing-font".to_owned());
+        shared_flags.push("missing-font".to_owned());
     }
 
-    let label = collapse_ws(&flatten_text(node.index, nodes, ctx));
-    if label.is_empty() {
-        return None;
-    }
-    ctx.text_element_count += 1;
-    ctx.text_character_count += label.chars().count();
-
-    let mut x = attr(&node.tag, "x")
-        .and_then(|v| parse_length(v, state.viewport_w))
-        .unwrap_or(0.0);
-    let mut y = attr(&node.tag, "y")
-        .and_then(|v| parse_length(v, state.viewport_h))
-        .unwrap_or(0.0);
-    x += attr(&node.tag, "dx")
-        .and_then(|v| parse_length(v, state.viewport_w))
-        .unwrap_or(0.0);
-    y += attr(&node.tag, "dy")
-        .and_then(|v| parse_length(v, state.viewport_h))
-        .unwrap_or(0.0);
-
-    let font_size = style
+    let group = format!("svgtext-{}", node.source_order);
+    let base_font = style
         .font_size
         .or_else(|| attr(&node.tag, "font-size").and_then(|v| parse_length(v, state.viewport_h)))
         .unwrap_or(16.0)
         .clamp(8.0, 96.0);
-    let mut width = (label.chars().count() as f64 * font_size * 0.6).max(MIN_PLACEHOLDER_SIZE);
+    let attr_len = |n: &Node, key: &str, base: f64| -> f64 {
+        attr(&n.tag, key)
+            .and_then(|v| parse_length(v, base))
+            .unwrap_or(0.0)
+    };
+    let start_x = attr_len(node, "x", state.viewport_w) + attr_len(node, "dx", state.viewport_w);
+    let start_y = attr_len(node, "y", state.viewport_h) + attr_len(node, "dy", state.viewport_h);
+
+    let mut chunks: Vec<TextChunk> = Vec::new();
+    let mut current = TextChunk {
+        x: start_x,
+        y: start_y,
+        text: collapse_ws(&decode_entities(&node.text, ctx, Some(node))),
+        font_size: base_font,
+        anchor: style.text_anchor.clone(),
+        baseline: style.dominant_baseline.clone(),
+        fill: style.fill.clone(),
+        source_node: node.index,
+        warning_flags: shared_flags.clone(),
+    };
+
+    for &child_id in &node.children {
+        let child = &nodes[child_id];
+        match child.tag.name.as_str() {
+            "tspan" => {
+                let abs_x = attr(&child.tag, "x").and_then(|v| parse_length(v, state.viewport_w));
+                let abs_y = attr(&child.tag, "y").and_then(|v| parse_length(v, state.viewport_h));
+                let has_adjust = ["dx", "dy", "rotate", "textlength", "lengthadjust"]
+                    .into_iter()
+                    .any(|key| attr(&child.tag, key).is_some());
+                let span_text = collapse_ws(&tspan_text(child_id, nodes, ctx));
+                let span_font = attr(&child.tag, "font-size")
+                    .and_then(|v| parse_length(v, state.viewport_h))
+                    .map(|s| s.clamp(8.0, 96.0))
+                    .unwrap_or(base_font);
+                let span_anchor = attr(&child.tag, "text-anchor")
+                    .map(ToOwned::to_owned)
+                    .or_else(|| current.anchor.clone());
+                let span_baseline = attr(&child.tag, "dominant-baseline")
+                    .map(ToOwned::to_owned)
+                    .or_else(|| current.baseline.clone());
+                let span_fill = attr(&child.tag, "fill")
+                    .map(ToOwned::to_owned)
+                    .or_else(|| current.fill.clone());
+
+                if has_adjust {
+                    ctx.warn(
+                        "text.tspan_adjust",
+                        "tspan dx/dy/rotate/textLength approximated; source SVG preserved for exact layout",
+                        Some(child),
+                        SvgWarningSeverity::Info,
+                    );
+                }
+
+                if abs_x.is_some() || abs_y.is_some() {
+                    // Absolutely-positioned span starts a new chunk → new label.
+                    let mut flags = shared_flags.clone();
+                    if has_adjust {
+                        flags.push("tspan-adjust".to_owned());
+                    }
+                    let started = TextChunk {
+                        x: abs_x.unwrap_or(current.x),
+                        y: abs_y.unwrap_or(current.y),
+                        text: span_text,
+                        font_size: span_font,
+                        anchor: span_anchor,
+                        baseline: span_baseline,
+                        fill: span_fill,
+                        source_node: child.index,
+                        warning_flags: flags,
+                    };
+                    chunks.push(std::mem::replace(&mut current, started));
+                } else {
+                    // Relative/styled span flattens into the current chunk.
+                    if attr(&child.tag, "style").is_some()
+                        || attr(&child.tag, "class").is_some()
+                        || attr(&child.tag, "font-size").is_some()
+                        || attr(&child.tag, "fill").is_some()
+                    {
+                        ctx.warn(
+                            "text.tspan_style",
+                            "styled tspan flattened into the surrounding editable text run; source SVG preserved",
+                            Some(child),
+                            SvgWarningSeverity::Info,
+                        );
+                        current.warning_flags.push("tspan-style".to_owned());
+                    }
+                    if has_adjust {
+                        current.warning_flags.push("tspan-adjust".to_owned());
+                    }
+                    if !current.text.is_empty() && !span_text.is_empty() {
+                        current.text.push(' ');
+                    }
+                    current.text.push_str(&span_text);
+                }
+            }
+            "textpath" => ctx.unsupported("textPath", Some(child)),
+            _ => {}
+        }
+    }
+    chunks.push(current);
+
+    let multi = chunks.iter().filter(|c| !c.text.trim().is_empty()).count() > 1;
+    chunks
+        .into_iter()
+        .filter_map(|chunk| {
+            build_text_label(chunk, state, &group, multi, style.opacity, nodes, ctx)
+        })
+        .collect()
+}
+
+/// Concatenate a `<tspan>` subtree's text (including nested spans) without
+/// emitting per-span diagnostics; the caller owns chunk-level diagnostics.
+fn tspan_text(node_id: usize, nodes: &[Node], ctx: &mut ImportContext) -> String {
+    let node = &nodes[node_id];
+    let mut text = node.text.clone();
+    for &child_id in &node.children {
+        let child = &nodes[child_id];
+        match child.tag.name.as_str() {
+            "tspan" => {
+                text.push(' ');
+                text.push_str(&tspan_text(child_id, nodes, ctx));
+            }
+            "textpath" => ctx.unsupported("textPath", Some(child)),
+            _ => {}
+        }
+    }
+    decode_entities(&text, ctx, Some(node))
+}
+
+/// Place one text chunk as an editable `Label` with deterministic placeholder
+/// metrics, per-chunk anchor/baseline handling, and grouped provenance.
+fn build_text_label(
+    chunk: TextChunk,
+    state: ParseState,
+    group: &str,
+    grouped: bool,
+    opacity: Option<f64>,
+    nodes: &[Node],
+    ctx: &mut ImportContext,
+) -> Option<WidgetInstance> {
+    let text = collapse_ws(&chunk.text);
+    if text.is_empty() {
+        return None;
+    }
+    let src = &nodes[chunk.source_node];
+    let mut flags = chunk.warning_flags.clone();
+
+    let font_size = chunk.font_size;
+    let mut x = chunk.x;
+    let mut y = chunk.y;
+    let mut width = (text.chars().count() as f64 * font_size * 0.6).max(MIN_PLACEHOLDER_SIZE);
     let height = (font_size * 1.25).max(MIN_PLACEHOLDER_SIZE);
 
-    match style.text_anchor.as_deref() {
+    match chunk.anchor.as_deref() {
         Some("middle") => x -= width / 2.0,
         Some("end") => x -= width,
         _ => {}
     }
-    match style.dominant_baseline.as_deref() {
+    match chunk.baseline.as_deref() {
         Some("middle") | Some("central") => y -= height / 2.0,
         Some("hanging") => {}
         Some(_) => {
             ctx.warn(
                 "text.baseline",
                 "dominant-baseline approximated",
-                Some(node),
+                Some(src),
                 SvgWarningSeverity::Info,
             );
-            warning_flags.push("baseline-approx".to_owned());
+            flags.push("baseline-approx".to_owned());
             y -= font_size;
         }
         None => y -= font_size,
@@ -1528,65 +1638,33 @@ fn text_widget(
     }
     let bounds = Bounds::new(x, y, width, height)?.transform(state.transform);
     let rect = bounds.rect();
-    let fill_color = style_color(
-        style.fill.as_deref(),
-        style.opacity,
-        node,
-        ctx,
-        &mut warning_flags,
-    );
+    let fill_color = style_color(chunk.fill.as_deref(), opacity, src, ctx, &mut flags);
+
+    ctx.text_element_count += 1;
+    ctx.text_character_count += text.chars().count();
+
+    let mut metadata = metadata_for(src, state, flags);
+    if grouped {
+        metadata.text_group = Some(group.to_owned());
+    }
 
     Some(WidgetInstance {
-        id: deterministic_uuid(node, &rect),
+        id: deterministic_source_uuid(
+            "svg-text-chunk",
+            &format!("{group}:{}:{text}", src.source_order),
+            &rect,
+        ),
         kind: WidgetKind::Label,
         rect,
         props: WidgetProps {
-            label,
+            label: text,
             ..Default::default()
         },
         state_binding: None,
-        import_metadata: Some(metadata_for(node, state, warning_flags)),
+        import_metadata: Some(metadata),
         fg_color: fill_color,
         ..Default::default()
     })
-}
-
-fn flatten_text(node_id: usize, nodes: &[Node], ctx: &mut ImportContext) -> String {
-    let node = &nodes[node_id];
-    let mut text = node.text.clone();
-    for &child_id in &node.children {
-        let child = &nodes[child_id];
-        match child.tag.name.as_str() {
-            "tspan" => {
-                if ["x", "y", "dx", "dy", "rotate", "textlength", "lengthadjust"]
-                    .into_iter()
-                    .any(|key| attr(&child.tag, key).is_some())
-                {
-                    ctx.warn(
-                        "text.complex_tspan",
-                        "positioned or adjusted tspan flattened into editable placeholder text; source SVG preserved for exact layout",
-                        Some(child),
-                        SvgWarningSeverity::Warning,
-                    );
-                }
-                if attr(&child.tag, "style").is_some() || attr(&child.tag, "class").is_some() {
-                    ctx.warn(
-                        "text.tspan_style",
-                        "tspan style was flattened into one editable text placeholder",
-                        Some(child),
-                        SvgWarningSeverity::Info,
-                    );
-                }
-                text.push(' ');
-                text.push_str(&flatten_text(child_id, nodes, ctx));
-            }
-            "textpath" => {
-                ctx.unsupported("textPath", Some(child));
-            }
-            _ => {}
-        }
-    }
-    decode_entities(&text, ctx, Some(node))
 }
 
 fn metadata_for(node: &Node, state: ParseState, warning_flags: Vec<String>) -> SvgImportMetadata {
@@ -1597,6 +1675,7 @@ fn metadata_for(node: &Node, state: ParseState, warning_flags: Vec<String>) -> S
         source_order: node.source_order,
         transform_summary: state.transform.summary(),
         warning_flags,
+        text_group: None,
     }
 }
 
@@ -1693,138 +1772,16 @@ fn path_bounds(
 }
 
 fn parse_length(value: &str, percent_base: f64) -> Option<f64> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let end = trimmed
-        .find(|c: char| !(c.is_ascii_digit() || matches!(c, '.' | '-' | '+' | 'e' | 'E')))
-        .unwrap_or(trimmed.len());
-    let number = trimmed[..end].parse::<f64>().ok()?;
-    let unit = trimmed[end..].trim();
-    let value = match unit {
-        "" | "px" => number,
-        "%" => number * percent_base / 100.0,
-        "in" => number * 96.0,
-        "cm" => number * 96.0 / 2.54,
-        "mm" => number * 96.0 / 25.4,
-        "pt" => number * 96.0 / 72.0,
-        "pc" => number * 16.0,
-        "em" | "rem" => number * 16.0,
-        _ => number,
-    };
-    value.is_finite().then_some(value)
+    svg_core::resolve_length(value, svg_core::SvgLengthContext::user_units(percent_base))
 }
 
 fn parse_transform(value: &str) -> Matrix {
-    let mut rest = value.trim();
-    let mut out = Matrix::IDENTITY;
-
-    while let Some(paren) = rest.find('(') {
-        let name = rest[..paren].trim().to_ascii_lowercase();
-        let after = &rest[paren + 1..];
-        let Some(end) = after.find(')') else {
-            break;
-        };
-        let nums = parse_numbers(&after[..end]).unwrap_or_default();
-        let local = match name.as_str() {
-            "matrix" if nums.len() >= 6 => Matrix {
-                a: nums[0],
-                b: nums[1],
-                c: nums[2],
-                d: nums[3],
-                e: nums[4],
-                f: nums[5],
-            },
-            "translate" if !nums.is_empty() => {
-                Matrix::translate(nums[0], *nums.get(1).unwrap_or(&0.0))
-            }
-            "scale" if !nums.is_empty() => Matrix::scale(nums[0], *nums.get(1).unwrap_or(&nums[0])),
-            "rotate" if !nums.is_empty() => {
-                if nums.len() >= 3 {
-                    Matrix::translate(nums[1], nums[2])
-                        .multiply(Matrix::rotate(nums[0]))
-                        .multiply(Matrix::translate(-nums[1], -nums[2]))
-                } else {
-                    Matrix::rotate(nums[0])
-                }
-            }
-            "skewx" if !nums.is_empty() => Matrix::skew_x(nums[0]),
-            "skewy" if !nums.is_empty() => Matrix::skew_y(nums[0]),
-            _ => Matrix::IDENTITY,
-        };
-        out = out.multiply(local);
-        rest = &after[end + 1..];
-    }
-
-    out
+    Matrix::parse_transform(value)
 }
 
 fn parse_numbers(value: &str) -> Option<Vec<f64>> {
-    let mut nums = Vec::new();
-    for token in number_spans(value) {
-        if let Ok(num) = token.parse::<f64>() {
-            nums.push(num);
-        }
-    }
+    let nums = svg_core::parse_numbers(value);
     (!nums.is_empty()).then_some(nums)
-}
-
-fn number_spans(value: &str) -> Vec<&str> {
-    let bytes = value.as_bytes();
-    let mut out = Vec::new();
-    let mut index = 0;
-    while index < bytes.len() {
-        while index < bytes.len() && !is_number_start(bytes[index] as char) {
-            index += 1;
-        }
-        let start = index;
-        if index < bytes.len() && matches!(bytes[index] as char, '+' | '-') {
-            index += 1;
-        }
-        let mut digits = 0usize;
-        while index < bytes.len() && (bytes[index] as char).is_ascii_digit() {
-            digits += 1;
-            index += 1;
-        }
-        if index < bytes.len() && bytes[index] == b'.' {
-            index += 1;
-            while index < bytes.len() && (bytes[index] as char).is_ascii_digit() {
-                digits += 1;
-                index += 1;
-            }
-        }
-        if digits > 0 && index < bytes.len() && matches!(bytes[index] as char, 'e' | 'E') {
-            let exp = index;
-            index += 1;
-            if index < bytes.len() && matches!(bytes[index] as char, '+' | '-') {
-                index += 1;
-            }
-            let exp_digits = index;
-            while index < bytes.len() && (bytes[index] as char).is_ascii_digit() {
-                index += 1;
-            }
-            if exp_digits == index {
-                index = exp;
-            }
-        }
-        if start < index && digits > 0 {
-            out.push(&value[start..index]);
-        } else if start == index {
-            index += 1;
-        }
-    }
-    out
-}
-
-fn is_number_start(c: char) -> bool {
-    c.is_ascii_digit() || matches!(c, '-' | '+' | '.')
-}
-
-#[derive(Clone, Copy, Debug)]
-enum PathToken {
-    Command(char),
-    Number(f64),
 }
 
 fn parse_path_points(
@@ -1834,7 +1791,7 @@ fn parse_path_points(
     node: &Node,
     warning_flags: &mut Vec<String>,
 ) -> Result<Vec<(f64, f64)>, SvgImportError> {
-    let tokens = path_tokens(data);
+    let tokens = svg_core::tokenize_path_data(data);
     let mut points = Vec::new();
     let mut index = 0;
     let mut command = 'M';
@@ -1851,7 +1808,7 @@ fn parse_path_points(
                 format!("path exceeded {max_commands} commands"),
             ));
         }
-        if let PathToken::Command(c) = tokens[index] {
+        if let svg_core::SvgPathToken::Command(c) = tokens[index] {
             command = c;
             index += 1;
         }
@@ -1975,75 +1932,25 @@ fn parse_path_points(
     Ok(points)
 }
 
-fn path_tokens(data: &str) -> Vec<PathToken> {
-    let mut out = Vec::new();
-    let bytes = data.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        let c = bytes[index] as char;
-        if c.is_ascii_alphabetic() {
-            out.push(PathToken::Command(c));
-            index += 1;
-        } else if is_number_start(c) {
-            let start = index;
-            if matches!(bytes[index] as char, '+' | '-') {
-                index += 1;
-            }
-            let mut digits = 0usize;
-            while index < bytes.len() && (bytes[index] as char).is_ascii_digit() {
-                index += 1;
-                digits += 1;
-            }
-            if index < bytes.len() && bytes[index] == b'.' {
-                index += 1;
-                while index < bytes.len() && (bytes[index] as char).is_ascii_digit() {
-                    index += 1;
-                    digits += 1;
-                }
-            }
-            if digits > 0 && index < bytes.len() && matches!(bytes[index] as char, 'e' | 'E') {
-                let exp = index;
-                index += 1;
-                if index < bytes.len() && matches!(bytes[index] as char, '+' | '-') {
-                    index += 1;
-                }
-                let exp_digits = index;
-                while index < bytes.len() && (bytes[index] as char).is_ascii_digit() {
-                    index += 1;
-                }
-                if exp_digits == index {
-                    index = exp;
-                }
-            }
-            if digits > 0 {
-                if let Ok(num) = data[start..index].parse::<f64>() {
-                    out.push(PathToken::Number(num));
-                }
-            } else {
-                index += 1;
-            }
-        } else {
-            index += 1;
-        }
-    }
-    out
-}
-
-fn read_number(tokens: &[PathToken], index: &mut usize) -> Option<f64> {
+fn read_number(tokens: &[svg_core::SvgPathToken], index: &mut usize) -> Option<f64> {
     match tokens.get(*index)? {
-        PathToken::Number(num) => {
+        svg_core::SvgPathToken::Number(num) => {
             *index += 1;
             Some(*num)
         }
-        PathToken::Command(_) => None,
+        svg_core::SvgPathToken::Command(_) => None,
     }
 }
 
-fn read_pair(tokens: &[PathToken], index: &mut usize) -> Option<(f64, f64)> {
+fn read_pair(tokens: &[svg_core::SvgPathToken], index: &mut usize) -> Option<(f64, f64)> {
     Some((read_number(tokens, index)?, read_number(tokens, index)?))
 }
 
-fn read_numbers(tokens: &[PathToken], index: &mut usize, count: usize) -> Option<Vec<f64>> {
+fn read_numbers(
+    tokens: &[svg_core::SvgPathToken],
+    index: &mut usize,
+    count: usize,
+) -> Option<Vec<f64>> {
     let start = *index;
     let mut out = Vec::with_capacity(count);
     for _ in 0..count {
@@ -2058,8 +1965,8 @@ fn read_numbers(tokens: &[PathToken], index: &mut usize, count: usize) -> Option
     Some(out)
 }
 
-fn skip_until_next_command(tokens: &[PathToken], index: &mut usize) {
-    while *index < tokens.len() && !matches!(tokens[*index], PathToken::Command(_)) {
+fn skip_until_next_command(tokens: &[svg_core::SvgPathToken], index: &mut usize) {
+    while *index < tokens.len() && !matches!(tokens[*index], svg_core::SvgPathToken::Command(_)) {
         *index += 1;
     }
 }
@@ -2257,57 +2164,7 @@ fn style_color(
 }
 
 fn parse_color(value: &str) -> Option<[u8; 3]> {
-    let value = value.trim();
-    if value.eq_ignore_ascii_case("none")
-        || value.eq_ignore_ascii_case("currentcolor")
-        || value.starts_with("url(")
-    {
-        return None;
-    }
-    if let Some(hex) = value.strip_prefix('#') {
-        return match hex.len() {
-            3 => {
-                let r = u8::from_str_radix(&hex[0..1].repeat(2), 16).ok()?;
-                let g = u8::from_str_radix(&hex[1..2].repeat(2), 16).ok()?;
-                let b = u8::from_str_radix(&hex[2..3].repeat(2), 16).ok()?;
-                Some([r, g, b])
-            }
-            6 => {
-                let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-                let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-                let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-                Some([r, g, b])
-            }
-            _ => None,
-        };
-    }
-    let lower = value.to_ascii_lowercase();
-    if let Some(body) = lower
-        .strip_prefix("rgb(")
-        .and_then(|body| body.strip_suffix(')'))
-    {
-        let nums = parse_numbers(body)?;
-        if nums.len() >= 3 {
-            return Some([
-                nums[0].round().clamp(0.0, 255.0) as u8,
-                nums[1].round().clamp(0.0, 255.0) as u8,
-                nums[2].round().clamp(0.0, 255.0) as u8,
-            ]);
-        }
-    }
-    match lower.as_str() {
-        "black" => Some([0, 0, 0]),
-        "white" => Some([255, 255, 255]),
-        "red" => Some([255, 0, 0]),
-        "green" => Some([0, 128, 0]),
-        "blue" => Some([0, 0, 255]),
-        "yellow" => Some([255, 255, 0]),
-        "cyan" | "aqua" => Some([0, 255, 255]),
-        "magenta" | "fuchsia" => Some([255, 0, 255]),
-        "gray" | "grey" => Some([128, 128, 128]),
-        "transparent" => Some([0, 0, 0]),
-        _ => None,
-    }
+    svg_core::parse_rgb(value)
 }
 
 fn collapse_ws(value: &str) -> String {
@@ -2375,6 +2232,51 @@ mod tests {
     }
 
     #[test]
+    fn nested_viewport_state_honors_meet_and_none_mapping() {
+        let node = |preserve_aspect_ratio: &str| Node {
+            index: 1,
+            children: Vec::new(),
+            tag: Tag {
+                name: "svg".to_owned(),
+                attrs: vec![
+                    ("x".to_owned(), "20".to_owned()),
+                    ("y".to_owned(), "10".to_owned()),
+                    ("width".to_owned(), "40".to_owned()),
+                    ("height".to_owned(), "60".to_owned()),
+                    ("viewbox".to_owned(), "0 0 10 10".to_owned()),
+                    (
+                        "preserveaspectratio".to_owned(),
+                        preserve_aspect_ratio.to_owned(),
+                    ),
+                ],
+                self_closing: false,
+            },
+            text: String::new(),
+            source_order: 1,
+        };
+
+        let mut meet = ParseState {
+            viewport_w: 100.0,
+            viewport_h: 100.0,
+            ..Default::default()
+        };
+        update_viewport(&node("xMidYMid meet"), &mut meet);
+        assert_eq!(meet.transform.apply(0.0, 0.0), (20.0, 20.0));
+        assert_eq!(meet.transform.apply(10.0, 10.0), (60.0, 60.0));
+        assert_eq!((meet.viewport_w, meet.viewport_h), (10.0, 10.0));
+
+        let mut none = ParseState {
+            viewport_w: 100.0,
+            viewport_h: 100.0,
+            ..Default::default()
+        };
+        update_viewport(&node("none"), &mut none);
+        assert_eq!(none.transform.apply(0.0, 0.0), (20.0, 10.0));
+        assert_eq!(none.transform.apply(10.0, 10.0), (60.0, 70.0));
+        assert_eq!((none.viewport_w, none.viewport_h), (10.0, 10.0));
+    }
+
+    #[test]
     fn rejects_malicious_doctype_and_entities() {
         let svg = r#"<!DOCTYPE svg [ <!ENTITY xxe SYSTEM "file:///etc/passwd"> ]><svg/>"#;
         let err = import_svg_template(svg, SvgImportOptions::default()).unwrap_err();
@@ -2433,6 +2335,36 @@ mod tests {
     }
 
     #[test]
+    fn tier1_css_specificity_and_current_color_match_rasterizer_rules() {
+        let svg = r##"<svg viewBox="0 0 30 10" color="#112233">
+<style>
+  rect, .base { fill: #ff0000; }
+  rect.hot { fill: #00ff00; }
+  #hero { fill: currentColor; }
+</style>
+<rect class="base" width="10" height="10"/>
+<rect class="hot" x="10" width="10" height="10"/>
+<rect id="hero" class="hot" x="20" width="10" height="10"/>
+</svg>"##;
+        let output = import_svg_template(svg, SvgImportOptions::default()).unwrap();
+        let colors: Vec<Option<[u8; 3]>> = output
+            .widgets
+            .iter()
+            .map(|widget| widget.fg_color)
+            .collect();
+
+        assert_eq!(
+            colors,
+            vec![Some([255, 0, 0]), Some([0, 255, 0]), Some([17, 34, 51])]
+        );
+        assert!(!output
+            .report
+            .unsupported_features
+            .iter()
+            .any(|feature| feature.feature == "complex CSS selector"));
+    }
+
+    #[test]
     fn expands_symbol_use_and_detects_cycles() {
         let svg = r##"
             <svg width="100" height="100">
@@ -2466,6 +2398,19 @@ mod tests {
         assert_eq!(output.widgets.len(), 1);
         assert!(output.widgets[0].rect.w >= MIN_PLACEHOLDER_SIZE as f32);
         assert!(output.widgets[0].rect.h >= MIN_PLACEHOLDER_SIZE as f32);
+    }
+
+    #[test]
+    fn shared_path_tokenizer_preserves_unsupported_command_warning() {
+        let svg = r#"<svg><path d="M0 0 R5 5 L10 10"/></svg>"#;
+        let output = import_svg_template(svg, SvgImportOptions::default()).unwrap();
+
+        assert_eq!(output.widgets.len(), 1);
+        assert!(output
+            .report
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "path.unsupported_command"));
     }
 
     #[test]
@@ -2599,6 +2544,106 @@ mod tests {
         assert_eq!(output.report.fidelity, SvgFidelity::Medium);
     }
 
+    // --- R6: text import phase 1 -------------------------------------------
+
+    fn text_group_of(w: &WidgetInstance) -> Option<String> {
+        w.import_metadata
+            .as_ref()
+            .and_then(|m| m.text_group.clone())
+    }
+
+    #[test]
+    fn positioned_tspans_import_as_grouped_multi_labels() {
+        let svg = r#"
+            <svg>
+                <text id="t" x="10" y="20" font-family="Noto">
+                    <tspan x="10" y="20">Top</tspan>
+                    <tspan x="10" y="60">Bottom</tspan>
+                </text>
+            </svg>
+        "#;
+        let out = import_svg_template(svg, SvgImportOptions::default()).unwrap();
+        let labels: Vec<_> = out
+            .widgets
+            .iter()
+            .filter(|w| w.kind == WidgetKind::Label)
+            .collect();
+        assert_eq!(
+            labels.len(),
+            2,
+            "positioned tspans should split into 2 labels"
+        );
+        assert_eq!(labels[0].props.label, "Top");
+        assert_eq!(labels[1].props.label, "Bottom");
+        // Both chunks share one provenance group.
+        let g0 = text_group_of(labels[0]);
+        assert!(g0.is_some(), "grouped chunks carry a text_group");
+        assert_eq!(g0, text_group_of(labels[1]));
+        // Distinct vertical placement (source order preserved).
+        assert!(labels[1].rect.y > labels[0].rect.y);
+    }
+
+    #[test]
+    fn simple_text_imports_as_single_ungrouped_label() {
+        let svg = r#"<svg><text x="10" y="20" font-family="Noto">Hello</text></svg>"#;
+        let out = import_svg_template(svg, SvgImportOptions::default()).unwrap();
+        assert_eq!(out.widgets.len(), 1);
+        assert_eq!(out.widgets[0].props.label, "Hello");
+        assert_eq!(text_group_of(&out.widgets[0]), None);
+    }
+
+    #[test]
+    fn text_anchor_shifts_chunk_horizontally() {
+        // Same anchor x and width: an end-anchored chunk sits left of a
+        // start-anchored one (compared after origin normalization).
+        let svg = r#"
+            <svg>
+                <text x="100" y="20" text-anchor="start" font-family="Noto">WORD</text>
+                <text x="100" y="50" text-anchor="end" font-family="Noto">WORD</text>
+            </svg>
+        "#;
+        let out = import_svg_template(svg, SvgImportOptions::default()).unwrap();
+        let start = &out.widgets[0].rect;
+        let end = &out.widgets[1].rect;
+        assert!(end.x < start.x, "start {start:?} end {end:?}");
+    }
+
+    #[test]
+    fn unsupported_baseline_is_diagnosed() {
+        let svg = r#"<svg><text x="0" y="20" dominant-baseline="text-top" font-family="Noto">B</text></svg>"#;
+        let out = import_svg_template(svg, SvgImportOptions::default()).unwrap();
+        assert!(out
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.code == "text.baseline"));
+    }
+
+    #[test]
+    fn text_chunks_are_deterministic() {
+        let svg = r#"
+            <svg><text x="5" y="10">
+                <tspan x="5" y="10">A</tspan><tspan x="5" y="30">B</tspan>
+            </text></svg>
+        "#;
+        let first = import_svg_template(svg, SvgImportOptions::default()).unwrap();
+        let second = import_svg_template(svg, SvgImportOptions::default()).unwrap();
+        let ids = |o: &SvgImportOutput| o.widgets.iter().map(|w| w.id).collect::<Vec<_>>();
+        assert_eq!(ids(&first), ids(&second));
+    }
+
+    #[test]
+    fn textpath_stays_deferred_unsupported() {
+        // A rect keeps the import non-empty; the textPath stays diagnosed.
+        let svg = r##"<svg><rect width="10" height="10"/><text x="0" y="20"><textPath href="#p">curved</textPath></text></svg>"##;
+        let out = import_svg_template(svg, SvgImportOptions::default()).unwrap();
+        assert!(out
+            .report
+            .unsupported_features
+            .iter()
+            .any(|f| f.feature == "textPath"));
+    }
+
     #[test]
     fn recovers_from_empty_geometry_and_extreme_transform_deterministically() {
         let svg = r#"
@@ -2695,10 +2740,10 @@ mod tests {
             FixtureCase {
                 name: "tspan_text",
                 svg: include_str!("../tests/fixtures/svg_import/real_world/tspan_text.svg"),
-                min_widgets: 1,
+                min_widgets: 2,
                 fidelity: SvgFidelity::Medium,
                 unsupported: &[],
-                warnings: &["text.complex_tspan"],
+                warnings: &["text.tspan_adjust", "text.tspan_style"],
             },
             FixtureCase {
                 name: "paint_servers",

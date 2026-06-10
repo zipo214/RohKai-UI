@@ -11,19 +11,54 @@ const _PALETTE_KIND_COUNT: usize = widgets::ALL_KINDS.len();
 const CATEGORIES: &[(&str, &[WidgetKind])] = &[
     (
         "Basic",
-        &[WidgetKind::Button, WidgetKind::Label, WidgetKind::TextInput],
+        &[
+            WidgetKind::Button,
+            WidgetKind::ToolButton,
+            WidgetKind::CommandLinkButton,
+            WidgetKind::DialogButtonBox,
+            WidgetKind::Label,
+            WidgetKind::TextInput,
+            WidgetKind::TextArea,
+        ],
     ),
     (
         "Input",
         &[
             WidgetKind::Slider,
+            WidgetKind::SpinBox,
             WidgetKind::Checkbox,
             WidgetKind::RadioButton,
             WidgetKind::ComboBox,
+            WidgetKind::FontComboBox,
+            WidgetKind::FilePicker,
         ],
     ),
-    ("Layout", &[WidgetKind::Frame]),
-    ("Display", &[WidgetKind::ProgressBar]),
+    (
+        "Layout",
+        &[
+            WidgetKind::Frame,
+            WidgetKind::GroupBox,
+            WidgetKind::VLayout,
+            WidgetKind::HLayout,
+            WidgetKind::GridLayout,
+            WidgetKind::ScrollArea,
+            WidgetKind::TabWidget,
+            WidgetKind::StackedWidget,
+            WidgetKind::ToolBox,
+            WidgetKind::HorizontalSpacer,
+            WidgetKind::VerticalSpacer,
+        ],
+    ),
+    (
+        "Data",
+        &[
+            WidgetKind::Table,
+            WidgetKind::ListView,
+            WidgetKind::TreeView,
+            WidgetKind::Chart,
+        ],
+    ),
+    ("Display", &[WidgetKind::ProgressBar, WidgetKind::MathLabel]),
 ];
 
 /// Inner palette content.

@@ -180,9 +180,10 @@ mod tests {
     use crate::project::ui_tree::UiTree;
 
     fn make_tree(widgets: Vec<WidgetInstance>) -> UiTree {
-        let mut t = UiTree::default();
-        t.widgets = widgets;
-        t
+        UiTree {
+            widgets,
+            ..Default::default()
+        }
     }
 
     fn simple_widget(kind: WidgetKind, binding: &str) -> WidgetInstance {

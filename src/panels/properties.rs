@@ -1,6 +1,7 @@
 use crate::codegen::widget_descriptor::{DescriptorPropType, WidgetDescriptor};
 use crate::project::schema::{
-    CustomProp, CustomPropType, Orientation, TextAlign, WidgetInstance, WidgetKind,
+    CustomProp, CustomPropType, HandlerResult, Orientation, TextAlign, WidgetEvent, WidgetInstance,
+    WidgetKind,
 };
 use crate::project::ui_tree::UiTree;
 use uuid::Uuid;
@@ -13,6 +14,10 @@ pub enum PropertiesAction {
     None,
     /// Tracé — scroll the code panel to (and insert if absent) this handler.
     ScrollToHandler(String),
+    /// Open the SVG source viewer popup for this widget.
+    ShowSvgSource(uuid::Uuid),
+    /// Open the descriptor editor for this descriptor id.
+    EditDescriptor(String),
 }
 
 const TEAL: egui::Color32 = egui::Color32::from_rgb(52, 211, 153);
@@ -68,6 +73,7 @@ fn show_content_inner(
 
     let mut do_delete = false;
     let mut props_action = PropertiesAction::None;
+    let mut child_move: Option<(Uuid, Uuid, usize)> = None;
 
     {
         let Some(w) = tree.get_mut(id) else {
@@ -87,11 +93,42 @@ fn show_content_inner(
             WidgetKind::ComboBox => show_combo_box(ui, w, &mut do_delete),
             WidgetKind::ProgressBar => show_progress_bar(ui, w, &mut do_delete),
             WidgetKind::Frame => show_frame(ui, w, &mut do_delete),
-            WidgetKind::Image => show_image(ui, w, &mut do_delete),
+            WidgetKind::TextArea => show_text_area(ui, w, &mut do_delete),
+            WidgetKind::SpinBox => show_spin_box(ui, w, &mut do_delete),
+            WidgetKind::FontComboBox => show_font_combo_box(ui, w, &mut do_delete),
+            WidgetKind::HorizontalSpacer | WidgetKind::VerticalSpacer => {
+                show_spacer(ui, w, &mut do_delete)
+            }
+            WidgetKind::GroupBox => show_group_box(ui, w, &mut do_delete),
+            WidgetKind::VLayout | WidgetKind::HLayout => {
+                show_layout_container(ui, w, &mut do_delete, &mut child_move)
+            }
+            WidgetKind::ScrollArea => show_scroll_area(ui, w, &mut do_delete),
+            WidgetKind::GridLayout => show_layout_container(ui, w, &mut do_delete, &mut child_move),
+            WidgetKind::TabWidget => show_tab_widget(ui, w, &mut do_delete),
+            WidgetKind::ToolButton => show_button(ui, w, &mut do_delete),
+            WidgetKind::CommandLinkButton => show_command_link(ui, w, &mut do_delete),
+            WidgetKind::DialogButtonBox => show_options_widget(ui, w, &mut do_delete, "Buttons"),
+            WidgetKind::MathLabel => show_math_label(ui, w, &mut do_delete),
+            WidgetKind::FilePicker => show_file_picker(ui, w, &mut do_delete),
+            WidgetKind::Chart => show_layout_container(ui, w, &mut do_delete, &mut child_move),
+            WidgetKind::Table => show_options_widget(ui, w, &mut do_delete, "Columns"),
+            WidgetKind::ListView => show_options_widget(ui, w, &mut do_delete, "Items"),
+            WidgetKind::TreeView => show_options_widget(ui, w, &mut do_delete, "Nodes"),
+            WidgetKind::StackedWidget => show_options_widget(ui, w, &mut do_delete, "Pages"),
+            WidgetKind::ToolBox => show_options_widget(ui, w, &mut do_delete, "Sections"),
+            WidgetKind::Image => {
+                if show_image(ui, w, &mut do_delete) {
+                    props_action = PropertiesAction::ShowSvgSource(id);
+                }
+            }
             WidgetKind::Custom(ref desc_id) => {
                 let desc =
                     crate::codegen::widget_descriptor::find_by_id(descriptors, desc_id).cloned();
-                show_custom(ui, w, &mut do_delete, desc.as_ref());
+                let desc_id_owned = desc_id.clone();
+                if show_custom(ui, w, &mut do_delete, desc.as_ref()) {
+                    props_action = PropertiesAction::EditDescriptor(desc_id_owned);
+                }
             }
         }
     } // w borrow ends
@@ -100,6 +137,9 @@ fn show_content_inner(
         tree.remove(id);
         selected.retain(|&x| x != id);
     } else {
+        if let Some((parent_id, child_id, to_idx)) = child_move {
+            tree.move_child_within_parent(parent_id, child_id, to_idx);
+        }
         tree.validate_and_repair();
     }
 
@@ -176,6 +216,7 @@ fn show_label(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
     show_fg_color(ui, w);
     show_font_size(ui, w);
     show_text_align(ui, w);
+    show_text_wrap(ui, w);
     ui.separator();
     show_tooltip(ui, w);
     show_custom_props(ui, w);
@@ -210,7 +251,9 @@ fn show_text_input(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bo
     binding_field(ui, w);
     show_geometry(ui, w);
     ui.separator();
+    show_bg_color(ui, w);
     show_fg_color(ui, w);
+    show_corner_radius(ui, w);
     show_font_size(ui, w);
     ui.separator();
     show_tooltip(ui, w);
@@ -697,6 +740,34 @@ fn show_orientation(ui: &mut egui::Ui, w: &mut WidgetInstance) {
     });
 }
 
+fn show_text_wrap(ui: &mut egui::Ui, w: &mut WidgetInstance) {
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Wrap text").small().weak());
+        let current = w.props.text_wrap;
+        if ui
+            .selectable_label(current.is_none(), "Default")
+            .on_hover_text("Use egui default wrapping")
+            .clicked()
+        {
+            w.props.text_wrap = None;
+        }
+        if ui
+            .selectable_label(current == Some(true), "Wrap")
+            .on_hover_text("Wrap at widget boundary")
+            .clicked()
+        {
+            w.props.text_wrap = Some(true);
+        }
+        if ui
+            .selectable_label(current == Some(false), "Clip")
+            .on_hover_text("Do not wrap; clip excess")
+            .clicked()
+        {
+            w.props.text_wrap = Some(false);
+        }
+    });
+}
+
 fn show_custom_props(ui: &mut egui::Ui, w: &mut WidgetInstance) {
     ui.separator();
     ui.label(egui::RichText::new("Custom props").small().weak());
@@ -753,18 +824,35 @@ fn show_custom_props(ui: &mut egui::Ui, w: &mut WidgetInstance) {
     ui.data_mut(|d| d.insert_temp(add_key, form));
 }
 
-fn show_image(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
+/// Returns `true` if the user clicked "View SVG Source".
+fn show_image(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) -> bool {
     ui.label(
         egui::RichText::new("SVG Image - source-backed canvas preview")
             .small()
             .weak(),
     );
+    let mut view_clicked = false;
     if w.svg_source.is_some() {
-        ui.label(
-            egui::RichText::new("SVG source loaded")
-                .small()
-                .color(egui::Color32::from_rgb(52, 211, 153)),
-        );
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("SVG source loaded")
+                    .small()
+                    .color(egui::Color32::from_rgb(52, 211, 153)),
+            );
+            if ui
+                .small_button("View source")
+                .on_hover_text("Open read-only SVG source viewer")
+                .clicked()
+            {
+                view_clicked = true;
+            }
+        });
+        ui.checkbox(&mut w.expand_svg_inline, "Expand SVG inline in code panel")
+            .on_hover_text("Show full SVG source in the live code panel instead of [SVG: N bytes]");
+        ui.separator();
+        if let Some(src) = w.svg_source.as_deref() {
+            crate::panels::svg_report::show_report(ui, src);
+        }
     } else {
         ui.label(
             egui::RichText::new("No SVG source")
@@ -773,6 +861,7 @@ fn show_image(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
         );
     }
     show_delete_button(ui, do_delete);
+    view_clicked
 }
 
 fn show_delete_button(ui: &mut egui::Ui, do_delete: &mut bool) {
@@ -789,78 +878,183 @@ fn show_delete_button(ui: &mut egui::Ui, do_delete: &mut bool) {
 // Event handler (re-borrows tree after validate_and_repair)
 // ---------------------------------------------------------------------------
 
+/// Tag identifying which event field to read/write.
+#[derive(Clone, Copy, PartialEq)]
+enum EventField {
+    Click,
+    DoubleClick,
+    Change,
+    LostFocus,
+    DragStopped,
+}
+
+/// Map a schema [`WidgetEvent`] to its Properties row metadata:
+/// `(field, label, placeholder-hint)`.  This is the only place that turns the
+/// schema event vocabulary into editor labels.
+fn event_ui_meta(ev: WidgetEvent) -> (EventField, &'static str, &'static str) {
+    match ev {
+        WidgetEvent::Click => (EventField::Click, "On Click", "handle_click"),
+        WidgetEvent::DoubleClick => (
+            EventField::DoubleClick,
+            "On Double-click",
+            "handle_double_click",
+        ),
+        WidgetEvent::Change => (EventField::Change, "On Change", "handle_change"),
+        WidgetEvent::LostFocus => (EventField::LostFocus, "On Lost Focus", "handle_lost_focus"),
+        WidgetEvent::DragStopped => (
+            EventField::DragStopped,
+            "On Drag Stopped",
+            "handle_drag_stopped",
+        ),
+    }
+}
+
 fn show_event_handler(
     ui: &mut egui::Ui,
     tree: &mut UiTree,
     id: Uuid,
     action: &mut PropertiesAction,
 ) {
-    let Some(w) = tree.get_mut(id) else {
-        return;
-    };
+    // Collect applicable events without holding a borrow on tree.
+    let applicable: Vec<(EventField, &'static str, &'static str)> = {
+        let Some(w) = tree.get_mut(id) else { return };
 
-    let (event_label, is_button) = match &w.kind {
-        WidgetKind::Button => ("On Click", true),
-        WidgetKind::TextInput
-        | WidgetKind::Slider
-        | WidgetKind::Checkbox
-        | WidgetKind::ComboBox
-        | WidgetKind::RadioButton => ("On Change", false),
-        _ => return,
-    };
+        // Migrate legacy event_handler → on_click / on_change on first display.
+        if let Some(ref eh) = w.event_handler.clone() {
+            if !eh.is_empty() {
+                if w.kind == WidgetKind::Button && w.on_click.is_empty() {
+                    w.on_click = eh.clone();
+                } else if w.kind != WidgetKind::Button && w.on_change.is_empty() {
+                    w.on_change = eh.clone();
+                }
+            }
+        }
 
-    // Migrate legacy event_handler → on_click / on_change on first display
-    if let Some(ref eh) = w.event_handler.clone() {
-        if !eh.is_empty() {
-            if is_button && w.on_click.is_empty() {
-                w.on_click = eh.clone();
-            } else if !is_button && w.on_change.is_empty() {
-                w.on_change = eh.clone();
+        // Derive the applicable event rows from the schema's single source of
+        // truth (`WidgetKind::supported_events`).  Export reads the same source,
+        // so the Properties UI and generated code cannot drift.
+        if !w.kind.is_event_capable() {
+            return;
+        }
+        w.kind
+            .supported_events()
+            .iter()
+            .map(|ev| event_ui_meta(*ev))
+            .collect()
+    }; // tree borrow released here
+
+    ui.separator();
+    ui.label(egui::RichText::new("Events").small().weak());
+
+    for (field, label, hint) in &applicable {
+        let field = *field;
+        // Read current value — borrow, clone, release.
+        let current: String = tree
+            .get_mut(id)
+            .map(|w| event_field_get(w, field).to_owned())
+            .unwrap_or_default();
+
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(*label).small());
+            if !current.is_empty() {
+                let chip = format!("→ fn {current}");
+                if ui
+                    .button(egui::RichText::new(chip).small().color(TEAL))
+                    .on_hover_text("Click to jump to handler in code panel (Tracé)")
+                    .clicked()
+                {
+                    *action = PropertiesAction::ScrollToHandler(current.clone());
+                }
+            }
+        });
+
+        let mut handler = current;
+        let changed = ui
+            .add(
+                egui::TextEdit::singleline(&mut handler)
+                    .hint_text(format!("e.g. {hint}"))
+                    .desired_width(f32::INFINITY),
+            )
+            .on_hover_text("Ctrl+double-click widget on canvas to jump to handler (Tracé)")
+            .changed();
+
+        if changed {
+            let trimmed = handler.trim().to_owned();
+            if let Some(w) = tree.get_mut(id) {
+                event_field_set(w, field, trimmed);
             }
         }
     }
 
-    let current = if is_button {
-        w.on_click.clone()
-    } else {
-        w.on_change.clone()
-    };
+    // Stage 11 — async + error-mode controls, shown when any handler is set.
+    let has_any_handler = tree
+        .get_mut(id)
+        .map(|w| {
+            !w.on_click.is_empty()
+                || !w.on_change.is_empty()
+                || !w.on_double_click.is_empty()
+                || !w.on_lost_focus.is_empty()
+                || !w.on_drag_stopped.is_empty()
+        })
+        .unwrap_or(false);
 
-    ui.separator();
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(event_label).small().weak());
-        if !current.is_empty() {
-            let chip = format!("→ fn {current}");
-            if ui
-                .button(egui::RichText::new(chip).small().color(TEAL))
-                .on_hover_text("Click to jump to handler in code panel (Tracé)")
-                .clicked()
-            {
-                *action = PropertiesAction::ScrollToHandler(current.clone());
+    if has_any_handler {
+        // Async checkbox
+        let mut is_async = tree.get_mut(id).map(|w| w.async_handler).unwrap_or(false);
+        if ui
+            .checkbox(&mut is_async, "⚙ Run async (background thread)")
+            .on_hover_text("Wrap the handler in std::thread::spawn (no tokio)")
+            .changed()
+        {
+            if let Some(w) = tree.get_mut(id) {
+                w.async_handler = is_async;
             }
         }
-    });
 
-    let mut handler = current;
-    let hint = format!(
-        "e.g. handle_{}",
-        event_label.to_lowercase().replace(' ', "_")
-    );
-    if ui
-        .add(
-            egui::TextEdit::singleline(&mut handler)
-                .hint_text(hint)
-                .desired_width(f32::INFINITY),
-        )
-        .on_hover_text("Ctrl+double-click widget to jump to handler")
-        .changed()
-    {
-        let trimmed = handler.trim().to_owned();
-        if is_button {
-            w.on_click = trimmed;
-        } else {
-            w.on_change = trimmed;
+        // Error-mode dropdown
+        let mut mode = tree
+            .get_mut(id)
+            .map(|w| w.handler_result.clone())
+            .unwrap_or(HandlerResult::Plain);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Error mode").small().weak());
+            egui::ComboBox::from_id_salt(("handler_result", id))
+                .selected_text(mode.label())
+                .show_ui(ui, |ui| {
+                    for m in [
+                        HandlerResult::Plain,
+                        HandlerResult::Result,
+                        HandlerResult::Option,
+                    ] {
+                        ui.selectable_value(&mut mode, m.clone(), m.label());
+                    }
+                });
+        });
+        if let Some(w) = tree.get_mut(id) {
+            if w.handler_result != mode {
+                w.handler_result = mode;
+            }
         }
+    }
+}
+
+fn event_field_get(w: &WidgetInstance, field: EventField) -> &str {
+    match field {
+        EventField::Click => &w.on_click,
+        EventField::DoubleClick => &w.on_double_click,
+        EventField::Change => &w.on_change,
+        EventField::LostFocus => &w.on_lost_focus,
+        EventField::DragStopped => &w.on_drag_stopped,
+    }
+}
+
+fn event_field_set(w: &mut WidgetInstance, field: EventField, value: String) {
+    match field {
+        EventField::Click => w.on_click = value,
+        EventField::DoubleClick => w.on_double_click = value,
+        EventField::Change => w.on_change = value,
+        EventField::LostFocus => w.on_lost_focus = value,
+        EventField::DragStopped => w.on_drag_stopped = value,
     }
 }
 
@@ -1172,27 +1366,340 @@ fn show_alignment(ui: &mut egui::Ui, tree: &mut UiTree, selected: &[Uuid], shift
 }
 
 // ---------------------------------------------------------------------------
+// Stage 9 widget panels
+// ---------------------------------------------------------------------------
+
+fn show_text_area(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
+    field_text(ui, "Placeholder", &mut w.props.placeholder);
+    binding_field(ui, w);
+    show_geometry(ui, w);
+    ui.separator();
+    show_bg_color(ui, w);
+    show_fg_color(ui, w);
+    show_corner_radius(ui, w);
+    show_font_size(ui, w);
+    show_text_wrap(ui, w);
+    ui.separator();
+    show_tooltip(ui, w);
+    show_enabled(ui, w);
+    show_custom_props(ui, w);
+    show_delete_button(ui, do_delete);
+}
+
+fn show_spin_box(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
+    field_text(ui, "Label", &mut w.props.label);
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Range").small().weak());
+        ui.add(
+            egui::DragValue::new(&mut w.props.min)
+                .speed(1.0)
+                .prefix("Min "),
+        );
+        ui.add(
+            egui::DragValue::new(&mut w.props.max)
+                .speed(1.0)
+                .prefix("Max "),
+        );
+    });
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Default").small().weak());
+        ui.add(
+            egui::DragValue::new(&mut w.props.default_value)
+                .speed(0.1)
+                .range(w.props.min..=w.props.max),
+        );
+    });
+    binding_field(ui, w);
+    show_geometry(ui, w);
+    ui.separator();
+    show_fg_color(ui, w);
+    show_tooltip(ui, w);
+    show_enabled(ui, w);
+    show_custom_props(ui, w);
+    show_delete_button(ui, do_delete);
+}
+
+fn show_font_combo_box(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
+    ui.label(
+        egui::RichText::new("Font selector combo. Binding holds selected font name.")
+            .small()
+            .weak(),
+    );
+    binding_field(ui, w);
+    show_geometry(ui, w);
+    ui.separator();
+    show_tooltip(ui, w);
+    show_enabled(ui, w);
+    show_custom_props(ui, w);
+    show_delete_button(ui, do_delete);
+}
+
+fn show_spacer(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
+    show_geometry(ui, w);
+    show_delete_button(ui, do_delete);
+}
+
+fn show_group_box(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
+    field_text(ui, "Title", &mut w.props.label);
+    show_geometry(ui, w);
+    ui.separator();
+    show_fg_color(ui, w);
+    show_font_size(ui, w);
+    show_tooltip(ui, w);
+    show_custom_props(ui, w);
+    show_delete_button(ui, do_delete);
+}
+
+fn show_layout_container(
+    ui: &mut egui::Ui,
+    w: &mut WidgetInstance,
+    do_delete: &mut bool,
+    child_move: &mut Option<(Uuid, Uuid, usize)>,
+) {
+    field_text(ui, "Label", &mut w.props.label);
+    if matches!(
+        w.kind,
+        WidgetKind::VLayout | WidgetKind::HLayout | WidgetKind::GridLayout
+    ) {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Children").small().weak());
+            ui.label(format!("{}", w.children.len()));
+            ui.checkbox(&mut w.props.layout_stretch, "Stretch children")
+                .on_hover_text(
+                    "Fill the layout cross-axis/cell size. Disable to preserve child size hints.",
+                );
+        });
+        egui::Grid::new(("layout_props", w.id))
+            .num_columns(4)
+            .spacing([4.0, 2.0])
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Margin").small());
+                ui.add(
+                    egui::DragValue::new(&mut w.props.inner_margin)
+                        .range(0.0..=128.0_f32)
+                        .speed(0.5)
+                        .suffix(" px"),
+                );
+                ui.label(egui::RichText::new("Gap").small());
+                ui.add(
+                    egui::DragValue::new(&mut w.props.layout_spacing)
+                        .range(0.0..=128.0_f32)
+                        .speed(0.5)
+                        .suffix(" px"),
+                );
+                ui.end_row();
+                if matches!(w.kind, WidgetKind::GridLayout) {
+                    ui.label(egui::RichText::new("Columns").small());
+                    ui.add(egui::DragValue::new(&mut w.props.grid_columns).range(1..=12));
+                    ui.label(egui::RichText::new("Rows").small());
+                    let rows = w
+                        .children
+                        .len()
+                        .div_ceil(w.props.grid_columns.clamp(1, 12))
+                        .max(1);
+                    ui.label(rows.to_string());
+                    ui.end_row();
+                }
+            });
+        if matches!(w.kind, WidgetKind::GridLayout) && !w.children.is_empty() {
+            ui.separator();
+            ui.label(egui::RichText::new("Grid slots").small().weak());
+            let columns = w.props.grid_columns.clamp(1, 12);
+            for (idx, child_id) in w.children.iter().copied().enumerate() {
+                ui.horizontal(|ui| {
+                    let row = idx / columns + 1;
+                    let col = idx % columns + 1;
+                    ui.label(
+                        egui::RichText::new(format!("R{row} C{col}"))
+                            .small()
+                            .monospace(),
+                    );
+                    ui.label(short_uuid(child_id));
+                    if ui
+                        .add_enabled(idx > 0, egui::Button::new("↑"))
+                        .on_hover_text("Move child to previous grid slot")
+                        .clicked()
+                    {
+                        *child_move = Some((w.id, child_id, idx - 1));
+                    }
+                    if ui
+                        .add_enabled(idx + 1 < w.children.len(), egui::Button::new("↓"))
+                        .on_hover_text("Move child to next grid slot")
+                        .clicked()
+                    {
+                        *child_move = Some((w.id, child_id, idx + 1));
+                    }
+                });
+            }
+        }
+        ui.separator();
+    }
+    show_geometry(ui, w);
+    ui.separator();
+    show_custom_props(ui, w);
+    show_delete_button(ui, do_delete);
+}
+
+fn short_uuid(id: Uuid) -> String {
+    id.as_simple().to_string().chars().take(8).collect()
+}
+
+fn show_scroll_area(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
+    field_text(ui, "Label", &mut w.props.label);
+    show_geometry(ui, w);
+    ui.separator();
+    show_custom_props(ui, w);
+    show_delete_button(ui, do_delete);
+}
+
+fn show_command_link(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
+    field_text(ui, "Title", &mut w.props.label);
+    field_text(ui, "Description", &mut w.props.placeholder);
+    show_geometry(ui, w);
+    ui.separator();
+    show_bg_color(ui, w);
+    show_fg_color(ui, w);
+    show_corner_radius(ui, w);
+    ui.separator();
+    show_tooltip(ui, w);
+    show_enabled(ui, w);
+    show_delete_button(ui, do_delete);
+}
+
+fn show_math_label(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
+    field_text(ui, "Label", &mut w.props.label);
+    ui.label(
+        egui::RichText::new("Displays a computed f32 from the bound AppState field.")
+            .small()
+            .weak(),
+    );
+    binding_field(ui, w);
+    show_geometry(ui, w);
+    ui.separator();
+    show_fg_color(ui, w);
+    show_font_size(ui, w);
+    show_tooltip(ui, w);
+    show_custom_props(ui, w);
+    show_delete_button(ui, do_delete);
+}
+
+fn show_file_picker(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
+    field_text(ui, "Button text", &mut w.props.label);
+    ui.label(
+        egui::RichText::new("Selected path stored in the bound String field.")
+            .small()
+            .weak(),
+    );
+    binding_field(ui, w);
+    show_geometry(ui, w);
+    ui.separator();
+    show_tooltip(ui, w);
+    show_enabled(ui, w);
+    show_custom_props(ui, w);
+    show_delete_button(ui, do_delete);
+}
+
+/// Generic editor for widgets whose content is the `options` list
+/// (Table columns, ListView items, TreeView nodes, etc.).
+fn show_options_widget(
+    ui: &mut egui::Ui,
+    w: &mut WidgetInstance,
+    do_delete: &mut bool,
+    item_label: &str,
+) {
+    field_text(ui, "Label", &mut w.props.label);
+    ui.label(egui::RichText::new(item_label).small().weak());
+    let mut to_remove: Option<usize> = None;
+    for (i, opt) in w.props.options.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            let ow = (ui.available_width() - 28.0).clamp(60.0, 180.0);
+            ui.add(
+                egui::TextEdit::singleline(opt)
+                    .hint_text(format!("{item_label} {}", i + 1))
+                    .desired_width(ow),
+            );
+            if ui.small_button("x").clicked() {
+                to_remove = Some(i);
+            }
+        });
+    }
+    if let Some(i) = to_remove {
+        w.props.options.remove(i);
+    }
+    if ui.small_button(format!("+ Add {item_label}")).clicked() {
+        let n = w.props.options.len() + 1;
+        w.props.options.push(format!("{item_label} {n}"));
+    }
+    show_geometry(ui, w);
+    ui.separator();
+    show_custom_props(ui, w);
+    show_delete_button(ui, do_delete);
+}
+
+fn show_tab_widget(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
+    ui.label(egui::RichText::new("Tabs").small().weak());
+    let mut to_remove: Option<usize> = None;
+    for (i, opt) in w.props.options.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            let ow = (ui.available_width() - 28.0).clamp(60.0, 160.0);
+            ui.add(
+                egui::TextEdit::singleline(opt)
+                    .hint_text(format!("Tab {}", i + 1))
+                    .desired_width(ow),
+            );
+            if ui.small_button("x").clicked() {
+                to_remove = Some(i);
+            }
+        });
+    }
+    if let Some(i) = to_remove {
+        w.props.options.remove(i);
+    }
+    if ui.small_button("+ Add tab").clicked() {
+        w.props
+            .options
+            .push(format!("Tab {}", w.props.options.len() + 1));
+    }
+    show_geometry(ui, w);
+    ui.separator();
+    show_custom_props(ui, w);
+    show_delete_button(ui, do_delete);
+}
+
+// ---------------------------------------------------------------------------
 // Custom widget (descriptor-backed)
 // ---------------------------------------------------------------------------
 
+/// Returns `true` if the user clicked "Edit Descriptor".
 fn show_custom(
     ui: &mut egui::Ui,
     w: &mut WidgetInstance,
     do_delete: &mut bool,
     descriptor: Option<&WidgetDescriptor>,
-) {
+) -> bool {
     // Label field — always shown
     field_text(ui, "Label", &mut w.props.label);
     show_geometry(ui, w);
     ui.separator();
 
+    let mut edit_clicked = false;
+
     // Descriptor-defined properties
     if let Some(desc) = descriptor {
-        ui.label(
-            egui::RichText::new(format!("Descriptor: {}", desc.id))
-                .small()
-                .weak(),
-        );
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(format!("Descriptor: {}", desc.id))
+                    .small()
+                    .weak(),
+            );
+            if ui
+                .small_button("Edit descriptor")
+                .on_hover_text("Open the .rkwd editor for this widget type")
+                .clicked()
+            {
+                edit_clicked = true;
+            }
+        });
         for prop in &desc.properties {
             let current = w
                 .descriptor_props
@@ -1279,4 +1786,5 @@ fn show_custom(
     show_tooltip(ui, w);
     show_enabled(ui, w);
     show_delete_button(ui, do_delete);
+    edit_clicked
 }

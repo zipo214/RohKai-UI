@@ -25,6 +25,9 @@ Never write code that mutates canvas state and code state separately.
 - All dependencies via Cargo. No cmake, no pkg-config.
 - "Pure Rust crate" does not mean "approved dependency." Do not add new crates
   unless the user explicitly approves that exact dependency by name.
+- `rayon = "1"` is an approved dependency for parallel processing. Planned
+  future replacement with `src/platform/thread_pool.rs` when Stage 15 renderer
+  needs its own scheduler.
 - SVG import, SVG image preview, and SVG raster/vector work are zero-new-crate
   zones: no `resvg`, no `usvg`, no `tiny-skia`, and no substitute renderer
   dependency chain. Implement required SVG behavior in RohKai source.
@@ -50,31 +53,41 @@ src/
 ```
 
 ## Current Stage (see docs/ROADMAP.md for full history)
-Stages 1–6 complete. Active scope is Stage 7 (widget descriptor format / .rkwd files).
+Stages 0–8, 8.5, 9 (core), 10, 11, and 14 complete. Stage 9's parallel-processing
+sub-cluster (rayon-based parallel rasterization/codegen/export/template-load +
+benchmarks) and Form Layout remain deferred. Open stages: 12 (Platform Targets),
+13 (Data & Integration), 15 (Own Renderer), plus the deferred Stage 9 items.
+Current focused work is the pre-release depth gate and SVG R0-R2 maturity;
+Stage 15 remains a separate deferred architecture decision.
 
 Core features implemented:
-- Canvas: drag, drop, select, multi-select, resize, rubber-band, z-order, snap, smart guides
+- Canvas: drag, drop, select, multi-select, resize, rubber-band, z-order, snap, smart guides,
+  pixel rulers, guide lines, guide snapping
 - Widgets: Button, Label, TextInput, Slider, Checkbox, Frame, ComboBox, RadioButton, ProgressBar
-- Properties panel: label, binding, geometry, alignment, group/ungroup
+- Custom widgets: `.rkwd` descriptor format, in-app editor, beginner builder, hot-reload
+- Properties panel: label, binding, geometry, alignment, group/ungroup, events, custom props
 - Code panel: live egui Rust output — **editable** (Lazare bidirectional sync, Stage 6)
 - AppState panel: auto-generated struct fields
 - Save/load `.rohkai.json` (versioned envelope, legacy bare UiTree supported)
-- Export: complete compilable Rust project
+- Export: complete compilable Rust project (with theming, presets, descriptor cargo deps)
 - Templates: `.rktp` files, SVG import, drag-to-canvas
+- Theming: dark/light, accent color, font size, corner radius, spacing — saved as `.rktheme`
 - Preferences: UI scale, font size, snap step (persisted)
 
 ## What NOT to build yet
-- Multi-window support
-- Custom widget creation
-- Undo/redo (design for it, don't implement yet)
-- Themes / styling beyond basics
-- Any codegen target other than egui
+- Multi-window support (no stage assigned)
+- Undo/redo — planned Stage 14; design for it but do not implement until then
+- WASM / non-egui codegen targets — planned Stage 12; do not start before Stage 9–11 complete
+- Database integration — planned Stage 13; requires user-approved crate at stage start
+- Own renderer — planned Stage 15; do not touch rendering stack before then
 
 ## Rust Patterns We Use
 - `RohKaiApp` struct holds all designer state — no globals
 - egui immediate mode throughout — no retained widget objects
 - serde + serde_json for project serialization
-- No async (unnecessary for this app)
+- No async in the core designer loop (canvas, codegen, UiTree mutations stay
+  synchronous). Background tasks use `std::sync::mpsc` channels. No tokio
+  runtime unless a specific planned feature explicitly requires it.
 
 ## Running
     cargo run
@@ -84,23 +97,41 @@ Core features implemented:
     cargo clippy -- -D warnings
 
 ## Session Rules
-- Before planning or coding, run or manually follow the repo preflight:
+- Before planning or coding, run the low-token preflight:
   `pwsh -NoProfile -ExecutionPolicy Bypass -File D:\dev\rohkai\scripts\preflight-context.ps1`
-- Preflight means reading `AGENTS.md`, `CLAUDE.md`, `docs/ROADMAP.md`, the latest
-  `docs/DEVLOG.md` entry, `docs/CODE_INDEX.md`, the latest `docs/CODE_COOP.md`
-  note, `git status --short --branch`, and any relevant `.claude/skills/*/SKILL.md`
-  files before edits.
+- Default context is intentionally small: this file, the preflight output,
+  `git status --short --branch`, latest `docs/CODE_COOP.md` note, and relevant
+  skills. Read heavier docs only when needed:
+  - `docs/ROADMAP.md` for scope/stage decisions.
+  - `docs/CODE_INDEX.md` for codebase orientation.
+  - `docs/ARCHITECTURE.md` for structural changes.
+  - `docs/DEVLOG.md` for regression/history investigation; use preflight
+    `-IncludeDevlog` when you need it.
 - At the start of a meaningful planning or coding session, append a 3-4 sentence
-  `docs/CODE_COOP.md` note for the next agent.
+  newest-first `docs/CODE_COOP.md` note for the next agent.
+- When writing a goal/prompt for another agent, use `docs/PROMPT_CONTRACT.md`
+  so the task derives source-of-truth sets, enumerates all output paths, and
+  requires invariant tests instead of fixing only the obvious surface.
 - For SVG/Image work, `svg-zero-dep` is a relevant skill and must be read.
-- Do not add `CONTRIBUTING.md` to preflight/prep unless the user explicitly asks
-  for contribution-policy work.
+- SVG renderer roadmap step protocol: before starting ANY SVG renderer lane
+  (R0–R8 and R8.1 are done; remaining lanes are R9, R10, R11, R12, plus the
+  optional R8.2 deep-fuzz hardening lane that does not block the others), FIRST
+  read that lane's paste-ready goal prompt in
+  `docs/svg-goal-plan-prompts/<lane>-*.goal.md` (e.g. `R9-*.goal.md`) and follow
+  it exactly: derive source-of-truth paths before coding, render in BOTH the
+  in-app and export-embedded rasterizers, add golden/unit tests + diagnostics +
+  caps, keep both embedded sources std-only with the single-`crate::` export
+  contract, and end on the zero-warning verification gate. See
+  `docs/svg-goal-plan-prompts/README.md` for the authoritative run order. Execute
+  lanes in order; do not skip the prompt read.
 - Record meaningful sessions in `docs/DEVLOG.md`: time, docs reviewed, changes,
   verification, risks, and follow-ups.
 - `docs/ROADMAP.md` is strategic stage planning. `docs/DEVLOG.md` is chronological.
   `docs/ARCHITECTURE.md` is structural truth, not a timeline.
-- Every session ends with `cargo run` confirming a clean launch.
-- Zero warnings is required before any session is considered done.
+- Feature or behavior sessions end with appropriate cargo verification and, when
+  practical, `cargo run` launch smoke. Docs-only sessions may use script/encoding
+  checks plus `cargo fmt --check`/`cargo check` as appropriate.
+- Zero warnings is required before any code session is considered done.
 - Prefer `pwsh`/PowerShell 7 for repo scripts. Do not use Windows PowerShell 5.1
   text-writing commands for repo files.
 - Do not use `Set-Content`, `Add-Content`, or `Out-File` without explicit

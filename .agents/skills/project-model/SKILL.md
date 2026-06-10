@@ -30,7 +30,7 @@ kind:            WidgetKind
 rect:            Rect
 props:           WidgetProps
 state_binding:   Option<String>
-children:        Vec<WidgetInstance>
+children:        Vec<Uuid>
 import_metadata: Option<ImportMetadata>
 tooltip:         Option<String>
 enabled:         Option<bool>
@@ -50,10 +50,18 @@ min:           f32
 max:           f32
 default_value: f32
 options:       Vec<String>
+inner_margin:  f32
+layout_spacing: f32
+layout_stretch: bool
+grid_columns:  usize
 ```
 
 `default_value` is meaningful for sliders and is clamped during repair.
 `options` is meaningful for ComboBox, defaults to `["Option A", "Option B", "Option C"]`, and is repaired to a non-empty default for ComboBox widgets.
+`inner_margin` and `layout_spacing` drive Frame/layout container reflow.
+`layout_stretch` controls first-slice fill/stretch behavior in layout containers.
+`grid_columns` drives GridLayout row-major cell assignment and generated
+`ui.end_row()` boundaries.
 
 ## WidgetKind
 

@@ -11,23 +11,59 @@ pub struct KindInfo {
 /// maintaining their own per-kind match arms.
 pub fn state_info(kind: &WidgetKind) -> Option<KindInfo> {
     match kind {
-        WidgetKind::Button | WidgetKind::Frame => None,
+        // Stateless widgets
+        WidgetKind::Button
+        | WidgetKind::Frame
+        | WidgetKind::Image
+        | WidgetKind::HorizontalSpacer
+        | WidgetKind::VerticalSpacer
+        | WidgetKind::GroupBox
+        | WidgetKind::VLayout
+        | WidgetKind::HLayout
+        | WidgetKind::ScrollArea
+        | WidgetKind::GridLayout
+        | WidgetKind::TabWidget
+        | WidgetKind::ToolButton
+        | WidgetKind::CommandLinkButton
+        | WidgetKind::DialogButtonBox
+        | WidgetKind::Table
+        | WidgetKind::ListView
+        | WidgetKind::TreeView
+        | WidgetKind::StackedWidget
+        | WidgetKind::ToolBox
+        | WidgetKind::Custom(_) => None,
+
+        // String-state widgets
         WidgetKind::Label
         | WidgetKind::TextInput
+        | WidgetKind::TextArea
         | WidgetKind::ComboBox
-        | WidgetKind::RadioButton => Some(KindInfo {
+        | WidgetKind::FontComboBox
+        | WidgetKind::RadioButton
+        | WidgetKind::FilePicker => Some(KindInfo {
             rust_type: "String",
             default_expr: "String::new()",
         }),
-        WidgetKind::Slider | WidgetKind::ProgressBar => Some(KindInfo {
+
+        // f32-state widgets
+        WidgetKind::Slider
+        | WidgetKind::ProgressBar
+        | WidgetKind::SpinBox
+        | WidgetKind::MathLabel => Some(KindInfo {
             rust_type: "f32",
             default_expr: "0.0",
         }),
+
+        // Vec<f32>-state widgets
+        WidgetKind::Chart => Some(KindInfo {
+            rust_type: "Vec<f32>",
+            default_expr: "vec![0.2, 0.5, 0.8, 0.4]",
+        }),
+
+        // bool-state widgets
         WidgetKind::Checkbox => Some(KindInfo {
             rust_type: "bool",
             default_expr: "false",
         }),
-        WidgetKind::Image => None,
-        WidgetKind::Custom(_) => None,
     }
 }
