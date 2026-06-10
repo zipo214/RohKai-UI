@@ -3293,6 +3293,24 @@ mod tests {
         }
     }
 
+    /// R10 invariant: tier-2 filter primitives render in the export-embedded
+    /// rasterizer (same verbatim source as in-app), not merely diagnostics.
+    #[test]
+    fn embedded_rasterizer_includes_r10_render_paths() {
+        for marker in [
+            "fn composite_filter",   // feComposite (Porter-Duff + arithmetic)
+            "fn blend_filter",       // feBlend
+            "fn component_transfer", // feComponentTransfer
+            "fn morphology",         // feMorphology
+            "enum BlendMode",        // shared blend (feBlend / mix-blend-mode)
+        ] {
+            assert!(
+                SVG_RASTERIZER_SOURCE.contains(marker),
+                "embedded rasterizer missing R10 render path: {marker}"
+            );
+        }
+    }
+
     /// Always-run smoke: the fixture generates the required files and its source
     /// contains every feature-matrix marker.  Fast (no compilation).
     #[test]

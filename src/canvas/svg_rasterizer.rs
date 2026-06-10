@@ -48,6 +48,8 @@ const MAX_MASK_ITEMS: usize = 4_096;
 const MAX_FILTER_PRIMITIVES: usize = 64;
 /// Maximum Gaussian-blur box radius in device pixels (R7), to bound filter CPU.
 const MAX_BLUR_RADIUS: usize = 200;
+/// Maximum `feMorphology` radius in device pixels (R10); the window is O(r^2).
+const MAX_MORPH_RADIUS: usize = 100;
 /// Maximum marker placements (start/mid/end vertices) drawn per stroked shape (R9).
 const MAX_MARKER_PLACEMENTS: usize = 10_000;
 /// Maximum shapes lowered from a single `<marker>` subtree (R9).
@@ -3322,6 +3324,7 @@ fn is_container_tag(tag: &str) -> bool {
             | "style"
             | "switch"
             | "femerge"
+            | "fecomponenttransfer"
     )
 }
 
@@ -4648,8 +4651,116 @@ enum FilterKind {
         sy: f64,
         color: [u8; 4],
     },
+    /// R10 `feComposite` — Porter-Duff + arithmetic, on premultiplied pixels.
+    Composite {
+        op: CompositeOp,
+        input2: FilterInput,
+    },
+    /// R10 `feBlend` — separable blend of `in` over `in2`.
+    Blend {
+        mode: BlendMode,
+        input2: FilterInput,
+    },
+    /// R10 `feComponentTransfer` — per-channel transfer functions (R, G, B, A).
+    ComponentTransfer {
+        funcs: [TransferFunc; 4],
+    },
+    /// R10 `feMorphology` — dilate/erode over a bounded radius.
+    Morphology {
+        dilate: bool,
+        rx: usize,
+        ry: usize,
+    },
     /// Unsupported primitive passed through (partial output) with a diagnostic.
     Identity,
+}
+
+/// `feComposite` operator (R10). Inputs are premultiplied.
+#[derive(Clone, Copy)]
+enum CompositeOp {
+    Over,
+    In,
+    Out,
+    Atop,
+    Xor,
+    Arithmetic { k1: f32, k2: f32, k3: f32, k4: f32 },
+}
+
+/// Separable blend, shared by `feBlend` and `mix-blend-mode` (R10).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BlendMode {
+    Normal,
+    Multiply,
+    Screen,
+    Darken,
+    Lighten,
+}
+
+fn parse_blend_mode(value: &str) -> Option<BlendMode> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "normal" => Some(BlendMode::Normal),
+        "multiply" => Some(BlendMode::Multiply),
+        "screen" => Some(BlendMode::Screen),
+        "darken" => Some(BlendMode::Darken),
+        "lighten" => Some(BlendMode::Lighten),
+        _ => None,
+    }
+}
+
+/// Per-channel `feComponentTransfer` transfer function (R10).
+#[derive(Clone)]
+enum TransferFunc {
+    Identity,
+    Table(Vec<f32>),
+    Discrete(Vec<f32>),
+    Linear {
+        slope: f32,
+        intercept: f32,
+    },
+    Gamma {
+        amplitude: f32,
+        exponent: f32,
+        offset: f32,
+    },
+}
+
+impl TransferFunc {
+    /// Map a straight channel value in `[0,1]` through this function.
+    fn apply(&self, c: f32) -> f32 {
+        let c = c.clamp(0.0, 1.0);
+        let out = match self {
+            TransferFunc::Identity => c,
+            TransferFunc::Linear { slope, intercept } => slope * c + intercept,
+            TransferFunc::Gamma {
+                amplitude,
+                exponent,
+                offset,
+            } => amplitude * c.powf(*exponent) + offset,
+            TransferFunc::Table(values) => {
+                if values.is_empty() {
+                    c
+                } else if values.len() == 1 {
+                    values[0]
+                } else {
+                    let n = values.len() - 1;
+                    let scaled = c * n as f32;
+                    let k = (scaled.floor() as usize).min(n - 1);
+                    let frac = scaled - k as f32;
+                    values[k] + frac * (values[k + 1] - values[k])
+                }
+            }
+            TransferFunc::Discrete(values) => {
+                if values.is_empty() {
+                    c
+                } else {
+                    let n = values.len();
+                    let k = ((c * n as f32).floor() as usize).min(n - 1);
+                    values[k]
+                }
+            }
+        };
+        out.clamp(0.0, 1.0)
+    }
 }
 
 struct FilterPrimitive {
@@ -4698,6 +4809,20 @@ impl FilterGraph {
                     shadow = offset_buffer(&shadow, w, h, *dx, *dy);
                     composite_premultiplied_over(&mut shadow, source);
                     shadow
+                }
+                FilterKind::Composite { op, input2 } => {
+                    let in2 =
+                        resolve_filter_input(input2, source, &source_alpha, &named, &previous);
+                    composite_filter(&input, &in2, *op)
+                }
+                FilterKind::Blend { mode, input2 } => {
+                    let in2 =
+                        resolve_filter_input(input2, source, &source_alpha, &named, &previous);
+                    blend_filter(&input, &in2, *mode)
+                }
+                FilterKind::ComponentTransfer { funcs } => component_transfer(&input, funcs),
+                FilterKind::Morphology { dilate, rx, ry } => {
+                    morphology(&input, w, h, *dilate, *rx, *ry)
                 }
                 FilterKind::Identity => input.clone(),
             };
@@ -4910,6 +5035,134 @@ fn composite_premultiplied_over(dst: &mut [u8], src: &[u8]) {
     }
 }
 
+/// R10 `feComposite`: Porter-Duff and arithmetic compositing of premultiplied
+/// `in` (i) and `in2` (i2). Channels are treated in `[0,1]` premultiplied.
+fn composite_filter(i: &[u8], i2: &[u8], op: CompositeOp) -> Vec<u8> {
+    let n = i.len().min(i2.len());
+    let mut out = vec![0u8; n];
+    let mut p = 0;
+    while p + 3 < n {
+        let sa = i[p + 3] as f32 / 255.0;
+        let da = i2[p + 3] as f32 / 255.0;
+        for c in 0..4 {
+            let s = i[p + c] as f32 / 255.0;
+            let d = i2[p + c] as f32 / 255.0;
+            let v = match op {
+                CompositeOp::Over => s + d * (1.0 - sa),
+                CompositeOp::In => s * da,
+                CompositeOp::Out => s * (1.0 - da),
+                CompositeOp::Atop => s * da + d * (1.0 - sa),
+                CompositeOp::Xor => s * (1.0 - da) + d * (1.0 - sa),
+                CompositeOp::Arithmetic { k1, k2, k3, k4 } => k1 * s * d + k2 * s + k3 * d + k4,
+            };
+            out[p + c] = (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        }
+        // Keep alpha consistent with the premultiplied colour (clamp rgb <= a).
+        let a = out[p + 3];
+        for c in 0..3 {
+            if out[p + c] > a {
+                out[p + c] = a;
+            }
+        }
+        p += 4;
+    }
+    out
+}
+
+/// R10 separable blend `B(cb, cs)` for `feBlend` / `mix-blend-mode`.
+#[inline]
+fn blend_channel(mode: BlendMode, cb: f32, cs: f32) -> f32 {
+    match mode {
+        BlendMode::Normal => cs,
+        BlendMode::Multiply => cb * cs,
+        BlendMode::Screen => cb + cs - cb * cs,
+        BlendMode::Darken => cb.min(cs),
+        BlendMode::Lighten => cb.max(cs),
+    }
+}
+
+/// R10 `feBlend`: blend premultiplied source `i` over backdrop `i2`.
+/// Uses the premultiplied separable-blend formula:
+///   Co = (1-ab)*Cs + (1-as)*Cb + as*ab*B(Cs/as, Cb/ab)
+///   Ao = as + ab - as*ab
+fn blend_filter(i: &[u8], i2: &[u8], mode: BlendMode) -> Vec<u8> {
+    let n = i.len().min(i2.len());
+    let mut out = vec![0u8; n];
+    let mut p = 0;
+    while p + 3 < n {
+        let asrc = i[p + 3] as f32 / 255.0;
+        let aback = i2[p + 3] as f32 / 255.0;
+        let ao = asrc + aback - asrc * aback;
+        for c in 0..3 {
+            let scp = i[p + c] as f32 / 255.0; // premultiplied source channel
+            let bcp = i2[p + c] as f32 / 255.0; // premultiplied backdrop channel
+            let sc = if asrc > 0.0 { scp / asrc } else { 0.0 };
+            let bc = if aback > 0.0 { bcp / aback } else { 0.0 };
+            let co = (1.0 - aback) * scp
+                + (1.0 - asrc) * bcp
+                + asrc * aback * blend_channel(mode, bc, sc);
+            out[p + c] = (co.clamp(0.0, ao.max(0.0)).min(1.0) * 255.0).round() as u8;
+        }
+        out[p + 3] = (ao.clamp(0.0, 1.0) * 255.0).round() as u8;
+        p += 4;
+    }
+    out
+}
+
+/// R10 `feComponentTransfer`: per-channel transfer on straight (unpremultiplied)
+/// colour, re-premultiplied at the end.
+fn component_transfer(src: &[u8], funcs: &[TransferFunc; 4]) -> Vec<u8> {
+    let mut out = vec![0u8; src.len()];
+    for (px, dst) in src.chunks_exact(4).zip(out.chunks_exact_mut(4)) {
+        let a = px[3] as f32 / 255.0;
+        let straight = |c: usize| {
+            if a > 0.0 {
+                px[c] as f32 / 255.0 / a
+            } else {
+                0.0
+            }
+        };
+        let nr = funcs[0].apply(straight(0));
+        let ng = funcs[1].apply(straight(1));
+        let nb = funcs[2].apply(straight(2));
+        let na = funcs[3].apply(a);
+        dst[0] = (nr * na * 255.0).round().clamp(0.0, 255.0) as u8;
+        dst[1] = (ng * na * 255.0).round().clamp(0.0, 255.0) as u8;
+        dst[2] = (nb * na * 255.0).round().clamp(0.0, 255.0) as u8;
+        dst[3] = (na * 255.0).round().clamp(0.0, 255.0) as u8;
+    }
+    out
+}
+
+/// R10 `feMorphology`: dilate (max) or erode (min) each premultiplied channel
+/// over a `(2rx+1) x (2ry+1)` window. Radii are capped by the caller.
+fn morphology(src: &[u8], w: usize, h: usize, dilate: bool, rx: usize, ry: usize) -> Vec<u8> {
+    if (rx == 0 && ry == 0) || w == 0 || h == 0 {
+        return src.to_vec();
+    }
+    let mut out = vec![0u8; src.len()];
+    for y in 0..h {
+        let y0 = y.saturating_sub(ry);
+        let y1 = (y + ry).min(h - 1);
+        for x in 0..w {
+            let x0 = x.saturating_sub(rx);
+            let x1 = (x + rx).min(w - 1);
+            for c in 0..4 {
+                let mut acc: u8 = if dilate { 0 } else { 255 };
+                for yy in y0..=y1 {
+                    let row = yy * w;
+                    for xx in x0..=x1 {
+                        let v = src[(row + xx) * 4 + c];
+                        acc = if dilate { acc.max(v) } else { acc.min(v) };
+                    }
+                }
+                out[(y * w + x) * 4 + c] = acc;
+            }
+        }
+    }
+    out
+}
+
 fn parse_filter(
     scene: &SvgScene,
     filter_id: &str,
@@ -4993,6 +5246,33 @@ fn parse_filter(
                     sx: sx * scale,
                     sy: sy * scale,
                     color: flood_color(attrs),
+                }
+            }
+            "fecomposite" => FilterKind::Composite {
+                op: parse_composite_op(attrs),
+                input2: parse_filter_input(attr_get(attrs, "in2")),
+            },
+            "feblend" => {
+                let mode = attr_get(attrs, "mode")
+                    .and_then(parse_blend_mode)
+                    .unwrap_or(BlendMode::Normal);
+                FilterKind::Blend {
+                    mode,
+                    input2: parse_filter_input(attr_get(attrs, "in2")),
+                }
+            }
+            "fecomponenttransfer" => FilterKind::ComponentTransfer {
+                funcs: parse_component_transfer(child),
+            },
+            "femorphology" => {
+                let dilate = attr_get(attrs, "operator")
+                    .map(|v| v.trim().eq_ignore_ascii_case("dilate"))
+                    .unwrap_or(false);
+                let (rx, ry) = parse_std_deviation(attr_get(attrs, "radius"));
+                FilterKind::Morphology {
+                    dilate,
+                    rx: ((rx * scale).round().max(0.0) as usize).min(MAX_MORPH_RADIUS),
+                    ry: ((ry * scale).round().max(0.0) as usize).min(MAX_MORPH_RADIUS),
                 }
             }
             other => {
@@ -5110,6 +5390,83 @@ fn parse_color_matrix(attrs: &[(String, String)]) -> [f32; 20] {
             0.7154, 0.0721, 0.0, 0.0,
         ],
         _ => identity,
+    }
+}
+
+/// Parse a `feComposite` `operator` (+ arithmetic k1..k4) (R10).
+fn parse_composite_op(attrs: &[(String, String)]) -> CompositeOp {
+    let k = |name: &str| attr_get(attrs, name).and_then(parse_f64).unwrap_or(0.0) as f32;
+    match attr_get(attrs, "operator")
+        .map(|v| v.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("in") => CompositeOp::In,
+        Some("out") => CompositeOp::Out,
+        Some("atop") => CompositeOp::Atop,
+        Some("xor") => CompositeOp::Xor,
+        Some("arithmetic") => CompositeOp::Arithmetic {
+            k1: k("k1"),
+            k2: k("k2"),
+            k3: k("k3"),
+            k4: k("k4"),
+        },
+        _ => CompositeOp::Over,
+    }
+}
+
+/// Parse `feFuncR/G/B/A` children into per-channel transfer functions (R10).
+fn parse_component_transfer(node: &SvgNode) -> [TransferFunc; 4] {
+    let mut funcs = [
+        TransferFunc::Identity,
+        TransferFunc::Identity,
+        TransferFunc::Identity,
+        TransferFunc::Identity,
+    ];
+    for child in node.children().unwrap_or_default() {
+        let SvgNode::Unsupported { tag, attrs, .. } = child else {
+            continue;
+        };
+        let idx = match tag.as_str() {
+            "fefuncr" => 0,
+            "fefuncg" => 1,
+            "fefuncb" => 2,
+            "fefunca" => 3,
+            _ => continue,
+        };
+        funcs[idx] = parse_transfer_func(attrs);
+    }
+    funcs
+}
+
+fn parse_transfer_func(attrs: &[(String, String)]) -> TransferFunc {
+    let f = |name: &str, default: f32| {
+        attr_get(attrs, name)
+            .and_then(parse_f64)
+            .map(|v| v as f32)
+            .unwrap_or(default)
+    };
+    let table = || {
+        svg_core::parse_numbers(attr_get(attrs, "tablevalues").unwrap_or(""))
+            .into_iter()
+            .map(|v| v as f32)
+            .collect::<Vec<f32>>()
+    };
+    match attr_get(attrs, "type")
+        .map(|v| v.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("table") => TransferFunc::Table(table()),
+        Some("discrete") => TransferFunc::Discrete(table()),
+        Some("linear") => TransferFunc::Linear {
+            slope: f("slope", 1.0),
+            intercept: f("intercept", 0.0),
+        },
+        Some("gamma") => TransferFunc::Gamma {
+            amplitude: f("amplitude", 1.0),
+            exponent: f("exponent", 1.0),
+            offset: f("offset", 0.0),
+        },
+        _ => TransferFunc::Identity,
     }
 }
 
@@ -11011,6 +11368,74 @@ mod tests {
         assert_eq!(pixel(&out, 0, 0), [0, 0, 255, 255]);
         assert_eq!(pixel(&out, 1, 0), [0, 0, 0, 0]);
         assert_eq!(pixel(&out, 2, 0), [0, 0, 255, 255]);
+    }
+
+    // --- R10: tier-2 filter primitives --------------------------------------
+
+    #[test]
+    fn feblend_multiply_and_screen_differ_and_are_deterministic() {
+        let multiply = r##"<svg viewBox="0 0 4 4"><filter id="f"><feFlood flood-color="#00ff00" result="b"/><feBlend mode="multiply" in="SourceGraphic" in2="b"/></filter><rect width="4" height="4" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        let screen = r##"<svg viewBox="0 0 4 4"><filter id="f"><feFlood flood-color="#00ff00" result="b"/><feBlend mode="screen" in="SourceGraphic" in2="b"/></filter><rect width="4" height="4" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        let m1 = rasterize(multiply, 4, 4).unwrap();
+        let m2 = rasterize(multiply, 4, 4).unwrap();
+        assert_eq!(m1.pixels, m2.pixels, "feBlend must be deterministic");
+        // multiply(red, green) = black; screen(red, green) = yellow.
+        assert_eq!(pixel(&m1, 0, 0), [0, 0, 0, 255]);
+        let s = rasterize(screen, 4, 4).unwrap();
+        assert_eq!(pixel(&s, 0, 0), [255, 255, 0, 255]);
+    }
+
+    #[test]
+    fn fecomposite_arithmetic_and_porterduff_render() {
+        // arithmetic add of red over green flood = yellow.
+        let add = r##"<svg viewBox="0 0 2 2"><filter id="f"><feFlood flood-color="#00ff00" result="g"/><feComposite operator="arithmetic" k1="0" k2="1" k3="1" k4="0" in="SourceGraphic" in2="g"/></filter><rect width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        assert_eq!(
+            pixel(&rasterize(add, 2, 2).unwrap(), 0, 0),
+            [255, 255, 0, 255]
+        );
+        // operator="in" keeps source only where the backdrop (flood) is present.
+        let op_in = r##"<svg viewBox="0 0 2 2"><filter id="f"><feFlood flood-color="#0000ff" result="g"/><feComposite operator="in" in="SourceGraphic" in2="g"/></filter><rect width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        assert_eq!(
+            pixel(&rasterize(op_in, 2, 2).unwrap(), 0, 0),
+            [255, 0, 0, 255]
+        );
+    }
+
+    #[test]
+    fn fecomponent_transfer_gamma_and_linear_are_applied() {
+        // gamma exponent=2 on a mid grey (0.5) -> 0.25.
+        assert_eq!(
+            TransferFunc::Gamma {
+                amplitude: 1.0,
+                exponent: 2.0,
+                offset: 0.0,
+            }
+            .apply(0.5),
+            0.25
+        );
+        // linear slope=0 intercept=1 forces the channel to full.
+        assert_eq!(
+            TransferFunc::Linear {
+                slope: 0.0,
+                intercept: 1.0,
+            }
+            .apply(0.0),
+            1.0
+        );
+        // table inversion renders (red -> cyan) end to end.
+        let svg = r##"<svg viewBox="0 0 2 2"><filter id="f"><feComponentTransfer><feFuncR type="table" tableValues="1 0"/></feComponentTransfer></filter><rect width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        assert_eq!(pixel(&rasterize(svg, 2, 2).unwrap(), 0, 0), [0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn femorphology_dilate_grows_and_huge_radius_is_bounded() {
+        let svg = r##"<svg viewBox="0 0 8 8"><filter id="f"><feMorphology operator="dilate" radius="1"/></filter><rect x="3" y="3" width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        let out = rasterize(svg, 8, 8).unwrap();
+        // Dilation reaches the pixel just outside the original 2x2 square.
+        assert_eq!(pixel(&out, 2, 2), [255, 0, 0, 255]);
+        // A pathological radius must complete (capped) without panicking.
+        let bomb = r##"<svg viewBox="0 0 8 8"><filter id="f"><feMorphology operator="dilate" radius="100000"/></filter><rect width="8" height="8" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        assert_eq!(rasterize(bomb, 8, 8).unwrap().size, [8, 8]);
     }
 
     // --- R8.1: in-repo fuzz harness + memory/CPU cap regressions ------------

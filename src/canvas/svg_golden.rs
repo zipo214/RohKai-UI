@@ -418,6 +418,43 @@ pub fn fixtures() -> Vec<GoldenFixture> {
             golden: "B.B.\nB.B.\nB.B.\nB.B.",
         },
         GoldenFixture {
+            // R10: feComposite operator="arithmetic" (k2=k3=1 -> additive). A 2x2
+            // red source added to a green flood is yellow where they overlap and
+            // green elsewhere.
+            name: "r10_composite_arithmetic_add",
+            svg: r##"<svg viewBox="0 0 4 4"><filter id="f"><feFlood flood-color="#00ff00" result="g"/><feComposite operator="arithmetic" k1="0" k2="1" k3="1" k4="0" in="SourceGraphic" in2="g"/></filter><rect width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##,
+            width: 4,
+            height: 4,
+            golden: "RRGG\nRRGG\nGGGG\nGGGG",
+        },
+        GoldenFixture {
+            // R10: feBlend mode="multiply" — red source over a green backdrop
+            // multiplies to black across the fill.
+            name: "r10_blend_multiply",
+            svg: r##"<svg viewBox="0 0 4 4"><filter id="f"><feFlood flood-color="#00ff00" result="bg"/><feBlend mode="multiply" in="SourceGraphic" in2="bg"/></filter><rect width="4" height="4" fill="#ff0000" filter="url(#f)"/></svg>"##,
+            width: 4,
+            height: 4,
+            golden: "KKKK\nKKKK\nKKKK\nKKKK",
+        },
+        GoldenFixture {
+            // R10: feComponentTransfer table="1 0" inverts each RGB channel, so a
+            // red fill becomes cyan.
+            name: "r10_component_transfer_invert",
+            svg: r##"<svg viewBox="0 0 4 4"><filter id="f"><feComponentTransfer><feFuncR type="table" tableValues="1 0"/><feFuncG type="table" tableValues="1 0"/><feFuncB type="table" tableValues="1 0"/></feComponentTransfer></filter><rect width="4" height="4" fill="#ff0000" filter="url(#f)"/></svg>"##,
+            width: 4,
+            height: 4,
+            golden: "GGGG\nGGGG\nGGGG\nGGGG",
+        },
+        GoldenFixture {
+            // R10: feMorphology operator="dilate" radius="1" grows a 2x2 red
+            // square (cols/rows 3-4) outward by one pixel each side.
+            name: "r10_morphology_dilate",
+            svg: r##"<svg viewBox="0 0 8 8"><filter id="f"><feMorphology operator="dilate" radius="1"/></filter><rect x="3" y="3" width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##,
+            width: 8,
+            height: 8,
+            golden: "........\n........\n..RRRR..\n..RRRR..\n..RRRR..\n..RRRR..\n........\n........",
+        },
+        GoldenFixture {
             name: "unsafe_external_href_rejected",
             svg: r##"<svg viewBox="0 0 4 4"><image href="https://example.invalid/a.png" width="4" height="4"/></svg>"##,
             width: 4,
