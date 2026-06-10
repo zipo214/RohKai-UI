@@ -3315,6 +3315,24 @@ mod tests {
         }
     }
 
+    /// R11 invariant: raster text (bundled vector font + textPath) renders in
+    /// the export-embedded rasterizer, not merely diagnostics.
+    #[test]
+    fn embedded_rasterizer_includes_r11_render_paths() {
+        for marker in [
+            "HERSHEY_SIMPLEX",         // bundled public-domain glyph data
+            "fn lower_text_command",   // text -> stroked glyph Shape lowering
+            "fn scan_text_runs",       // tspan/textPath content scanner
+            "struct ArcLengthPath",    // textPath arc-length placement
+            "fn append_glyph_strokes", // glyph polyline emission
+        ] {
+            assert!(
+                SVG_RASTERIZER_SOURCE.contains(marker),
+                "embedded rasterizer missing R11 render path: {marker}"
+            );
+        }
+    }
+
     /// Always-run smoke: the fixture generates the required files and its source
     /// contains every feature-matrix marker.  Fast (no compilation).
     #[test]

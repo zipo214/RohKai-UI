@@ -484,6 +484,33 @@ pub fn fixtures() -> Vec<GoldenFixture> {
             golden: "KKKK\nKKKK\nKKKK\nKKKK",
         },
         GoldenFixture {
+            // R11: raster text snapshot — the word "Hi" stroked with the bundled
+            // Hershey simplex font at font-size 12 (baseline y=12).
+            name: "r11_text_word",
+            svg: r##"<svg viewBox="0 0 16 16"><text x="1" y="12" font-size="12" fill="#ff0000">Hi</text></svg>"##,
+            width: 16,
+            height: 16,
+            golden: "................\n................\n...........o....\n..o....oo.oRo...\n..o....oo.oo....\n..o....oo.......\n..o....oo..o....\n..RooooRo..o....\n..o....oo..o....\n..o....oo..o....\n..o....oo..o....\n..o....oo..o....\n..o....oo..o....\n................\n................\n................",
+        },
+        GoldenFixture {
+            // R11: text-anchor="middle" centres the run on x=8 (compare with the
+            // start-anchored fixture above).
+            name: "r11_text_anchor_middle",
+            svg: r##"<svg viewBox="0 0 16 16"><text x="8" y="12" font-size="12" fill="#0000ff" text-anchor="middle">Hi</text></svg>"##,
+            width: 16,
+            height: 16,
+            golden: "................\n................\n............o...\n...o....oo.oBo..\n...o....oo.oo...\n...o....oo......\n...o....oo..o...\n...BooooBo..o...\n...o....oo..o...\n...o....oo..o...\n...o....oo..o...\n...o....oo..o...\n...o....oo..o...\n................\n................\n................",
+        },
+        GoldenFixture {
+            // R11: textPath places glyphs along a referenced path by arc-length
+            // ("ll" along a rising diagonal — two strokes following the slope).
+            name: "r11_textpath_diagonal",
+            svg: r##"<svg viewBox="0 0 16 16"><defs><path id="p" d="M2 14 L14 2"/></defs><text font-size="10" fill="#00aa00"><textPath href="#p">ll</textPath></text></svg>"##,
+            width: 16,
+            height: 16,
+            golden: "................\n................\n................\n................\n................\n................\noo..............\nooo.............\n.ooo............\no.ooo...........\noo.ooo..........\nooo.oo..........\n.ooo............\n..oo............\n................\n................",
+        },
+        GoldenFixture {
             name: "unsafe_external_href_rejected",
             svg: r##"<svg viewBox="0 0 4 4"><image href="https://example.invalid/a.png" width="4" height="4"/></svg>"##,
             width: 4,

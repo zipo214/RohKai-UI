@@ -580,6 +580,28 @@ struct Style {
     stop_opacity: f32,
     visible: bool,
     vector_effect: VectorEffect,
+    /// Inherited `font-size` (R11 raster text); resolved at text lowering.
+    font_size: svg_core::SvgLength,
+    /// Inherited `text-anchor` (R11 raster text).
+    text_anchor: TextAnchor,
+}
+
+/// `text-anchor` (R11). Applied to the whole laid-out run.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum TextAnchor {
+    #[default]
+    Start,
+    Middle,
+    End,
+}
+
+fn parse_text_anchor(value: &str) -> Option<TextAnchor> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "start" => Some(TextAnchor::Start),
+        "middle" => Some(TextAnchor::Middle),
+        "end" => Some(TextAnchor::End),
+        _ => None,
+    }
 }
 
 impl Default for Style {
@@ -602,6 +624,11 @@ impl Default for Style {
             stop_opacity: 1.0,
             visible: true,
             vector_effect: VectorEffect::None,
+            font_size: svg_core::SvgLength {
+                value: 16.0,
+                unit: svg_core::SvgLengthUnit::Number,
+            },
+            text_anchor: TextAnchor::Start,
         }
     }
 }
@@ -727,6 +754,18 @@ impl Style {
                 // to None and are diagnosed at lowering time.
                 if let Some(effect) = parse_vector_effect(value) {
                     self.vector_effect = effect;
+                }
+            }
+            "font-size" => {
+                if let Some(size) = svg_core::parse_length(value)
+                    .filter(|size| size.value.is_finite() && size.value > 0.0)
+                {
+                    self.font_size = size;
+                }
+            }
+            "text-anchor" => {
+                if let Some(anchor) = parse_text_anchor(value) {
+                    self.text_anchor = anchor;
                 }
             }
             "display" if value.trim() == "none" => {
@@ -2027,9 +2066,10 @@ enum SvgNode {
     Text {
         id: SvgNodeId,
         span: SvgSourceSpan,
-        // Skipped in rendering; kept for parse completeness
-        #[allow(dead_code)]
         attrs: Vec<(String, String)>,
+        /// Raw inner markup of the `<text>` element (plain text plus nested
+        /// `<tspan>` runs), scanned into glyph runs by the R11 text renderer.
+        content: String,
     },
     Definition {
         id: SvgNodeId,
@@ -2662,10 +2702,16 @@ impl SvgNode {
                 span: *span,
                 attrs: attrs.clone(),
             },
-            SvgNode::Text { id, span, attrs } => SvgNode::Text {
+            SvgNode::Text {
+                id,
+                span,
+                attrs,
+                content,
+            } => SvgNode::Text {
                 id: *id,
                 span: *span,
                 attrs: attrs.clone(),
+                content: content.clone(),
             },
             SvgNode::Definition {
                 id,
@@ -3158,12 +3204,20 @@ impl<'a> XmlParser<'a> {
             }
             ch
         } else if !self_closing && is_text {
-            // Consume until close tag (text content is skipped)
-            self.consume_until("</");
-            if self.starts_with("</") {
-                self.consume(2);
+            // Capture the raw inner markup (plain text + nested <tspan> runs)
+            // until the MATCHING close tag, so `<text>a<tspan>b</tspan></text>`
+            // is not cut at the first `</` (R11 raster text needs the content).
+            let close = format!("</{tag}");
+            if let Some(relative) = self.s[self.pos..].to_ascii_lowercase().find(&close) {
+                let end = self.pos + relative;
+                text_content = self.s[self.pos..end].to_owned();
+                self.pos = end;
+                self.consume(2 + tag.len());
                 self.consume_until(">");
                 self.consume(1);
+            } else {
+                // Unterminated text element — consume the rest, render nothing.
+                self.pos = self.s.len();
             }
             Vec::new()
         } else if !self_closing {
@@ -3271,7 +3325,12 @@ impl<'a> XmlParser<'a> {
             "polyline" => Some(SvgNode::Polyline { id, span, attrs }),
             "polygon" => Some(SvgNode::Polygon { id, span, attrs }),
             "path" => Some(SvgNode::Path { id, span, attrs }),
-            "text" | "tspan" => Some(SvgNode::Text { id, span, attrs }),
+            "text" | "tspan" => Some(SvgNode::Text {
+                id,
+                span,
+                attrs,
+                content: text_content,
+            }),
             "defs" | "symbol" => Some(SvgNode::Definition {
                 id,
                 span,
@@ -3564,6 +3623,901 @@ fn shape_layer(
         blend,
         source,
     })
+}
+
+// ---------------------------------------------------------------------------
+// R11: raster text (vector-outline snapshot via a bundled stroked font)
+// ---------------------------------------------------------------------------
+//
+// Image-mode text rendering uses an embedded public-domain stroked vector font
+// (Hershey "simplex", Allen V. Hershey, US Naval Weapons Laboratory — public
+// domain).  Coverage is ASCII 32..=126 only; every other character renders as
+// a tofu box with a diagnostic.  Glyph metrics: y-up, baseline at 0, capital
+// height 21 units, descender to -7; we treat 30 units as one em (cap height =
+// 0.70 em).  Each glyph is a set of polylines that are laid out in user space
+// and stroked through the existing stroke pipeline (so clips, masks, filters,
+// opacity, and gradient paint all apply to text exactly like to shapes).
+//
+// This is the *visual-fidelity snapshot* path: component import (svg_import.rs,
+// R6) keeps producing editable labels and is unchanged; choosing Image mode is
+// the opt-in to this raster snapshot, with the original source preserved.
+
+/// One em in glyph units (capital height 21 → 0.70 em).
+const HERSHEY_EM_UNITS: f64 = 30.0;
+/// Glyph stroke width in glyph units (2 units ≈ font_size / 15).
+const HERSHEY_STROKE_UNITS: f64 = 2.0;
+/// Maximum glyphs laid out per `<text>` element (R11).
+const MAX_TEXT_GLYPHS: usize = 4_096;
+
+/// Hershey simplex strokes for ASCII 32..=126.  Each entry is
+/// `[advance_width, x0, y0, x1, y1, ...]` with `(-1, -1)` pairs as pen-up
+/// markers (no real vertex has x = -1).  `^` is a simplified caret.
+const HERSHEY_SIMPLEX: [&[i8]; 95] = [
+    &[16],                                                    // space
+    &[10, 5, 21, 5, 7, -1, -1, 5, 2, 4, 1, 5, 0, 6, 1, 5, 2], // !
+    &[16, 4, 21, 4, 14, -1, -1, 12, 21, 12, 14],              // "
+    &[
+        21, 11, 25, 4, -7, -1, -1, 17, 25, 10, -7, -1, -1, 4, 12, 18, 12, -1, -1, 3, 6, 17, 6,
+    ], // #
+    &[
+        20, 8, 25, 8, -4, -1, -1, 12, 25, 12, -4, -1, -1, 17, 18, 15, 20, 12, 21, 8, 21, 5, 20, 3,
+        18, 3, 16, 4, 14, 5, 13, 7, 12, 13, 10, 15, 9, 16, 8, 17, 6, 17, 3, 15, 1, 12, 0, 8, 0, 5,
+        1, 3, 3,
+    ], // $
+    &[
+        24, 21, 21, 3, 0, -1, -1, 8, 21, 10, 19, 10, 17, 9, 15, 7, 14, 5, 14, 3, 16, 3, 18, 4, 20,
+        6, 21, 8, 21, 10, 20, 13, 19, 16, 19, 19, 20, 21, 21, -1, -1, 17, 7, 15, 6, 14, 4, 14, 2,
+        16, 0, 18, 0, 20, 1, 21, 3, 21, 5, 19, 7, 17, 7,
+    ], // %
+    &[
+        26, 23, 12, 23, 13, 22, 14, 21, 14, 20, 13, 19, 11, 17, 6, 15, 3, 13, 1, 11, 0, 7, 0, 5, 1,
+        4, 2, 3, 4, 3, 6, 4, 8, 5, 9, 12, 13, 13, 14, 14, 16, 14, 18, 13, 20, 11, 21, 9, 20, 8, 18,
+        8, 16, 9, 13, 11, 10, 16, 3, 18, 1, 20, 0, 22, 0, 23, 1, 23, 2,
+    ], // &
+    &[10, 5, 19, 4, 20, 5, 21, 6, 20, 6, 18, 5, 16, 4, 15],   // '
+    &[
+        14, 11, 25, 9, 23, 7, 20, 5, 16, 4, 11, 4, 7, 5, 2, 7, -2, 9, -5, 11, -7,
+    ], // (
+    &[
+        14, 3, 25, 5, 23, 7, 20, 9, 16, 10, 11, 10, 7, 9, 2, 7, -2, 5, -5, 3, -7,
+    ], // )
+    &[
+        16, 8, 21, 8, 9, -1, -1, 3, 18, 13, 12, -1, -1, 13, 18, 3, 12,
+    ], // *
+    &[26, 13, 18, 13, 0, -1, -1, 4, 9, 22, 9],                // +
+    &[10, 6, 1, 5, 0, 4, 1, 5, 2, 6, 1, 6, -1, 5, -3, 4, -4], // ,
+    &[26, 4, 9, 22, 9],                                       // -
+    &[10, 5, 2, 4, 1, 5, 0, 6, 1, 5, 2],                      // .
+    &[22, 20, 25, 2, -7],                                     // /
+    &[
+        20, 9, 21, 6, 20, 4, 17, 3, 12, 3, 9, 4, 4, 6, 1, 9, 0, 11, 0, 14, 1, 16, 4, 17, 9, 17, 12,
+        16, 17, 14, 20, 11, 21, 9, 21,
+    ], // 0
+    &[20, 6, 17, 8, 18, 11, 21, 11, 0],                       // 1
+    &[
+        20, 4, 16, 4, 17, 5, 19, 6, 20, 8, 21, 12, 21, 14, 20, 15, 19, 16, 17, 16, 15, 15, 13, 13,
+        10, 3, 0, 17, 0,
+    ], // 2
+    &[
+        20, 5, 21, 16, 21, 10, 13, 13, 13, 15, 12, 16, 11, 17, 8, 17, 6, 16, 3, 14, 1, 11, 0, 8, 0,
+        5, 1, 4, 2, 3, 4,
+    ], // 3
+    &[20, 13, 21, 3, 7, 18, 7, -1, -1, 13, 21, 13, 0],        // 4
+    &[
+        20, 15, 21, 5, 21, 4, 12, 5, 13, 8, 14, 11, 14, 14, 13, 16, 11, 17, 8, 17, 6, 16, 3, 14, 1,
+        11, 0, 8, 0, 5, 1, 4, 2, 3, 4,
+    ], // 5
+    &[
+        20, 16, 18, 15, 20, 12, 21, 10, 21, 7, 20, 5, 17, 4, 12, 4, 7, 5, 3, 7, 1, 10, 0, 11, 0,
+        14, 1, 16, 3, 17, 6, 17, 7, 16, 10, 14, 12, 11, 13, 10, 13, 7, 12, 5, 10, 4, 7,
+    ], // 6
+    &[20, 17, 21, 7, 0, -1, -1, 3, 21, 17, 21],               // 7
+    &[
+        20, 8, 21, 5, 20, 4, 18, 4, 16, 5, 14, 7, 13, 11, 12, 14, 11, 16, 9, 17, 7, 17, 4, 16, 2,
+        15, 1, 12, 0, 8, 0, 5, 1, 4, 2, 3, 4, 3, 7, 4, 9, 6, 11, 9, 12, 13, 13, 15, 14, 16, 16, 16,
+        18, 15, 20, 12, 21, 8, 21,
+    ], // 8
+    &[
+        20, 16, 14, 15, 11, 13, 9, 10, 8, 9, 8, 6, 9, 4, 11, 3, 14, 3, 15, 4, 18, 6, 20, 9, 21, 10,
+        21, 13, 20, 15, 18, 16, 14, 16, 9, 15, 4, 13, 1, 10, 0, 8, 0, 5, 1, 4, 3,
+    ], // 9
+    &[
+        10, 5, 14, 4, 13, 5, 12, 6, 13, 5, 14, -1, -1, 5, 2, 4, 1, 5, 0, 6, 1, 5, 2,
+    ], // :
+    &[
+        10, 5, 14, 4, 13, 5, 12, 6, 13, 5, 14, -1, -1, 6, 1, 5, 0, 4, 1, 5, 2, 6, 1, 6, -1, 5, -3,
+        4, -4,
+    ], // ;
+    &[24, 20, 18, 4, 9, 20, 0],                               // <
+    &[26, 4, 12, 22, 12, -1, -1, 4, 6, 22, 6],                // =
+    &[24, 4, 18, 20, 9, 4, 0],                                // >
+    &[
+        18, 3, 16, 3, 17, 4, 19, 5, 20, 7, 21, 11, 21, 13, 20, 14, 19, 15, 17, 15, 15, 14, 13, 13,
+        12, 9, 10, 9, 7, -1, -1, 9, 2, 8, 1, 9, 0, 10, 1, 9, 2,
+    ], // ?
+    &[
+        27, 18, 13, 17, 15, 15, 16, 12, 16, 10, 15, 9, 14, 8, 11, 8, 8, 9, 6, 11, 5, 14, 5, 16, 6,
+        17, 8, -1, -1, 12, 16, 10, 14, 9, 11, 9, 8, 10, 6, 11, 5, -1, -1, 18, 16, 17, 8, 17, 6, 19,
+        5, 21, 5, 23, 7, 24, 10, 24, 12, 23, 15, 22, 17, 20, 19, 18, 20, 15, 21, 12, 21, 9, 20, 7,
+        19, 5, 17, 4, 15, 3, 12, 3, 9, 4, 6, 5, 4, 7, 2, 9, 1, 12, 0, 15, 0, 18, 1, 20, 2, 21, 3,
+        -1, -1, 19, 16, 18, 8, 18, 6, 19, 5,
+    ], // @
+    &[18, 9, 21, 1, 0, -1, -1, 9, 21, 17, 0, -1, -1, 4, 7, 14, 7], // A
+    &[
+        21, 4, 21, 4, 0, -1, -1, 4, 21, 13, 21, 16, 20, 17, 19, 18, 17, 18, 15, 17, 13, 16, 12, 13,
+        11, -1, -1, 4, 11, 13, 11, 16, 10, 17, 9, 18, 7, 18, 4, 17, 2, 16, 1, 13, 0, 4, 0,
+    ], // B
+    &[
+        21, 18, 16, 17, 18, 15, 20, 13, 21, 9, 21, 7, 20, 5, 18, 4, 16, 3, 13, 3, 8, 4, 5, 5, 3, 7,
+        1, 9, 0, 13, 0, 15, 1, 17, 3, 18, 5,
+    ], // C
+    &[
+        21, 4, 21, 4, 0, -1, -1, 4, 21, 11, 21, 14, 20, 16, 18, 17, 16, 18, 13, 18, 8, 17, 5, 16,
+        3, 14, 1, 11, 0, 4, 0,
+    ], // D
+    &[
+        19, 4, 21, 4, 0, -1, -1, 4, 21, 17, 21, -1, -1, 4, 11, 12, 11, -1, -1, 4, 0, 17, 0,
+    ], // E
+    &[
+        18, 4, 21, 4, 0, -1, -1, 4, 21, 17, 21, -1, -1, 4, 11, 12, 11,
+    ], // F
+    &[
+        21, 18, 16, 17, 18, 15, 20, 13, 21, 9, 21, 7, 20, 5, 18, 4, 16, 3, 13, 3, 8, 4, 5, 5, 3, 7,
+        1, 9, 0, 13, 0, 15, 1, 17, 3, 18, 5, 18, 8, -1, -1, 13, 8, 18, 8,
+    ], // G
+    &[
+        22, 4, 21, 4, 0, -1, -1, 18, 21, 18, 0, -1, -1, 4, 11, 18, 11,
+    ], // H
+    &[8, 4, 21, 4, 0],                                        // I
+    &[
+        16, 12, 21, 12, 5, 11, 2, 10, 1, 8, 0, 6, 0, 4, 1, 3, 2, 2, 5, 2, 7,
+    ], // J
+    &[21, 4, 21, 4, 0, -1, -1, 18, 21, 4, 7, -1, -1, 9, 12, 18, 0], // K
+    &[17, 4, 21, 4, 0, -1, -1, 4, 0, 16, 0],                  // L
+    &[
+        24, 4, 21, 4, 0, -1, -1, 4, 21, 12, 0, -1, -1, 20, 21, 12, 0, -1, -1, 20, 21, 20, 0,
+    ], // M
+    &[22, 4, 21, 4, 0, -1, -1, 4, 21, 18, 0, -1, -1, 18, 21, 18, 0], // N
+    &[
+        22, 9, 21, 7, 20, 5, 18, 4, 16, 3, 13, 3, 8, 4, 5, 5, 3, 7, 1, 9, 0, 13, 0, 15, 1, 17, 3,
+        18, 5, 19, 8, 19, 13, 18, 16, 17, 18, 15, 20, 13, 21, 9, 21,
+    ], // O
+    &[
+        21, 4, 21, 4, 0, -1, -1, 4, 21, 13, 21, 16, 20, 17, 19, 18, 17, 18, 14, 17, 12, 16, 11, 13,
+        10, 4, 10,
+    ], // P
+    &[
+        22, 9, 21, 7, 20, 5, 18, 4, 16, 3, 13, 3, 8, 4, 5, 5, 3, 7, 1, 9, 0, 13, 0, 15, 1, 17, 3,
+        18, 5, 19, 8, 19, 13, 18, 16, 17, 18, 15, 20, 13, 21, 9, 21, -1, -1, 12, 4, 18, -2,
+    ], // Q
+    &[
+        21, 4, 21, 4, 0, -1, -1, 4, 21, 13, 21, 16, 20, 17, 19, 18, 17, 18, 15, 17, 13, 16, 12, 13,
+        11, 4, 11, -1, -1, 11, 11, 18, 0,
+    ], // R
+    &[
+        20, 17, 18, 15, 20, 12, 21, 8, 21, 5, 20, 3, 18, 3, 16, 4, 14, 5, 13, 7, 12, 13, 10, 15, 9,
+        16, 8, 17, 6, 17, 3, 15, 1, 12, 0, 8, 0, 5, 1, 3, 3,
+    ], // S
+    &[16, 8, 21, 8, 0, -1, -1, 1, 21, 15, 21],                // T
+    &[
+        22, 4, 21, 4, 6, 5, 3, 7, 1, 10, 0, 12, 0, 15, 1, 17, 3, 18, 6, 18, 21,
+    ], // U
+    &[18, 1, 21, 9, 0, -1, -1, 17, 21, 9, 0],                 // V
+    &[
+        24, 2, 21, 7, 0, -1, -1, 12, 21, 7, 0, -1, -1, 12, 21, 17, 0, -1, -1, 22, 21, 17, 0,
+    ], // W
+    &[20, 3, 21, 17, 0, -1, -1, 17, 21, 3, 0],                // X
+    &[18, 1, 21, 9, 11, 9, 0, -1, -1, 17, 21, 9, 11],         // Y
+    &[20, 17, 21, 3, 0, -1, -1, 3, 21, 17, 21, -1, -1, 3, 0, 17, 0], // Z
+    &[
+        14, 4, 25, 4, -7, -1, -1, 5, 25, 5, -7, -1, -1, 4, 25, 11, 25, -1, -1, 4, -7, 11, -7,
+    ], // [
+    &[14, 0, 21, 14, -3],                                     // backslash
+    &[
+        14, 9, 25, 9, -7, -1, -1, 10, 25, 10, -7, -1, -1, 3, 25, 10, 25, -1, -1, 3, -7, 10, -7,
+    ], // ]
+    &[16, 4, 14, 8, 21, 12, 14],                              // ^ (simplified caret)
+    &[16, 0, -2, 16, -2],                                     // _
+    &[10, 6, 21, 5, 20, 4, 18, 4, 16, 5, 15, 6, 16, 5, 17],   // `
+    &[
+        19, 15, 14, 15, 0, -1, -1, 15, 11, 13, 13, 11, 14, 8, 14, 6, 13, 4, 11, 3, 8, 3, 6, 4, 3,
+        6, 1, 8, 0, 11, 0, 13, 1, 15, 3,
+    ], // a
+    &[
+        19, 4, 21, 4, 0, -1, -1, 4, 11, 6, 13, 8, 14, 11, 14, 13, 13, 15, 11, 16, 8, 16, 6, 15, 3,
+        13, 1, 11, 0, 8, 0, 6, 1, 4, 3,
+    ], // b
+    &[
+        18, 15, 11, 13, 13, 11, 14, 8, 14, 6, 13, 4, 11, 3, 8, 3, 6, 4, 3, 6, 1, 8, 0, 11, 0, 13,
+        1, 15, 3,
+    ], // c
+    &[
+        19, 15, 21, 15, 0, -1, -1, 15, 11, 13, 13, 11, 14, 8, 14, 6, 13, 4, 11, 3, 8, 3, 6, 4, 3,
+        6, 1, 8, 0, 11, 0, 13, 1, 15, 3,
+    ], // d
+    &[
+        18, 3, 8, 15, 8, 15, 10, 14, 12, 13, 13, 11, 14, 8, 14, 6, 13, 4, 11, 3, 8, 3, 6, 4, 3, 6,
+        1, 8, 0, 11, 0, 13, 1, 15, 3,
+    ], // e
+    &[12, 10, 21, 8, 21, 6, 20, 5, 17, 5, 0, -1, -1, 2, 14, 9, 14], // f
+    &[
+        19, 15, 14, 15, -2, 14, -5, 13, -6, 11, -7, 8, -7, 6, -6, -1, -1, 15, 11, 13, 13, 11, 14,
+        8, 14, 6, 13, 4, 11, 3, 8, 3, 6, 4, 3, 6, 1, 8, 0, 11, 0, 13, 1, 15, 3,
+    ], // g
+    &[
+        19, 4, 21, 4, 0, -1, -1, 4, 10, 7, 13, 9, 14, 12, 14, 14, 13, 15, 10, 15, 0,
+    ], // h
+    &[8, 3, 21, 4, 20, 5, 21, 4, 22, 3, 21, -1, -1, 4, 14, 4, 0], // i
+    &[
+        10, 5, 21, 6, 20, 7, 21, 6, 22, 5, 21, -1, -1, 6, 14, 6, -3, 5, -6, 3, -7, 1, -7,
+    ], // j
+    &[17, 4, 21, 4, 0, -1, -1, 14, 14, 4, 4, -1, -1, 8, 8, 15, 0], // k
+    &[8, 4, 21, 4, 0],                                        // l
+    &[
+        30, 4, 14, 4, 0, -1, -1, 4, 10, 7, 13, 9, 14, 12, 14, 14, 13, 15, 10, 15, 0, -1, -1, 15,
+        10, 18, 13, 20, 14, 23, 14, 25, 13, 26, 10, 26, 0,
+    ], // m
+    &[
+        19, 4, 14, 4, 0, -1, -1, 4, 10, 7, 13, 9, 14, 12, 14, 14, 13, 15, 10, 15, 0,
+    ], // n
+    &[
+        19, 8, 14, 6, 13, 4, 11, 3, 8, 3, 6, 4, 3, 6, 1, 8, 0, 11, 0, 13, 1, 15, 3, 16, 6, 16, 8,
+        15, 11, 13, 13, 11, 14, 8, 14,
+    ], // o
+    &[
+        19, 4, 14, 4, -7, -1, -1, 4, 11, 6, 13, 8, 14, 11, 14, 13, 13, 15, 11, 16, 8, 16, 6, 15, 3,
+        13, 1, 11, 0, 8, 0, 6, 1, 4, 3,
+    ], // p
+    &[
+        19, 15, 14, 15, -7, -1, -1, 15, 11, 13, 13, 11, 14, 8, 14, 6, 13, 4, 11, 3, 8, 3, 6, 4, 3,
+        6, 1, 8, 0, 11, 0, 13, 1, 15, 3,
+    ], // q
+    &[13, 4, 14, 4, 0, -1, -1, 4, 8, 5, 11, 7, 13, 9, 14, 12, 14], // r
+    &[
+        17, 14, 11, 13, 13, 10, 14, 7, 14, 4, 13, 3, 11, 4, 9, 6, 8, 11, 7, 13, 6, 14, 4, 14, 3,
+        13, 1, 10, 0, 7, 0, 4, 1, 3, 3,
+    ], // s
+    &[12, 5, 21, 5, 4, 6, 1, 8, 0, 10, 0, -1, -1, 2, 14, 9, 14], // t
+    &[
+        19, 4, 14, 4, 4, 5, 1, 7, 0, 10, 0, 12, 1, 15, 4, -1, -1, 15, 14, 15, 0,
+    ], // u
+    &[16, 2, 14, 8, 0, -1, -1, 14, 14, 8, 0],                 // v
+    &[
+        22, 3, 14, 7, 0, -1, -1, 11, 14, 7, 0, -1, -1, 11, 14, 15, 0, -1, -1, 19, 14, 15, 0,
+    ], // w
+    &[17, 3, 14, 14, 0, -1, -1, 14, 14, 3, 0],                // x
+    &[
+        16, 2, 14, 8, 0, -1, -1, 14, 14, 8, 0, 6, -4, 4, -6, 2, -7, 1, -7,
+    ], // y
+    &[17, 14, 14, 3, 0, -1, -1, 3, 14, 14, 14, -1, -1, 3, 0, 14, 0], // z
+    &[
+        14, 9, 25, 7, 24, 6, 23, 5, 21, 5, 19, 6, 17, 7, 16, 8, 14, 8, 12, 6, 10, -1, -1, 7, 24, 6,
+        22, 6, 20, 7, 18, 8, 17, 9, 15, 9, 13, 8, 11, 4, 9, 8, 7, 9, 5, 9, 3, 8, 1, 7, 0, 6, -2, 6,
+        -4, 7, -6, -1, -1, 6, 8, 8, 6, 8, 4, 7, 2, 6, 1, 5, -1, 5, -3, 6, -5, 7, -6, 9, -7,
+    ], // {
+    &[8, 4, 25, 4, -7],                                       // |
+    &[
+        14, 5, 25, 7, 24, 8, 23, 9, 21, 9, 19, 8, 17, 7, 16, 6, 14, 6, 12, 8, 10, -1, -1, 7, 24, 8,
+        22, 8, 20, 7, 18, 6, 17, 5, 15, 5, 13, 6, 11, 10, 9, 6, 7, 5, 5, 5, 3, 6, 1, 7, 0, 8, -2,
+        8, -4, 7, -6, -1, -1, 8, 8, 6, 6, 6, 4, 7, 2, 8, 1, 9, -1, 9, -3, 8, -5, 7, -6, 5, -7,
+    ], // }
+    &[
+        24, 3, 6, 3, 8, 4, 11, 6, 12, 8, 12, 10, 11, 14, 8, 16, 7, 18, 7, 20, 8, 21, 10, -1, -1, 3,
+        8, 4, 10, 6, 11, 8, 11, 10, 10, 14, 7, 16, 6, 18, 6, 20, 7, 21, 9, 21, 11,
+    ], // ~
+];
+
+/// Look up the stroke set for an ASCII character.
+fn hershey_glyph(c: char) -> Option<&'static [i8]> {
+    let code = c as usize;
+    if !(32..=126).contains(&code) {
+        return None;
+    }
+    Some(HERSHEY_SIMPLEX[code - 32])
+}
+
+/// Tofu box strokes (drawn for any character outside the bundled coverage).
+const TOFU_STROKES: &[i8] = &[16, 3, 0, 13, 0, 13, 21, 3, 21, 3, 0];
+
+/// Advance width (glyph units) for a character, tofu included.
+fn glyph_advance_units(c: char) -> f64 {
+    hershey_glyph(c).unwrap_or(TOFU_STROKES)[0] as f64
+}
+
+/// One laid-out run of characters from a `<text>` element's inner markup.
+struct TextRun {
+    text: String,
+    /// Absolute reposition from a `<tspan x= y=>`, in user units.
+    x: Option<f32>,
+    y: Option<f32>,
+    /// Relative offsets from `<tspan dx= dy=>`, in user units.
+    dx: f32,
+    dy: f32,
+}
+
+/// Flags accumulated while scanning text content (each becomes a diagnostic).
+#[derive(Default)]
+struct TextScanFlags {
+    nested_tspan: bool,
+    styled_tspan: bool,
+    text_path: Option<TextPathRef>,
+}
+
+/// A `<textPath>` reference found inside a `<text>` element.
+struct TextPathRef {
+    href: Option<String>,
+    start_offset: Option<svg_core::SvgLength>,
+    text: String,
+}
+
+/// Collapse XML whitespace runs to single spaces (default `xml:space`).
+fn collapse_text_whitespace(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_ws = false;
+    for c in s.chars() {
+        if c.is_whitespace() {
+            if !in_ws && !out.is_empty() {
+                out.push(' ');
+            }
+            in_ws = true;
+        } else {
+            out.push(c);
+            in_ws = false;
+        }
+    }
+    if out.ends_with(' ') {
+        out.pop();
+    }
+    out
+}
+
+/// Extract the attribute list from a raw `<tag attr="v">` fragment.
+fn scan_tag_attrs(tag_body: &str) -> Vec<(String, String)> {
+    let mut parser = XmlParser {
+        s: tag_body,
+        pos: 0,
+        next_node_id: 0,
+    };
+    let mut attrs = Vec::new();
+    while parser.pos < tag_body.len() {
+        if let Some((k, v)) = parser.parse_attr() {
+            attrs.push((k, v));
+        } else {
+            parser.consume(1);
+        }
+    }
+    attrs
+}
+
+/// Scan a `<text>` element's raw inner markup into flat character runs plus an
+/// optional `<textPath>` payload.  One level of `<tspan>` is honored
+/// (x/y/dx/dy); deeper nesting and other child tags are flattened to their
+/// text with a diagnostic flag.
+fn scan_text_runs(content: &str) -> (Vec<TextRun>, TextScanFlags) {
+    let mut runs = Vec::new();
+    let mut flags = TextScanFlags::default();
+    let lower = content.to_ascii_lowercase();
+    let mut pos = 0usize;
+
+    let push_plain = |text: &str, runs: &mut Vec<TextRun>| {
+        let collapsed = collapse_text_whitespace(&unescape_xml(text));
+        if !collapsed.is_empty() {
+            runs.push(TextRun {
+                text: collapsed,
+                x: None,
+                y: None,
+                dx: 0.0,
+                dy: 0.0,
+            });
+        }
+    };
+
+    while pos < content.len() {
+        let Some(open_rel) = lower[pos..].find('<') else {
+            push_plain(&content[pos..], &mut runs);
+            break;
+        };
+        let open = pos + open_rel;
+        push_plain(&content[pos..open], &mut runs);
+        let Some(gt_rel) = lower[open..].find('>') else {
+            break; // malformed tail — stop scanning
+        };
+        let tag_end = open + gt_rel;
+        let tag_body = &content[open + 1..tag_end];
+        let tag_lower = &lower[open + 1..tag_end];
+        if tag_lower.starts_with("tspan") {
+            let attrs = scan_tag_attrs(&tag_body["tspan".len()..]);
+            if attrs
+                .iter()
+                .any(|(k, _)| matches!(k.as_str(), "font-size" | "fill" | "stroke" | "style"))
+            {
+                flags.styled_tspan = true;
+            }
+            let self_closing = tag_body.trim_end().ends_with('/');
+            let (inner, after) = if self_closing {
+                ("", tag_end + 1)
+            } else if let Some(close_rel) = lower[tag_end..].find("</tspan") {
+                let close = tag_end + close_rel;
+                let inner = &content[tag_end + 1..close];
+                let after = lower[close..]
+                    .find('>')
+                    .map(|r| close + r + 1)
+                    .unwrap_or(content.len());
+                (inner, after)
+            } else {
+                (&content[tag_end + 1..], content.len())
+            };
+            if inner.to_ascii_lowercase().contains("<tspan") {
+                flags.nested_tspan = true;
+            }
+            // Flatten any nested markup inside the tspan to its text.
+            let inner_text = strip_tags(inner);
+            let collapsed = collapse_text_whitespace(&unescape_xml(&inner_text));
+            if !collapsed.is_empty() {
+                let num = |key: &str| {
+                    attr_get(&attrs, key)
+                        .and_then(svg_core::parse_length)
+                        .map(|l| l.value as f32)
+                };
+                runs.push(TextRun {
+                    text: collapsed,
+                    x: num("x"),
+                    y: num("y"),
+                    dx: num("dx").unwrap_or(0.0),
+                    dy: num("dy").unwrap_or(0.0),
+                });
+            }
+            pos = after;
+        } else if tag_lower.starts_with("textpath") {
+            let attrs = scan_tag_attrs(&tag_body["textpath".len()..]);
+            let (inner, after) = if let Some(close_rel) = lower[tag_end..].find("</textpath") {
+                let close = tag_end + close_rel;
+                let inner = &content[tag_end + 1..close];
+                let after = lower[close..]
+                    .find('>')
+                    .map(|r| close + r + 1)
+                    .unwrap_or(content.len());
+                (inner, after)
+            } else {
+                (&content[tag_end + 1..], content.len())
+            };
+            flags.text_path = Some(TextPathRef {
+                href: attr_get(&attrs, "href")
+                    .and_then(|v| v.trim().strip_prefix('#'))
+                    .map(ToOwned::to_owned),
+                start_offset: attr_get(&attrs, "startoffset").and_then(svg_core::parse_length),
+                text: collapse_text_whitespace(&unescape_xml(&strip_tags(inner))),
+            });
+            pos = after;
+        } else {
+            // Unknown child tag — skip the tag itself, keep scanning after it.
+            pos = tag_end + 1;
+        }
+    }
+    (runs, flags)
+}
+
+/// Remove markup tags, keeping text content.
+fn strip_tags(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_tag = false;
+    for c in s.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            c if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Character classes the bundled font cannot honestly render.
+fn char_needs_bidi(c: char) -> bool {
+    matches!(c as u32,
+        0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF | 0x200E..=0x200F | 0x202A..=0x202E)
+}
+
+fn char_needs_shaping(c: char) -> bool {
+    matches!(c as u32, 0x0300..=0x036F | 0x1AB0..=0x1AFF | 0x20D0..=0x20FF)
+}
+
+/// Append one glyph's strokes to `data`, placing each glyph-space vertex via
+/// `place` (which bakes scale, y-flip, pen position, and any rotation).
+fn append_glyph_strokes(
+    data: &mut PathData,
+    strokes: &[i8],
+    place: &dyn Fn(f64, f64) -> (f64, f64),
+) {
+    let mut current: Option<PathSubpath> = None;
+    let mut i = 1;
+    while i + 1 < strokes.len() {
+        let (gx, gy) = (strokes[i], strokes[i + 1]);
+        i += 2;
+        if gx == -1 && gy == -1 {
+            if let Some(sub) = current.take() {
+                if !sub.segments.is_empty() {
+                    data.subpaths.push(sub);
+                }
+            }
+            continue;
+        }
+        let to = place(gx as f64, gy as f64);
+        match current.as_mut() {
+            None => {
+                current = Some(PathSubpath {
+                    start: to,
+                    segments: Vec::new(),
+                    closed: false,
+                });
+            }
+            Some(sub) => sub.segments.push(PathSegment::Line { to }),
+        }
+    }
+    if let Some(sub) = current.take() {
+        if !sub.segments.is_empty() {
+            data.subpaths.push(sub);
+        }
+    }
+}
+
+/// Total advance of a string in glyph units.
+fn text_advance_units(text: &str) -> f64 {
+    text.chars().map(glyph_advance_units).sum()
+}
+
+/// Arc-length table over a flattened user-space path (R11 textPath).
+struct ArcLengthPath {
+    points: Vec<(f64, f64)>,
+    cumulative: Vec<f64>,
+}
+
+impl ArcLengthPath {
+    fn build(subpaths: &[FlattenedSubpath]) -> Option<Self> {
+        let mut points: Vec<(f64, f64)> = Vec::new();
+        for sub in subpaths {
+            points.extend(sub.points.iter().map(|&(x, y)| (x as f64, y as f64)));
+        }
+        if points.len() < 2 {
+            return None;
+        }
+        let mut cumulative = Vec::with_capacity(points.len());
+        let mut total = 0.0;
+        cumulative.push(0.0);
+        for pair in points.windows(2) {
+            total += (pair[1].0 - pair[0].0).hypot(pair[1].1 - pair[0].1);
+            cumulative.push(total);
+        }
+        Some(Self { points, cumulative })
+    }
+
+    fn total(&self) -> f64 {
+        *self.cumulative.last().unwrap_or(&0.0)
+    }
+
+    /// Point + tangent angle at arc distance `d`; `None` beyond the path end
+    /// (glyphs past the end are not rendered, per SVG).
+    fn at(&self, d: f64) -> Option<((f64, f64), f64)> {
+        if d < 0.0 || d > self.total() {
+            return None;
+        }
+        let idx = match self
+            .cumulative
+            .binary_search_by(|probe| probe.partial_cmp(&d).unwrap_or(std::cmp::Ordering::Less))
+        {
+            Ok(i) => i.min(self.points.len() - 2),
+            Err(i) => i.saturating_sub(1).min(self.points.len() - 2),
+        };
+        let seg = self.cumulative[idx + 1] - self.cumulative[idx];
+        let t = if seg > 1.0e-12 {
+            (d - self.cumulative[idx]) / seg
+        } else {
+            0.0
+        };
+        let (p0, p1) = (self.points[idx], self.points[idx + 1]);
+        let pos = (p0.0 + (p1.0 - p0.0) * t, p0.1 + (p1.1 - p0.1) * t);
+        let angle = (p1.1 - p0.1).atan2(p1.0 - p0.0);
+        Some((pos, angle))
+    }
+}
+
+/// Flatten a referenced geometry into user-space polylines for textPath.
+fn user_space_subpaths(geometry: &ShapeGeometry) -> Vec<FlattenedSubpath> {
+    match geometry {
+        ShapeGeometry::Path { data } => flatten_path_data(data, &Transform::identity(), 0.25),
+        ShapeGeometry::Poly { points, closed } => vec![FlattenedSubpath {
+            points: points.clone(),
+            closed: *closed,
+        }],
+        ShapeGeometry::Line { from, to } => vec![FlattenedSubpath {
+            points: vec![*from, *to],
+            closed: false,
+        }],
+        ShapeGeometry::Rect {
+            x,
+            y,
+            width,
+            height,
+            rx,
+            ry,
+        } => vec![FlattenedSubpath {
+            points: rounded_rect_pts(*x, *y, *width, *height, *rx, *ry),
+            closed: true,
+        }],
+        ShapeGeometry::Ellipse { cx, cy, rx, ry } => vec![FlattenedSubpath {
+            points: ellipse_pts(*cx, *cy, *rx, *ry),
+            closed: true,
+        }],
+    }
+}
+
+/// Lower a `<text>` element into a stroked-glyph `Shape` command (R11).  All
+/// glyph layout happens in user space; the resulting `PathData` flows through
+/// the normal shape render path, so clips, masks, filters, opacity, and
+/// gradient paint apply to text exactly like to shapes.
+fn lower_text_command(
+    scene: &SvgScene,
+    item: &SvgSceneItem,
+    node_xform: Transform,
+    mut diagnostics: Vec<PendingDiagnostic>,
+    source: SvgRenderSource,
+) -> DrawCommand {
+    let SvgNode::Text { attrs, content, .. } = &item.node else {
+        return DrawCommand::SkippedShape {
+            diagnostics,
+            source,
+        };
+    };
+    let lb = item.length_bases;
+    let font_size = item
+        .style
+        .font_size
+        .resolve(svg_core::SvgLengthContext::user_units(lb.other))
+        .filter(|v| *v > 0.0)
+        .unwrap_or(16.0);
+    let scale = font_size / HERSHEY_EM_UNITS;
+
+    // First value of a possibly-listed coordinate attribute, in user units.
+    let mut position_list = false;
+    let mut first_coord = |key: &str, base: f64| -> f32 {
+        match attr_get(attrs, key) {
+            None => 0.0,
+            Some(value) => {
+                let nums = svg_core::parse_numbers(value);
+                if nums.len() > 1 {
+                    position_list = true;
+                }
+                match nums.first() {
+                    Some(n) => *n as f32,
+                    None => attr_f32(attrs, key, base, 0.0),
+                }
+            }
+        }
+    };
+    let origin_x = first_coord("x", lb.horizontal) as f64;
+    let origin_y = first_coord("y", lb.vertical) as f64;
+    if position_list {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "text.position_list_approximated",
+            message: "per-glyph x/y position lists are approximated by their first value",
+        });
+    }
+
+    let (runs, flags) = scan_text_runs(content);
+    if flags.nested_tspan {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "text.tspan_nested_flattened",
+            message: "tspan nesting beyond one level was flattened to plain text",
+        });
+    }
+    if flags.styled_tspan {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "text.tspan_style_ignored",
+            message: "per-tspan font/paint styling is ignored; the text element style is used",
+        });
+    }
+
+    let mut data = PathData::default();
+    let mut glyph_count = 0usize;
+    let mut truncated = false;
+    let mut tofu = false;
+    let mut bidi = false;
+    let mut shaping = false;
+
+    // Resolve the strokes for one character, recording honesty flags.
+    let mut strokes_for = |c: char| -> &'static [i8] {
+        if char_needs_bidi(c) {
+            bidi = true;
+            TOFU_STROKES
+        } else if char_needs_shaping(c) {
+            shaping = true;
+            TOFU_STROKES
+        } else {
+            hershey_glyph(c).unwrap_or_else(|| {
+                tofu = true;
+                TOFU_STROKES
+            })
+        }
+    };
+
+    if let Some(text_path) = &flags.text_path {
+        // --- textPath: glyphs along a referenced path, arc-length sampled ---
+        let resolved = text_path
+            .href
+            .as_ref()
+            .and_then(|id| scene.references.by_xml_id.get(id))
+            .and_then(|node_id| scene.references.nodes_by_id.get(node_id))
+            .and_then(|node| lower_shape_geometry(node, lb))
+            .map(|geometry| user_space_subpaths(&geometry))
+            .and_then(|subs| ArcLengthPath::build(&subs));
+        match resolved {
+            None => {
+                diagnostics.push(PendingDiagnostic::Warning {
+                    code: "textpath.unresolved",
+                    message:
+                        "textPath references an unavailable or empty local path; the text was not rendered",
+                });
+            }
+            Some(arc) => {
+                let total_advance = text_advance_units(&text_path.text) * scale;
+                let start = match text_path.start_offset {
+                    Some(len) if len.unit == svg_core::SvgLengthUnit::Percent => {
+                        arc.total() * len.value / 100.0
+                    }
+                    Some(len) => len.value,
+                    None => 0.0,
+                } + match item.style.text_anchor {
+                    TextAnchor::Start => 0.0,
+                    TextAnchor::Middle => -total_advance / 2.0,
+                    TextAnchor::End => -total_advance,
+                };
+                let mut pen = start;
+                for c in text_path.text.chars() {
+                    if glyph_count >= MAX_TEXT_GLYPHS {
+                        truncated = true;
+                        break;
+                    }
+                    let strokes = strokes_for(c);
+                    let advance = strokes[0] as f64 * scale;
+                    // Sample position at the glyph origin and the tangent at the
+                    // glyph midpoint, so rotation follows the curve smoothly.
+                    if let Some((pos, _)) = arc.at(pen) {
+                        let angle = arc
+                            .at(pen + advance * 0.5)
+                            .map(|(_, a)| a)
+                            .unwrap_or_else(|| arc.at(pen).map(|(_, a)| a).unwrap_or(0.0));
+                        let (sin, cos) = angle.sin_cos();
+                        append_glyph_strokes(&mut data, strokes, &|gx, gy| {
+                            let (lx, ly) = (gx * scale, -gy * scale);
+                            (pos.0 + lx * cos - ly * sin, pos.1 + lx * sin + ly * cos)
+                        });
+                        glyph_count += 1;
+                    }
+                    pen += advance;
+                }
+            }
+        }
+    } else {
+        // --- plain text: horizontal pen, x/y/dx/dy runs, whole-run anchor ---
+        let total_advance: f64 = runs
+            .iter()
+            .map(|run| text_advance_units(&run.text))
+            .sum::<f64>()
+            * scale;
+        let anchor_shift = match item.style.text_anchor {
+            TextAnchor::Start => 0.0,
+            TextAnchor::Middle => -total_advance / 2.0,
+            TextAnchor::End => -total_advance,
+        };
+        let mut pen_x = origin_x + anchor_shift;
+        let mut pen_y = origin_y;
+        'runs: for run in &runs {
+            if let Some(x) = run.x {
+                pen_x = x as f64 + anchor_shift;
+            }
+            if let Some(y) = run.y {
+                pen_y = y as f64;
+            }
+            pen_x += run.dx as f64;
+            pen_y += run.dy as f64;
+            for c in run.text.chars() {
+                if glyph_count >= MAX_TEXT_GLYPHS {
+                    truncated = true;
+                    break 'runs;
+                }
+                let strokes = strokes_for(c);
+                let (gx0, gy0) = (pen_x, pen_y);
+                append_glyph_strokes(&mut data, strokes, &|gx, gy| {
+                    (gx0 + gx * scale, gy0 - gy * scale)
+                });
+                pen_x += strokes[0] as f64 * scale;
+                glyph_count += 1;
+            }
+        }
+    }
+
+    if truncated {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "limit.text_glyphs",
+            message: "text exceeded the renderer glyph limit; remaining glyphs skipped",
+        });
+    }
+    if tofu {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "text.glyph_unsupported",
+            message:
+                "characters outside the bundled ASCII glyph set were rendered as placeholder boxes",
+        });
+    }
+    if bidi {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "text.bidi_unsupported",
+            message: "bidirectional text is not supported; affected characters render as placeholder boxes",
+        });
+    }
+    if shaping {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "text.shaping_unsupported",
+            message: "combining marks / complex shaping are not supported; affected characters render as placeholder boxes",
+        });
+    }
+
+    if data.subpaths.is_empty() {
+        return DrawCommand::SkippedShape {
+            diagnostics,
+            source,
+        };
+    }
+
+    diagnostics.push(PendingDiagnostic::Warning {
+        code: "text.raster_snapshot",
+        message:
+            "text rendered with the bundled stroked vector font (font-family substituted, approximate metrics)",
+    });
+
+    // Text is painted with the element's *fill* through the stroke pipeline
+    // (a stroked font has no fillable outline); stroke styling is not applied.
+    let glyph_style = Style {
+        fill: Paint::None,
+        stroke: item.style.fill.clone(),
+        stroke_width: svg_core::SvgLength {
+            value: font_size * HERSHEY_STROKE_UNITS / HERSHEY_EM_UNITS,
+            unit: svg_core::SvgLengthUnit::Number,
+        },
+        stroke_linecap: StrokeLineCap::Round,
+        stroke_linejoin: StrokeLineJoin::Round,
+        stroke_miterlimit: 4.0,
+        stroke_dasharray: None,
+        stroke_dashoffset: zero_stroke_length(),
+        stroke_opacity: item.style.fill_opacity,
+        ..item.style.clone()
+    };
+
+    let geometry = ShapeGeometry::Path { data };
+    let clip = clip_path_ref(attrs).and_then(|id| {
+        let bbox = Some(geometry_local_bounds(&geometry));
+        let mut visited = Vec::new();
+        resolve_clip(
+            scene,
+            &id,
+            node_xform,
+            bbox,
+            lb,
+            &mut visited,
+            &mut diagnostics,
+        )
+    });
+    DrawCommand::Shape {
+        geometry: Some(geometry),
+        transform: node_xform,
+        style: Box::new(glyph_style),
+        length_bases: lb,
+        path_length: None,
+        clip,
+        markers: None,
+        diagnostics,
+        source,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -5843,11 +6797,6 @@ enum DrawCommand {
         diagnostics: Vec<PendingDiagnostic>,
         source: SvgRenderSource,
     },
-    /// Text — preserved in source but not rasterized.
-    UnsupportedText {
-        diagnostics: Vec<PendingDiagnostic>,
-        source: SvgRenderSource,
-    },
     /// Unsupported element — diagnostics + skip.
     UnsupportedNode {
         tag: String,
@@ -5884,10 +6833,17 @@ impl DisplayList {
                     diagnostics,
                     source,
                 },
-                SvgNode::Text { .. } => DrawCommand::UnsupportedText {
-                    diagnostics,
-                    source,
-                },
+                SvgNode::Text { .. } => {
+                    if item.skipped_by_unsupported_ancestor {
+                        DrawCommand::SkippedShape {
+                            diagnostics,
+                            source,
+                        }
+                    } else {
+                        // R11: raster text snapshot via the bundled vector font.
+                        lower_text_command(scene, item, node_xform, diagnostics, source)
+                    }
+                }
                 SvgNode::Unsupported { tag, attrs, .. } if tag == "image" => {
                     let lb = item.length_bases;
                     let x = attr_f32(attrs, "x", lb.horizontal, 0.0) as f64;
@@ -6307,18 +7263,6 @@ impl DisplayList {
                     source,
                 } => {
                     emit_diagnostics(diagnostics, *source, report);
-                    report.skipped();
-                }
-                DrawCommand::UnsupportedText {
-                    diagnostics,
-                    source,
-                } => {
-                    emit_diagnostics(diagnostics, *source, report);
-                    report.unsupported_at(
-                        "text",
-                        "text elements are preserved in source but not rasterized yet",
-                        Some(*source),
-                    );
                     report.skipped();
                 }
                 DrawCommand::UnsupportedNode {
@@ -9917,19 +10861,25 @@ mod tests {
 
     #[test]
     fn render_report_counts_rendered_skipped_and_text_limitations() {
+        // R11: <text> now renders via the bundled vector font (with an honest
+        // text.raster_snapshot approximation warning) instead of being skipped.
         let svg = r##"<svg viewBox="0 0 20 20">
 <rect width="10" height="10" fill="#ff0000"/>
 <rect x="12" width="0" height="5" fill="#00ff00"/>
-<text x="1" y="18">Skipped text</text>
+<text x="1" y="18">Hi</text>
 </svg>"##;
         let output = rasterize_with_report(svg, 20, 20).unwrap();
 
-        assert_eq!(output.report.rendered_element_count, 1);
-        assert_eq!(output.report.skipped_element_count, 2);
-        assert_eq!(output.report.warning_count, 0);
-        assert_eq!(output.report.unsupported_feature_count, 1);
-        assert_eq!(output.report.unsupported_features[0].feature, "text");
-        let source = output.report.unsupported_features[0].source.unwrap();
+        assert_eq!(output.report.rendered_element_count, 2);
+        assert_eq!(output.report.skipped_element_count, 1);
+        assert_eq!(output.report.unsupported_feature_count, 0);
+        let snapshot = output
+            .report
+            .warnings
+            .iter()
+            .find(|w| w.code == "text.raster_snapshot")
+            .expect("raster snapshot warning");
+        let source = snapshot.source.unwrap();
         assert!(svg[source.byte_start..source.byte_end].starts_with("<text"));
         assert_eq!(output.report.fidelity, SvgRenderFidelity::Medium);
         assert_eq!(pixel(&output.image, 5, 5), [255, 0, 0, 255]);
@@ -11805,6 +12755,91 @@ mod tests {
         let u = rasterize(user, 6, 6).unwrap();
         assert_eq!(pixel(&u, 1, 1), [0, 0, 255, 255]); // inside [1,3)
         assert_eq!(pixel(&u, 4, 4), [0, 0, 0, 0]); // outside the explicit region
+    }
+
+    // --- R11: raster text ----------------------------------------------------
+
+    #[test]
+    fn raster_text_renders_deterministically_and_reports_snapshot() {
+        let svg = r##"<svg viewBox="0 0 16 16"><text x="1" y="12" font-size="12" fill="#ff0000">Hi</text></svg>"##;
+        let a = rasterize_with_report(svg, 16, 16).unwrap();
+        let b = rasterize_with_report(svg, 16, 16).unwrap();
+        assert_eq!(a.image.pixels, b.image.pixels, "text render deterministic");
+        // Pixels actually land (H left stem near x=2).
+        assert!(a.image.pixels.iter().any(|c| c.r() > 200 && c.a() > 200));
+        assert!(a
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.code == "text.raster_snapshot"));
+        assert_eq!(a.report.rendered_element_count, 1);
+        // No "text" unsupported bucket anymore.
+        assert!(!a
+            .report
+            .unsupported_features
+            .iter()
+            .any(|f| f.feature == "text"));
+    }
+
+    #[test]
+    fn unknown_glyphs_render_tofu_with_diagnostic() {
+        let svg = r##"<svg viewBox="0 0 24 24"><text x="2" y="18" font-size="16" fill="#000000">日</text></svg>"##;
+        let out = rasterize_with_report(svg, 24, 24).unwrap();
+        assert!(out
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.code == "text.glyph_unsupported"));
+        // The tofu box paints something.
+        assert!(out.image.pixels.iter().any(|c| c.a() > 200));
+    }
+
+    #[test]
+    fn bidi_text_is_diagnosed_not_silently_wrong() {
+        let svg = r##"<svg viewBox="0 0 24 24"><text x="2" y="18" font-size="16" fill="#000000">ש</text></svg>"##;
+        let out = rasterize_with_report(svg, 24, 24).unwrap();
+        assert!(out
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.code == "text.bidi_unsupported"));
+    }
+
+    #[test]
+    fn tspan_runs_offset_and_unresolved_textpath_is_diagnosed() {
+        // dy-shifted tspan lands lower than the base run.
+        let svg = r##"<svg viewBox="0 0 32 32"><text x="2" y="10" font-size="10" fill="#ff0000">l<tspan dy="12">l</tspan></text></svg>"##;
+        let out = rasterize(svg, 32, 32).unwrap();
+        // Threshold 50: the 0.67px glyph stroke can straddle a pixel boundary
+        // and split its anti-aliased coverage across two columns.
+        let inked_rows: Vec<usize> = (0..32)
+            .filter(|&y| (0..32).any(|x| pixel(&out, x, y)[3] > 50))
+            .collect();
+        // Two stems: one ending near y=10, one near y=22.
+        assert!(inked_rows.iter().any(|&y| y < 11), "rows: {inked_rows:?}");
+        assert!(inked_rows.iter().any(|&y| y > 16), "rows: {inked_rows:?}");
+
+        let missing = r##"<svg viewBox="0 0 16 16"><text font-size="10"><textPath href="#nope">x</textPath></text></svg>"##;
+        let rep = rasterize_with_report(missing, 16, 16).unwrap();
+        assert!(rep
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.code == "textpath.unresolved"));
+    }
+
+    #[test]
+    fn text_glyph_limit_is_bounded_with_diagnostic() {
+        let long: String = "x".repeat(MAX_TEXT_GLYPHS + 50);
+        let svg = format!(
+            r##"<svg viewBox="0 0 64 64"><text x="1" y="32" font-size="8">{long}</text></svg>"##
+        );
+        let out = rasterize_with_report(&svg, 64, 64).unwrap();
+        assert!(out
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.code == "limit.text_glyphs"));
     }
 
     #[test]
