@@ -178,5 +178,9 @@ if (Test-Path $DependencyPolicy) {
 }
 
 Write-Host ""
-Write-Host "Reminder: low-token default is AGENTS/CLAUDE policy + this summary + latest Code CoOp + git status + relevant skills. Read ROADMAP/CODE_INDEX/ARCHITECTURE/DEVLOG only when the task needs planning, structure, or history."
+Write-Host "== Engineering Invariants =="
+Write-Host "Fixing a bug or reviewer finding, or touching codegen / preview-canvas-export parity / input gating / reset paths / string truncation / filename-identifier sanitizing? Read docs\ENGINEERING_INVARIANTS.md and fix the class, not the symptom. Gate: cargo clippy --all-targets -- -D warnings (plain clippy skips examples/ and tests/)."
+
+Write-Host ""
+Write-Host "Reminder: low-token default is AGENTS/CLAUDE policy + this summary + latest Code CoOp + git status + relevant skills. Read ROADMAP/CODE_INDEX/ARCHITECTURE/ENGINEERING_INVARIANTS/DEVLOG only when the task needs planning, structure, lessons, or history."
 Pop-Location

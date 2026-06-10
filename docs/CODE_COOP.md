@@ -7,6 +7,50 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-09 — Engineering invariants doc (process hardening from PR #4 review)
+
+On `dev`. Triaged the PR #4 CodeRabbit batch (32 comments): all substantive
+findings are already fixed in current code (verified the one without a ✅ reply —
+`refresh_preview_state()` now re-seeds preview after every tree swap in
+`app.rs`). Distilled the recurring **bug classes** into a new read-on-demand
+reference `docs/ENGINEERING_INVARIANTS.md`: surface parity (canvas/preview/
+export), single-source-of-truth classification, input-ownership gating,
+reset/default restoration, generated-identifier safety + codegen module
+boundary, string byte-slicing, filename sanitizing, conservative shipped
+defaults, doc-contradiction reconciliation — each with an invariant + cheap
+guard, plus the systemic-fix workflow. Wired terse pointers into `CLAUDE.md`,
+`AGENTS.md`, and preflight, and bumped the documented gate to `cargo clippy
+--all-targets -- -D warnings` (plain clippy skipped the `examples/`/`tests/`
+lints the reviewer flagged). No code behavior changed. Next coding lane is still
+**R10** (filters).
+
+## 2026-06-09 — SVG R9 complete: markers + pattern tiling
+
+On `dev`. **R9 is now fully done** (vector-effect shipped earlier in 61f3d66;
+this session added markers + pattern tiling). All in `src/canvas/svg_rasterizer.rs`
+(embedded verbatim into exports, so in-app == export; new
+`embedded_rasterizer_includes_r9_render_paths` test enforces parity). **Patterns:**
+`PaintServerTable` grew a `patterns: HashMap<String, PatternDef>` built in a second
+pass (`build_pattern_def`, href-merge + `reference.pattern_cycle` guard);
+`PaintSampler::Pattern` renders one tile lazily per fill via `build_pattern_sampler`
+(reuses the `<mask>` subtree-render trick through the new shared
+`render_content_items`), repeating across the bbox with `rem_euclid` wrap; tile
+pixels capped by `MAX_PATTERN_TILE_PIXELS`; content self-reference is broken by
+rendering the tile with the pattern removed from a cloned table. **Markers:**
+`build_markers` (called in `DisplayList::build`, stored on `DrawCommand::Shape`)
+resolves `marker-start/mid/end` (+`marker`), extracts vertices+tangents from
+line/poly/path geometry, places content with orient `auto`/`auto-start-reverse`/
+angle, `markerUnits`, `viewBox`/`refX`/`refY` + overflow clip; drawn in
+`execute()` after the shape, bounded by `MAX_MARKER_PLACEMENTS`. Both `<marker>`
+and `<pattern>` def nodes are now skipped in scene build (like clipPath/mask) so
+they no longer emit unsupported diags. 4 new goldens + 7 new unit tests; updated 3
+older tests that asserted patterns-unsupported. **Gate green:** fmt/check/clippy
+`--all-targets -D warnings`/test (313 pass, 6 ignored)/validate-svg-import/
+check-text-encoding/`cargo run` launch smoke. No new deps. **Next: R10**
+(filter linearRGB color-interpolation + precise filter regions + tier-2
+feComposite/feBlend/mix-blend-mode) — read
+`docs/svg-goal-plan-prompts/R10-*.goal.md` first.
+
 ## 2026-06-07 — SVG R9 part 1: vector-effect non-scaling-stroke
 
 On `dev`. Started R9 (markers/vector-effect/patterns). **Shipped the vector-effect

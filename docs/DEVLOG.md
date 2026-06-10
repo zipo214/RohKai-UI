@@ -2,6 +2,109 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-09 — Engineering invariants doc (process hardening)
+
+### Context Reviewed Before Editing
+- PR #4 CodeRabbit review batch (32 comments) — the bug classes underneath them
+- `CLAUDE.md`/`AGENTS.md` Architecture + Session Rules; `scripts/preflight-context.ps1`
+- `src/app.rs` (`set_preview_mode`/`refresh_preview_state`) to confirm the one
+  finding lacking a ✅ reply was already addressed
+
+### Changes
+- Triage: every substantive PR #4 finding is already fixed in current code
+  (preview re-seed, apply_theme reset, undo/redo focus gate, ruler layer
+  ownership, aspect-lock preset bypass, `has_handler` via `supported_events()`,
+  codegen module boundary + safe identifiers, UTF-8 char-safe truncation). No
+  code fix required.
+- New `docs/ENGINEERING_INVARIANTS.md`: a read-on-demand bug-class → invariant →
+  cheap-guard table (parity, single-source-of-truth, input ownership, reset
+  paths, generated-identifier safety, string byte-slicing, filename sanitizing,
+  conservative defaults, doc consistency) plus the systemic-fix workflow and the
+  `--all-targets` verification gate.
+- Reinforced two always-on rules in `CLAUDE.md` + `AGENTS.md` (codegen identifier
+  safety; surface parity / single-source-of-truth), bumped the documented clippy
+  gate to `--all-targets`, and added doc + workflow pointers. Preflight now prints
+  a one-line Engineering-Invariants reminder.
+
+### Verification
+- `pwsh scripts/check-text-encoding.ps1` OK; preflight runs clean and surfaces the
+  new reminder. Docs/script-only change — no cargo build affected.
+
+### Risks / Follow-ups
+- The invariants doc is read-on-demand (kept out of the low-token default to avoid
+  a bottleneck); discoverability relies on the CLAUDE/AGENTS/preflight pointers.
+- Most invariants are enforced by convention + targeted tests, not automation;
+  add per-class regression tests as those areas are next touched.
+
+## 2026-06-09 — SVG R9 complete: markers + pattern tiling (post-R8 lane 2/5)
+
+### Context Reviewed Before Editing
+- `CLAUDE.md`/`AGENTS.md` SVG roadmap step protocol; `svg-zero-dep` skill;
+  preflight output
+- `docs/svg-goal-plan-prompts/R9-markers-vector-effect-patterns.goal.md` (lane spec)
+- `docs/SVG_RENDERER_ROADMAP.md` Post-R8 gap matrix + lanes
+- `src/canvas/svg_rasterizer.rs` landmarks: `PaintServerTable`/`PaintSampler`,
+  `MaskDef::build_alpha`, `resolve_clip`/`collect_mask_items`, `DisplayList::build`/
+  `execute`, `render_shape`/`flatten_path_data`, scene `build_items`, caps;
+  `src/canvas/svg_golden.rs`; `src/codegen/export.rs` single-`crate::` contract
+
+### Changes (all in `src/canvas/svg_rasterizer.rs` unless noted)
+- **Vector-effect** was already shipped + committed in `61f3d66` (VectorEffect
+  enum, `effective_device_stroke`, `vector_effect.unsupported` diag, golden
+  `r9_non_scaling_stroke`). This session added the remaining two pillars.
+- **Pattern tiling.** `PaintServerTable` gained `patterns: HashMap<String,
+  PatternDef>`, built in a second pass after gradients (`build_pattern_def`:
+  `href` attribute+content merge bounded by `MAX_PATTERN_REFERENCE_DEPTH`, cyclic
+  href → `reference.pattern_cycle`). New `PaintSampler::Pattern` variant samples a
+  pre-rendered straight-RGBA tile with `rem_euclid` wrap. `build_pattern_sampler`
+  resolves the tile rect (patternUnits objectBoundingBox/userSpaceOnUse), maps
+  content via viewBox/patternContentUnits, renders the tile once through the new
+  shared `render_content_items` helper (extracted from `MaskDef::build_alpha`),
+  caps tile pixels at `MAX_PATTERN_TILE_PIXELS`, and breaks content
+  self-reference by rendering with the pattern removed from a cloned table.
+- **Markers.** New `MarkerDef`/`MarkerSet`/`MarkerPlacement` + `build_markers`
+  (in `DisplayList::build`, stored on `DrawCommand::Shape`): resolves
+  `marker-start/mid/end` (+`marker` shorthand) via `final_style_property`,
+  extracts vertices and in/out tangents from line/polyline/polygon/path geometry,
+  computes orient (`auto`/`auto-start-reverse`/`<angle>`), builds the
+  content→device transform honoring `markerUnits`, `viewBox`/`refX`/`refY`/
+  `markerWidth`/`markerHeight`, and draws each placement in `execute()` after the
+  shape, clipped to its viewport rect (overflow:hidden) ∩ ancestor clip. Bounded
+  by `MAX_MARKER_PLACEMENTS` (`limit.marker_count`) / `MAX_MARKER_CONTENT_ITEMS`;
+  missing/non-marker target → `marker.unresolved`.
+- Scene build now skips `<marker>`/`<pattern>` def nodes like clipPath/mask/filter
+  (they render only when referenced), so they no longer emit unsupported diags.
+- **Tests/goldens:** 4 new goldens (`r9_marker_start_mid_end`,
+  `r9_marker_auto_orient`, `r9_pattern_userspace_tile`,
+  `r9_pattern_objectbbox_tile`); 7 new unit tests (marker placement, auto-orient
+  determinism, missing-marker diag, userSpaceOnUse-ignores-stroke-width, pattern
+  href cycle, self-referential pattern terminates, oversized tile capped, OBB
+  tile); updated 3 existing tests that asserted patterns-unsupported; new
+  `embedded_rasterizer_includes_r9_render_paths` export-parity test in
+  `src/codegen/export.rs`. Embedded source stays std-only, single `crate::`.
+- **Docs:** flipped R9 lane + Patterns/Markers/vector-effect gap rows + maturity
+  assessment in `SVG_RENDERER_ROADMAP.md`; updated `SVG_IMPORT.md` and
+  `docs/feature-evaluation/svg-import-renderer.md`; appended CODE_COOP handoff.
+
+### Verification
+- `cargo fmt --check` clean; `cargo check` clean; `cargo test` **313 pass / 6
+  ignored / 0 fail**; `cargo clippy --all-targets -- -D warnings` clean;
+  `pwsh scripts/validate-svg-import.ps1` passed (banned-crate grep + determinism +
+  fixtures + clippy); `pwsh scripts/check-text-encoding.ps1` OK; `cargo run`
+  launch smoke (25s, no early crash). No new dependencies.
+
+### Risks / Follow-ups
+- Marker/pattern content lowered via `collect_mask_items` ignores `<use>`
+  expansion (same limitation as masks) — `<use>`-based marker/pattern content
+  won't render; bounded + safe, documented.
+- Pattern tile clipping does not wrap shapes across the tile edge (content
+  overflowing the tile rect is clipped, not repeated). Acceptable for R9; note for
+  any future fidelity pass.
+- Tile/marker rendering composites in straight-sRGB like the rest of the base
+  pipeline; gamma/linearRGB tuning is the R10 boundary.
+- **Next: R10** (filter linearRGB color-interpolation, precise filter regions,
+  tier-2 feComposite/feBlend/mix-blend-mode). Read `R10-*.goal.md` first.
+
 ## 2026-06-07 — SVG R8.1: Conformance + Security Hardening (post-R8 lane 1/5)
 
 ### Context Reviewed Before Editing
