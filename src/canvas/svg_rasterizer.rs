@@ -4789,6 +4789,32 @@ struct FilterGraph {
     /// `color-interpolation-filters` (R10): `true` = run in linearRGB (the SVG
     /// default), `false` = sRGB (`color-interpolation-filters: sRGB`).
     linear: bool,
+    /// Filter region (R10): the result is clipped to this rect.
+    region: FilterRegion,
+}
+
+/// Filter region from `filterUnits` + filter `x/y/width/height` (R10). The
+/// result of the primitive graph is clipped to this rect.
+#[derive(Clone, Copy)]
+enum FilterRegion {
+    /// `filterUnits="userSpaceOnUse"`: an explicit device-space rect
+    /// `[x0, y0, x1, y1]`.
+    UserSpace([f64; 4]),
+    /// `filterUnits="objectBoundingBox"` (default): fractions of the element
+    /// bounding box (default `-10% -10% 120% 120%`). Resolved in `apply` against
+    /// the source content's device-space alpha extent.
+    ObjectBoundingBox { fx: f64, fy: f64, fw: f64, fh: f64 },
+}
+
+impl Default for FilterRegion {
+    fn default() -> Self {
+        FilterRegion::ObjectBoundingBox {
+            fx: -0.1,
+            fy: -0.1,
+            fw: 1.2,
+            fh: 1.2,
+        }
+    }
 }
 
 impl FilterGraph {
@@ -4864,10 +4890,72 @@ impl FilterGraph {
             }
             previous = out;
         }
-        if self.linear {
+        let mut result = if self.linear {
             linear_to_srgb_premul(&previous)
         } else {
             previous
+        };
+        clip_to_filter_region(&mut result, w, h, self.region, source_srgb);
+        result
+    }
+}
+
+/// Device-space alpha bounding box `[minx, miny, maxx, maxy]` of a buffer, or
+/// `None` when fully transparent.
+fn alpha_extent(buf: &[u8], w: usize, h: usize) -> Option<[usize; 4]> {
+    let (mut minx, mut miny, mut maxx, mut maxy) = (usize::MAX, usize::MAX, 0usize, 0usize);
+    let mut any = false;
+    for y in 0..h {
+        for x in 0..w {
+            if buf[(y * w + x) * 4 + 3] != 0 {
+                any = true;
+                minx = minx.min(x);
+                miny = miny.min(y);
+                maxx = maxx.max(x);
+                maxy = maxy.max(y);
+            }
+        }
+    }
+    any.then_some([minx, miny, maxx, maxy])
+}
+
+/// Zero every pixel of `buf` outside the resolved filter region (R10). For
+/// objectBoundingBox units the element bbox is taken from the source content's
+/// device-space alpha extent (a deterministic proxy that also works for groups,
+/// which have no single geometric bbox).
+fn clip_to_filter_region(
+    buf: &mut [u8],
+    w: usize,
+    h: usize,
+    region: FilterRegion,
+    source_srgb: &[u8],
+) {
+    let rect = match region {
+        FilterRegion::UserSpace(rect) => rect,
+        FilterRegion::ObjectBoundingBox { fx, fy, fw, fh } => {
+            let Some([minx, miny, maxx, maxy]) = alpha_extent(source_srgb, w, h) else {
+                return; // no source content — nothing to bound
+            };
+            let (bx, by) = (minx as f64, miny as f64);
+            let bw = (maxx - minx + 1) as f64;
+            let bh = (maxy - miny + 1) as f64;
+            [
+                bx + fx * bw,
+                by + fy * bh,
+                bx + (fx + fw) * bw,
+                by + (fy + fh) * bh,
+            ]
+        }
+    };
+    let (x0, y0, x1, y1) = (rect[0], rect[1], rect[2], rect[3]);
+    for y in 0..h {
+        let py = y as f64 + 0.5;
+        for x in 0..w {
+            let px = x as f64 + 0.5;
+            if px < x0 || px >= x1 || py < y0 || py >= y1 {
+                let idx = (y * w + x) * 4;
+                buf[idx..idx + 4].fill(0);
+            }
         }
     }
 }
@@ -5405,7 +5493,67 @@ fn parse_filter(
     if primitives.is_empty() {
         return None;
     }
-    Some(FilterGraph { primitives, linear })
+    let region = parse_filter_region(filter_attrs, ctm, diagnostics);
+    Some(FilterGraph {
+        primitives,
+        linear,
+        region,
+    })
+}
+
+/// Parse the filter region from `filterUnits` + filter `x/y/width/height` (R10).
+/// objectBoundingBox (default) yields bbox fractions; userSpaceOnUse yields an
+/// explicit device rect (percentage lengths there are approximated + diagnosed).
+fn parse_filter_region(
+    attrs: &[(String, String)],
+    ctm: Transform,
+    diagnostics: &mut Vec<PendingDiagnostic>,
+) -> FilterRegion {
+    let obbox = !attr_get(attrs, "filterunits")
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("userSpaceOnUse"));
+    if obbox {
+        // Fractions of the bounding box: number as-is, percent / 100.
+        let frac = |key: &str, default: f64| {
+            attr_get(attrs, key)
+                .and_then(svg_core::parse_length)
+                .map(|l| match l.unit {
+                    svg_core::SvgLengthUnit::Percent => l.value / 100.0,
+                    _ => l.value,
+                })
+                .unwrap_or(default)
+        };
+        FilterRegion::ObjectBoundingBox {
+            fx: frac("x", -0.1),
+            fy: frac("y", -0.1),
+            fw: frac("width", 1.2),
+            fh: frac("height", 1.2),
+        }
+    } else {
+        // userSpaceOnUse: explicit user lengths -> device rect via the CTM.
+        let parse_len = |key: &str| attr_get(attrs, key).and_then(svg_core::parse_length);
+        if ["x", "y", "width", "height"]
+            .iter()
+            .any(|k| matches!(parse_len(k), Some(l) if l.unit == svg_core::SvgLengthUnit::Percent))
+        {
+            diagnostics.push(PendingDiagnostic::Warning {
+                code: "filter.region_percent_approximated",
+                message:
+                    "percentage filter region with userSpaceOnUse is approximated as a user-unit value",
+            });
+        }
+        let num = |key: &str| parse_len(key).map(|l| l.value);
+        let (x, y) = (num("x").unwrap_or(0.0), num("y").unwrap_or(0.0));
+        let (wd, ht) = (num("width"), num("height"));
+        match (wd, ht) {
+            (Some(wd), Some(ht)) if wd > 0.0 && ht > 0.0 => {
+                let (dx0, dy0) = ctm.apply(x, y);
+                let (dx1, dy1) = ctm.apply(x + wd, y + ht);
+                FilterRegion::UserSpace([dx0.min(dx1), dy0.min(dy1), dx0.max(dx1), dy0.max(dy1)])
+            }
+            // No usable explicit region — fall back to the bbox default.
+            _ => FilterRegion::default(),
+        }
+    }
 }
 
 fn parse_filter_input(value: Option<&str>) -> FilterInput {
@@ -11299,7 +11447,8 @@ mod tests {
 
     #[test]
     fn gaussian_blur_softens_a_hard_edge() {
-        let svg = r##"<svg viewBox="0 0 8 8"><filter id="f"><feGaussianBlur stdDeviation="1.2"/></filter><rect x="2" y="2" width="4" height="4" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        // Explicit region so the blur halo survives R10 filter-region clipping.
+        let svg = r##"<svg viewBox="0 0 8 8"><filter id="f" x="-25%" y="-25%" width="150%" height="150%"><feGaussianBlur stdDeviation="1.2"/></filter><rect x="2" y="2" width="4" height="4" fill="#ff0000" filter="url(#f)"/></svg>"##;
         let out = rasterize(svg, 8, 8).unwrap();
         // Blur bleeds partial alpha outside the original sharp 4x4 rect.
         assert!(out.pixels.iter().any(|c| c.a() > 0 && c.a() < 255));
@@ -11319,7 +11468,8 @@ mod tests {
 
     #[test]
     fn fedropshadow_adds_offset_shadow() {
-        let svg = r##"<svg viewBox="0 0 6 6"><filter id="f"><feDropShadow dx="2" dy="2" stdDeviation="0" flood-color="#000000"/></filter><rect width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        // Explicit region so the offset shadow survives R10 region clipping.
+        let svg = r##"<svg viewBox="0 0 6 6"><filter id="f" x="0" y="0" width="250%" height="250%"><feDropShadow dx="2" dy="2" stdDeviation="0" flood-color="#000000"/></filter><rect width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##;
         let out = rasterize(svg, 6, 6).unwrap();
         // Source stays red at the origin; a dark shadow appears at the offset.
         assert_eq!(pixel(&out, 0, 0), [255, 0, 0, 255]);
@@ -11614,7 +11764,7 @@ mod tests {
 
     #[test]
     fn femorphology_dilate_grows_and_huge_radius_is_bounded() {
-        let svg = r##"<svg viewBox="0 0 8 8"><filter id="f"><feMorphology operator="dilate" radius="1"/></filter><rect x="3" y="3" width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        let svg = r##"<svg viewBox="0 0 8 8"><filter id="f" x="-50%" y="-50%" width="200%" height="200%"><feMorphology operator="dilate" radius="1"/></filter><rect x="3" y="3" width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##;
         let out = rasterize(svg, 8, 8).unwrap();
         // Dilation reaches the pixel just outside the original 2x2 square.
         assert_eq!(pixel(&out, 2, 2), [255, 0, 0, 255]);
@@ -11640,6 +11790,21 @@ mod tests {
         );
         // Determinism.
         assert_eq!(lin.pixels, rasterize(linear, 8, 4).unwrap().pixels);
+    }
+
+    #[test]
+    fn filter_region_clips_default_and_userspace() {
+        // Default objectBoundingBox region clips an feFlood to the bbox+margin,
+        // not the whole canvas.
+        let default_region = r##"<svg viewBox="0 0 6 6"><filter id="f"><feFlood flood-color="#0000ff"/></filter><rect x="2" y="2" width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        let out = rasterize(default_region, 6, 6).unwrap();
+        assert_eq!(pixel(&out, 2, 2), [0, 0, 255, 255]); // inside region
+        assert_eq!(pixel(&out, 0, 0), [0, 0, 0, 0]); // corner clipped out
+                                                     // userSpaceOnUse region with an explicit rect bounds the flood exactly.
+        let user = r##"<svg viewBox="0 0 6 6"><filter id="f" filterUnits="userSpaceOnUse" x="1" y="1" width="2" height="2"><feFlood flood-color="#0000ff"/></filter><rect width="6" height="6" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        let u = rasterize(user, 6, 6).unwrap();
+        assert_eq!(pixel(&u, 1, 1), [0, 0, 255, 255]); // inside [1,3)
+        assert_eq!(pixel(&u, 4, 4), [0, 0, 0, 0]); // outside the explicit region
     }
 
     #[test]

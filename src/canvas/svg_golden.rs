@@ -269,16 +269,21 @@ pub fn fixtures() -> Vec<GoldenFixture> {
         },
         GoldenFixture {
             // R7: feOffset shifts the blue strip two user units to the right.
+            // R10: an explicit filter region (x/y/width/height) is needed now
+            // that the result is clipped to the region; the default bbox region
+            // would clip the offset output back to the source bbox.
             name: "feoffset_shifts_right",
-            svg: r##"<svg viewBox="0 0 4 4"><filter id="f"><feOffset dx="2" dy="0"/></filter><rect width="2" height="4" fill="#0000ff" filter="url(#f)"/></svg>"##,
+            svg: r##"<svg viewBox="0 0 4 4"><filter id="f" x="0" y="0" width="200%" height="100%"><feOffset dx="2" dy="0"/></filter><rect width="2" height="4" fill="#0000ff" filter="url(#f)"/></svg>"##,
             width: 4,
             height: 4,
             golden: "..BB\n..BB\n..BB\n..BB",
         },
         GoldenFixture {
             // R7: feFlood (green) + feMerge with SourceGraphic (red 2x2 on top).
+            // R10: explicit region (200%x200% of the 2x2 bbox = the 4x4 canvas)
+            // so the flood still fills the canvas under region clipping.
             name: "feflood_femerge",
-            svg: r##"<svg viewBox="0 0 4 4"><filter id="f"><feFlood flood-color="#00ff00" result="bg"/><feMerge><feMergeNode in="bg"/><feMergeNode in="SourceGraphic"/></feMerge></filter><rect width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##,
+            svg: r##"<svg viewBox="0 0 4 4"><filter id="f" x="0" y="0" width="200%" height="200%"><feFlood flood-color="#00ff00" result="bg"/><feMerge><feMergeNode in="bg"/><feMergeNode in="SourceGraphic"/></feMerge></filter><rect width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##,
             width: 4,
             height: 4,
             golden: "RRGG\nRRGG\nGGGG\nGGGG",
@@ -421,8 +426,10 @@ pub fn fixtures() -> Vec<GoldenFixture> {
             // R10: feComposite operator="arithmetic" (k2=k3=1 -> additive). A 2x2
             // red source added to a green flood is yellow where they overlap and
             // green elsewhere.
+            // The explicit region (200%x200% of the 2x2 bbox) lets the green
+            // flood fill the canvas under R10 filter-region clipping.
             name: "r10_composite_arithmetic_add",
-            svg: r##"<svg viewBox="0 0 4 4"><filter id="f"><feFlood flood-color="#00ff00" result="g"/><feComposite operator="arithmetic" k1="0" k2="1" k3="1" k4="0" in="SourceGraphic" in2="g"/></filter><rect width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##,
+            svg: r##"<svg viewBox="0 0 4 4"><filter id="f" x="0" y="0" width="200%" height="200%"><feFlood flood-color="#00ff00" result="g"/><feComposite operator="arithmetic" k1="0" k2="1" k3="1" k4="0" in="SourceGraphic" in2="g"/></filter><rect width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##,
             width: 4,
             height: 4,
             golden: "RRGG\nRRGG\nGGGG\nGGGG",
@@ -447,12 +454,25 @@ pub fn fixtures() -> Vec<GoldenFixture> {
         },
         GoldenFixture {
             // R10: feMorphology operator="dilate" radius="1" grows a 2x2 red
-            // square (cols/rows 3-4) outward by one pixel each side.
+            // square (cols/rows 3-4) outward by one pixel each side. The explicit
+            // region (-50%..150% of the bbox) is sized to contain the dilation
+            // under filter-region clipping.
             name: "r10_morphology_dilate",
-            svg: r##"<svg viewBox="0 0 8 8"><filter id="f"><feMorphology operator="dilate" radius="1"/></filter><rect x="3" y="3" width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##,
+            svg: r##"<svg viewBox="0 0 8 8"><filter id="f" x="-50%" y="-50%" width="200%" height="200%"><feMorphology operator="dilate" radius="1"/></filter><rect x="3" y="3" width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##,
             width: 8,
             height: 8,
             golden: "........\n........\n..RRRR..\n..RRRR..\n..RRRR..\n..RRRR..\n........\n........",
+        },
+        GoldenFixture {
+            // R10: the DEFAULT filter region (objectBoundingBox -10%..110%) clips
+            // an feFlood to the element's bbox+margin instead of the whole canvas
+            // -- proving region clipping. The 2x2 source at (2,2) bounds the blue
+            // flood to roughly the centre, not the 6x6 canvas.
+            name: "r10_filter_region_clips_flood",
+            svg: r##"<svg viewBox="0 0 6 6"><filter id="f"><feFlood flood-color="#0000ff"/></filter><rect x="2" y="2" width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##,
+            width: 6,
+            height: 6,
+            golden: "......\n......\n..BB..\n..BB..\n......\n......",
         },
         GoldenFixture {
             // R10: mix-blend-mode on a group. A green group with

@@ -3306,6 +3306,7 @@ mod tests {
             "fn composite_offscreen_blended", // mix-blend-mode group compositing
             "fn srgb_to_linear_premul",       // color-interpolation-filters: linearRGB
             "fn linear_to_srgb_premul",       // linearRGB -> sRGB at the boundary
+            "fn clip_to_filter_region",       // precise filter-region clipping
         ] {
             assert!(
                 SVG_RASTERIZER_SOURCE.contains(marker),
