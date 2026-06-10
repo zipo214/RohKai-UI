@@ -2,6 +2,66 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-10 — SVG R10 complete: filter correctness + tier-2 + blend (post-R8 lane 3/5)
+
+### Context Reviewed Before Editing
+- `docs/svg-goal-plan-prompts/R10-filter-correctness-tier2.goal.md` (lane spec)
+- `docs/SVG_RENDERER_ROADMAP.md` Post-R8 gap matrix + lanes; `svg-zero-dep` skill
+- `src/canvas/svg_rasterizer.rs` R7 filter machinery: FilterGraph/FilterKind/
+  FilterPrimitive::apply, gaussian_blur, color_matrix,
+  composite_premultiplied_over, parse_filter, ResolvedLayer/LayerRaw/Offscreen,
+  composite_offscreen, layer_for_group/shape_layer
+
+### Changes (all in `src/canvas/svg_rasterizer.rs`; embedded verbatim into exports)
+Shipped as four verified, separately-committed increments:
+- **Tier-2 primitives** (commit e268e9d): feComposite (over/in/out/atop/xor/
+  arithmetic), feBlend (normal/multiply/screen/darken/lighten via premultiplied
+  separable-blend), feComponentTransfer (identity/table/discrete/linear/gamma),
+  feMorphology (dilate/erode, `MAX_MORPH_RADIUS`-capped). `<feComponentTransfer>`
+  added to `is_container_tag` so its feFunc* children parse. Tier-3 stays
+  Identity + `filter.unsupported_primitive`.
+- **mix-blend-mode** (commit 4709d80): `BlendMode` (shared with feBlend) threaded
+  LayerRaw→ResolvedLayer→Offscreen; non-Normal forces an offscreen and composites
+  via `composite_offscreen_blended`. Normal path byte-identical.
+- **linearRGB color-interpolation-filters** (commit 4e112ea): default linearRGB;
+  `apply` converts source sRGB→linear (premultiplied-aware) before the graph and
+  back after; feFlood/feDropShadow colours linearised; `sRGB` opts out.
+- **Precise filter region** (commit 1a141ba): `FilterRegion` from filterUnits +
+  x/y/w/h (default obbox −10%..110% via source alpha extent; userSpaceOnUse exact
+  via CTM); `clip_to_filter_region` clips the result.
+
+### Tests / goldens
+New goldens: r10_composite_arithmetic_add, r10_blend_multiply,
+r10_component_transfer_invert, r10_morphology_dilate, r10_mix_blend_multiply_group,
+r10_filter_region_clips_flood. New unit tests: blend determinism + multiply/
+screen, composite arithmetic/in, transfer gamma/linear/table, morphology growth +
+radius cap, mix-blend vs src-over, linearRGB-vs-sRGB blur midpoint (pixel-exact),
+filter region default + userSpaceOnUse. Three R10 export-parity markers added.
+
+### Justified golden/test changes (region clipping)
+Filter-region clipping is spec-correct and clips output beyond the element bbox.
+feoffset_shifts_right, feflood_femerge, r10_composite_arithmetic_add,
+r10_morphology_dilate (goldens) and gaussian_blur_softens_a_hard_edge,
+fedropshadow_adds_offset_shadow, femorphology_dilate_grows... (unit tests) were
+given explicit filter regions (documented inline) matching their intent, so their
+expected output is preserved — not rebaked to clipped output. linearRGB perturbed
+no golden (all use pure 0/255 colours; sRGB↔linear identity there).
+
+### Verification
+- `cargo fmt --check` clean; `cargo check` clean; `cargo test` **321 pass / 6
+  ignored / 0 fail**; `cargo clippy --all-targets -- -D warnings` clean;
+  `pwsh scripts/validate-svg-import.ps1` + `check-text-encoding.ps1` pass;
+  `cargo run` launch smoke. No new dependencies.
+
+### Risks / Follow-ups
+- objectBoundingBox filter regions use the source alpha extent as a bbox proxy
+  (exact geometric bbox is not threaded to the layer); userSpaceOnUse percentage
+  lengths are approximated as user units + diagnosed.
+- color-interpolation-filters is filter-level, not per-primitive.
+- Tier-3 primitives (turbulence/displacement/convolution/lighting/tile/image)
+  remain diagnosed.
+- **Next: R11** (raster text & textPath) — heavy; gate on real product need.
+
 ## 2026-06-09 — Engineering invariants doc (process hardening)
 
 ### Context Reviewed Before Editing

@@ -7,6 +7,28 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-10 — SVG R10 complete: filter correctness + tier-2 + blend modes
+
+On `dev`. **R10 done**, shipped as four verified+committed increments (each ends
+green; tree always shippable): (1) tier-2 primitives feComposite/feBlend/
+feComponentTransfer/feMorphology — real buffers on the R7 premultiplied pipeline,
+`<feComponentTransfer>` added to `is_container_tag` so feFunc* children parse,
+feMorphology radius capped (`MAX_MORPH_RADIUS`); (2) `mix-blend-mode` —
+`BlendMode` threaded LayerRaw→ResolvedLayer→Offscreen, composited via new
+`composite_offscreen_blended` (Normal path byte-identical, so no existing group/
+mask/filter golden moved); (3) linearRGB `color-interpolation-filters` default
+(srgb↔linear premult-aware convert at the graph boundary, `sRGB` opts out,
+flood/dropshadow colours linearised) — existing goldens use pure 0/255 so none
+moved, gamma proven by a pixel-exact unit test; (4) precise filter region
+(`filterUnits`+x/y/w/h, default obbox −10%..110% via source alpha extent;
+userSpaceOnUse exact via CTM) clipping the result. **Heads-up for R11+:** region
+clipping is spec-correct and clips filter output beyond the element bbox, so
+feOffset/feFlood/feMorphology/feDropShadow/feGaussianBlur fixtures+tests now carry
+explicit filter regions (documented inline). Gate green:
+fmt/check/test 321/clippy --all-targets/validate-svg-import/check-text-encoding/
+cargo run. No new deps. **Next: R11** (raster text & textPath) — read
+`docs/svg-goal-plan-prompts/R11-*.goal.md` first; it is heavy, gate on real need.
+
 ## 2026-06-09 — Engineering invariants doc (process hardening from PR #4 review)
 
 On `dev`. Triaged the PR #4 CodeRabbit batch (32 comments): all substantive

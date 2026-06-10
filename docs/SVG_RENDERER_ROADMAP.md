@@ -192,10 +192,12 @@ Current limits:
   markers) `data:` images are decoded and rendered through the R4 clip/compositing
   pipeline. Progressive/arithmetic/CMYK/12-bit JPEG and external sources are
   diagnosed rather than rendered.
-- No blend modes. (Markers and pattern tiling render as of R9; alpha/luminance
-  masks and filter tier-1 — blur/offset/flood/merge/colorMatrix/dropShadow —
-  render via the R4 offscreen pipeline as of R7; tier 2/3 filter primitives are
-  diagnosed.)
+- Markers and pattern tiling render as of R9. Alpha/luminance masks and filter
+  tier-1 (blur/offset/flood/merge/colorMatrix/dropShadow) render via the R4
+  offscreen pipeline as of R7; filter tier-2 (composite/blend/componentTransfer/
+  morphology), linearRGB color-interpolation, precise filter-region clipping, and
+  `mix-blend-mode` (separable modes) render as of R10. Tier-3 filter primitives
+  (turbulence/displacement/convolution/lighting/tile/image) remain diagnosed.
 - Text imports as editable chunked labels (positioned spans become separate
   grouped labels with per-chunk anchor/baseline diagnostics); raster text
   rendering (vector-outline snapshot) is deferred, so the rasterizer still reports
@@ -393,7 +395,7 @@ need all of it immediately, but this is the map.
 | `defs`/`use` | Id resolution and expansion | Importer and rasterizer support bounded local symbol/use expansion with cycles, depth/node limits, duplicate-ID diagnostics, and source-order stability | Extend references only as later phases require | P1 |
 | Clips | Actual clipping stack | clipPath rendered: clip-rule, transforms, both clipPathUnits (shape bbox), nested intersection, cycle/depth caps, plus nested-`<svg>` overflow clipping (R4) | objectBoundingBox-on-group; clip on text/image when those land | P2 |
 | Masks | Alpha/luminance masks | Alpha + luminance masks rendered through the R4 offscreen (shape/gradient mask content, `mask-type`, bounded by item/offscreen caps) | objectBoundingBox content units; mask region clipping | P3 |
-| Filters | Primitive graph | Tier-1 graph on R4 offscreen (premultiplied, capped): blur/offset/flood/merge/colorMatrix/dropShadow; unsupported primitives partial + diagnosed | Tier 2/3 primitives; full filter-region clipping | P4 |
+| Filters | Primitive graph | Tier-1 + tier-2 graph on R4 offscreen (premultiplied, capped): blur/offset/flood/merge/colorMatrix/dropShadow (R7) + composite/blend/componentTransfer/morphology (R10), in linearRGB by default with precise filter-region clipping (R10); tier-3 primitives partial + diagnosed | Tier-3 primitives (turbulence/displacement/convolution/lighting/tile/image) | P4 |
 | Text | Full layout/shaping | Editable chunked multi-label import (positioned spans → grouped labels, per-chunk anchor/baseline diagnostics); raster text skipped | Vector-outline snapshot / raster text; shaping/bidi/textPath | P3/P4 |
 | Markers | Arrowheads and symbols on paths | Rendered (R9): marker-start/mid/end, orient auto/auto-start-reverse/angle, markerUnits, viewBox/refX/refY + overflow clip, bounded count | Closed | P3 |
 | Antialiasing | High-quality coverage | Deterministic 8x8 coverage; winding/parity fills and unioned stroke coverage are separate | Tune quality/performance and add gamma-aware compositing | P1/P2 |
@@ -799,9 +801,9 @@ deferred; **extra-roadmap** = a real gap the roadmap never represented.
 
 | Capability | RohKai now | Mature engines | Priority | Gap type | Origin | Recommendation |
 |---|---|---|---|---|---|---|
-| Filter color-interpolation (linearRGB) | filters run in sRGB premultiplied | filters default `color-interpolation-filters: linearRGB` | P1 | conformance | extra-roadmap | implement (R10) |
-| Filter region precision | region = whole canvas | bbox-based `-10%..110%` + x/y/w/h filterUnits | P1 | implementation/conformance | partially (R7 noted approx) | implement (R10) |
-| Filters tier 2/3 | identity passthrough + diagnostic | feComposite/feBlend/feTile/feMorphology/feComponentTransfer/feImage/feTurbulence/feDisplacementMap | P2/P3 | implementation | intra-roadmap deferred | tier-2 implement (R10); tier-3 defer |
+| Filter color-interpolation (linearRGB) | linearRGB default + sRGB opt-out (R10) | filters default `color-interpolation-filters: linearRGB` | P1 | conformance | extra-roadmap | DONE (R10) |
+| Filter region precision | region clipped to filterUnits + x/y/w/h, default obbox `-10%..110%` (R10) | bbox-based `-10%..110%` + x/y/w/h filterUnits | P1 | implementation/conformance | partially (R7 noted approx) | DONE (R10); userSpaceOnUse % approximated |
+| Filters tier 2/3 | tier-2 real (R10): feComposite/feBlend/feComponentTransfer/feMorphology; tier-3 identity passthrough + diagnostic | feComposite/feBlend/feTile/feMorphology/feComponentTransfer/feImage/feTurbulence/feDisplacementMap | P2/P3 | implementation | intra-roadmap deferred | tier-2 DONE (R10); tier-3 (feTile/feImage/feTurbulence/feDisplacementMap/feConvolveMatrix/lighting) defer |
 | Patterns | tiled via offscreen (R9) | full tiling (patternUnits/contentUnits/viewBox/transform) | P1/P2 | implementation | intra-roadmap deferred | DONE (R9); colour-space tuning later |
 | Markers | marker-start/mid/end rendered (R9) | marker-start/mid/end, orient, markerUnits, viewBox | P1 | implementation | extra-roadmap | DONE (R9) |
 | vector-effect=non-scaling-stroke | supported (R9) | supported | P2 | implementation | extra-roadmap | DONE (R9) |
@@ -809,7 +811,7 @@ deferred; **extra-roadmap** = a real gap the roadmap never represented.
 | Namespace model | prefixes stripped (`xlink:href`→`href`) | real xmlns/qualified-name model | P1 | architecture/conformance | extra-roadmap | implement bounded model (R12) |
 | Malformed-document recovery | hard-reject on several constructs | lenient recovery + diagnostics | P1 | robustness | extra-roadmap | implement recovery policy (R12) |
 | Accessibility metadata | dropped | `title`/`desc`/`aria-*`/`role` exposed | P2 | editor/diagnostics | extra-roadmap | implement title/desc extraction (R12) |
-| Blend modes (mix-blend-mode) | normal over only | full isolation/blend | P2/P3 | implementation | extra-roadmap | tier-2 with feBlend (R10) |
+| Blend modes (mix-blend-mode) | normal/multiply/screen/darken/lighten on group layers (R10) | full isolation/blend | P2/P3 | implementation | extra-roadmap | DONE (R10) for the separable modes; remaining CSS blend modes future |
 | CSS combinators/@media/vars | tier-1 selectors only | descendant/child/attr/pseudo, @media, custom props | P2/P3 | implementation | intra-roadmap (only justified tiers) | implement only fixture-justified tiers |
 | Color management (ICC) | sRGB assumed | ICC/`color-interpolation` | P4 | conformance | extra-roadmap | reject (out of scope) |
 | Conformance corpus validation | per-feature goldens + curated W3C-1.1 subset | W3C test-suite + reference oracles | P1 | conformance/testing | yes (R8.1 curated subset) | DONE (R8.1); broader licensed corpus future |
@@ -856,10 +858,21 @@ deferred; **extra-roadmap** = a real gap the roadmap never represented.
   Goldens: `r9_marker_start_mid_end`, `r9_marker_auto_orient`,
   `r9_pattern_userspace_tile`, `r9_pattern_objectbbox_tile`,
   `r9_non_scaling_stroke`. No new dependencies.
-- **R10 — Filter correctness & tier-2** (P1/P2; depends R7): linearRGB
-  color-interpolation-filters; precise filter-region computation + clipping;
-  feComposite, feBlend (+ mix-blend-mode), feComponentTransfer, feMorphology;
-  bounded buffers; goldens per primitive.
+- **R10 — Filter correctness & tier-2** — ✅ DONE (P1/P2; depends R7), in
+  `src/canvas/svg_rasterizer.rs` (embedded verbatim into exports). (1) linearRGB
+  `color-interpolation-filters` by default (premultiplied sRGB<->linear convert at
+  the graph boundary; `sRGB` opts out; feFlood/feDropShadow colours linearised).
+  (2) Precise filter region from `filterUnits` + `x/y/width/height` (default
+  objectBoundingBox `-10%..110%`, resolved against the source alpha extent;
+  userSpaceOnUse exact via the CTM); the result is clipped to it. (3) Tier-2
+  primitives real: feComposite (over/in/out/atop/xor/arithmetic), feBlend
+  (normal/multiply/screen/darken/lighten), feComponentTransfer (identity/table/
+  discrete/linear/gamma), feMorphology (dilate/erode, `MAX_MORPH_RADIUS`-capped).
+  (4) `mix-blend-mode` on group/shape layers via the R4 offscreen composite
+  (shared `BlendMode`). Tier-3 (feTile/feImage/feTurbulence/feDisplacementMap/
+  feConvolveMatrix/lighting) stay identity + `filter.unsupported_primitive`.
+  Goldens per primitive + region clip + mix-blend; linearRGB proven by a
+  pixel-exact unit test. No new dependencies.
 - **R11 — Raster text & textPath** (P1; depends R6): editable-first stays; add an
   optional vector-outline snapshot render path (own glyph-outline extraction, no
   external font/shaping crate) and textPath layout; explicit diagnostics for
@@ -898,15 +911,16 @@ deferred; **extra-roadmap** = a real gap the roadmap never represented.
 - **Editor-grade: achieved.** In-app report UI, source viewer, rendered/source
   toggle, round-trip source preservation, honest fidelity scoring.
 - **Application-grade: achieved.** Deterministic, bounded, diagnosed rendering of
-  most static SVG (geometry, gradients, clips, masks, filter tier-1, PNG+JPEG
-  images, plus markers/patterns/vector-effect as of R9 — features common in
-  real-world UI/diagram SVGs). Remaining for full coverage: raster text (R11).
+  most static SVG (geometry, gradients, clips, masks, PNG+JPEG images,
+  markers/patterns/vector-effect (R9), and linearRGB filter tier-1+tier-2 with
+  precise regions + mix-blend-mode (R10) — features common in real-world UI/
+  diagram SVGs). Remaining for full coverage: raster text (R11).
 - **Renderer-grade (resvg/librsvg-class): not yet.** R8.1 (W3C-subset conformance
-  corpus + fuzzing + precision policy) and R9 (markers/patterns/vector-effect)
-  are **done**; still requires R10-R12: linearRGB filters + precise regions
-  (R10), raster text (R11), namespace model + malformed recovery (R12). Until
-  then, "renderer-grade" is not claimed.
+  corpus + fuzzing + precision policy), R9 (markers/patterns/vector-effect), and
+  R10 (linearRGB filters + precise regions + tier-2 + blend modes) are **done**;
+  still requires R11-R12: raster text (R11), namespace model + malformed recovery
+  (R12). Until then, "renderer-grade" is not claimed.
 
 Next maturity step (application → renderer grade): **R8.1 (conformance/fuzz) ✅ →
-R9 (markers/patterns/vector-effect) ✅ → R10 (filter correctness) → R11 (raster
-text) → R12 (namespace/robustness/a11y)**. R8.1 and R9 complete; R10 is next.
+R9 (markers/patterns/vector-effect) ✅ → R10 (filter correctness) ✅ → R11 (raster
+text) → R12 (namespace/robustness/a11y)**. R8.1, R9, and R10 complete; R11 is next.

@@ -155,9 +155,14 @@ textures at runtime.
   keeps `<image>` as an editable placeholder with the source preserved.
 - Image-mode rasterization renders `mask` (alpha + luminance) and filter tier-1
   (`feGaussianBlur`, `feOffset`, `feFlood`, `feMerge`, `feColorMatrix`,
-  `feDropShadow`) through the R4 offscreen pipeline (R7). Filter tier 2/3
-  primitives pass through with a `filter.unsupported_primitive` partial-output
-  diagnostic; missing mask/filter refs warn and leave the element rendered.
+  `feDropShadow`) through the R4 offscreen pipeline (R7), plus filter tier-2
+  (`feComposite`, `feBlend`, `feComponentTransfer`, `feMorphology`), linearRGB
+  `color-interpolation-filters` (default; `sRGB` opts out), precise filter-region
+  clipping (`filterUnits` + `x/y/width/height`), and `mix-blend-mode` group
+  blending (R10). Tier-3 primitives (turbulence/displacement/convolution/
+  lighting/tile/image) pass through with a `filter.unsupported_primitive`
+  partial-output diagnostic; missing mask/filter refs warn and leave the element
+  rendered.
 - Image-mode rasterization renders **markers** (`marker-start`/`marker-mid`/
   `marker-end` + `marker` shorthand, `orient` `auto`/`auto-start-reverse`/angle,
   `markerUnits`, `viewBox`/`refX`/`refY` with overflow clip), **patterns** (tiled
@@ -167,8 +172,8 @@ textures at runtime.
   (`reference.pattern_cycle`, `marker.unresolved`, `limit.marker_count`) and
   never panic.
 - Image-mode rasterization emits structured diagnostics for the remaining
-  unsupported renderer buckets such as text, blend modes, and unavailable
-  paint-server references.
+  unsupported renderer buckets such as text, tier-3 filter primitives, and
+  unavailable paint-server references.
   Invalid fill-rule/stroke declarations produce source-spanned warnings and
   preserve inherited/default behavior. Stroke complexity limits report
   truncation explicitly.
@@ -213,13 +218,13 @@ RohKai rejects or ignores unsafe SVG features:
   `DOCTYPE`, custom entities, scripts, non-XML processing instructions, external
   hrefs or non-local `url(...)` references, excessive tag count, excessive path
   commands, or excessive raster dimensions.
-- Animation, `foreignObject`, `textPath`, filter tier 2/3 primitives,
+- Animation, `foreignObject`, `textPath`, tier-3 filter primitives,
   unavailable paint-server references, and complex CSS selectors are reported
   as unsupported or approximated with structured diagnostics. Linear/radial
-  gradients, `clipPath` clipping, masks (alpha/luminance), filter tier-1,
-  markers, patterns, and `vector-effect: non-scaling-stroke` (R9) are supported
-  in Image-mode rendering but remain non-editable, diagnosed placeholders in
-  component import mode.
+  gradients, `clipPath` clipping, masks (alpha/luminance), filter tier-1 + tier-2
+  (linearRGB, precise regions, `mix-blend-mode`) (R7/R10), markers, patterns, and
+  `vector-effect: non-scaling-stroke` (R9) are supported in Image-mode rendering
+  but remain non-editable, diagnosed placeholders in component import mode.
   `clip-path` is applied in Image-mode rendering (R4); unresolved/cyclic/too-deep
   clip references and objectBoundingBox-on-group are diagnosed and skipped.
 
