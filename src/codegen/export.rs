@@ -3298,11 +3298,12 @@ mod tests {
     #[test]
     fn embedded_rasterizer_includes_r10_render_paths() {
         for marker in [
-            "fn composite_filter",   // feComposite (Porter-Duff + arithmetic)
-            "fn blend_filter",       // feBlend
-            "fn component_transfer", // feComponentTransfer
-            "fn morphology",         // feMorphology
-            "enum BlendMode",        // shared blend (feBlend / mix-blend-mode)
+            "fn composite_filter",            // feComposite (Porter-Duff + arithmetic)
+            "fn blend_filter",                // feBlend
+            "fn component_transfer",          // feComponentTransfer
+            "fn morphology",                  // feMorphology
+            "enum BlendMode",                 // shared blend (feBlend / mix-blend-mode)
+            "fn composite_offscreen_blended", // mix-blend-mode group compositing
         ] {
             assert!(
                 SVG_RASTERIZER_SOURCE.contains(marker),

@@ -455,6 +455,15 @@ pub fn fixtures() -> Vec<GoldenFixture> {
             golden: "........\n........\n..RRRR..\n..RRRR..\n..RRRR..\n..RRRR..\n........\n........",
         },
         GoldenFixture {
+            // R10: mix-blend-mode on a group. A green group with
+            // mix-blend-mode:multiply over a red backdrop multiplies to black.
+            name: "r10_mix_blend_multiply_group",
+            svg: r##"<svg viewBox="0 0 4 4"><rect width="4" height="4" fill="#ff0000"/><g style="mix-blend-mode: multiply"><rect width="4" height="4" fill="#00ff00"/></g></svg>"##,
+            width: 4,
+            height: 4,
+            golden: "KKKK\nKKKK\nKKKK\nKKKK",
+        },
+        GoldenFixture {
             name: "unsafe_external_href_rejected",
             svg: r##"<svg viewBox="0 0 4 4"><image href="https://example.invalid/a.png" width="4" height="4"/></svg>"##,
             width: 4,

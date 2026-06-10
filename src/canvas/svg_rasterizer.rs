@@ -2135,6 +2135,9 @@ struct LayerRaw {
     opacity: f32,
     /// `isolation: isolate` requested an offscreen regardless of opacity.
     isolate: bool,
+    /// `mix-blend-mode` (R10); non-`Normal` composites the isolated offscreen
+    /// with the parent using the selected separable blend.
+    blend: BlendMode,
     source: SvgRenderSource,
 }
 
@@ -3496,12 +3499,14 @@ fn layer_for_group(
     let filter_ref = local_attr_ref(attrs, "filter");
     let opacity = style.opacity.clamp(0.0, 1.0);
     let isolate = parse_isolation(attrs);
+    let blend = parse_mix_blend_mode(attrs);
     if clip_ref.is_none()
         && mask_ref.is_none()
         && filter_ref.is_none()
         && overflow.is_none()
         && opacity >= 1.0
         && !isolate
+        && blend == BlendMode::Normal
     {
         return None;
     }
@@ -3515,8 +3520,16 @@ fn layer_for_group(
         overflow,
         opacity,
         isolate,
+        blend,
         source,
     })
+}
+
+/// `mix-blend-mode` (R10); unrecognised values fall back to `Normal`.
+fn parse_mix_blend_mode(attrs: &[(String, String)]) -> BlendMode {
+    final_style_property(attrs, "mix-blend-mode")
+        .and_then(parse_blend_mode)
+        .unwrap_or(BlendMode::Normal)
 }
 
 /// A `<g>`/shape `mask`/`filter` reference resolved to a local `url(#id)` target.
@@ -3534,7 +3547,8 @@ fn shape_layer(
 ) -> Option<LayerRaw> {
     let mask_ref = local_attr_ref(attrs, "mask");
     let filter_ref = local_attr_ref(attrs, "filter");
-    if mask_ref.is_none() && filter_ref.is_none() {
+    let blend = parse_mix_blend_mode(attrs);
+    if mask_ref.is_none() && filter_ref.is_none() && blend == BlendMode::Normal {
         return None;
     }
     Some(LayerRaw {
@@ -3547,6 +3561,7 @@ fn shape_layer(
         overflow: None,
         opacity: 1.0,
         isolate: false,
+        blend,
         source,
     })
 }
@@ -5476,6 +5491,7 @@ struct ResolvedLayer {
     mask: Option<MaskDef>,
     filter: Option<FilterGraph>,
     opacity: f32,
+    blend: BlendMode,
     needs_offscreen: bool,
     diagnostics: Vec<PendingDiagnostic>,
     source: SvgRenderSource,
@@ -5515,13 +5531,17 @@ impl ResolvedLayer {
             .filter_ref
             .as_ref()
             .and_then(|id| parse_filter(scene, id, element_ctm, &mut diagnostics));
-        let needs_offscreen =
-            raw.opacity < 1.0 || raw.isolate || mask.is_some() || filter.is_some();
+        let needs_offscreen = raw.opacity < 1.0
+            || raw.isolate
+            || mask.is_some()
+            || filter.is_some()
+            || raw.blend != BlendMode::Normal;
         ResolvedLayer {
             clip,
             mask,
             filter,
             opacity: raw.opacity.clamp(0.0, 1.0),
+            blend: raw.blend,
             needs_offscreen,
             diagnostics,
             source: raw.source,
@@ -5782,6 +5802,7 @@ impl DisplayList {
                             offscreens.push(Offscreen {
                                 buf: vec![0u8; bytes],
                                 opacity: layer.opacity,
+                                blend: layer.blend,
                             });
                             offscreen_bytes += bytes;
                             pushed_offscreen = true;
@@ -6250,6 +6271,8 @@ fn combine_clips(ancestor: Option<&ClipMask>, local: Option<&ClipMask>) -> Optio
 struct Offscreen {
     buf: Vec<u8>,
     opacity: f32,
+    /// `mix-blend-mode` used when compositing this layer back into its parent.
+    blend: BlendMode,
 }
 
 /// One open layer scope in `DisplayList::execute`'s layer stack.
@@ -8142,6 +8165,10 @@ fn composite_offscreen(parent: &mut [u8], parent_premultiplied: bool, offscreen:
     if opacity <= 0.0 {
         return;
     }
+    if offscreen.blend != BlendMode::Normal {
+        composite_offscreen_blended(parent, parent_premultiplied, offscreen, opacity);
+        return;
+    }
     let src = &offscreen.buf;
     let count = parent.len().min(src.len()) / 4;
     for pixel in 0..count {
@@ -8184,6 +8211,67 @@ fn composite_offscreen(parent: &mut [u8], parent_premultiplied: bool, offscreen:
                     .clamp(0.0, 255.0) as u8;
                 parent[idx + 3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
             }
+        }
+    }
+}
+
+/// R10 `mix-blend-mode` composite: blend an isolated group offscreen
+/// (premultiplied, faded by `opacity`) into its parent with a separable blend.
+/// Works in premultiplied space; converts to/from a straight parent at the edge.
+fn composite_offscreen_blended(
+    parent: &mut [u8],
+    parent_premultiplied: bool,
+    offscreen: &Offscreen,
+    opacity: f32,
+) {
+    let src = &offscreen.buf;
+    let count = parent.len().min(src.len()) / 4;
+    for pixel in 0..count {
+        let idx = pixel * 4;
+        let sa = src[idx + 3] as f32 * opacity / 255.0;
+        // Source premultiplied channels, faded by group opacity.
+        let s = [
+            src[idx] as f32 * opacity / 255.0,
+            src[idx + 1] as f32 * opacity / 255.0,
+            src[idx + 2] as f32 * opacity / 255.0,
+        ];
+        let ab = parent[idx + 3] as f32 / 255.0;
+        // Backdrop premultiplied channels.
+        let d = if parent_premultiplied {
+            [
+                parent[idx] as f32 / 255.0,
+                parent[idx + 1] as f32 / 255.0,
+                parent[idx + 2] as f32 / 255.0,
+            ]
+        } else {
+            [
+                parent[idx] as f32 / 255.0 * ab,
+                parent[idx + 1] as f32 / 255.0 * ab,
+                parent[idx + 2] as f32 / 255.0 * ab,
+            ]
+        };
+        if sa <= 0.0 && ab <= 0.0 {
+            continue;
+        }
+        let ao = sa + ab - sa * ab;
+        let mut co = [0.0f32; 3];
+        for c in 0..3 {
+            let sc = if sa > 0.0 { s[c] / sa } else { 0.0 };
+            let bc = if ab > 0.0 { d[c] / ab } else { 0.0 };
+            co[c] = (1.0 - ab) * s[c]
+                + (1.0 - sa) * d[c]
+                + sa * ab * blend_channel(offscreen.blend, bc, sc);
+        }
+        if parent_premultiplied {
+            for c in 0..3 {
+                parent[idx + c] = (co[c] * 255.0).round().clamp(0.0, 255.0) as u8;
+            }
+            parent[idx + 3] = (ao * 255.0).round().clamp(0.0, 255.0) as u8;
+        } else if ao > 0.0 {
+            for c in 0..3 {
+                parent[idx + c] = (co[c] / ao * 255.0).round().clamp(0.0, 255.0) as u8;
+            }
+            parent[idx + 3] = (ao * 255.0).round().clamp(0.0, 255.0) as u8;
         }
     }
 }
@@ -11436,6 +11524,20 @@ mod tests {
         // A pathological radius must complete (capped) without panicking.
         let bomb = r##"<svg viewBox="0 0 8 8"><filter id="f"><feMorphology operator="dilate" radius="100000"/></filter><rect width="8" height="8" fill="#ff0000" filter="url(#f)"/></svg>"##;
         assert_eq!(rasterize(bomb, 8, 8).unwrap().size, [8, 8]);
+    }
+
+    #[test]
+    fn mix_blend_mode_group_blends_with_backdrop() {
+        // Green group with mix-blend-mode:multiply over a red backdrop -> black.
+        let blended = r##"<svg viewBox="0 0 4 4"><rect width="4" height="4" fill="#ff0000"/><g style="mix-blend-mode: multiply"><rect width="4" height="4" fill="#00ff00"/></g></svg>"##;
+        let out = rasterize(blended, 4, 4).unwrap();
+        assert_eq!(pixel(&out, 1, 1), [0, 0, 0, 255]);
+        // Without the blend, the green group is plain src-over -> green wins.
+        let normal = r##"<svg viewBox="0 0 4 4"><rect width="4" height="4" fill="#ff0000"/><g><rect width="4" height="4" fill="#00ff00"/></g></svg>"##;
+        assert_eq!(
+            pixel(&rasterize(normal, 4, 4).unwrap(), 1, 1),
+            [0, 255, 0, 255]
+        );
     }
 
     // --- R8.1: in-repo fuzz harness + memory/CPU cap regressions ------------
