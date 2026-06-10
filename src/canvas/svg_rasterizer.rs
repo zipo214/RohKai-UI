@@ -4786,13 +4786,28 @@ struct FilterPrimitive {
 
 struct FilterGraph {
     primitives: Vec<FilterPrimitive>,
+    /// `color-interpolation-filters` (R10): `true` = run in linearRGB (the SVG
+    /// default), `false` = sRGB (`color-interpolation-filters: sRGB`).
+    linear: bool,
 }
 
 impl FilterGraph {
     /// Run the primitive graph over a premultiplied source-graphic buffer,
     /// returning the premultiplied result. Bounded by buffer size and primitive
     /// count; never panics.
-    fn apply(&self, source: &[u8], w: usize, h: usize) -> Vec<u8> {
+    ///
+    /// R10: when `self.linear`, the source is converted sRGB->linearRGB
+    /// (premultiplied-aware) before the graph and back to sRGB after, and any
+    /// sRGB-specified primitive colour (`feFlood`/`feDropShadow`) is linearised
+    /// so all per-channel math runs in linear light.
+    fn apply(&self, source_srgb: &[u8], w: usize, h: usize) -> Vec<u8> {
+        let owned_linear;
+        let source: &[u8] = if self.linear {
+            owned_linear = srgb_to_linear_premul(source_srgb);
+            &owned_linear
+        } else {
+            source_srgb
+        };
         let source_alpha = source_alpha_buffer(source);
         let mut named: HashMap<String, Vec<u8>> = HashMap::new();
         let mut previous = source.to_vec();
@@ -4801,7 +4816,9 @@ impl FilterGraph {
             let out = match &prim.kind {
                 FilterKind::GaussianBlur { sx, sy } => gaussian_blur(&input, w, h, *sx, *sy),
                 FilterKind::Offset { dx, dy } => offset_buffer(&input, w, h, *dx, *dy),
-                FilterKind::Flood { color } => flood_buffer(*color, w, h),
+                FilterKind::Flood { color } => {
+                    flood_buffer(linearize_color(*color, self.linear), w, h)
+                }
                 FilterKind::ColorMatrix { m } => color_matrix(&input, m),
                 FilterKind::Merge { inputs } => {
                     let mut acc = vec![0u8; w * h * 4];
@@ -4819,7 +4836,8 @@ impl FilterGraph {
                     sy,
                     color,
                 } => {
-                    let mut shadow = flood_masked(&source_alpha, *color);
+                    let mut shadow =
+                        flood_masked(&source_alpha, linearize_color(*color, self.linear));
                     shadow = gaussian_blur(&shadow, w, h, *sx, *sy);
                     shadow = offset_buffer(&shadow, w, h, *dx, *dy);
                     composite_premultiplied_over(&mut shadow, source);
@@ -4846,8 +4864,77 @@ impl FilterGraph {
             }
             previous = out;
         }
-        previous
+        if self.linear {
+            linear_to_srgb_premul(&previous)
+        } else {
+            previous
+        }
     }
+}
+
+/// sRGB transfer (component in `[0,1]`) -> linear light.
+#[inline]
+fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Linear light (component in `[0,1]`) -> sRGB transfer.
+#[inline]
+fn linear_to_srgb(c: f32) -> f32 {
+    if c <= 0.003_130_8 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+/// Convert a premultiplied sRGB buffer to premultiplied linearRGB (alpha kept).
+fn srgb_to_linear_premul(buf: &[u8]) -> Vec<u8> {
+    convert_premul(buf, srgb_to_linear)
+}
+
+/// Convert a premultiplied linearRGB buffer back to premultiplied sRGB.
+fn linear_to_srgb_premul(buf: &[u8]) -> Vec<u8> {
+    convert_premul(buf, linear_to_srgb)
+}
+
+/// Apply a colour-transfer function to each RGB channel of a premultiplied
+/// buffer (unpremultiply -> transfer -> re-premultiply); alpha is unchanged.
+fn convert_premul(buf: &[u8], transfer: fn(f32) -> f32) -> Vec<u8> {
+    let mut out = vec![0u8; buf.len()];
+    for (px, dst) in buf.chunks_exact(4).zip(out.chunks_exact_mut(4)) {
+        let a = px[3] as f32 / 255.0;
+        for c in 0..3 {
+            let straight = if a > 0.0 {
+                px[c] as f32 / 255.0 / a
+            } else {
+                0.0
+            };
+            dst[c] = (transfer(straight.clamp(0.0, 1.0)) * a * 255.0)
+                .round()
+                .clamp(0.0, 255.0) as u8;
+        }
+        dst[3] = px[3];
+    }
+    out
+}
+
+/// Linearise an sRGB-specified `[u8;4]` colour (RGB only) when running a filter
+/// graph in linearRGB; a no-op in sRGB mode.
+fn linearize_color(color: [u8; 4], linear: bool) -> [u8; 4] {
+    if !linear {
+        return color;
+    }
+    let conv = |c: u8| {
+        (srgb_to_linear(c as f32 / 255.0) * 255.0)
+            .round()
+            .clamp(0.0, 255.0) as u8
+    };
+    [conv(color[0]), conv(color[1]), conv(color[2]), color[3]]
 }
 
 fn resolve_filter_input(
@@ -5189,7 +5276,13 @@ fn parse_filter(
         .by_xml_id
         .get(filter_id)
         .and_then(|id| scene.references.nodes_by_id.get(id));
-    let Some(SvgNode::Unsupported { tag, children, .. }) = node else {
+    let Some(SvgNode::Unsupported {
+        tag,
+        attrs: filter_attrs,
+        children,
+        ..
+    }) = node
+    else {
         diagnostics.push(PendingDiagnostic::Warning {
             code: "filter.unresolved",
             message: "filter references an unavailable local id; no filter was applied",
@@ -5203,6 +5296,10 @@ fn parse_filter(
         });
         return None;
     }
+    // `color-interpolation-filters` defaults to linearRGB; only an explicit
+    // `sRGB` opts out (auto/linearRGB both stay linear).
+    let linear = !final_style_property(filter_attrs, "color-interpolation-filters")
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("sRGB"));
     let scale = affine_max_scale(ctm).max(1.0e-6);
     let mut primitives = Vec::new();
     for child in children {
@@ -5308,7 +5405,7 @@ fn parse_filter(
     if primitives.is_empty() {
         return None;
     }
-    Some(FilterGraph { primitives })
+    Some(FilterGraph { primitives, linear })
 }
 
 fn parse_filter_input(value: Option<&str>) -> FilterInput {
@@ -11524,6 +11621,25 @@ mod tests {
         // A pathological radius must complete (capped) without panicking.
         let bomb = r##"<svg viewBox="0 0 8 8"><filter id="f"><feMorphology operator="dilate" radius="100000"/></filter><rect width="8" height="8" fill="#ff0000" filter="url(#f)"/></svg>"##;
         assert_eq!(rasterize(bomb, 8, 8).unwrap().size, [8, 8]);
+    }
+
+    #[test]
+    fn color_interpolation_filters_linear_default_lightens_blur_midpoint() {
+        // Blur a black|white seam. In linearRGB (default) the blurred midpoint is
+        // lighter than in sRGB, because averaging happens in linear light.
+        let linear = r##"<svg viewBox="0 0 8 4"><filter id="f"><feGaussianBlur stdDeviation="1.2"/></filter><g filter="url(#f)"><rect width="4" height="4" fill="#000000"/><rect x="4" width="4" height="4" fill="#ffffff"/></g></svg>"##;
+        let srgb = r##"<svg viewBox="0 0 8 4"><filter id="f" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="1.2"/></filter><g filter="url(#f)"><rect width="4" height="4" fill="#000000"/><rect x="4" width="4" height="4" fill="#ffffff"/></g></svg>"##;
+        let lin = rasterize(linear, 8, 4).unwrap();
+        let srg = rasterize(srgb, 8, 4).unwrap();
+        // Same seam pixel, just-left-of-centre (still inside the black half).
+        let lp = pixel(&lin, 3, 2);
+        let sp = pixel(&srg, 3, 2);
+        assert!(
+            lp[0] > sp[0] + 10,
+            "linearRGB blur must lighten the midpoint vs sRGB: linear={lp:?} srgb={sp:?}"
+        );
+        // Determinism.
+        assert_eq!(lin.pixels, rasterize(linear, 8, 4).unwrap().pixels);
     }
 
     #[test]

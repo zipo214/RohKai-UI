@@ -3304,6 +3304,8 @@ mod tests {
             "fn morphology",                  // feMorphology
             "enum BlendMode",                 // shared blend (feBlend / mix-blend-mode)
             "fn composite_offscreen_blended", // mix-blend-mode group compositing
+            "fn srgb_to_linear_premul",       // color-interpolation-filters: linearRGB
+            "fn linear_to_srgb_premul",       // linearRGB -> sRGB at the boundary
         ] {
             assert!(
                 SVG_RASTERIZER_SOURCE.contains(marker),
