@@ -3333,6 +3333,25 @@ mod tests {
         }
     }
 
+    /// R12 invariant: namespace model, malformed recovery, and a11y metadata
+    /// live in the export-embedded rasterizer (same verbatim source as in-app).
+    #[test]
+    fn embedded_rasterizer_includes_r12_paths() {
+        for marker in [
+            "fn apply_xmlns",       // xmlns scope resolution
+            "enum Namespace",       // svg/xlink/foreign classification
+            "fn consume_close_tag", // malformed-recovery close-tag counting
+            "fn bounded_a11y_text", // <title>/<desc> extraction (bounded)
+            "namespace.foreign_element",
+            "recovery.malformed_markup",
+        ] {
+            assert!(
+                SVG_RASTERIZER_SOURCE.contains(marker),
+                "embedded rasterizer missing R12 path: {marker}"
+            );
+        }
+    }
+
     /// Always-run smoke: the fixture generates the required files and its source
     /// contains every feature-matrix marker.  Fast (no compilation).
     #[test]

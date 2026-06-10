@@ -39,27 +39,41 @@ pub fn report_summary(report: &SvgRenderReport) -> ReportSummary {
         s.map(|s| format!(" [bytes {}..{}]", s.byte_start, s.byte_end))
             .unwrap_or_default()
     };
+    let mut rows = vec![
+        (
+            "Fidelity".to_owned(),
+            fidelity_label(report.fidelity).to_owned(),
+        ),
+        (
+            "Rendered".to_owned(),
+            report.rendered_element_count.to_string(),
+        ),
+        (
+            "Skipped".to_owned(),
+            report.skipped_element_count.to_string(),
+        ),
+        ("Warnings".to_owned(), report.warning_count.to_string()),
+        (
+            "Unsupported".to_owned(),
+            report.unsupported_feature_count.to_string(),
+        ),
+    ];
+    // R12: accessibility metadata + recovery, shown only when present.
+    if let Some(title) = &report.title {
+        rows.push(("Title".to_owned(), title.clone()));
+    }
+    if let Some(desc) = &report.desc {
+        rows.push(("Description".to_owned(), desc.clone()));
+    }
+    if report.recovered_error_count > 0 {
+        rows.push((
+            "Recovered".to_owned(),
+            report.recovered_error_count.to_string(),
+        ));
+    }
     ReportSummary {
         fidelity: report.fidelity,
-        rows: vec![
-            (
-                "Fidelity".to_owned(),
-                fidelity_label(report.fidelity).to_owned(),
-            ),
-            (
-                "Rendered".to_owned(),
-                report.rendered_element_count.to_string(),
-            ),
-            (
-                "Skipped".to_owned(),
-                report.skipped_element_count.to_string(),
-            ),
-            ("Warnings".to_owned(), report.warning_count.to_string()),
-            (
-                "Unsupported".to_owned(),
-                report.unsupported_feature_count.to_string(),
-            ),
-        ],
+        rows,
         warnings: report
             .warnings
             .iter()
@@ -194,6 +208,9 @@ mod tests {
                 source: None,
             }],
             fidelity,
+            title: None,
+            desc: None,
+            recovered_error_count: 0,
         }
     }
 
@@ -223,6 +240,25 @@ mod tests {
         assert_eq!(s.unsupported[0].0, "pattern");
         // No source span on this unsupported feature → no byte annotation.
         assert!(!s.unsupported[0].1.contains("bytes"));
+    }
+
+    #[test]
+    fn a11y_and_recovery_rows_appear_only_when_present() {
+        let mut r = report(SvgRenderFidelity::High);
+        // Absent by default.
+        let base = report_summary(&r);
+        assert!(!base.rows.iter().any(|(k, _)| k == "Title"));
+        assert!(!base.rows.iter().any(|(k, _)| k == "Recovered"));
+        // Present when set.
+        r.title = Some("Chart".to_owned());
+        r.desc = Some("Quarterly revenue".to_owned());
+        r.recovered_error_count = 2;
+        let s = report_summary(&r);
+        assert!(s.rows.contains(&("Title".to_owned(), "Chart".to_owned())));
+        assert!(s
+            .rows
+            .contains(&("Description".to_owned(), "Quarterly revenue".to_owned())));
+        assert!(s.rows.contains(&("Recovered".to_owned(), "2".to_owned())));
     }
 
     #[test]

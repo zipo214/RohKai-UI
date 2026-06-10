@@ -96,6 +96,13 @@ pub struct SvgRenderReport {
     pub warnings: Vec<SvgRenderWarning>,
     pub unsupported_features: Vec<SvgRenderUnsupportedFeature>,
     pub fidelity: SvgRenderFidelity,
+    /// R12 accessibility metadata: `<title>` text (bounded length), if any.
+    pub title: Option<String>,
+    /// R12 accessibility metadata: `<desc>` text (bounded length), if any.
+    pub desc: Option<String>,
+    /// R12: count of malformed constructs the parser recovered from
+    /// (mismatched/unclosed tags, stray junk) rather than hard-failing.
+    pub recovered_error_count: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,6 +152,9 @@ impl SvgRenderReport {
             warnings: Vec::new(),
             unsupported_features: Vec::new(),
             fidelity: SvgRenderFidelity::High,
+            title: None,
+            desc: None,
+            recovered_error_count: 0,
         }
     }
 
@@ -254,6 +264,28 @@ pub fn rasterize_with_report(
             format!(
                 "{} cyclic local use reference(s) were skipped",
                 scene.use_cycle_count
+            ),
+        );
+    }
+    // R12: accessibility metadata + namespace/recovery diagnostics.
+    report.title = scene.title.clone();
+    report.desc = scene.desc.clone();
+    report.recovered_error_count = scene.recovered;
+    if scene.foreign_count > 0 {
+        report.warning(
+            "namespace.foreign_element",
+            format!(
+                "{} foreign-namespace element(s) were skipped (not in the SVG namespace)",
+                scene.foreign_count
+            ),
+        );
+    }
+    if scene.recovered > 0 {
+        report.warning(
+            "recovery.malformed_markup",
+            format!(
+                "recovered from {} malformed-markup construct(s) (mismatched/unclosed tags); output is partial",
+                scene.recovered
             ),
         );
     }
@@ -2121,6 +2153,11 @@ struct SvgDoc {
     width: f32,
     height: f32,
     nodes: Vec<SvgNode>,
+    /// R12 accessibility + recovery metadata gathered during parse.
+    title: Option<String>,
+    desc: Option<String>,
+    foreign_count: usize,
+    recovered: usize,
 }
 
 struct SvgScene {
@@ -2134,6 +2171,11 @@ struct SvgScene {
     paint_servers: PaintServerTable,
     expanded_use_limit_hit: bool,
     use_cycle_count: usize,
+    /// R12 a11y + namespace/recovery metadata surfaced into the render report.
+    title: Option<String>,
+    desc: Option<String>,
+    foreign_count: usize,
+    recovered: usize,
 }
 
 struct SvgSceneItem {
@@ -2268,6 +2310,10 @@ impl SvgScene {
             paint_servers,
             expanded_use_limit_hit: expansion.limit_hit,
             use_cycle_count: expansion.cycle_count,
+            title: doc.title,
+            desc: doc.desc,
+            foreign_count: doc.foreign_count,
+            recovered: doc.recovered,
         }
     }
 
@@ -2990,8 +3036,17 @@ impl SvgDoc {
             s: svg_text,
             pos: 0,
             next_node_id: 0,
+            ns_stack: Vec::new(),
+            foreign_count: 0,
+            recovered: 0,
+            title: None,
+            desc: None,
         };
         let all_nodes = parser.parse_nodes();
+        let title = parser.title.clone();
+        let desc = parser.desc.clone();
+        let foreign_count = parser.foreign_count;
+        let recovered = parser.recovered;
 
         // Find the SVG root node and extract its attributes
         let (root_attrs, root_children) = all_nodes.into_iter().find_map(|n| {
@@ -3034,6 +3089,13 @@ impl SvgDoc {
             })
             .unwrap_or(0.0) as f32;
 
+        // Root aria-label is an a11y fallback when no <title> child is present.
+        let title = title.or_else(|| {
+            attr("aria-label")
+                .filter(|v| !v.trim().is_empty())
+                .map(bounded_a11y_text)
+        });
+
         Some(SvgDoc {
             root_attrs,
             viewbox,
@@ -3041,6 +3103,10 @@ impl SvgDoc {
             width,
             height,
             nodes: root_children,
+            title,
+            desc,
+            foreign_count,
+            recovered,
         })
     }
 }
@@ -3049,10 +3115,128 @@ impl SvgDoc {
 // Minimal XML parser
 // ---------------------------------------------------------------------------
 
+/// R12: maximum a11y metadata text length kept (`<title>`/`<desc>`).
+const MAX_A11Y_TEXT: usize = 1_024;
+/// R12: maximum nested xmlns scope frames tracked (bounds the namespace stack).
+const MAX_NS_DEPTH: usize = 256;
+
+/// One xmlns scope frame (R12). `default` is the no-prefix namespace in effect;
+/// `prefixes` maps declared `xmlns:p` prefixes to their namespace token.
+#[derive(Clone, Default)]
+struct NsFrame {
+    default: Namespace,
+    prefixes: Vec<(String, Namespace)>,
+}
+
+/// The small set of namespaces the renderer understands (R12). Everything else
+/// is `Foreign` and skipped-with-diagnostic rather than mis-parsed.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum Namespace {
+    #[default]
+    Svg,
+    Xlink,
+    Foreign,
+}
+
+fn classify_namespace(uri: &str) -> Namespace {
+    let u = uri.trim();
+    if u == "http://www.w3.org/2000/svg" || u.is_empty() {
+        Namespace::Svg
+    } else if u == "http://www.w3.org/1999/xlink" {
+        Namespace::Xlink
+    } else {
+        Namespace::Foreign
+    }
+}
+
+/// Apply any `xmlns` / `xmlns:prefix` declarations in a raw open-tag header to a
+/// namespace scope frame (R12). Bounded: a malformed header simply stops the
+/// scan; prefix names are case-sensitive, the `xmlns` keyword is not.
+fn apply_xmlns(header: &str, frame: &mut NsFrame) {
+    let bytes = header.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        while i < bytes.len()
+            && (bytes[i].is_ascii_whitespace() || bytes[i] == b'<' || bytes[i] == b'/')
+        {
+            i += 1;
+        }
+        let key_start = i;
+        while i < bytes.len() {
+            let b = bytes[i];
+            if b == b'=' || b.is_ascii_whitespace() || b == b'>' || b == b'/' {
+                break;
+            }
+            i += 1;
+        }
+        if i == key_start {
+            i += 1;
+            continue;
+        }
+        let key = &header[key_start..i];
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if bytes.get(i) != Some(&b'=') {
+            continue;
+        }
+        i += 1;
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let value = match bytes.get(i) {
+            Some(&q @ (b'"' | b'\'')) => {
+                i += 1;
+                let vs = i;
+                while i < bytes.len() && bytes[i] != q {
+                    i += 1;
+                }
+                let v = &header[vs..i.min(header.len())];
+                if i < bytes.len() {
+                    i += 1;
+                }
+                v
+            }
+            _ => "",
+        };
+        let key_lower = key.to_ascii_lowercase();
+        if key_lower == "xmlns" {
+            frame.default = classify_namespace(value);
+        } else if let Some(pfx) = key.get(..6).map(|h| h.eq_ignore_ascii_case("xmlns:")) {
+            if pfx {
+                let prefix = key[6..].to_owned();
+                let ns = classify_namespace(value);
+                if frame.prefixes.len() < MAX_NS_DEPTH {
+                    frame.prefixes.push((prefix, ns));
+                }
+            }
+        }
+    }
+}
+
+/// Collapse whitespace and truncate a11y text to `MAX_A11Y_TEXT` chars (R12).
+fn bounded_a11y_text(raw: &str) -> String {
+    let collapsed = collapse_text_whitespace(&unescape_xml(raw));
+    if collapsed.chars().count() > MAX_A11Y_TEXT {
+        collapsed.chars().take(MAX_A11Y_TEXT).collect()
+    } else {
+        collapsed
+    }
+}
+
 struct XmlParser<'a> {
     s: &'a str,
     pos: usize,
     next_node_id: u32,
+    /// R12 xmlns scope stack (innermost last).
+    ns_stack: Vec<NsFrame>,
+    /// R12 count of foreign-namespace elements skipped.
+    foreign_count: usize,
+    /// R12 count of recovered malformed constructs (mismatched/unclosed tags).
+    recovered: usize,
+    /// R12 first `<title>` / `<desc>` text encountered (bounded length).
+    title: Option<String>,
+    desc: Option<String>,
 }
 
 impl<'a> XmlParser<'a> {
@@ -3137,12 +3321,13 @@ impl<'a> XmlParser<'a> {
             self.pos += 1;
         }
         let tag_raw = &self.s[name_start..self.pos];
-        // Strip namespace prefix (e.g. "svg:rect" → "rect")
-        let tag = tag_raw
-            .rfind(':')
-            .map(|i| &tag_raw[i + 1..])
-            .unwrap_or(tag_raw)
-            .to_lowercase();
+        // Split a namespace prefix (e.g. "svg:rect" → prefix "svg", local "rect").
+        let (prefix, local) = match tag_raw.rfind(':') {
+            Some(i) => (Some(tag_raw[..i].to_owned()), &tag_raw[i + 1..]),
+            None => (None, tag_raw),
+        };
+        let tag = local.to_lowercase();
+        let header_start = self.pos;
 
         // Attributes
         let mut raw_attrs: Vec<(String, String)> = Vec::new();
@@ -3175,13 +3360,67 @@ impl<'a> XmlParser<'a> {
             }
         }
 
-        let is_container = is_container_tag(&tag);
-        let is_text = tag == "text" || tag == "tspan";
-        let is_style = tag == "style";
+        // R12: resolve this element's namespace within the xmlns scope, then
+        // push a scope frame (with any xmlns declared here) for its children.
+        let header = &self.s[header_start..self.pos];
+        let mut frame = self.ns_stack.last().cloned().unwrap_or_default();
+        apply_xmlns(header, &mut frame);
+        let elem_ns = match &prefix {
+            None => frame.default,
+            Some(p) if p.eq_ignore_ascii_case("svg") => frame
+                .prefixes
+                .iter()
+                .rev()
+                .find(|(k, _)| k == p)
+                .map(|(_, ns)| *ns)
+                .unwrap_or(Namespace::Svg),
+            Some(p) => frame
+                .prefixes
+                .iter()
+                .rev()
+                .find(|(k, _)| k == p)
+                .map(|(_, ns)| *ns)
+                .unwrap_or(Namespace::Foreign),
+        };
+        let foreign = elem_ns != Namespace::Svg;
+        if self.ns_stack.len() < MAX_NS_DEPTH {
+            self.ns_stack.push(frame);
+        }
+
+        let is_meta = tag == "title" || tag == "desc";
+        let is_container = is_container_tag(&tag) && !foreign;
+        let is_text = (tag == "text" || tag == "tspan") && !foreign;
+        let is_style = tag == "style" && !foreign;
         let id = SvgNodeId(self.next_node_id);
         self.next_node_id = self.next_node_id.saturating_add(1);
 
         let mut text_content = String::new();
+        // R12: foreign-namespace element or <title>/<desc> — consume the subtree
+        // (balanced) and produce no renderable node.
+        if (foreign || is_meta) && !self_closing && !is_text && !is_style {
+            let inner_start = self.pos;
+            // Balance nested elements so we land on the matching close tag.
+            let _ = self.parse_nodes();
+            let inner = self.s[inner_start..self.pos].to_owned();
+            self.consume_close_tag(&tag);
+            self.ns_stack.pop();
+            if foreign {
+                self.foreign_count += 1;
+            } else if tag == "title" && self.title.is_none() {
+                self.title = Some(bounded_a11y_text(&strip_tags(&inner)));
+            } else if tag == "desc" && self.desc.is_none() {
+                self.desc = Some(bounded_a11y_text(&strip_tags(&inner)));
+            }
+            return None;
+        }
+        if (foreign || is_meta) && self_closing {
+            self.ns_stack.pop();
+            if foreign {
+                self.foreign_count += 1;
+            }
+            return None;
+        }
+
         let children = if !self_closing && is_style {
             if let Some(relative) = self.s[self.pos..].to_ascii_lowercase().find("</style") {
                 let end = self.pos + relative;
@@ -3196,11 +3435,11 @@ impl<'a> XmlParser<'a> {
             Vec::new()
         } else if !self_closing && is_container {
             let ch = self.parse_nodes();
-            // Consume end tag
+            // R12: consume the close tag, recovering from mismatch/unclosed.
             if self.starts_with("</") {
-                self.consume(2);
-                self.consume_until(">");
-                self.consume(1);
+                self.consume_close_tag(&tag);
+            } else {
+                self.recovered += 1; // unclosed container element
             }
             ch
         } else if !self_closing && is_text {
@@ -3242,11 +3481,34 @@ impl<'a> XmlParser<'a> {
             Vec::new()
         };
 
+        self.ns_stack.pop();
         let span = SvgSourceSpan {
             start: element_start,
             end: self.pos,
         };
         self.make_node(id, span, &tag, raw_attrs, children, text_content)
+    }
+
+    /// R12: consume a `</name>` close tag, counting a recovery when its name
+    /// does not match the element it is closing.
+    fn consume_close_tag(&mut self, expected: &str) {
+        self.consume(2); // "</"
+        self.skip_ws();
+        let name_start = self.pos;
+        while self.pos < self.s.len() {
+            let b = self.s.as_bytes()[self.pos];
+            if b.is_ascii_whitespace() || b == b'>' {
+                break;
+            }
+            self.pos += 1;
+        }
+        let raw = &self.s[name_start..self.pos];
+        let local = raw.rsplit(':').next().unwrap_or(raw).to_ascii_lowercase();
+        if local != expected {
+            self.recovered += 1;
+        }
+        self.consume_until(">");
+        self.consume(1);
     }
 
     fn parse_attr(&mut self) -> Option<(String, String)> {
@@ -3977,6 +4239,11 @@ fn scan_tag_attrs(tag_body: &str) -> Vec<(String, String)> {
         s: tag_body,
         pos: 0,
         next_node_id: 0,
+        ns_stack: Vec::new(),
+        foreign_count: 0,
+        recovered: 0,
+        title: None,
+        desc: None,
     };
     let mut attrs = Vec::new();
     while parser.pos < tag_body.len() {
@@ -12854,6 +13121,93 @@ mod tests {
             pixel(&rasterize(normal, 4, 4).unwrap(), 1, 1),
             [0, 255, 0, 255]
         );
+    }
+
+    // --- R12: namespace model + malformed recovery + a11y metadata ----------
+
+    #[test]
+    fn foreign_namespace_element_is_skipped_not_misrendered() {
+        // A custom-namespace <c:rect> must NOT render as an SVG <rect>; the real
+        // svg rect still renders, and xlink:href on <use> still resolves.
+        let svg = r##"<svg viewBox="0 0 10 10" xmlns:c="urn:custom">
+<c:rect width="10" height="10" fill="#ff0000"/>
+<rect x="0" y="0" width="4" height="4" fill="#00ff00"/>
+</svg>"##;
+        let out = rasterize_with_report(svg, 10, 10).unwrap();
+        // green rect rendered...
+        assert_eq!(pixel(&out.image, 1, 1), [0, 255, 0, 255]);
+        // ...but the foreign c:rect did not paint red over the rest.
+        assert_eq!(pixel(&out.image, 8, 8), [0, 0, 0, 0]);
+        assert!(out
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.code == "namespace.foreign_element"));
+    }
+
+    #[test]
+    fn xlink_href_use_still_resolves() {
+        let svg = r##"<svg viewBox="0 0 4 4" xmlns:xlink="http://www.w3.org/1999/xlink"><defs><rect id="r" width="2" height="4" fill="#ff0000"/></defs><use xlink:href="#r" x="2"/></svg>"##;
+        let out = rasterize(svg, 4, 4).unwrap();
+        assert_eq!(pixel(&out, 3, 1), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn malformed_markup_recovers_with_partial_render_and_diagnostic() {
+        // Mismatched close tag + stray junk: should still render the rect and
+        // report a recovery, never ParseFailed or panic.
+        let svg = r##"<svg viewBox="0 0 4 4"><g><rect width="4" height="4" fill="#ff0000"/></span> junk text <</svg>"##;
+        let out = rasterize_with_report(svg, 4, 4).unwrap();
+        assert_eq!(pixel(&out.image, 2, 2), [255, 0, 0, 255]);
+        assert!(out.report.recovered_error_count > 0);
+        assert!(out
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.code == "recovery.malformed_markup"));
+        // Determinism.
+        let again = rasterize(svg, 4, 4).unwrap();
+        assert_eq!(out.image.pixels, again.pixels);
+    }
+
+    #[test]
+    fn title_and_desc_are_extracted_and_bounded() {
+        let svg = r##"<svg viewBox="0 0 4 4"><title>My Chart</title><desc>A red square</desc><rect width="4" height="4" fill="#ff0000"/></svg>"##;
+        let out = rasterize_with_report(svg, 4, 4).unwrap();
+        assert_eq!(out.report.title.as_deref(), Some("My Chart"));
+        assert_eq!(out.report.desc.as_deref(), Some("A red square"));
+        // <title> text does not render as glyphs.
+        assert_eq!(out.report.rendered_element_count, 1);
+        // Length bound.
+        let long = "x".repeat(MAX_A11Y_TEXT + 500);
+        let big = format!(
+            r##"<svg viewBox="0 0 4 4"><title>{long}</title><rect width="4" height="4"/></svg>"##
+        );
+        let out2 = rasterize_with_report(&big, 4, 4).unwrap();
+        assert_eq!(out2.report.title.unwrap().chars().count(), MAX_A11Y_TEXT);
+    }
+
+    #[test]
+    fn aria_label_is_a11y_title_fallback() {
+        let svg = r##"<svg viewBox="0 0 4 4" aria-label="Icon"><rect width="4" height="4" fill="#ff0000"/></svg>"##;
+        let out = rasterize_with_report(svg, 4, 4).unwrap();
+        assert_eq!(out.report.title.as_deref(), Some("Icon"));
+    }
+
+    #[test]
+    fn security_gates_survive_recovery_policy() {
+        // Recovery must NOT weaken the secure-static profile.
+        for bad in [
+            r##"<!DOCTYPE svg><svg viewBox="0 0 4 4"><rect width="4" height="4"/></svg>"##,
+            r##"<svg viewBox="0 0 4 4"><script>x()</script><rect width="4" height="4"/></svg>"##,
+            r##"<svg viewBox="0 0 4 4"><image href="https://evil.invalid/a.png" width="4" height="4"/></svg>"##,
+        ] {
+            assert_eq!(
+                rasterize(bad, 4, 4),
+                Err(SvgRasterError::ForbiddenContent),
+                "must stay rejected: {bad}"
+            );
+        }
     }
 
     // --- R8.1: in-repo fuzz harness + memory/CPU cap regressions ------------
