@@ -2,6 +2,63 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-10 — SVG R12 complete: namespace + recovery + a11y (post-R8 lane 5/5)
+
+### Context Reviewed Before Editing
+- `docs/svg-goal-plan-prompts/R12-namespace-recovery-a11y.goal.md`; svg-zero-dep
+- `src/canvas/svg_rasterizer.rs`: XmlParser/parse_element (prefix stripping),
+  SvgDoc::parse (only None on no-root → ParseFailed; otherwise already lenient),
+  SvgRenderReport, rasterize_with_report; `src/panels/svg_report.rs` report rows
+
+### Derive + report (lane requirement)
+1. `parse_element` stripped namespace prefixes (`svg:rect`→`rect`) with no scope
+   tracking → a foreign `<custom:rect>` mis-rendered as a `rect`. xmlns must be
+   read from the raw open-tag header (parse_attr strips prefixes from attr keys).
+2. Hard-reject paths: only `svg_text_allowed` (DOCTYPE/entity/script/external)
+   and "no `<svg>` root" → ParseFailed; the parser is otherwise lenient already
+   (unclosed/junk recover by consuming), but recoveries weren't counted/diagnosed.
+3. `<title>`/`<desc>` dropped (make_node returns None for them); aria-label/role
+   unused.
+
+### Changes (all in `src/canvas/svg_rasterizer.rs`; commit a0b563f)
+- Namespace: `NsFrame` scope stack on `XmlParser` (bounded `MAX_NS_DEPTH`);
+  `apply_xmlns` parses xmlns/xmlns:prefix from the raw header; `Namespace`
+  {Svg,Xlink,Foreign} via `classify_namespace`; element qualified name resolved
+  in scope (undeclared prefix → Foreign, except lenient `svg:`); foreign elements
+  consume their balanced subtree, emit no node, bump `foreign_count`. xlink:href
+  attrs still resolve (already stripped to `href`).
+- Recovery: `consume_close_tag` compares the close-tag local name to the open
+  element and bumps `recovered` on mismatch; unclosed containers bump it too.
+  Surfaced as `recovery.malformed_markup` + `report.recovered_error_count`. Never
+  ParseFailed/panic for malformed-but-rooted documents; security gates unchanged.
+- a11y: `<title>`/`<desc>` captured inline in `parse_element` (balanced subtree,
+  `strip_tags` + `bounded_a11y_text`, first-wins) — deliberately NOT as an
+  `SvgNode`, so R11 text rendering does not draw them as glyphs; root aria-label
+  is a title fallback. `SvgDoc`/`SvgScene` carry title/desc/foreign/recovered →
+  `SvgRenderReport.title`/`desc`/`recovered_error_count`; `report_summary` adds
+  Title/Description/Recovered rows. Export preserves via verbatim `svg_source`.
+
+### Tests
+foreign-ns element skipped (not mis-rendered) + diagnostic; xlink:href use
+resolves; malformed recovery partial render + diagnostic + determinism;
+title/desc extraction + `MAX_A11Y_TEXT` bound + aria-label fallback; security
+regression (DOCTYPE/script/external still `ForbiddenContent`); panel a11y/recovery
+rows; export-parity `embedded_rasterizer_includes_r12_paths`.
+
+### Verification
+- `cargo fmt --check` clean; `cargo check` clean; `cargo test` **335 pass / 6
+  ignored / 0 fail**; `cargo clippy --all-targets -- -D warnings` clean;
+  `validate-svg-import.ps1` + `check-text-encoding.ps1` pass. No new dependencies.
+
+### Status / Follow-ups
+- **The post-R8 SVG renderer roadmap (R8.1, R9–R12) is complete.** Remaining gaps
+  are explicit out-of-profile non-goals: real font-file glyphs + shaping/bidi,
+  tier-3 filter primitives, progressive/CMYK JPEG, ICC colour, `foreignObject`.
+- Namespace model is bounded/heuristic (lenient `svg:` prefix; per-attribute
+  namespace not fully tracked beyond xlink); full DOM recovery out of scope.
+- Next work is outside the SVG renderer: `docs/ROADMAP.md` open stages (12/13/15)
+  or the deferred Stage 9 parallel-processing cluster.
+
 ## 2026-06-10 — SVG R11 complete: raster text + textPath (post-R8 lane 4/5)
 
 ### Context Reviewed Before Editing

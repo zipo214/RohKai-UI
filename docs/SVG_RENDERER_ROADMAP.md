@@ -186,7 +186,9 @@ Current strengths:
 
 Current limits:
 
-- No real XML namespace model.
+- Bounded XML namespace model (R12): xmlns/xmlns:prefix scope stack, qualified
+  names resolved to {svg, xlink, foreign}; foreign-namespace elements are
+  skipped-with-diagnostic (`namespace.foreign_element`) rather than mis-parsed.
 - PNG (zlib/DEFLATE + unfilter, color types 0/2/3/4/6 at 8/16-bit) and baseline
   JPEG (Huffman entropy, IDCT, YCbCr, 4:4:4/4:2:2/4:2:0 subsampling, restart
   markers) `data:` images are decoded and rendered through the R4 clip/compositing
@@ -386,7 +388,7 @@ need all of it immediately, but this is the map.
 | Capability | Mature renderer expectation | RohKai now | Gap | Priority |
 |---|---|---|---|---|
 | Secure parse budgets | Comprehensive limits across parse/render/filter/reference work | Basic importer + rasterizer limits | Add unified limit config/report for rasterizer too | P0 |
-| XML model | Namespace-aware XML tree with source spans | Simple custom parser with stable byte spans | Add namespaces and better recovery | P1 |
+| XML model | Namespace-aware XML tree with source spans | Custom parser with stable byte spans, bounded xmlns scope model + foreign-ns skip + malformed-markup recovery (R12) | Closed (full DOM/recovery out of scope) | P1 |
 | Render IR | Scene/display-list separate from XML | Stable source-spanned node IDs, bounded expanded local references, flattened scene items, owned geometry/diagnostic/clip commands, BeginLayer/EndLayer compositing scopes, and reusable paint-server IR | Extend for masks/filters (R7) | P0/P1 |
 | Diagnostics | Structured per-node render/import diagnostics | Importer rich; rasterizer reports warnings, unsupported buckets, counts, fidelity, and node ID/byte-span provenance, surfaced in the R8 properties report panel + source viewer | Closed | P1 |
 | ViewBox/preserveAspectRatio | Full modes and nested viewport behavior | Full `none`/alignment/meet/slice mapping for root and nested SVG viewports; nested viewport overflow is clipped (R4) | Closed | P1/P2 |
@@ -813,9 +815,9 @@ deferred; **extra-roadmap** = a real gap the roadmap never represented.
 | Markers | marker-start/mid/end rendered (R9) | marker-start/mid/end, orient, markerUnits, viewBox | P1 | implementation | extra-roadmap | DONE (R9) |
 | vector-effect=non-scaling-stroke | supported (R9) | supported | P2 | implementation | extra-roadmap | DONE (R9) |
 | Raster text / textPath | rendered (R11): bundled Hershey simplex vector font, ASCII coverage, anchored runs, arc-length textPath, honest diagnostics | full glyph layout + textPath | P1 | implementation | intra-roadmap deferred (R6 ph3) | DONE (R11); real font files + shaping/bidi remain out of scope |
-| Namespace model | prefixes stripped (`xlink:href`→`href`) | real xmlns/qualified-name model | P1 | architecture/conformance | extra-roadmap | implement bounded model (R12) |
-| Malformed-document recovery | hard-reject on several constructs | lenient recovery + diagnostics | P1 | robustness | extra-roadmap | implement recovery policy (R12) |
-| Accessibility metadata | dropped | `title`/`desc`/`aria-*`/`role` exposed | P2 | editor/diagnostics | extra-roadmap | implement title/desc extraction (R12) |
+| Namespace model | bounded xmlns scope model (R12): scope stack, qualified names → svg/xlink/foreign, foreign-ns skip+diagnostic | real xmlns/qualified-name model | P1 | architecture/conformance | extra-roadmap | DONE (R12) |
+| Malformed-document recovery | recover-and-diagnose (R12): mismatched/unclosed tags + junk → partial render + recovery counter, hard-fail only for security gates | lenient recovery + diagnostics | P1 | robustness | extra-roadmap | DONE (R12) |
+| Accessibility metadata | `<title>`/`<desc>` (+ root aria-label fallback) extracted, bounded, surfaced in the report panel, preserved on export (R12) | `title`/`desc`/`aria-*`/`role` exposed | P2 | editor/diagnostics | extra-roadmap | DONE (R12) |
 | Blend modes (mix-blend-mode) | normal/multiply/screen/darken/lighten on group layers (R10) | full isolation/blend | P2/P3 | implementation | extra-roadmap | DONE (R10) for the separable modes; remaining CSS blend modes future |
 | CSS combinators/@media/vars | tier-1 selectors only | descendant/child/attr/pseudo, @media, custom props | P2/P3 | implementation | intra-roadmap (only justified tiers) | implement only fixture-justified tiers |
 | Color management (ICC) | sRGB assumed | ICC/`color-interpolation` | P4 | conformance | extra-roadmap | reject (out of scope) |
@@ -894,11 +896,17 @@ deferred; **extra-roadmap** = a real gap the roadmap never represented.
   `text.glyph_unsupported`; bidi/combining → diagnosed tofu, never silently
   wrong. Bounded by `MAX_TEXT_GLYPHS` (`limit.text_glyphs`). Goldens: word,
   anchored, textPath-on-diagonal. No new dependencies.
-- **R12 — XML/namespace & robustness** (P1; depends R0): real bounded namespace
-  model (qualified names, xmlns scoping, foreign-namespace skip with diagnostics);
-  malformed-document recovery policy (recover-and-diagnose instead of hard reject
-  where safe); accessibility metadata (`title`/`desc`) extraction surfaced in the
-  report panel and preserved on export.
+- **R12 — XML/namespace & robustness** — ✅ DONE (P1; depends R0), in
+  `src/canvas/svg_rasterizer.rs` (export-embedded). Bounded xmlns scope stack
+  (`NsFrame`, `MAX_NS_DEPTH`); `apply_xmlns` reads xmlns/xmlns:prefix from raw
+  open-tag headers; element qualified names resolve to {Svg, Xlink, Foreign};
+  foreign elements skip their (balanced) subtree + `namespace.foreign_element`.
+  `consume_close_tag` counts mismatched/unclosed tags; malformed markup recovers
+  to partial output + `recovery.malformed_markup` + `recovered_error_count`,
+  never ParseFailed/panic (hard-fail kept only for the security gates).
+  `<title>`/`<desc>` (+ root aria-label fallback) extracted, whitespace-collapsed,
+  bounded (`MAX_A11Y_TEXT`), surfaced on `SvgRenderReport` and as Title/
+  Description/Recovered rows in the report panel, preserved on export.
 
 ### Recommended Additions To R8 (conformance/testing) — fold into R8.1
 
@@ -932,16 +940,18 @@ deferred; **extra-roadmap** = a real gap the roadmap never represented.
   markers/patterns/vector-effect (R9), linearRGB filter tier-1+tier-2 with
   precise regions + mix-blend-mode (R10), and raster text/textPath via the
   bundled vector font (R11) — features common in real-world UI/diagram SVGs).
-- **Renderer-grade (resvg/librsvg-class): not yet.** R8.1 (W3C-subset conformance
-  corpus + fuzzing + precision policy), R9 (markers/patterns/vector-effect),
-  R10 (linearRGB filters + precise regions + tier-2 + blend modes), and R11
-  (raster text + textPath, approximate bundled-font glyphs) are **done**; still
-  requires R12 (namespace model + malformed recovery + a11y) — and true
-  renderer-grade text would additionally need real font-file glyph rendering and
-  shaping, which stay out of scope per the zero-dependency profile. Until then,
-  "renderer-grade" is not claimed.
+- **Renderer-grade (resvg/librsvg-class): approaching — all post-R8 lanes
+  complete.** R8.1 (W3C-subset conformance corpus + fuzzing + precision policy),
+  R9 (markers/patterns/vector-effect), R10 (linearRGB filters + precise regions +
+  tier-2 + blend modes), R11 (raster text + textPath), and R12 (bounded namespace
+  model + malformed recovery + a11y) are **done**. What still separates RohKai
+  from full resvg/librsvg parity is deliberately out of the zero-dependency
+  secure-static profile: real font-file glyph rendering + HarfBuzz-class shaping/
+  bidi, tier-3 filter primitives (turbulence/displacement/convolution/lighting),
+  progressive/CMYK JPEG, ICC colour management, and `foreignObject`. Within the
+  profile the renderer is deterministic, bounded, and honestly diagnosed.
 
-Next maturity step (application → renderer grade): **R8.1 (conformance/fuzz) ✅ →
-R9 (markers/patterns/vector-effect) ✅ → R10 (filter correctness) ✅ → R11 (raster
-text) ✅ → R12 (namespace/robustness/a11y)**. R8.1 and R9-R11 complete; R12 is
-next (the final open lane).
+Maturity ladder (all complete): **R8.1 (conformance/fuzz) ✅ → R9
+(markers/patterns/vector-effect) ✅ → R10 (filter correctness) ✅ → R11 (raster
+text) ✅ → R12 (namespace/robustness/a11y) ✅**. The post-R8 SVG renderer roadmap
+is closed; remaining items are the explicit out-of-profile non-goals above.

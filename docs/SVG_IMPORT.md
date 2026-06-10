@@ -180,6 +180,16 @@ textures at runtime.
   with `text.glyph_unsupported`; bidi/combining marks are diagnosed
   (`text.bidi_unsupported` / `text.shaping_unsupported`), never silently wrong.
   Glyph count is bounded (`limit.text_glyphs`).
+- Image-mode rasterization tracks a bounded **xmlns namespace model** (R12):
+  qualified names resolve to svg/xlink/foreign within an xmlns scope stack;
+  foreign-namespace elements are skipped + diagnosed (`namespace.foreign_element`)
+  rather than mis-parsed (so `<custom:rect>` is not drawn as a `<rect>`), while
+  `xlink:href` still resolves. **Malformed markup** (mismatched/unclosed tags,
+  stray junk) recovers to partial output + `recovery.malformed_markup` +
+  `recovered_error_count` instead of a whole-document failure (the security gates
+  stay hard-fail). **Accessibility metadata** `<title>`/`<desc>` (+ root
+  `aria-label` fallback) is extracted (bounded length), surfaced on the render
+  report + report panel (Title/Description rows), and preserved on export.
 - Image-mode rasterization emits structured diagnostics for the remaining
   unsupported renderer buckets such as tier-3 filter primitives and
   unavailable paint-server references.

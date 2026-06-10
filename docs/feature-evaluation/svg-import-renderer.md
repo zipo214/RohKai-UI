@@ -23,8 +23,8 @@ capabilities where required.
 | Feature | Current Depth | What It Does Now | Gap |
 |---|---:|---|---|
 | Security gate | 4 | Rejects DOCTYPE/entities and guards unsupported risky input; R8.1 deterministic fuzz harness (XML/path/PNG/JPEG/inflate, seed corpus) + memory-cap regressions assert no-panic/bounded output. | Broader licensed corpus + size/resource telemetry remain. |
-| Import parser | 3 | Handles common shapes, paths, groups, style subset, transforms, `use`, metadata. | Needs richer CSS, text/tspan, clipping/masking behavior, and report UI. |
-| Diagnostics | 3-4 | Structured warnings/errors/fidelity for many unsupported buckets; raster node diagnostics carry stable node IDs and source byte spans. | Needs R8 UI surfacing and per-element remediation suggestions. |
+| Import parser | 4 | Common shapes/paths/groups/style/transforms/`use`/metadata; bounded xmlns namespace model with foreign-ns skip + malformed-markup recovery + `<title>`/`<desc>` a11y extraction (R12). | Real DOM/full recovery (out of scope); richer CSS tiers as fixtures justify. |
+| Diagnostics | 4 | Structured warnings/errors/fidelity across buckets; raster node diagnostics carry stable node IDs + source byte spans; namespace/recovery/a11y surfaced (R12) in the report panel. | Per-element remediation suggestions. |
 | Source preservation | 4 | Original SVG preserved beside imported template and in Image widgets. | Needs source diff/viewer integration polish. |
 | Shared microsyntax | 4 | Shared colors, numbers, lengths, checked transforms, path tokenization, preserveAspectRatio/viewBox mapping, declarations, and bounded tier-1 CSS selectors/cascade. | Needs broader fuzz/property tests and only those later CSS tiers justified by fixtures. |
 | Raster IR | 4 | Stable source-spanned node IDs, bounded expanded local references, flattened scene items, owned lowered display commands (incl. clip geometry + BeginLayer/EndLayer compositing scopes), and reusable solid/linear/radial paint-server IR. | Later phases add image/text/effects IR. |

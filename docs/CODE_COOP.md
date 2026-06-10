@@ -7,6 +7,29 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-10 — SVG R12 complete: namespace + recovery + a11y (post-R8 lanes ALL done)
+
+On `dev`. **R12 done** (commit a0b563f) — final post-R8 lane; **the SVG renderer
+roadmap (R0–R12 + R8.1) is now complete.** All in `svg_rasterizer.rs`
+(export-embedded). (1) Namespace: `XmlParser.ns_stack` of `NsFrame`; `apply_xmlns`
+reads xmlns/xmlns:prefix from raw open-tag headers (note: `parse_attr` strips
+prefixes, so xmlns must be scanned from the raw header slice, not raw_attrs);
+qualified names → `Namespace::{Svg,Xlink,Foreign}`; foreign elements skip their
+balanced subtree + `namespace.foreign_element`. Key fix: prefix-stripping turned
+`<custom:rect>` into a rendered `rect` — now foreign. (2) Recovery:
+`consume_close_tag` counts mismatched/unclosed; → `recovery.malformed_markup` +
+`recovered_error_count`, never ParseFailed/panic; security gates stay hard-fail.
+(3) a11y: `<title>`/`<desc>` captured inline during parse (NOT as SvgNode, so
+they don't render as R11 glyphs) + root aria-label fallback, bounded
+`MAX_A11Y_TEXT`, on `SvgRenderReport` + report-panel rows + export-preserved.
+`SvgRenderReport` gained `title`/`desc`/`recovered_error_count` (svg_report test
+literal + panel updated). Gate green: 335 tests / fmt / clippy --all-targets /
+validate-svg-import / check-text-encoding. No new deps. **Next:** no open SVG
+renderer lanes remain — remaining gaps are explicit out-of-profile non-goals
+(real font files+shaping, tier-3 filters, progressive JPEG, ICC, foreignObject).
+Pick from `docs/ROADMAP.md` open stages (12 Platform Targets / 13 Data / 15
+Renderer) or the deferred Stage 9 parallel-processing items.
+
 ## 2026-06-10 — SVG R11 complete: raster text + textPath (bundled Hershey font)
 
 On `dev`. **R11 done** (commit e8eae08). Image-mode rasterizer now renders
