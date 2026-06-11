@@ -1,3 +1,4 @@
+use crate::codegen::formula::{collect_variables, emit_formula_rust, parse_formula};
 use crate::codegen::rust::{field_binding, string_literal};
 use crate::codegen::source_map::{GeneratedCodeDocument, SourceSpan, WidgetSourceSpan};
 use crate::project::schema::{LayoutCrossAlign, Orientation, WidgetInstance, WidgetKind};
@@ -593,14 +594,37 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                 lines.push((Some(w.id), s));
             }
             WidgetKind::MathLabel => {
-                let line = match binding {
-                    Some(b) => {
-                        let label_lit = string_literal(&w.props.label);
-                        format!(
-                            "        ui.label(format!(\"{{}} = {{:.2}}\", {label_lit}, self.{b}));"
-                        )
+                let line = if !w.props.formula_expr.is_empty() {
+                    let decimals = w.props.formula_decimals;
+                    let label_lit = string_literal(&w.props.label);
+                    match parse_formula(&w.props.formula_expr) {
+                        Ok(node) => {
+                            let vars = collect_variables(&node);
+                            let rust_expr = emit_formula_rust(&node);
+                            // Build let-bindings for referenced variables that map to self fields.
+                            let bindings: String = vars
+                                .iter()
+                                .map(|v| format!("            let {v} = self.{v} as f64;\n"))
+                                .collect();
+                            format!(
+                                "        ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, {{\n{bindings}            {rust_expr}\n        }}));"
+                            )
+                        }
+                        Err(e) => {
+                            format!("        // Formula parse error: {e}")
+                        }
                     }
-                    None => format!("        // MathLabel {label_lit}: set a valid Binding"),
+                } else {
+                    match binding {
+                        Some(b) => {
+                            let label_lit = string_literal(&w.props.label);
+                            let decimals = w.props.formula_decimals;
+                            format!(
+                                "        ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, self.{b}));"
+                            )
+                        }
+                        None => format!("        // MathLabel {label_lit}: set a valid Binding"),
+                    }
                 };
                 lines.push((Some(w.id), line));
             }
@@ -1155,6 +1179,31 @@ fn emit_layout_child_lines(child: &WidgetInstance, lines: &mut Vec<(Option<Uuid>
             ),
             None => format!("            // ProgressBar {label}: set a valid Binding"),
         },
+        WidgetKind::MathLabel => {
+            if !child.props.formula_expr.is_empty() {
+                let decimals = child.props.formula_decimals;
+                match parse_formula(&child.props.formula_expr) {
+                    Ok(node) => {
+                        let vars = collect_variables(&node);
+                        let rust_expr = emit_formula_rust(&node);
+                        let binds: String = vars
+                            .iter()
+                            .map(|v| format!("                let {v} = self.{v} as f64;\n"))
+                            .collect();
+                        format!("            ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label}, {{\n{binds}                {rust_expr}\n            }}));")
+                    }
+                    Err(e) => format!("            // Formula parse error: {e}"),
+                }
+            } else {
+                match binding {
+                    Some(b) => {
+                        let decimals = child.props.formula_decimals;
+                        format!("            ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label}, self.{b}));")
+                    }
+                    None => format!("            // MathLabel {label}: set a valid Binding"),
+                }
+            }
+        }
         WidgetKind::HorizontalSpacer => format!("            ui.add_space({:.1});", child.rect.w),
         WidgetKind::VerticalSpacer => format!("            ui.add_space({:.1});", child.rect.h),
         WidgetKind::Image => image_child_preview_line(child, "ui.available_rect_before_wrap()"),

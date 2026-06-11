@@ -548,6 +548,18 @@ pub struct WidgetProps {
     #[serde(default, skip_serializing_if = "LayoutCrossAlign::is_start")]
     pub layout_cross_align: LayoutCrossAlign,
 
+    // Formula widget
+    /// Infix formula expression for MathLabel (e.g. "sqrt(a^2 + b^2)").
+    /// Empty string → fall back to simple `self.{binding}` display.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub formula_expr: String,
+    /// Decimal places for formula result display (default 2).
+    #[serde(
+        default = "default_formula_decimals",
+        skip_serializing_if = "is_default_formula_decimals"
+    )]
+    pub formula_decimals: usize,
+
     // Stage 9 schema audit
     /// Wrap text at widget boundary (Label, TextArea). None = egui default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -606,6 +618,12 @@ fn default_grid_columns() -> usize {
 fn is_default_grid_columns(v: &usize) -> bool {
     *v == 3
 }
+fn default_formula_decimals() -> usize {
+    2
+}
+fn is_default_formula_decimals(v: &usize) -> bool {
+    *v == 2
+}
 
 impl Default for WidgetProps {
     fn default() -> Self {
@@ -632,6 +650,8 @@ impl Default for WidgetProps {
             layout_stretch: true,
             grid_columns: 3,
             layout_cross_align: LayoutCrossAlign::Start,
+            formula_expr: String::new(),
+            formula_decimals: 2,
             text_wrap: None,
         }
     }

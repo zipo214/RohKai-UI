@@ -1624,11 +1624,43 @@ fn show_command_link(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut 
 fn show_math_label(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
     field_text(ui, "Label", &mut w.props.label);
     ui.label(
-        egui::RichText::new("Displays a computed f32 from the bound AppState field.")
+        egui::RichText::new("Displays a computed f32 from a bound field or formula.")
             .small()
             .weak(),
     );
     binding_field(ui, w);
+
+    ui.separator();
+    ui.label(egui::RichText::new("Formula (optional)").small().weak());
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("f(x) =").monospace().small());
+        ui.add(
+            egui::TextEdit::singleline(&mut w.props.formula_expr)
+                .hint_text("e.g. sqrt(a^2 + b^2)")
+                .desired_width(ui.available_width()),
+        );
+    });
+    if !w.props.formula_expr.is_empty() {
+        match crate::codegen::formula::parse_formula(&w.props.formula_expr) {
+            Ok(node) => {
+                let vars = crate::codegen::formula::collect_variables(&node);
+                let vars_str = if vars.is_empty() {
+                    "no variables".to_owned()
+                } else {
+                    format!("uses: {}", vars.join(", "))
+                };
+                ui.label(egui::RichText::new(vars_str).small().color(egui::Color32::from_rgb(52, 211, 153)));
+            }
+            Err(e) => {
+                ui.label(egui::RichText::new(format!("Error: {e}")).small().color(egui::Color32::RED));
+            }
+        }
+    }
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Decimals").small());
+        ui.add(egui::DragValue::new(&mut w.props.formula_decimals).range(0..=9_usize));
+    });
+
     show_geometry(ui, w);
     ui.separator();
     show_fg_color(ui, w);

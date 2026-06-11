@@ -6,6 +6,7 @@ use crate::project::{
     schema::{WidgetEvent, WidgetKind},
     ui_tree::UiTree,
 };
+use crate::codegen::formula::{collect_variables, emit_formula_rust, parse_formula};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -761,15 +762,33 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 s.push_str("                });\n");
                 s
             }
-            WidgetKind::MathLabel => match binding {
-                Some(b) => {
-                    let label_lit = string_literal(&w.props.label);
-                    format!(
-                        "                ui.label(format!(\"{{}} = {{:.2}}\", {label_lit}, self.state.{b}));\n"
-                    )
+            WidgetKind::MathLabel => {
+                let label_lit = string_literal(&w.props.label);
+                let decimals = w.props.formula_decimals;
+                if !w.props.formula_expr.is_empty() {
+                    match parse_formula(&w.props.formula_expr) {
+                        Ok(node) => {
+                            let vars = collect_variables(&node);
+                            let rust_expr = emit_formula_rust(&node);
+                            let binds: String = vars
+                                .iter()
+                                .map(|v| format!("                    let {v} = self.state.{v} as f64;\n"))
+                                .collect();
+                            format!(
+                                "                ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, {{\n{binds}                    {rust_expr}\n                }}));\n"
+                            )
+                        }
+                        Err(e) => format!("                // Formula parse error: {e}\n"),
+                    }
+                } else {
+                    match binding {
+                        Some(b) => format!(
+                            "                ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, self.state.{b}));\n"
+                        ),
+                        None => format!("                // MathLabel {label}: set a valid Binding\n"),
+                    }
                 }
-                None => format!("                // MathLabel {label}: set a valid Binding\n"),
-            },
+            }
             WidgetKind::FilePicker => match binding {
                 Some(b) => format!(
                     "                if ui.button(\"Browse…\").clicked() {{\n                    \
@@ -1281,15 +1300,33 @@ fn export_child_line(
         WidgetKind::DialogButtonBox => format!(
             "                        ui.put({rect_expr}, egui::Label::new({child_label})); // DialogButtonBox\n"
         ),
-        WidgetKind::MathLabel => match child_binding {
-            Some(b) => {
-                let label_lit = string_literal(&child.props.label);
-                format!(
-                    "                        ui.put({rect_expr}, egui::Label::new(format!(\"{{}} = {{:.2}}\", {label_lit}, self.state.{b})));\n"
-                )
+        WidgetKind::MathLabel => {
+            let label_lit = string_literal(&child.props.label);
+            let decimals = child.props.formula_decimals;
+            if !child.props.formula_expr.is_empty() {
+                match parse_formula(&child.props.formula_expr) {
+                    Ok(node) => {
+                        let vars = collect_variables(&node);
+                        let rust_expr = emit_formula_rust(&node);
+                        let binds: String = vars
+                            .iter()
+                            .map(|v| format!("                                let {v} = self.state.{v} as f64;\n"))
+                            .collect();
+                        format!(
+                            "                        ui.put({rect_expr}, egui::Label::new(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, {{\n{binds}                                {rust_expr}\n                        }})));\n"
+                        )
+                    }
+                    Err(e) => format!("                        // Formula parse error: {e}\n"),
+                }
+            } else {
+                match child_binding {
+                    Some(b) => format!(
+                        "                        ui.put({rect_expr}, egui::Label::new(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, self.state.{b})));\n"
+                    ),
+                    None => format!("                        // MathLabel {child_label}: set a valid Binding\n"),
+                }
             }
-            None => format!("                        // MathLabel {child_label}: set a valid Binding\n"),
-        },
+        }
         WidgetKind::FilePicker => match child_binding {
             Some(b) => format!(
                 "                        ui.put({rect_expr}, egui::Label::new(&self.state.{b})); // FilePicker\n"
