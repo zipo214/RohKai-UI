@@ -1513,6 +1513,10 @@ impl RohKaiApp {
     }
 }
 
+// TODO(P2-A): wire ShaperEngine — when RustyBuzzShaper is plumbed into the canvas
+// text pipeline, the NotoSans bytes loaded here should also be passed as
+// font_data to RustyBuzzShaper::shape() so shaping and rendering use the
+// same face.  egui owns pixel rasterization; ShaperEngine owns cluster layout.
 fn setup_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(

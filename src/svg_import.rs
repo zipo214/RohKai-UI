@@ -1609,6 +1609,8 @@ fn build_text_label(
     let font_size = chunk.font_size;
     let mut x = chunk.x;
     let mut y = chunk.y;
+    // TODO(P2-A): wire ShaperEngine — replace the 0.6-em char-count heuristic
+    // with HersheyShaper::shape() advance sum (std-only; safe in export path).
     let mut width = (text.chars().count() as f64 * font_size * 0.6).max(MIN_PLACEHOLDER_SIZE);
     let height = (font_size * 1.25).max(MIN_PLACEHOLDER_SIZE);
 
