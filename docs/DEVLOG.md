@@ -2,6 +2,84 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-11 — v0.2.0 release: good-citizen pass + Phase 2 roadmap
+
+### Context Reviewed Before Editing
+- `docs/ENGINEERING_INVARIANTS.md` (Invariant 7 filename sanitizing)
+- `docs/CLINE_RECOMMENDATIONS_GROUP1.md` (Rec 1 handler extraction, Rec 2 module docs, Rec 6 tests)
+- `src/canvas/widget_maker.rs`, `src/panels/widget_maker_panel.rs` (resize logic)
+- `docs/ROADMAP.md`, `docs/SVG_RENDERER_ROADMAP.md`, `docs/ROADMAP_COMPARATIVE_ANALYSIS.md`,
+  `docs/feature-evaluation/*` (Phase 2 roadmap input)
+- `docs/VISUAL_WIDGET_MAKER.md` (Later Capabilities for Phase 2)
+
+### Changes
+
+**Invariant 7 fix (filename sanitizer):**
+- `sanitize_widget_id_to_filename(id: &str) -> String` in `src/canvas/widget_maker.rs`
+- Whitelists `[A-Za-z0-9_-]`; every other character (Windows-reserved `<>:"\|?*\`,
+  control bytes, path separators) → `_`; empty/all-underscores result → `"widget"`
+- Replaced broken `.chars().map(|c| if c == '.' || c == '/' ...)` in `app.rs`
+- 6 unit tests: dots/slashes, Windows chars, control bytes, empty, all-seps, preserved
+
+**Cline Rec 1 — handler extraction:**
+- New `src/codegen/handlers.rs`: `resolve_click_handler` + `resolve_change_handler`
+- `egui_emitter.rs` and `export.rs` delegate to the shared module (no logic duplication)
+
+**Cline Rec 2 — module docs:**
+- `//!` added to `canvas/mod.rs`, `panels/mod.rs`, `widgets/mod.rs`,
+  `widget_maker.rs`, `widget_maker_panel.rs`
+
+**Cline Rec 6 — unit tests (12 new):**
+- UiTree: `bring_to_front_moves_to_end`, `send_to_back_moves_to_start`,
+  `group_creates_frame_with_children`, `group_fails_with_less_than_two`,
+  `ungroup_removes_frame_returns_children`, `remove_cascades_to_children`,
+  `validate_and_repair_fixes_duplicate_ids`, `validate_and_repair_removes_stale_children`
+- Canvas: `snap_value_to_grid`, `resize_handle_hit_detection`,
+  `resize_handle_apply_delta_top_left`, `resize_handle_respects_min_size`
+
+**Widget Maker interactive resize:**
+- `resize_corner: Option<u8>` (serde skip) on `WidgetMakerDoc`
+- `corner_hit(pos, rect) -> Option<u8>` (8px hit radius, 4 corners)
+- `apply_corner_resize(prim, corner, dx, dy)` with MIN=5% and bounds clamping
+- `drag_started` detects handle grab; `dragged` applies resize or move
+
+**Stage 12 browser preview:**
+- `cmd_preview_wasm`: PATH-checks trunk, exports to `%TEMP%/rohkai_wasm_preview`,
+  spawns `trunk serve` detached; error if trunk missing
+- "Preview in Browser…" added to File menu
+
+**Doc staleness (Invariant 9):**
+- `feature-evaluation/README.md`: VWM 0-1→1-2, SVG raster 2-3→4, testing 3→3-4
+- `feature-evaluation/testing-quality.md`: 116→412 tests
+- `feature-evaluation/remaining-roadmap-items.md`: VWM/WASM/Formula status updated
+- `feature-evaluation/codegen-lazare-export.md`: code navigation 3→3-4
+- `ARCHITECTURE.md`: 8 missing WidgetProps fields + 3 missing WidgetInstance fields added
+- `ROADMAP.md`: Stage 7.x items 1-6 `[ ]`→`[x]`; Stage 12 browser preview `[x]`
+
+**Phase 2 roadmap:**
+- `docs/ROADMAP_PHASE2.md` created: 12 sorted sections + unsorted scratchpad
+- Priority starter lines: P2-A font shaping (HarfBuzz port, 2252/2252 tests),
+  P2-B DB integration research
+- All deferred items from ROADMAP.md, SVG_RENDERER_ROADMAP.md, CLINE_REVIEW,
+  ROADMAP_COMPARATIVE_ANALYSIS.md, feature-evaluation, VISUAL_WIDGET_MAKER.md
+  collected and organised
+
+**PR #6 created** for v0.2.0 merge to main.
+
+### Verification
+- `cargo test`: **412 pass / 0 fail / 6 ignored**
+- `cargo clippy --all-targets -- -D warnings`: zero warnings
+- `cargo fmt --check`: clean
+
+### Risks / Follow-ups
+- `cmd_preview_wasm` spawns `trunk serve` detached but does not track the PID;
+  the server runs until the OS reclaims it. A future "Stop Preview" button
+  should store the `Child` handle in `RohKaiApp`.
+- Phase 2 roadmap P2-A (font shaping) is the most ambitious single piece of work
+  in the project — budget 6–10 session-cycles before the 2252-test gate passes.
+- CodeRabbit may flag the `cmd_preview_wasm` function for additional spawn safety
+  checks.
+
 ## 2026-06-11 — Pre-release depth gate closed: all deferred features implemented
 
 ### Context Reviewed
@@ -48,7 +126,7 @@ Chronological session record. The roadmap stays strategic; this file records wha
 ### Remaining Open Items
 - Stage 13 (DB integration): BLOCKED — needs explicit user approval for crate name
   (sqlx or rusqlite). No work started.
-- Font shaping: BLOCKED — needs user approval for `rustybuzz`. No work started.
+- Font shaping: BLOCKED — needs user approval for `rustybuzz`. No work started.[user comment: build harfbuzz shaping algorith port in rust that passes 2252 of 2252 shaping testss.  ]
 - Stage 15 (own renderer): DEFERRED by user.
 - Lazare diff view: deferred (mentioned in depth gate but not critical path).
 - Visual Widget Maker resize handles: draggable (visual only now, not interactive).
