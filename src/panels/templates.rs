@@ -1,4 +1,5 @@
 use crate::project::schema::{Rect, WidgetInstance, WidgetKind, WidgetProps};
+use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
@@ -98,6 +99,20 @@ pub fn list_templates() -> Vec<(String, PathBuf)> {
 pub fn load_template(path: &Path) -> Result<Vec<WidgetInstance>, String> {
     let json = std::fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
     serde_json::from_str(&json).map_err(|e| format!("parse: {e}"))
+}
+
+/// Load all user templates in parallel.
+/// Returns `(name, path, result)` tuples in sorted order.
+#[allow(dead_code)]
+pub fn load_all_templates() -> Vec<(String, PathBuf, Result<Vec<WidgetInstance>, String>)> {
+    let entries = list_templates();
+    entries
+        .into_par_iter()
+        .map(|(name, path)| {
+            let result = load_template(&path);
+            (name, path, result)
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

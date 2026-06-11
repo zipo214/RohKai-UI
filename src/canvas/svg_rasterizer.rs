@@ -10,6 +10,7 @@
 
 use crate::svg_core::{self, Rgba};
 use egui::ColorImage;
+use rayon::prelude::*;
 use std::collections::HashMap;
 
 const MAX_SVG_BYTES: usize = 5_000_000;
@@ -318,6 +319,20 @@ pub fn rasterize(svg_text: &str, width: u32, height: u32) -> Result<ColorImage, 
 pub fn rasterize_or_fallback(svg_text: &str, width: u32, height: u32) -> ColorImage {
     let (w, h) = raster_size(width, height);
     rasterize(svg_text, width, height).unwrap_or_else(|_| fallback_image(w, h))
+}
+
+/// Rasterize multiple SVGs in parallel.
+///
+/// Each entry is `(svg_text, width, height)`.  Results are returned in the
+/// same order as `items`, with `Err` on parse/security failure.
+#[allow(dead_code)]
+pub fn rasterize_batch(
+    items: &[(&str, u32, u32)],
+) -> Vec<Result<ColorImage, SvgRasterError>> {
+    items
+        .par_iter()
+        .map(|(svg, w, h)| rasterize(svg, *w, *h))
+        .collect()
 }
 
 fn raster_size(width: u32, height: u32) -> (usize, usize) {

@@ -6,6 +6,7 @@ use crate::project::{
     schema::{WidgetEvent, WidgetKind},
     ui_tree::UiTree,
 };
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
@@ -20,13 +21,23 @@ pub fn write_project(tree: &UiTree, dest: &Path) -> Result<(), String> {
     let src_dir = dest.join("src");
     fs::create_dir_all(&src_dir).map_err(|e| format!("create dirs: {e}"))?;
 
-    for (rel_path, content) in project_files(tree) {
-        let full = dest.join(&rel_path);
+    let files = project_files(tree);
+
+    // Ensure all parent directories exist before parallel writes.
+    for (rel_path, _) in &files {
+        let full = dest.join(rel_path);
         if let Some(parent) = full.parent() {
             fs::create_dir_all(parent).map_err(|e| format!("create dirs: {e}"))?;
         }
-        fs::write(&full, content).map_err(|e| format!("{rel_path}: {e}"))?;
     }
+
+    files
+        .par_iter()
+        .map(|(rel_path, content)| {
+            fs::write(dest.join(rel_path), content).map_err(|e| format!("{rel_path}: {e}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
     Ok(())
 }
 
@@ -58,10 +69,20 @@ pub fn project_files(tree: &UiTree) -> Vec<(String, String)> {
         }
     }
 
+    // Generate the three core output files in parallel.
+    let ((cargo_toml, main_rs), app_rs) = rayon::join(
+        || {
+            rayon::join(
+                || gen_cargo_toml(&extra_deps),
+                || gen_main_rs(tree),
+            )
+        },
+        || gen_app_rs(tree),
+    );
     let mut files = vec![
-        ("Cargo.toml".to_owned(), gen_cargo_toml(&extra_deps)),
-        ("src/main.rs".to_owned(), gen_main_rs(tree)),
-        ("src/app.rs".to_owned(), gen_app_rs(tree)),
+        ("Cargo.toml".to_owned(), cargo_toml),
+        ("src/main.rs".to_owned(), main_rs),
+        ("src/app.rs".to_owned(), app_rs),
     ];
 
     if !tree.app_props.assets.is_empty() {

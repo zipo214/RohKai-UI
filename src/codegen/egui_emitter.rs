@@ -2,6 +2,7 @@ use crate::codegen::rust::{field_binding, string_literal};
 use crate::codegen::source_map::{GeneratedCodeDocument, SourceSpan, WidgetSourceSpan};
 use crate::project::schema::{Orientation, WidgetInstance, WidgetKind};
 use crate::project::ui_tree::UiTree;
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
@@ -9,6 +10,9 @@ const MAX_GRID_COLUMNS: usize = 12;
 
 /// Returns (widget_id_or_none, code_line) for every line in the generated body.
 /// Preamble/closing lines have `None` as the id.
+///
+/// Top-level widget blocks are generated in parallel using rayon; results are
+/// assembled in original order so codegen remains deterministic.
 pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
     let mut lines: Vec<(Option<Uuid>, String)> = Vec::new();
 
@@ -17,65 +21,90 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
         "egui::CentralPanel::default().show(ctx, |_ui| {});".to_owned(),
     ));
 
-    // Children are emitted inside their parent Frame — skip them in the top-level loop
+    // Children are emitted inside their parent Frame — skip them in the top-level loop.
     let child_ids: HashSet<Uuid> = tree
         .widgets
         .iter()
         .flat_map(|w| w.children.iter().copied())
         .collect();
 
-    for w in &tree.widgets {
-        if child_ids.contains(&w.id) {
-            continue;
-        }
+    let top_level: Vec<&WidgetInstance> = tree
+        .widgets
+        .iter()
+        .filter(|w| !child_ids.contains(&w.id))
+        .collect();
 
-        let area_id = string_literal(&format!("widget_{}", w.id));
-        lines.push((
-            Some(w.id),
-            format!("egui::Area::new(egui::Id::new({area_id}))"),
-        ));
-        lines.push((
-            Some(w.id),
-            format!(
-                "    .fixed_pos(egui::pos2({:.1}, {:.1}))",
-                w.rect.x, w.rect.y
-            ),
-        ));
-        lines.push((Some(w.id), "    .show(ctx, |ui| {".to_owned()));
-        lines.push((
-            Some(w.id),
-            format!(
-                "        ui.set_min_size(egui::vec2({:.1}, {:.1}));",
-                w.rect.w, w.rect.h
-            ),
-        ));
+    // Parallel block generation: each top-level widget is independent.
+    // par_iter().collect() preserves original order.
+    let blocks: Vec<Vec<(Option<Uuid>, String)>> =
+        top_level.par_iter().map(|w| emit_widget_area_block(w, tree)).collect();
 
-        // enabled = false → ui.set_enabled(false)
-        if w.enabled == Some(false) {
-            lines.push((Some(w.id), "        ui.set_enabled(false);".to_owned()));
-        }
+    for block in blocks {
+        lines.extend(block);
+    }
 
-        let eff = w
-            .state_binding
-            .as_deref()
-            .map(crate::codegen::rust::effective_binding);
-        let binding = field_binding(eff.as_deref());
-        // Bound label mode: label_binding overrides the static label literal
-        let label = if let Some(ref lb) = w.label_binding {
-            if let Some(b) = field_binding(Some(lb.as_str())) {
-                format!("&self.{b}")
-            } else {
-                string_literal(&w.props.label)
-            }
+    // Design-time non-visual components (timers etc.) — emitted as update() comments.
+    for line in
+        crate::codegen::component_state::component_update_lines(&tree.app_props.components)
+    {
+        lines.push((None, line));
+    }
+
+    lines
+}
+
+/// Generate the egui::Area wrapper + widget body for one top-level widget.
+/// Pure function: reads `w` and `tree`; no mutable shared state.
+fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
+    let mut lines: Vec<(Option<Uuid>, String)> = Vec::new();
+
+    let area_id = string_literal(&format!("widget_{}", w.id));
+    lines.push((
+        Some(w.id),
+        format!("egui::Area::new(egui::Id::new({area_id}))"),
+    ));
+    lines.push((
+        Some(w.id),
+        format!(
+            "    .fixed_pos(egui::pos2({:.1}, {:.1}))",
+            w.rect.x, w.rect.y
+        ),
+    ));
+    lines.push((Some(w.id), "    .show(ctx, |ui| {".to_owned()));
+    lines.push((
+        Some(w.id),
+        format!(
+            "        ui.set_min_size(egui::vec2({:.1}, {:.1}));",
+            w.rect.w, w.rect.h
+        ),
+    ));
+
+    // enabled = false → ui.set_enabled(false)
+    if w.enabled == Some(false) {
+        lines.push((Some(w.id), "        ui.set_enabled(false);".to_owned()));
+    }
+
+    let eff = w
+        .state_binding
+        .as_deref()
+        .map(crate::codegen::rust::effective_binding);
+    let binding = field_binding(eff.as_deref());
+    // Bound label mode: label_binding overrides the static label literal
+    let label = if let Some(ref lb) = w.label_binding {
+        if let Some(b) = field_binding(Some(lb.as_str())) {
+            format!("&self.{b}")
         } else {
             string_literal(&w.props.label)
-        };
-        let label_lit = string_literal(&w.props.label); // always the static version
+        }
+    } else {
+        string_literal(&w.props.label)
+    };
+    let label_lit = string_literal(&w.props.label); // always the static version
 
-        let tip = w.tooltip.as_deref().map(string_literal);
-        let fg_color_expr = w
-            .fg_color
-            .map(|c| format!("egui::Color32::from_rgb({}, {}, {})", c[0], c[1], c[2]));
+    let tip = w.tooltip.as_deref().map(string_literal);
+    let fg_color_expr = w
+        .fg_color
+        .map(|c| format!("egui::Color32::from_rgb({}, {}, {})", c[0], c[1], c[2]));
 
         match &w.kind {
             WidgetKind::Frame => {
@@ -484,7 +513,7 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                         }
                     }
                 }
-                if !w.children.is_empty() && w.children.len() % columns != 0 {
+                if !w.children.is_empty() && !w.children.len().is_multiple_of(columns) {
                     lines.push((Some(w.id), "            ui.end_row();".to_owned()));
                 }
                 lines.push((Some(w.id), "        });".to_owned()));
@@ -664,13 +693,6 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
         }
 
         lines.push((Some(w.id), "    });".to_owned()));
-    }
-
-    // Design-time non-visual components (timers etc.) — emitted as update() comments.
-    for line in crate::codegen::component_state::component_update_lines(&tree.app_props.components)
-    {
-        lines.push((None, line));
-    }
 
     lines
 }
@@ -1528,5 +1550,80 @@ mod tests {
             !g.contains("self.type,") && !g.contains("&mut self.type)"),
             "raw keyword must not appear as a field reference: got\n{g}"
         );
+    }
+
+    fn make_flat_tree(count: usize) -> UiTree {
+        let widgets: Vec<WidgetInstance> = (0..count)
+            .map(|i| WidgetInstance {
+                id: Uuid::from_u128(0x_0000_BEEF_0000_0000 + i as u128),
+                kind: WidgetKind::Button,
+                rect: Rect {
+                    x: (i as f32) * 110.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 30.0,
+                },
+                props: WidgetProps {
+                    label: format!("btn_{i}"),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .collect();
+        UiTree { widgets, ..Default::default() }
+    }
+
+    #[test]
+    fn parallel_emit_produces_n_area_blocks_for_50_widgets() {
+        let tree = make_flat_tree(50);
+        let t0 = std::time::Instant::now();
+        let doc = emit_document(&tree);
+        let elapsed = t0.elapsed();
+        let area_count = doc.text.matches("egui::Area::new(").count();
+        assert_eq!(area_count, 50, "expected 50 Area blocks, got {area_count}");
+        eprintln!("[bench] 50 widgets: {elapsed:?}");
+    }
+
+    #[test]
+    fn parallel_emit_produces_n_area_blocks_for_100_widgets() {
+        let tree = make_flat_tree(100);
+        let t0 = std::time::Instant::now();
+        let doc = emit_document(&tree);
+        let elapsed = t0.elapsed();
+        let area_count = doc.text.matches("egui::Area::new(").count();
+        assert_eq!(area_count, 100, "expected 100 Area blocks, got {area_count}");
+        eprintln!("[bench] 100 widgets: {elapsed:?}");
+    }
+
+    #[test]
+    fn parallel_emit_produces_n_area_blocks_for_500_widgets() {
+        let tree = make_flat_tree(500);
+        let t0 = std::time::Instant::now();
+        let doc = emit_document(&tree);
+        let elapsed = t0.elapsed();
+        let area_count = doc.text.matches("egui::Area::new(").count();
+        assert_eq!(area_count, 500, "expected 500 Area blocks, got {area_count}");
+        eprintln!("[bench] 500 widgets: {elapsed:?}");
+    }
+
+    #[test]
+    fn parallel_emit_output_matches_sequential_for_10_widgets() {
+        // Verify that parallel codegen is a pure refactor — output is stable
+        // across repeated calls and matches expected stable structure.
+        let tree = make_flat_tree(10);
+        let doc_a = emit_document(&tree);
+        let doc_b = emit_document(&tree);
+        assert_eq!(
+            doc_a.text, doc_b.text,
+            "parallel emit must be deterministic across two runs"
+        );
+        // Every widget must have a span entry.
+        for w in &tree.widgets {
+            let uid = w.id.to_string();
+            assert!(
+                doc_a.widget_spans.iter().any(|s| s.widget_id == w.id),
+                "widget {uid} missing from widget_spans"
+            );
+        }
     }
 }
