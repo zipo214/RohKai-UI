@@ -484,7 +484,21 @@ fn extract_binding_name(line: &str) -> Option<String> {
                 .find(|c: char| !c.is_alphanumeric() && c != '_')
                 .unwrap_or(rest.len());
             if end > 0 {
-                return Some(rest[..end].to_owned());
+                let name = rest[..end].to_owned();
+                if crate::codegen::rust::is_valid_identifier(&name) {
+                    return Some(name);
+                }
+                // Leading digit: prepend underscore to salvage the binding
+                if name.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                    return Some(format!("_{name}"));
+                }
+                // Otherwise (keyword already blocked by is_valid_identifier): drop
+                return None;
+            } else if !rest.is_empty()
+                && (rest.starts_with(')') || rest.starts_with(','))
+            {
+                // Matched "self." but nothing follows — malformed; signal caller
+                return Some("_malformed_binding_".to_owned());
             }
         }
     }
@@ -664,13 +678,13 @@ mod tests {
 
         let report = parse_egui_output(&code);
         assert!(!report.has_errors(), "{:?}", report.diagnostics);
-        let parsed = report.widgets.iter().find(|w| w.id == id).unwrap();
+        let parsed = report.widgets.iter().find(|w| w.id == id).expect("widget must be in parse report after successful parse");
         let span = parsed.source_span.as_ref().expect("source span");
         assert!(code[span.bytes.clone()].starts_with("egui::Area::new"));
         assert!(!code[span.bytes.clone()].contains("CentralPanel"));
         apply_parsed(&mut tree, &report.widgets);
 
-        let edited = tree.widgets.iter().find(|w| w.id == id).unwrap();
+        let edited = tree.widgets.iter().find(|w| w.id == id).expect("widget must remain in tree after apply_parsed");
         assert_eq!(edited.rect.x, 42.0);
         assert_eq!(edited.rect.y, 56.0);
     }
@@ -779,9 +793,8 @@ mod tests {
         );
         let report = parse_egui_output(&code);
         assert!(!report.has_errors(), "{:?}", report.diagnostics);
-        let pw = report.widgets.iter().find(|w| w.id == id);
-        assert!(pw.is_some(), "widget not found in parse output");
-        let pw = pw.unwrap();
+        let pw = report.widgets.iter().find(|w| w.id == id)
+            .expect("widget must be in parse output");
         assert_eq!(pw.kind, None, "Custom kind must not be inferred");
         assert_eq!(pw.label.as_deref(), Some("Hello World"));
         assert_eq!(
@@ -812,7 +825,7 @@ mod tests {
         );
         let report = parse_egui_output(&code);
         assert!(!report.has_errors(), "{:?}", report.diagnostics);
-        let pw = report.widgets.iter().find(|w| w.id == id).unwrap();
+        let pw = report.widgets.iter().find(|w| w.id == id).expect("widget must be in parse report");
         assert_eq!(pw.label.as_deref(), Some("Btn"));
         assert_eq!(
             pw.binding

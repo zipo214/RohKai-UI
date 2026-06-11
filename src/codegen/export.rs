@@ -3365,7 +3365,8 @@ mod tests {
         assert!(dir.join("src/main.rs").exists(), "main.rs missing");
         assert!(dir.join("src/app.rs").exists(), "app.rs missing");
 
-        let app = std::fs::read_to_string(dir.join("src/app.rs")).unwrap();
+        let app = std::fs::read_to_string(dir.join("src/app.rs"))
+            .expect("exported src/app.rs must be readable");
         // Feature matrix markers.
         assert!(app.contains("evt_response.clicked()"), "top Button Click");
         assert!(
@@ -3421,7 +3422,8 @@ mod tests {
         assert!(app.contains("trait CompileProofBehavior"));
         assert!(app.contains("impl CompileProofBehavior for ExportedApp"));
 
-        let cargo = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap();
+        let cargo = std::fs::read_to_string(dir.join("Cargo.toml"))
+            .expect("exported Cargo.toml must be readable");
         assert!(cargo.contains("eframe = \"0.29\""));
         assert!(cargo.contains("egui   = \"0.29\""));
         assert!(cargo.contains("rfd = \"0.14\""));
@@ -3441,8 +3443,10 @@ mod tests {
         assert!(dir.join("src/main.rs").exists(), "main.rs missing");
         assert!(dir.join("src/app.rs").exists(), "app.rs missing");
 
-        let app = std::fs::read_to_string(dir.join("src/app.rs")).unwrap();
-        let cargo = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap();
+        let app = std::fs::read_to_string(dir.join("src/app.rs"))
+            .expect("exported src/app.rs must be readable");
+        let cargo = std::fs::read_to_string(dir.join("Cargo.toml"))
+            .expect("exported Cargo.toml must be readable");
 
         assert!(cargo.contains("eframe = \"0.29\""));
         assert!(cargo.contains("egui   = \"0.29\""));

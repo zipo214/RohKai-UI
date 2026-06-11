@@ -54,7 +54,12 @@ fn collect_one(
 ) {
     // ---- Standard state binding ----
     if let Some(raw) = w.state_binding.as_deref() {
-        if let Some(name) = field_binding(Some(raw)) {
+        let effective = if crate::codegen::rust::RUST_KEYWORDS.contains(&raw) {
+            std::borrow::Cow::Owned(format!("{raw}_value"))
+        } else {
+            std::borrow::Cow::Borrowed(raw)
+        };
+        if let Some(name) = field_binding(Some(effective.as_ref())) {
             if let Some(info) = kind_table::state_info(&w.kind) {
                 push_field(
                     AppStateField {
@@ -277,5 +282,15 @@ mod tests {
         assert_eq!(r.fields[0].name, "counter");
         assert_eq!(r.fields[0].ty, "u32");
         assert_eq!(r.fields[1].name, "label_text");
+    }
+
+    #[test]
+    fn keyword_binding_is_sanitized_not_skipped() {
+        let tree = make_tree(vec![simple_widget(WidgetKind::Checkbox, "type")]);
+        let r = collect(&tree);
+        // Should generate a field "type_value", not skip it entirely
+        assert_eq!(r.fields.len(), 1, "keyword binding must be sanitized, not dropped");
+        assert_eq!(r.fields[0].name, "type_value");
+        assert!(r.warnings.is_empty(), "sanitized keyword should not emit warning");
     }
 }

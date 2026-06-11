@@ -107,7 +107,7 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
                 ));
                 for &child_id in &w.children {
                     if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
-                        emit_child_lines(child, w, &mut lines);
+                        emit_child_lines(child, w, &mut lines, 0);
                     }
                 }
                 lines.push((Some(w.id), "        });".to_owned()));
@@ -824,7 +824,9 @@ fn emit_child_lines(
     child: &WidgetInstance,
     parent: &WidgetInstance,
     lines: &mut Vec<(Option<Uuid>, String)>,
+    depth: usize,
 ) {
+    let indent = "    ".repeat(depth + 3);
     let rel_x = (child.rect.x - parent.rect.x).max(0.0);
     let rel_y = (child.rect.y - parent.rect.y).max(0.0);
     let rect_expr = format!(
@@ -836,44 +838,44 @@ fn emit_child_lines(
 
     lines.push((
         Some(child.id),
-        format!("            // widget_{}", child.id),
+        format!("{indent}// widget_{}", child.id),
     ));
 
     let line = match &child.kind {
         WidgetKind::Button => format!(
-            "            if ui.put({rect_expr}, egui::Button::new({label})).clicked() {{}}"
+            "{indent}if ui.put({rect_expr}, egui::Button::new({label})).clicked() {{}}"
         ),
         WidgetKind::Label => match binding {
-            Some(b) => format!("            ui.put({rect_expr}, egui::Label::new(&self.{b}));"),
-            None => format!("            ui.put({rect_expr}, egui::Label::new({label}));"),
+            Some(b) => format!("{indent}ui.put({rect_expr}, egui::Label::new(&self.{b}));"),
+            None => format!("{indent}ui.put({rect_expr}, egui::Label::new({label}));"),
         },
         WidgetKind::TextInput => match binding {
             Some(b) => format!(
-                "            ui.put({rect_expr}, egui::TextEdit::singleline(&mut self.{b}));"
+                "{indent}ui.put({rect_expr}, egui::TextEdit::singleline(&mut self.{b}));"
             ),
-            None => format!("            // TextInput {label}: set a valid Binding"),
+            None => format!("{indent}// TextInput {label}: set a valid Binding"),
         },
         WidgetKind::Slider => match binding {
             Some(b) => format!(
-                "            ui.put({rect_expr}, egui::Slider::new(&mut self.{b}, {:.1}..={:.1}).text({label}));",
+                "{indent}ui.put({rect_expr}, egui::Slider::new(&mut self.{b}, {:.1}..={:.1}).text({label}));",
                 child.props.min, child.props.max
             ),
-            None => format!("            // Slider {label}: set a valid Binding"),
+            None => format!("{indent}// Slider {label}: set a valid Binding"),
         },
         WidgetKind::Checkbox => match binding {
             Some(b) => format!(
-                "            ui.put({rect_expr}, egui::Checkbox::new(&mut self.{b}, {label}));"
+                "{indent}ui.put({rect_expr}, egui::Checkbox::new(&mut self.{b}, {label}));"
             ),
-            None => format!("            // Checkbox {label}: set a valid Binding"),
+            None => format!("{indent}// Checkbox {label}: set a valid Binding"),
         },
         WidgetKind::Frame => format!(
-            "            // Nested Frame {label} — grouping not recursive in codegen"
+            "{indent}// Nested Frame {label} — grouping not recursive in codegen"
         ),
         WidgetKind::ComboBox => match binding {
             Some(b) => format!(
-                "            ui.put({rect_expr}, egui::Label::new(self.{b}.as_str())); // ComboBox"
+                "{indent}ui.put({rect_expr}, egui::Label::new(self.{b}.as_str())); // ComboBox"
             ),
-            None => format!("            // ComboBox {label}: set a valid Binding"),
+            None => format!("{indent}// ComboBox {label}: set a valid Binding"),
         },
         WidgetKind::RadioButton => match binding {
             Some(b) => {
@@ -883,10 +885,10 @@ fn emit_child_lines(
                     string_literal(&child.props.radio_value)
                 };
                 format!(
-                    "            ui.radio_value(&mut self.{b}, {value_lit}.to_owned(), {label});"
+                    "{indent}ui.radio_value(&mut self.{b}, {value_lit}.to_owned(), {label});"
                 )
             }
-            None => format!("            // RadioButton {label}: set a valid Binding"),
+            None => format!("{indent}// RadioButton {label}: set a valid Binding"),
         },
         WidgetKind::ProgressBar => match binding {
             Some(b) => {
@@ -894,34 +896,34 @@ fn emit_child_lines(
                 if child.props.show_percentage {
                     pb.push_str(".show_percentage()");
                 }
-                format!("            ui.put({rect_expr}, {pb});")
+                format!("{indent}ui.put({rect_expr}, {pb});")
             }
-            None => format!("            // ProgressBar {label}: set a valid Binding"),
+            None => format!("{indent}// ProgressBar {label}: set a valid Binding"),
         },
         WidgetKind::TextArea => match binding {
             Some(b) => format!(
-                "            ui.put({rect_expr}, egui::TextEdit::multiline(&mut self.{b}));"
+                "{indent}ui.put({rect_expr}, egui::TextEdit::multiline(&mut self.{b}));"
             ),
-            None => format!("            // TextArea {label}: set a valid Binding"),
+            None => format!("{indent}// TextArea {label}: set a valid Binding"),
         },
         WidgetKind::SpinBox => match binding {
             Some(b) => format!(
-                "            ui.put({rect_expr}, egui::DragValue::new(&mut self.{b}).range({:.1}..={:.1}));",
+                "{indent}ui.put({rect_expr}, egui::DragValue::new(&mut self.{b}).range({:.1}..={:.1}));",
                 child.props.min, child.props.max
             ),
-            None => format!("            // SpinBox {label}: set a valid Binding"),
+            None => format!("{indent}// SpinBox {label}: set a valid Binding"),
         },
         WidgetKind::FontComboBox => match binding {
             Some(b) => format!(
-                "            ui.put({rect_expr}, egui::Label::new(self.{b}.as_str())); // FontComboBox"
+                "{indent}ui.put({rect_expr}, egui::Label::new(self.{b}.as_str())); // FontComboBox"
             ),
-            None => format!("            // FontComboBox {label}: set a valid Binding"),
+            None => format!("{indent}// FontComboBox {label}: set a valid Binding"),
         },
         WidgetKind::HorizontalSpacer => {
-            format!("            ui.add_space({:.1}); // HorizontalSpacer", child.rect.w)
+            format!("{indent}ui.add_space({:.1}); // HorizontalSpacer", child.rect.w)
         }
         WidgetKind::VerticalSpacer => {
-            format!("            ui.add_space({:.1}); // VerticalSpacer", child.rect.h)
+            format!("{indent}ui.add_space({:.1}); // VerticalSpacer", child.rect.h)
         }
         WidgetKind::GroupBox
         | WidgetKind::VLayout
@@ -935,28 +937,28 @@ fn emit_child_lines(
         | WidgetKind::ListView
         | WidgetKind::TreeView
         | WidgetKind::Chart => {
-            format!("            // Nested container {:?} — not expanded in child codegen", child.kind)
+            format!("{indent}// Nested container {:?} — not expanded in child codegen", child.kind)
         }
         WidgetKind::ToolButton => {
-            format!("            if ui.put({rect_expr}, egui::Button::new({label}).small()).clicked() {{}}")
+            format!("{indent}if ui.put({rect_expr}, egui::Button::new({label}).small()).clicked() {{}}")
         }
         WidgetKind::CommandLinkButton => {
-            format!("            if ui.put({rect_expr}, egui::Button::new({label})).clicked() {{}}")
+            format!("{indent}if ui.put({rect_expr}, egui::Button::new({label})).clicked() {{}}")
         }
         WidgetKind::DialogButtonBox => {
-            format!("            ui.put({rect_expr}, egui::Label::new({label})); // DialogButtonBox")
+            format!("{indent}ui.put({rect_expr}, egui::Label::new({label})); // DialogButtonBox")
         }
         WidgetKind::MathLabel => match binding {
             Some(b) => format!(
-                "            ui.put({rect_expr}, egui::Label::new(format!(\"{{}} = {{:.2}}\", {label}, self.{b})));"
+                "{indent}ui.put({rect_expr}, egui::Label::new(format!(\"{{}} = {{:.2}}\", {label}, self.{b})));"
             ),
-            None => format!("            // MathLabel {label}: set a valid Binding"),
+            None => format!("{indent}// MathLabel {label}: set a valid Binding"),
         },
         WidgetKind::FilePicker => match binding {
             Some(b) => format!(
-                "            ui.put({rect_expr}, egui::Label::new(&self.{b})); // FilePicker"
+                "{indent}ui.put({rect_expr}, egui::Label::new(&self.{b})); // FilePicker"
             ),
-            None => format!("            // FilePicker {label}: set a valid Binding"),
+            None => format!("{indent}// FilePicker {label}: set a valid Binding"),
         },
         WidgetKind::Image => image_child_preview_line(child, &rect_expr),
         WidgetKind::Custom(_) => {
@@ -967,7 +969,7 @@ fn emit_child_lines(
                     child.descriptor_name.as_deref().unwrap_or("Custom"),
                 )
             } else {
-                format!("            // Custom child {:?}: descriptor not loaded", child.kind)
+                format!("{indent}// Custom child {:?}: descriptor not loaded", child.kind)
             }
         }
     };

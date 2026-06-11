@@ -275,8 +275,13 @@ fn sanitize(name: &str) -> String {
         .map(|c| if c.is_alphanumeric() { c } else { '_' })
         .collect();
     let s = s.to_lowercase();
-    if s.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(true) {
+    let s = if s.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(true) {
         format!("c_{s}")
+    } else {
+        s
+    };
+    if crate::codegen::rust::RUST_KEYWORDS.contains(&s.as_str()) {
+        format!("{s}_ch")
     } else {
         s
     }
@@ -475,5 +480,47 @@ mod tests {
 
         let plain = async_drain_block("h", &HandlerResult::Plain);
         assert!(!plain.contains("_error"));
+    }
+
+    #[test]
+    fn sanitize_keyword_channel_name_gets_suffix() {
+        // "type" is a Rust keyword — must not appear as bare identifier
+        let pairs = channel_field_pairs(&RustWiring {
+            channels: vec![ChannelDef {
+                id: Uuid::nil(),
+                name: "type".to_owned(),
+                ty: "String".to_owned(),
+            }],
+            iterators: vec![],
+            trait_impls: vec![],
+        });
+        let decls: Vec<&str> = pairs.iter().map(|(d, _)| d.as_str()).collect();
+        // Should NOT contain "type_tx" (keyword), should contain "type_ch_tx" or similar
+        assert!(
+            !decls.iter().any(|d| d.contains(" type_tx:")),
+            "keyword 'type' must be sanitized in channel name"
+        );
+    }
+
+    #[test]
+    fn sanitize_digit_leading_channel_name() {
+        let pairs = channel_field_pairs(&RustWiring {
+            channels: vec![ChannelDef {
+                id: Uuid::nil(),
+                name: "123data".to_owned(),
+                ty: "u32".to_owned(),
+            }],
+            iterators: vec![],
+            trait_impls: vec![],
+        });
+        let decls: Vec<&str> = pairs.iter().map(|(d, _)| d.as_str()).collect();
+        // Must not start with a digit
+        assert!(
+            !decls.iter().any(|d| {
+                let trimmed = d.trim_start();
+                trimmed.chars().next().is_some_and(|c| c.is_ascii_digit())
+            }),
+            "digit-leading channel name must be prefixed"
+        );
     }
 }
