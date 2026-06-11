@@ -126,64 +126,12 @@ impl WidgetMakerDoc {
 
 /// Generate the `live_preview` template string from the maker doc.
 pub fn gen_live_preview(doc: &WidgetMakerDoc) -> String {
-    let mut lines = vec!["    {".to_owned()];
-    lines.push("        let _painter = ui.painter();".to_owned());
-    lines.push("        let _outer = ui.max_rect();".to_owned());
-    for prim in &doc.primitives {
-        lines.extend(prim_to_egui_lines(prim, false));
-    }
-    lines.push("    }".to_owned());
-    lines.join("\n")
+    crate::codegen::widget_maker_emit::gen_live_preview(doc)
 }
 
 /// Generate the `export` template string from the maker doc.
 pub fn gen_export_template(doc: &WidgetMakerDoc) -> String {
-    let mut lines = vec!["                {".to_owned()];
-    lines.push("                    let _painter = ui.painter();".to_owned());
-    lines.push("                    let _outer = ui.max_rect();".to_owned());
-    for prim in &doc.primitives {
-        lines.extend(prim_to_egui_lines(prim, true));
-    }
-    lines.push("                }".to_owned());
-    lines.join("\n")
-}
-
-fn prim_to_egui_lines(prim: &MakerPrimitive, _export: bool) -> Vec<String> {
-    let [r, g, b] = prim.fill;
-    let color = format!("egui::Color32::from_rgb({r}, {g}, {b})");
-    // Normalised sub-rect from _outer
-    let sub_rect = format!(
-        "egui::Rect::from_min_size(\
-            _outer.min + egui::vec2(_outer.width() * {:.3}, _outer.height() * {:.3}), \
-            egui::vec2(_outer.width() * {:.3}, _outer.height() * {:.3}))",
-        prim.x, prim.y, prim.w, prim.h
-    );
-    match prim.kind {
-        MakerPrimKind::Rect => vec![format!(
-            "        _painter.rect_filled({sub_rect}, {:.1}, {color});",
-            prim.corner_radius
-        )],
-        MakerPrimKind::Outline => vec![format!(
-            "        _painter.rect_stroke({sub_rect}, {:.1}, egui::Stroke::new(1.0, {color}));",
-            prim.corner_radius
-        )],
-        MakerPrimKind::Ellipse => vec![format!(
-            "        _painter.circle_filled({sub_rect}.center(), \
-                {sub_rect}.width().min({sub_rect}.height()) * 0.5, {color});"
-        )],
-        MakerPrimKind::Text => {
-            let text_expr = if prim.use_label_token {
-                "{{label}}".to_owned()
-            } else {
-                prim.text_content.replace('"', "\\\"")
-            };
-            let tc = format!("egui::Color32::from_rgb({r}, {g}, {b})");
-            vec![format!(
-                "        ui.put({sub_rect}, egui::Label::new(egui::RichText::new(\"{text_expr}\").size({:.1}).color({tc})).wrap(false));",
-                prim.font_size
-            )]
-        }
-    }
+    crate::codegen::widget_maker_emit::gen_export_template(doc)
 }
 
 // ---------------------------------------------------------------------------
@@ -290,15 +238,17 @@ mod tests {
 
     #[test]
     fn outline_prim_emits_rect_stroke() {
-        let prim = MakerPrimitive {
-            kind: MakerPrimKind::Outline,
-            ..Default::default()
+        let doc = WidgetMakerDoc {
+            primitives: vec![MakerPrimitive {
+                kind: MakerPrimKind::Outline,
+                ..Default::default()
+            }],
+            ..WidgetMakerDoc::new_with_defaults()
         };
-        let lines = prim_to_egui_lines(&prim, false);
+        let code = gen_live_preview(&doc);
         assert!(
-            lines.iter().any(|l| l.contains("rect_stroke")),
-            "outline must use rect_stroke: {:?}",
-            lines
+            code.contains("rect_stroke"),
+            "outline must use rect_stroke: {code}"
         );
     }
 
@@ -354,15 +304,17 @@ mod tests {
 
     #[test]
     fn ellipse_prim_emits_circle_filled() {
-        let prim = MakerPrimitive {
-            kind: MakerPrimKind::Ellipse,
-            ..Default::default()
+        let doc = WidgetMakerDoc {
+            primitives: vec![MakerPrimitive {
+                kind: MakerPrimKind::Ellipse,
+                ..Default::default()
+            }],
+            ..WidgetMakerDoc::new_with_defaults()
         };
-        let lines = prim_to_egui_lines(&prim, false);
+        let code = gen_live_preview(&doc);
         assert!(
-            lines.iter().any(|l| l.contains("circle_filled")),
-            "ellipse must use circle_filled: {:?}",
-            lines
+            code.contains("circle_filled"),
+            "ellipse must use circle_filled: {code}"
         );
     }
 }

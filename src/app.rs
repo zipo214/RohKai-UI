@@ -475,8 +475,9 @@ impl RohKaiApp {
             return;
         }
 
-        // Export WASM project to a temp directory.
-        let dest = std::env::temp_dir().join("rohkai_wasm_preview");
+        // Export WASM project to a per-process temp directory to avoid
+        // collisions between concurrent or repeated preview runs.
+        let dest = std::env::temp_dir().join(format!("rohkai_wasm_preview_{}", std::process::id()));
         if let Err(e) =
             crate::codegen::export::write_project_wasm(&self.project.ui_tree, &dest, true)
         {
@@ -1231,6 +1232,11 @@ impl RohKaiApp {
                         &self.widget_maker_doc.widget_id,
                     );
                     let path = dir.join(format!("{safe_id}.rkwd"));
+                    if let Err(e) = std::fs::create_dir_all(&dir) {
+                        self.messages.last_error =
+                            Some(format!("Widget Maker: could not create widgets dir: {e}"));
+                        return;
+                    }
                     if let Err(e) = std::fs::write(&path, &json) {
                         self.messages.last_error = Some(format!("Widget Maker save failed: {e}"));
                     } else {

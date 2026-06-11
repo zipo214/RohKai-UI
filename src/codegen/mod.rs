@@ -12,3 +12,4 @@ pub mod source_map;
 pub mod state_emitter;
 pub mod widget_bundle;
 pub mod widget_descriptor;
+pub mod widget_maker_emit;

@@ -131,7 +131,7 @@ pub fn project_files_wasm(tree: &UiTree, gen_index_html: bool) -> Vec<(String, S
 
     let ((cargo_toml, lib_rs), app_rs) = rayon::join(
         || rayon::join(gen_cargo_toml_wasm, || gen_lib_rs_wasm(tree)),
-        || gen_app_rs(tree),
+        || gen_app_rs_wasm(tree),
     );
 
     let mut files = vec![
@@ -331,6 +331,27 @@ fn main() -> eframe::Result<()> {{
 }}
 "#
     )
+}
+
+// ---------------------------------------------------------------------------
+
+/// WASM-safe app.rs generator.  Replaces `FilePicker` with a read-only
+/// `Label` stub because `rfd` requires native OS dialogs unavailable in WASM.
+fn gen_app_rs_wasm(tree: &UiTree) -> String {
+    let needs_stub = tree
+        .widgets
+        .iter()
+        .any(|w| w.kind == WidgetKind::FilePicker);
+    if !needs_stub {
+        return gen_app_rs(tree);
+    }
+    let mut wasm_tree = tree.clone();
+    for w in &mut wasm_tree.widgets {
+        if w.kind == WidgetKind::FilePicker {
+            w.kind = WidgetKind::Label;
+        }
+    }
+    gen_app_rs(&wasm_tree)
 }
 
 // ---------------------------------------------------------------------------
@@ -4018,5 +4039,20 @@ mod tests {
             "descriptor cargo dep not injected into exported Cargo.toml"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wasm_app_rs_has_no_rfd() {
+        let mut tree = UiTree::default();
+        tree.widgets.push(WidgetInstance {
+            kind: WidgetKind::FilePicker,
+            state_binding: Some("file_path".into()),
+            ..Default::default()
+        });
+        let app_rs = gen_app_rs_wasm(&tree);
+        assert!(
+            !app_rs.contains("rfd::"),
+            "WASM output must not reference rfd: found rfd:: in generated code"
+        );
     }
 }
