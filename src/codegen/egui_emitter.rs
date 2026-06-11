@@ -1490,6 +1490,30 @@ mod tests {
     }
 
     #[test]
+    fn svg_inline_toggle_switches_between_compact_and_raw_source() {
+        // Closure criterion: toggling expand_svg_inline changes code-panel output.
+        let compact = super::svg_source_arg(Some("<svg/>"), false);
+        assert!(
+            compact.starts_with('"') && compact.contains("bytes"),
+            "disabled: must emit compact byte-count form, got: {compact}"
+        );
+        let inline = super::svg_source_arg(Some("<svg/>"), true);
+        assert!(
+            inline.starts_with('r'),
+            "enabled: must emit raw string literal, got: {inline}"
+        );
+        assert!(
+            inline.contains("<svg/>"),
+            "enabled: raw literal must contain the SVG source"
+        );
+        // None source is always a placeholder regardless of toggle.
+        let none_compact = super::svg_source_arg(None, false);
+        let none_inline = super::svg_source_arg(None, true);
+        assert_eq!(none_compact, none_inline);
+        assert!(none_compact.contains("no SVG source"));
+    }
+
+    #[test]
     fn keyword_state_binding_emits_effective_field_name() {
         // A state_binding of "type" is a Rust keyword; the emitter must reference
         // self.type_value (not the bare keyword) so generated code compiles.

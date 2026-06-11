@@ -262,8 +262,9 @@
 - [x] Read-only SVG source viewer panel or popup for Image widgets
       (SVG is intentionally contracted in the live code panel — this gives a
       way to inspect/copy the raw SVG without polluting the code buffer)
-- Optional "expand SVG inline" toggle per Image widget for power users:
-  active closure item in SVG renderer Phase R8.
+- [x] "Expand SVG inline" toggle per Image widget — checkbox in properties
+      panel, warns on large SVGs (>10 KB), test in `egui_emitter` proves
+      compact vs raw-literal switch.
 
 ## Stage 7.x - SVG Import Maturity — Historical Snapshot
 
@@ -455,7 +456,9 @@ requiring schema changes.
 - [x] Vertical Layout (`VLayout`) — canvas box with ↕ indicator
 - [x] Horizontal Layout (`HLayout`) — canvas box with ↔ indicator
 - [x] Grid Layout (`GridLayout`) — canvas box with 3×3 grid lines; emits egui::Grid
-- [ ] Form Layout (deferred — egui has no distinct form primitive; Grid covers it)
+- [x] Form Layout — closed as a 2-column GridLayout preset; built-in "Form Layout"
+      and "Login Dialog" templates ship in `builtin_templates()` in
+      `src/panels/templates.rs` with structural tests.
 - [x] Horizontal Spacer — dashed horizontal bar
 - [x] Vertical Spacer — dashed vertical bar
 
@@ -689,8 +692,11 @@ and prioritizes depth over more palette breadth.
       palette kind plus Image/SVG. `src/codegen/export.rs` now has a fast smoke
       plus ignored real generated-crate `cargo check`; the proof caught and fixed
       SVG Image export module embedding.
-- [ ] Add export compile fixtures for assets, custom descriptors, SVG Image, and
+- [x] Add export compile fixtures for assets, custom descriptors, SVG Image, and
       mixed event/async/data widgets where not already covered.
+      `asset_manifest_is_generated_with_correct_entries` and
+      `custom_descriptor_export_renders_template_not_placeholder` added to
+      `src/codegen/export.rs`.
 - [ ] Add release smoke checklist: save/load, export, preview mode, code paste,
       multi-select, templates, preferences, theme, and SVG import.
 

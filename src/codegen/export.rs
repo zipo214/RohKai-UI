@@ -3580,4 +3580,97 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn asset_manifest_is_generated_with_correct_entries() {
+        use crate::project::schema::{AppProps, AssetEntry, AssetKind};
+        let tree = UiTree {
+            app_props: AppProps {
+                assets: vec![
+                    AssetEntry {
+                        id: Uuid::nil(),
+                        name: "logo.png".to_owned(),
+                        source_path: "/home/user/images/logo.png".to_owned(),
+                        kind: AssetKind::Image,
+                    },
+                    AssetEntry {
+                        id: Uuid::from_u128(1),
+                        name: "data.json".to_owned(),
+                        source_path: "/home/user/data/data.json".to_owned(),
+                        kind: AssetKind::Data,
+                    },
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let dir = unique_temp_dir("asset_manifest");
+        write_project(&tree, &dir).expect("write_project");
+
+        let manifest_path = dir.join("assets/MANIFEST.txt");
+        assert!(manifest_path.exists(), "assets/MANIFEST.txt not generated");
+        let manifest = std::fs::read_to_string(&manifest_path).expect("read manifest");
+        assert!(manifest.contains("logo.png"), "manifest missing logo.png");
+        assert!(
+            manifest.contains("/home/user/images/logo.png"),
+            "manifest missing source path for logo.png"
+        );
+        assert!(manifest.contains("data.json"), "manifest missing data.json");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn custom_descriptor_export_renders_template_not_placeholder() {
+        let tree = UiTree {
+            widgets: vec![WidgetInstance {
+                id: Uuid::nil(),
+                kind: WidgetKind::Custom("ply.button".to_owned()),
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 80.0,
+                    h: 30.0,
+                },
+                descriptor_name: Some("ply.button".to_owned()),
+                descriptor_export_tpl: Some(
+                    "ui.add(ply::Button::new({{label}}).size({{width}}, {{height}}));".to_owned(),
+                ),
+                descriptor_cargo_deps: vec!["ply = \"0.1\"".to_owned()],
+                props: crate::project::schema::WidgetProps {
+                    label: "Click me".to_owned(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let generated = gen_app_rs(&tree);
+
+        assert!(
+            generated.contains("ply::Button::new"),
+            "descriptor template not rendered: got\n{generated}"
+        );
+        assert!(
+            generated.contains("\"Click me\""),
+            "{{{{label}}}} token not substituted"
+        );
+        assert!(
+            generated.contains("80.0"),
+            "{{{{width}}}} token not substituted"
+        );
+        assert!(
+            !generated.contains("descriptor not loaded"),
+            "descriptor template must not fall through to placeholder"
+        );
+
+        let dir = unique_temp_dir("custom_descriptor");
+        write_project(&tree, &dir).expect("write_project");
+        let cargo = std::fs::read_to_string(dir.join("Cargo.toml")).expect("Cargo.toml");
+        assert!(
+            cargo.contains("ply = \"0.1\""),
+            "descriptor cargo dep not injected into exported Cargo.toml"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -848,7 +848,25 @@ fn show_image(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) -
             }
         });
         ui.checkbox(&mut w.expand_svg_inline, "Expand SVG inline in code panel")
-            .on_hover_text("Show full SVG source in the live code panel instead of [SVG: N bytes]");
+            .on_hover_text(
+                "Show full SVG source inline instead of [SVG: N bytes]. \
+                 Large SVGs (>10 KB) make the code panel very noisy — \
+                 use the source viewer below for inspection instead.",
+            );
+        if w.expand_svg_inline {
+            if let Some(src) = w.svg_source.as_deref() {
+                if src.len() > 10_000 {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Warning: SVG is {} KB — code panel will be verbose.",
+                            src.len() / 1024
+                        ))
+                        .small()
+                        .color(egui::Color32::from_rgb(251, 191, 36)),
+                    );
+                }
+            }
+        }
         ui.separator();
         if let Some(src) = w.svg_source.as_deref() {
             crate::panels::svg_report::show_report(ui, src);
