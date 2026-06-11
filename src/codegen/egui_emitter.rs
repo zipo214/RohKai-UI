@@ -838,7 +838,11 @@ fn emit_child_lines(
         child.rect.w, child.rect.h
     );
     let label = string_literal(&child.props.label);
-    let binding = field_binding(child.state_binding.as_deref());
+    let eff = child
+        .state_binding
+        .as_deref()
+        .map(crate::codegen::rust::effective_binding);
+    let binding = field_binding(eff.as_deref());
 
     lines.push((Some(child.id), format!("{indent}// widget_{}", child.id)));
 
@@ -1014,7 +1018,11 @@ fn image_child_preview_line(child: &WidgetInstance, rect_expr: &str) -> String {
 /// The layout closure owns their placement order.
 fn emit_layout_child_lines(child: &WidgetInstance, lines: &mut Vec<(Option<Uuid>, String)>) {
     let label = string_literal(&child.props.label);
-    let binding = field_binding(child.state_binding.as_deref());
+    let eff = child
+        .state_binding
+        .as_deref()
+        .map(crate::codegen::rust::effective_binding);
+    let binding = field_binding(eff.as_deref());
     lines.push((
         Some(child.id),
         format!("            // widget_{}", child.id),

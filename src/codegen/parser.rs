@@ -255,20 +255,32 @@ fn flush_pending_child(pending: &mut Option<ParsedWidget>, report: &mut ParseRep
     }
 }
 
-/// Assign `widget.binding` from a parsed line, intercepting the malformed-binding
-/// sentinel returned by `extract_binding_name`.  When malformed, emits a diagnostic
-/// and leaves `widget.binding` unchanged so no prior valid binding is clobbered.
+/// Outcome of attempting to extract a binding name from an emitted source line.
+enum BindingParse {
+    /// A valid Rust identifier was extracted.
+    Valid(String),
+    /// `self.` was present but no identifier followed (e.g. `self.)`).
+    Malformed,
+    /// No `self.` pattern found, or the extracted token was invalid.
+    NotFound,
+}
+
+/// Assign `widget.binding` from a parsed line.
+/// Malformed patterns emit a diagnostic and leave `widget.binding` unchanged.
 fn apply_binding(widget: &mut ParsedWidget, line: &str, line_no: usize, report: &mut ParseReport) {
     match extract_binding_name(line) {
-        Some(b) if b == "_malformed_binding_" => {
+        BindingParse::Malformed => {
             push_error(
                 report,
                 line_no,
                 "malformed binding: expected identifier after 'self.'",
             );
         }
-        b => {
-            widget.binding = Some(b);
+        BindingParse::Valid(b) => {
+            widget.binding = Some(Some(b));
+        }
+        BindingParse::NotFound => {
+            widget.binding = Some(None);
         }
     }
 }
@@ -357,17 +369,17 @@ fn parse_widget_line(
         }
         if widget.binding.is_none() {
             match extract_binding_name(line) {
-                Some(b) if b == "_malformed_binding_" => {
+                BindingParse::Malformed => {
                     push_error(
                         report,
                         line_no,
                         "malformed binding: expected identifier after 'self.'",
                     );
                 }
-                Some(b) => {
+                BindingParse::Valid(b) => {
                     widget.binding = Some(Some(b));
                 }
-                None => {}
+                BindingParse::NotFound => {}
             }
         }
     }
@@ -504,7 +516,7 @@ fn extract_string_literal(line: &str) -> Option<String> {
     None
 }
 
-fn extract_binding_name(line: &str) -> Option<String> {
+fn extract_binding_name(line: &str) -> BindingParse {
     for pat in &["&mut self.", "&self.", "self."] {
         if let Some(pos) = line.find(pat) {
             let rest = &line[pos + pat.len()..];
@@ -514,20 +526,18 @@ fn extract_binding_name(line: &str) -> Option<String> {
             if end > 0 {
                 let name = rest[..end].to_owned();
                 if crate::codegen::rust::is_valid_identifier(&name) {
-                    return Some(name);
+                    return BindingParse::Valid(name);
                 }
-                // Invalid (keyword, leading digit, etc.): drop rather than
-                // salvage — a prefixed name could collide with an existing
-                // binding and the canvas UI already blocks invalid input at
-                // edit time, so rejection is the safer default.
-                return None;
+                // Invalid (keyword, leading digit, etc.): drop — reject rather
+                // than salvage to avoid potential collisions with real bindings.
+                return BindingParse::NotFound;
             } else if !rest.is_empty() && (rest.starts_with(')') || rest.starts_with(',')) {
-                // Matched "self." but nothing follows — malformed; signal caller
-                return Some("_malformed_binding_".to_owned());
+                // "self." present but no identifier follows — malformed.
+                return BindingParse::Malformed;
             }
         }
     }
-    None
+    BindingParse::NotFound
 }
 
 fn extract_combo_binding(line: &str) -> Option<String> {
