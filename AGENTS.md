@@ -35,7 +35,13 @@ Never write code that mutates canvas state and code state separately.
   tests must all expose a real output form or the feature is not done.
 - Rendering stack: egui + eframe (winit + wgpu under the hood).
 - Codegen lives entirely in `src/codegen/`. Nothing outside that module
-  should know about Rust syntax strings.
+  should know about Rust syntax strings. Generated identifiers must be valid
+  (no leading digit), keyword-escaped, collision-resistant (deterministic), and
+  must `cargo check` in the exported project.
+- Surface parity: a behavior visible in one of {canvas, preview, export} must be
+  matched in the others or carry an explicit, tested reason for differing.
+  Derive classifications from the canonical API (`UiTree`,
+  `WidgetKind::supported_events()`); never re-list its members elsewhere.
 - UiTree nodes are serde-serializable. Project files are `.rohkai.json`.
 
 ## Module Map
@@ -94,7 +100,10 @@ Core features implemented:
 
 ## Testing
     cargo test
-    cargo clippy -- -D warnings
+    cargo clippy --all-targets -- -D warnings
+
+`--all-targets` is required: plain `cargo clippy` skips `examples/` and `tests/`,
+where real lints have hidden.
 
 ## Session Rules
 - Before planning or coding, run the low-token preflight:
@@ -105,8 +114,15 @@ Core features implemented:
   - `docs/ROADMAP.md` for scope/stage decisions.
   - `docs/CODE_INDEX.md` for codebase orientation.
   - `docs/ARCHITECTURE.md` for structural changes.
+  - `docs/ENGINEERING_INVARIANTS.md` when fixing a bug or reviewer finding, or
+    touching codegen, preview/canvas/export parity, input gating, reset paths,
+    string truncation, or filename/identifier sanitizing.
   - `docs/DEVLOG.md` for regression/history investigation; use preflight
     `-IncludeDevlog` when you need it.
+- When fixing a bug or reviewer finding, fix the *class* not the symptom: follow
+  the systemic-fix workflow in `docs/ENGINEERING_INVARIANTS.md` (root cause →
+  sibling-surface parity → name/add the invariant → class-level regression test →
+  minimal patch).
 - At the start of a meaningful planning or coding session, append a 3-4 sentence
   newest-first `docs/CODE_COOP.md` note for the next agent.
 - When writing a goal/prompt for another agent, use `docs/PROMPT_CONTRACT.md`

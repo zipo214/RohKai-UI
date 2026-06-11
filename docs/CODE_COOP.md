@@ -7,6 +7,118 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-10 — SVG R12 complete: namespace + recovery + a11y (post-R8 lanes ALL done)
+
+On `dev`. **R12 done** (commit a0b563f) — final post-R8 lane; **the SVG renderer
+roadmap (R0–R12 + R8.1) is now complete.** All in `svg_rasterizer.rs`
+(export-embedded). (1) Namespace: `XmlParser.ns_stack` of `NsFrame`; `apply_xmlns`
+reads xmlns/xmlns:prefix from raw open-tag headers (note: `parse_attr` strips
+prefixes, so xmlns must be scanned from the raw header slice, not raw_attrs);
+qualified names → `Namespace::{Svg,Xlink,Foreign}`; foreign elements skip their
+balanced subtree + `namespace.foreign_element`. Key fix: prefix-stripping turned
+`<custom:rect>` into a rendered `rect` — now foreign. (2) Recovery:
+`consume_close_tag` counts mismatched/unclosed; → `recovery.malformed_markup` +
+`recovered_error_count`, never ParseFailed/panic; security gates stay hard-fail.
+(3) a11y: `<title>`/`<desc>` captured inline during parse (NOT as SvgNode, so
+they don't render as R11 glyphs) + root aria-label fallback, bounded
+`MAX_A11Y_TEXT`, on `SvgRenderReport` + report-panel rows + export-preserved.
+`SvgRenderReport` gained `title`/`desc`/`recovered_error_count` (svg_report test
+literal + panel updated). Gate green: 335 tests / fmt / clippy --all-targets /
+validate-svg-import / check-text-encoding. No new deps. **Next:** no open SVG
+renderer lanes remain — remaining gaps are explicit out-of-profile non-goals
+(real font files+shaping, tier-3 filters, progressive JPEG, ICC, foreignObject).
+Pick from `docs/ROADMAP.md` open stages (12 Platform Targets / 13 Data / 15
+Renderer) or the deferred Stage 9 parallel-processing items.
+
+## 2026-06-10 — SVG R11 complete: raster text + textPath (bundled Hershey font)
+
+On `dev`. **R11 done** (commit e8eae08). Image-mode rasterizer now renders
+`<text>`/`<tspan>`/`<textPath>` as a vector-outline snapshot; editable component
+import (R6, svg_import.rs) untouched. Key pieces, all in `svg_rasterizer.rs`
+(export-embedded verbatim): `HERSHEY_SIMPLEX` (public-domain stroked font, ASCII
+32..=126, 30 units/em, `^` simplified); parser now captures `<text>` inner
+markup to the MATCHING close tag (`SvgNode::Text.content` — old code cut at
+first `</`); `scan_text_runs` (one tspan level x/y/dx/dy, deeper flattened +
+diags); `lower_text_command` lays out runs in user space and emits ONE stroked
+`DrawCommand::Shape` (PathData of glyph polylines) → full reuse of stroke
+pipeline/clips/masks/filters/gradients; `ArcLengthPath` places textPath glyphs
+by arc length with midpoint-tangent rotation. Style gained inherited `font_size`
++ `text_anchor`. Honesty: every text render emits `text.raster_snapshot`
+(→ Medium fidelity, intentional); tofu + diags for non-ASCII/bidi/combining;
+`MAX_TEXT_GLYPHS` cap. `DrawCommand::UnsupportedText` removed; the one test
+asserting text-unsupported was flipped (justified in DEVLOG). **Test-writing
+heads-up:** the 0.67px glyph stroke AA-splits across pixel columns when a stem
+straddles a boundary — assert alpha>50, not >100/200. Gate green: 327 tests /
+fmt / clippy --all-targets / scripts / launch smoke. **Next: R12** (namespace
+model + malformed recovery + a11y metadata — final open lane); read
+`docs/svg-goal-plan-prompts/R12-*.goal.md` first.
+
+## 2026-06-10 — SVG R10 complete: filter correctness + tier-2 + blend modes
+
+On `dev`. **R10 done**, shipped as four verified+committed increments (each ends
+green; tree always shippable): (1) tier-2 primitives feComposite/feBlend/
+feComponentTransfer/feMorphology — real buffers on the R7 premultiplied pipeline,
+`<feComponentTransfer>` added to `is_container_tag` so feFunc* children parse,
+feMorphology radius capped (`MAX_MORPH_RADIUS`); (2) `mix-blend-mode` —
+`BlendMode` threaded LayerRaw→ResolvedLayer→Offscreen, composited via new
+`composite_offscreen_blended` (Normal path byte-identical, so no existing group/
+mask/filter golden moved); (3) linearRGB `color-interpolation-filters` default
+(srgb↔linear premult-aware convert at the graph boundary, `sRGB` opts out,
+flood/dropshadow colours linearised) — existing goldens use pure 0/255 so none
+moved, gamma proven by a pixel-exact unit test; (4) precise filter region
+(`filterUnits`+x/y/w/h, default obbox −10%..110% via source alpha extent;
+userSpaceOnUse exact via CTM) clipping the result. **Heads-up for R11+:** region
+clipping is spec-correct and clips filter output beyond the element bbox, so
+feOffset/feFlood/feMorphology/feDropShadow/feGaussianBlur fixtures+tests now carry
+explicit filter regions (documented inline). Gate green:
+fmt/check/test 321/clippy --all-targets/validate-svg-import/check-text-encoding/
+cargo run. No new deps. **Next: R11** (raster text & textPath) — read
+`docs/svg-goal-plan-prompts/R11-*.goal.md` first; it is heavy, gate on real need.
+
+## 2026-06-09 — Engineering invariants doc (process hardening from PR #4 review)
+
+On `dev`. Triaged the PR #4 CodeRabbit batch (32 comments): all substantive
+findings are already fixed in current code (verified the one without a ✅ reply —
+`refresh_preview_state()` now re-seeds preview after every tree swap in
+`app.rs`). Distilled the recurring **bug classes** into a new read-on-demand
+reference `docs/ENGINEERING_INVARIANTS.md`: surface parity (canvas/preview/
+export), single-source-of-truth classification, input-ownership gating,
+reset/default restoration, generated-identifier safety + codegen module
+boundary, string byte-slicing, filename sanitizing, conservative shipped
+defaults, doc-contradiction reconciliation — each with an invariant + cheap
+guard, plus the systemic-fix workflow. Wired terse pointers into `CLAUDE.md`,
+`AGENTS.md`, and preflight, and bumped the documented gate to `cargo clippy
+--all-targets -- -D warnings` (plain clippy skipped the `examples/`/`tests/`
+lints the reviewer flagged). No code behavior changed. Next coding lane is still
+**R10** (filters).
+
+## 2026-06-09 — SVG R9 complete: markers + pattern tiling
+
+On `dev`. **R9 is now fully done** (vector-effect shipped earlier in 61f3d66;
+this session added markers + pattern tiling). All in `src/canvas/svg_rasterizer.rs`
+(embedded verbatim into exports, so in-app == export; new
+`embedded_rasterizer_includes_r9_render_paths` test enforces parity). **Patterns:**
+`PaintServerTable` grew a `patterns: HashMap<String, PatternDef>` built in a second
+pass (`build_pattern_def`, href-merge + `reference.pattern_cycle` guard);
+`PaintSampler::Pattern` renders one tile lazily per fill via `build_pattern_sampler`
+(reuses the `<mask>` subtree-render trick through the new shared
+`render_content_items`), repeating across the bbox with `rem_euclid` wrap; tile
+pixels capped by `MAX_PATTERN_TILE_PIXELS`; content self-reference is broken by
+rendering the tile with the pattern removed from a cloned table. **Markers:**
+`build_markers` (called in `DisplayList::build`, stored on `DrawCommand::Shape`)
+resolves `marker-start/mid/end` (+`marker`), extracts vertices+tangents from
+line/poly/path geometry, places content with orient `auto`/`auto-start-reverse`/
+angle, `markerUnits`, `viewBox`/`refX`/`refY` + overflow clip; drawn in
+`execute()` after the shape, bounded by `MAX_MARKER_PLACEMENTS`. Both `<marker>`
+and `<pattern>` def nodes are now skipped in scene build (like clipPath/mask) so
+they no longer emit unsupported diags. 4 new goldens + 7 new unit tests; updated 3
+older tests that asserted patterns-unsupported. **Gate green:** fmt/check/clippy
+`--all-targets -D warnings`/test (313 pass, 6 ignored)/validate-svg-import/
+check-text-encoding/`cargo run` launch smoke. No new deps. **Next: R10**
+(filter linearRGB color-interpolation + precise filter regions + tier-2
+feComposite/feBlend/mix-blend-mode) — read
+`docs/svg-goal-plan-prompts/R10-*.goal.md` first.
+
 ## 2026-06-07 — SVG R9 part 1: vector-effect non-scaling-stroke
 
 On `dev`. Started R9 (markers/vector-effect/patterns). **Shipped the vector-effect

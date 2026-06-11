@@ -48,6 +48,18 @@ const MAX_MASK_ITEMS: usize = 4_096;
 const MAX_FILTER_PRIMITIVES: usize = 64;
 /// Maximum Gaussian-blur box radius in device pixels (R7), to bound filter CPU.
 const MAX_BLUR_RADIUS: usize = 200;
+/// Maximum `feMorphology` radius in device pixels (R10); the window is O(r^2).
+const MAX_MORPH_RADIUS: usize = 100;
+/// Maximum marker placements (start/mid/end vertices) drawn per stroked shape (R9).
+const MAX_MARKER_PLACEMENTS: usize = 10_000;
+/// Maximum shapes lowered from a single `<marker>` subtree (R9).
+const MAX_MARKER_CONTENT_ITEMS: usize = 1_024;
+/// Maximum shapes lowered from a single `<pattern>` subtree (R9).
+const MAX_PATTERN_CONTENT_ITEMS: usize = 4_096;
+/// Maximum pixels in one rendered pattern tile buffer (R9), to bound tile memory.
+const MAX_PATTERN_TILE_PIXELS: usize = 1_048_576; // 1024 x 1024
+/// Maximum `<pattern>` href-inheritance chain depth (R9).
+const MAX_PATTERN_REFERENCE_DEPTH: usize = 32;
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -84,6 +96,13 @@ pub struct SvgRenderReport {
     pub warnings: Vec<SvgRenderWarning>,
     pub unsupported_features: Vec<SvgRenderUnsupportedFeature>,
     pub fidelity: SvgRenderFidelity,
+    /// R12 accessibility metadata: `<title>` text (bounded length), if any.
+    pub title: Option<String>,
+    /// R12 accessibility metadata: `<desc>` text (bounded length), if any.
+    pub desc: Option<String>,
+    /// R12: count of malformed constructs the parser recovered from
+    /// (mismatched/unclosed tags, stray junk) rather than hard-failing.
+    pub recovered_error_count: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,6 +152,9 @@ impl SvgRenderReport {
             warnings: Vec::new(),
             unsupported_features: Vec::new(),
             fidelity: SvgRenderFidelity::High,
+            title: None,
+            desc: None,
+            recovered_error_count: 0,
         }
     }
 
@@ -242,6 +264,28 @@ pub fn rasterize_with_report(
             format!(
                 "{} cyclic local use reference(s) were skipped",
                 scene.use_cycle_count
+            ),
+        );
+    }
+    // R12: accessibility metadata + namespace/recovery diagnostics.
+    report.title = scene.title.clone();
+    report.desc = scene.desc.clone();
+    report.recovered_error_count = scene.recovered;
+    if scene.foreign_count > 0 {
+        report.warning(
+            "namespace.foreign_element",
+            format!(
+                "{} foreign-namespace element(s) were skipped (not in the SVG namespace)",
+                scene.foreign_count
+            ),
+        );
+    }
+    if scene.recovered > 0 {
+        report.warning(
+            "recovery.malformed_markup",
+            format!(
+                "recovered from {} malformed-markup construct(s) (mismatched/unclosed tags); output is partial",
+                scene.recovered
             ),
         );
     }
@@ -568,6 +612,28 @@ struct Style {
     stop_opacity: f32,
     visible: bool,
     vector_effect: VectorEffect,
+    /// Inherited `font-size` (R11 raster text); resolved at text lowering.
+    font_size: svg_core::SvgLength,
+    /// Inherited `text-anchor` (R11 raster text).
+    text_anchor: TextAnchor,
+}
+
+/// `text-anchor` (R11). Applied to the whole laid-out run.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum TextAnchor {
+    #[default]
+    Start,
+    Middle,
+    End,
+}
+
+fn parse_text_anchor(value: &str) -> Option<TextAnchor> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "start" => Some(TextAnchor::Start),
+        "middle" => Some(TextAnchor::Middle),
+        "end" => Some(TextAnchor::End),
+        _ => None,
+    }
 }
 
 impl Default for Style {
@@ -590,6 +656,11 @@ impl Default for Style {
             stop_opacity: 1.0,
             visible: true,
             vector_effect: VectorEffect::None,
+            font_size: svg_core::SvgLength {
+                value: 16.0,
+                unit: svg_core::SvgLengthUnit::Number,
+            },
+            text_anchor: TextAnchor::Start,
         }
     }
 }
@@ -715,6 +786,18 @@ impl Style {
                 // to None and are diagnosed at lowering time.
                 if let Some(effect) = parse_vector_effect(value) {
                     self.vector_effect = effect;
+                }
+            }
+            "font-size" => {
+                if let Some(size) = svg_core::parse_length(value)
+                    .filter(|size| size.value.is_finite() && size.value > 0.0)
+                {
+                    self.font_size = size;
+                }
+            }
+            "text-anchor" => {
+                if let Some(anchor) = parse_text_anchor(value) {
+                    self.text_anchor = anchor;
                 }
             }
             "display" if value.trim() == "none" => {
@@ -947,6 +1030,10 @@ struct PaintServerWarning {
 #[derive(Clone, Default)]
 struct PaintServerTable {
     servers: HashMap<String, PaintServer>,
+    /// Resolved `<pattern>` paint servers (R9), tiled lazily per fill at paint
+    /// time.  Kept separate from gradient `servers` so the gradient enum stays
+    /// untouched.
+    patterns: HashMap<String, PatternDef>,
     warnings: Vec<PaintServerWarning>,
 }
 
@@ -964,6 +1051,26 @@ impl PaintServerTable {
         {
             let mut stack = Vec::new();
             let _ = table.resolve(&id, references, stylesheet, root_style, &mut stack);
+        }
+        // R9: resolve `<pattern>` definitions (separate pass; patterns are not
+        // gradients and inherit attributes/content via their own href chain).
+        for local in &references.ordered_ids {
+            let is_pattern = references.nodes_by_id.get(&local.node_id).is_some_and(
+                |node| matches!(node, SvgNode::Unsupported { tag, .. } if tag == "pattern"),
+            );
+            if !is_pattern || table.patterns.contains_key(&local.xml_id) {
+                continue;
+            }
+            let mut stack = Vec::new();
+            if let Some(def) = build_pattern_def(
+                &local.xml_id,
+                references,
+                stylesheet,
+                &mut table.warnings,
+                &mut stack,
+            ) {
+                table.patterns.insert(local.xml_id.clone(), def);
+            }
         }
         table
     }
@@ -1346,6 +1453,146 @@ fn percent_length(value: f64) -> svg_core::SvgLength {
     }
 }
 
+// ---------------------------------------------------------------------------
+// R9: pattern paint servers (tiled nested content)
+// ---------------------------------------------------------------------------
+
+/// `patternUnits` / `patternContentUnits` coordinate system (R9).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PatternUnits {
+    UserSpaceOnUse,
+    ObjectBoundingBox,
+}
+
+fn parse_pattern_units(value: &str) -> Option<PatternUnits> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "userspaceonuse" => Some(PatternUnits::UserSpaceOnUse),
+        "objectboundingbox" => Some(PatternUnits::ObjectBoundingBox),
+        _ => None,
+    }
+}
+
+/// A resolved `<pattern>` paint server (R9). Attributes are stored post-href
+/// merge as `Option`s; defaults (`objectBoundingBox` tile units,
+/// `userSpaceOnUse` content units) are applied when a tile is built so that
+/// `href`-chained patterns inherit cleanly. The tile itself is rendered lazily
+/// per fill in `build_pattern_sampler`, mirroring `MaskDef::build_alpha`.
+#[derive(Clone)]
+struct PatternDef {
+    units: Option<PatternUnits>,
+    content_units: Option<PatternUnits>,
+    x: Option<svg_core::SvgLength>,
+    y: Option<svg_core::SvgLength>,
+    width: Option<svg_core::SvgLength>,
+    height: Option<svg_core::SvgLength>,
+    view_box: Option<[f64; 4]>,
+    aspect: Option<svg_core::SvgPreserveAspectRatio>,
+    pattern_transform: Option<Transform>,
+    items: Vec<MaskItem>,
+}
+
+/// Resolve a `<pattern>` definition, merging `href`-inherited attributes and
+/// content. Bounded by `MAX_PATTERN_REFERENCE_DEPTH`; cyclic href chains are
+/// diagnosed and dropped (never panic).
+fn build_pattern_def(
+    id: &str,
+    references: &SvgReferenceTable,
+    stylesheet: &svg_core::SvgCssStyleSheet,
+    warnings: &mut Vec<PaintServerWarning>,
+    stack: &mut Vec<SvgNodeId>,
+) -> Option<PatternDef> {
+    if stack.len() >= MAX_PATTERN_REFERENCE_DEPTH {
+        return None;
+    }
+    let node = references
+        .by_xml_id
+        .get(id)
+        .and_then(|nid| references.nodes_by_id.get(nid))?;
+    let SvgNode::Unsupported {
+        tag,
+        attrs,
+        children,
+        ..
+    } = node
+    else {
+        return None;
+    };
+    if tag != "pattern" {
+        return None;
+    }
+    if stack.contains(&node.id()) {
+        warnings.push(PaintServerWarning {
+            code: "reference.pattern_cycle",
+            message: "cyclic pattern href inheritance was ignored".to_owned(),
+            source: node.source(),
+        });
+        return None;
+    }
+    stack.push(node.id());
+    let inherited = attr_get(attrs, "href")
+        .or_else(|| attr_get(attrs, "xlink:href"))
+        .and_then(|href| href.trim().strip_prefix('#'))
+        .and_then(|base| build_pattern_def(base, references, stylesheet, warnings, stack));
+    stack.pop();
+
+    let inherit = |pick: &dyn Fn(&PatternDef) -> Option<svg_core::SvgLength>, key: &str| {
+        attr_get(attrs, key)
+            .and_then(svg_core::parse_length)
+            .or_else(|| inherited.as_ref().and_then(pick))
+    };
+    let units = attr_get(attrs, "patternunits")
+        .and_then(parse_pattern_units)
+        .or_else(|| inherited.as_ref().and_then(|p| p.units));
+    let content_units = attr_get(attrs, "patterncontentunits")
+        .and_then(parse_pattern_units)
+        .or_else(|| inherited.as_ref().and_then(|p| p.content_units));
+    let x = inherit(&|p| p.x, "x");
+    let y = inherit(&|p| p.y, "y");
+    let width = inherit(&|p| p.width, "width");
+    let height = inherit(&|p| p.height, "height");
+    let view_box = parse_view_box(attrs).or_else(|| inherited.as_ref().and_then(|p| p.view_box));
+    let aspect = attr_get(attrs, "preserveaspectratio")
+        .map(svg_core::parse_preserve_aspect_ratio)
+        .or_else(|| inherited.as_ref().and_then(|p| p.aspect));
+    let pattern_transform = attr_get(attrs, "patterntransform")
+        .map(Transform::parse_chained)
+        .or_else(|| inherited.as_ref().and_then(|p| p.pattern_transform));
+
+    let content_bases = match view_box {
+        Some([_, _, w, h]) if w > 0.0 && h > 0.0 => SvgLengthBases::new(w.abs(), h.abs()),
+        _ => SvgLengthBases::new(0.0, 0.0),
+    };
+    let root_style = Style::default();
+    let mut items = Vec::new();
+    collect_mask_items(
+        children,
+        Transform::identity(),
+        content_bases,
+        &root_style,
+        stylesheet,
+        &mut items,
+    );
+    if items.is_empty() {
+        if let Some(base) = &inherited {
+            items = base.items.clone();
+        }
+    }
+    items.truncate(MAX_PATTERN_CONTENT_ITEMS);
+
+    Some(PatternDef {
+        units,
+        content_units,
+        x,
+        y,
+        width,
+        height,
+        view_box,
+        aspect,
+        pattern_transform,
+        items,
+    })
+}
+
 #[derive(Clone)]
 enum PaintSampler {
     Solid([u8; 4]),
@@ -1364,6 +1611,17 @@ enum PaintSampler {
         radius: f64,
         spread: GradientSpread,
         stops: Vec<GradientStop>,
+        opacity: f32,
+    },
+    /// R9 tiled `<pattern>`: a pre-rendered straight-RGBA tile repeated across
+    /// the fill via the device→pattern mapping.
+    Pattern {
+        tile: Vec<u8>,
+        tile_w: usize,
+        tile_h: usize,
+        device_to_pattern: Transform,
+        origin: (f64, f64),
+        size: (f64, f64),
         opacity: f32,
     },
     Transparent,
@@ -1386,7 +1644,7 @@ impl PaintSampler {
                 Self::Solid(color)
             }
             ResolvedPaintSource::Server(id) => {
-                servers.servers.get(id).map_or(Self::Transparent, |server| {
+                if let Some(server) = servers.servers.get(id) {
                     Self::from_server(
                         server,
                         paint.opacity,
@@ -1394,7 +1652,19 @@ impl PaintSampler {
                         object_transform,
                         length_bases,
                     )
-                })
+                } else if let Some(pattern) = servers.patterns.get(id) {
+                    build_pattern_sampler(
+                        pattern,
+                        id,
+                        paint.opacity,
+                        local_bounds,
+                        object_transform,
+                        length_bases,
+                        servers,
+                    )
+                } else {
+                    Self::Transparent
+                }
             }
         }
     }
@@ -1533,12 +1803,148 @@ impl PaintSampler {
                 };
                 sample_gradient(stops, spread_value(t, *spread), *opacity)
             }
+            Self::Pattern {
+                tile,
+                tile_w,
+                tile_h,
+                device_to_pattern,
+                origin,
+                size,
+                opacity,
+            } => {
+                let (tw, th) = *size;
+                if tw <= 0.0 || th <= 0.0 || *tile_w == 0 || *tile_h == 0 {
+                    return [0, 0, 0, 0];
+                }
+                let (px, py) = device_to_pattern.apply(device_x, device_y);
+                // Wrap into the tile rect (rem_euclid keeps negatives in range).
+                let u = (px - origin.0).rem_euclid(tw);
+                let v = (py - origin.1).rem_euclid(th);
+                let ix = (((u / tw) * *tile_w as f64) as usize).min(*tile_w - 1);
+                let iy = (((v / th) * *tile_h as f64) as usize).min(*tile_h - 1);
+                let i = (iy * *tile_w + ix) * 4;
+                let a = (tile[i + 3] as f32 * opacity.clamp(0.0, 1.0))
+                    .round()
+                    .clamp(0.0, 255.0) as u8;
+                [tile[i], tile[i + 1], tile[i + 2], a]
+            }
             Self::Transparent => [0, 0, 0, 0],
         }
     }
 
     fn is_transparent(&self) -> bool {
         matches!(self, Self::Transparent | Self::Solid([_, _, _, 0]))
+    }
+}
+
+/// Render a pattern tile once and produce a tiling sampler (R9). The tile is
+/// bounded to `MAX_PATTERN_TILE_PIXELS`; nested content is rendered through the
+/// shape renderer with this pattern removed from the server table, so a pattern
+/// whose content references itself (directly or via a cycle) terminates with a
+/// transparent paint instead of recursing forever.
+#[allow(clippy::too_many_arguments)]
+fn build_pattern_sampler(
+    def: &PatternDef,
+    pattern_id: &str,
+    opacity: f32,
+    bounds: [f64; 4],
+    object_transform: Transform,
+    length_bases: SvgLengthBases,
+    servers: &PaintServerTable,
+) -> PaintSampler {
+    let units = def.units.unwrap_or(PatternUnits::ObjectBoundingBox);
+    let content_units = def.content_units.unwrap_or(PatternUnits::UserSpaceOnUse);
+    let (bw, bh) = (bounds[2] - bounds[0], bounds[3] - bounds[1]);
+
+    // Resolve the tile rect (origin + size) into pattern user space.
+    let frac = |len: Option<svg_core::SvgLength>| -> f64 {
+        match len {
+            Some(l) => match l.unit {
+                svg_core::SvgLengthUnit::Percent => l.value / 100.0,
+                _ => l.value,
+            },
+            None => 0.0,
+        }
+    };
+    let user = |len: Option<svg_core::SvgLength>, base: f64| -> f64 {
+        len.and_then(|l| l.resolve(svg_core::SvgLengthContext::user_units(base)))
+            .unwrap_or(0.0)
+    };
+    let (tx, ty, tw, th) = match units {
+        PatternUnits::ObjectBoundingBox => {
+            if bw.abs() <= 1.0e-12 || bh.abs() <= 1.0e-12 {
+                return PaintSampler::Transparent;
+            }
+            (
+                bounds[0] + frac(def.x) * bw,
+                bounds[1] + frac(def.y) * bh,
+                frac(def.width) * bw,
+                frac(def.height) * bh,
+            )
+        }
+        PatternUnits::UserSpaceOnUse => (
+            user(def.x, length_bases.horizontal),
+            user(def.y, length_bases.vertical),
+            user(def.width, length_bases.horizontal),
+            user(def.height, length_bases.vertical),
+        ),
+    };
+    if tw <= 0.0 || th <= 0.0 {
+        return PaintSampler::Transparent;
+    }
+
+    let pattern_to_device =
+        object_transform.multiply(def.pattern_transform.unwrap_or_else(Transform::identity));
+    let Some(device_to_pattern) = pattern_to_device.inverse() else {
+        return PaintSampler::Transparent;
+    };
+
+    // Tile pixel size: scale the tile rect by the per-axis device scale, capped.
+    let sx = (pattern_to_device.a.powi(2) + pattern_to_device.b.powi(2)).sqrt();
+    let sy = (pattern_to_device.c.powi(2) + pattern_to_device.d.powi(2)).sqrt();
+    let mut tpw = ((tw * sx).round() as usize).clamp(1, MAX_RASTER_DIM as usize);
+    let mut tph = ((th * sy).round() as usize).clamp(1, MAX_RASTER_DIM as usize);
+    if tpw.saturating_mul(tph) > MAX_PATTERN_TILE_PIXELS {
+        let scale = (MAX_PATTERN_TILE_PIXELS as f64 / (tpw as f64 * tph as f64)).sqrt();
+        tpw = ((tpw as f64 * scale).floor() as usize).max(1);
+        tph = ((tph as f64 * scale).floor() as usize).max(1);
+    }
+
+    // content user space -> tile pixel space.
+    let content_to_tile_user = if let Some(vb) = def.view_box {
+        svg_core::viewbox_transform(vb, [0.0, 0.0, tw, th], def.aspect.unwrap_or_default())
+            .unwrap_or_else(Transform::identity)
+    } else if content_units == PatternUnits::ObjectBoundingBox {
+        Transform::scale(bw, bh)
+    } else {
+        Transform::identity()
+    };
+    let content_to_tile_px =
+        Transform::scale(tpw as f64 / tw, tph as f64 / th).multiply(content_to_tile_user);
+
+    // Render content into the tile with this pattern removed to break cycles.
+    let mut reduced = servers.clone();
+    reduced.patterns.remove(pattern_id);
+    let mut tile = vec![0u8; tpw * tph * 4];
+    {
+        let mut target = RasterTarget {
+            buf: &mut tile,
+            width: tpw,
+            height: tph,
+            premultiplied: false,
+            clip: None,
+        };
+        render_content_items(&def.items, content_to_tile_px, &reduced, &mut target);
+    }
+
+    PaintSampler::Pattern {
+        tile,
+        tile_w: tpw,
+        tile_h: tph,
+        device_to_pattern,
+        origin: (tx, ty),
+        size: (tw, th),
+        opacity: opacity.clamp(0.0, 1.0),
     }
 }
 
@@ -1692,9 +2098,10 @@ enum SvgNode {
     Text {
         id: SvgNodeId,
         span: SvgSourceSpan,
-        // Skipped in rendering; kept for parse completeness
-        #[allow(dead_code)]
         attrs: Vec<(String, String)>,
+        /// Raw inner markup of the `<text>` element (plain text plus nested
+        /// `<tspan>` runs), scanned into glyph runs by the R11 text renderer.
+        content: String,
     },
     Definition {
         id: SvgNodeId,
@@ -1746,6 +2153,11 @@ struct SvgDoc {
     width: f32,
     height: f32,
     nodes: Vec<SvgNode>,
+    /// R12 accessibility + recovery metadata gathered during parse.
+    title: Option<String>,
+    desc: Option<String>,
+    foreign_count: usize,
+    recovered: usize,
 }
 
 struct SvgScene {
@@ -1759,6 +2171,11 @@ struct SvgScene {
     paint_servers: PaintServerTable,
     expanded_use_limit_hit: bool,
     use_cycle_count: usize,
+    /// R12 a11y + namespace/recovery metadata surfaced into the render report.
+    title: Option<String>,
+    desc: Option<String>,
+    foreign_count: usize,
+    recovered: usize,
 }
 
 struct SvgSceneItem {
@@ -1800,6 +2217,9 @@ struct LayerRaw {
     opacity: f32,
     /// `isolation: isolate` requested an offscreen regardless of opacity.
     isolate: bool,
+    /// `mix-blend-mode` (R10); non-`Normal` composites the isolated offscreen
+    /// with the parent using the selected separable blend.
+    blend: BlendMode,
     source: SvgRenderSource,
 }
 
@@ -1890,6 +2310,10 @@ impl SvgScene {
             paint_servers,
             expanded_use_limit_hit: expansion.limit_hit,
             use_cycle_count: expansion.cycle_count,
+            title: doc.title,
+            desc: doc.desc,
+            foreign_count: doc.foreign_count,
+            recovered: doc.recovered,
         }
     }
 
@@ -1977,10 +2401,16 @@ impl SvgScene {
                         build,
                     );
                 }
-                // clipPath/mask/filter definitions never render directly; their
-                // children are consumed only when an element references them.
+                // clipPath/mask/filter/marker/pattern definitions never render
+                // directly; their children are consumed only when an element
+                // references them (R9 flips marker/pattern from diagnosed to
+                // rendered, so they no longer emit an unsupported-node command).
                 SvgNode::Unsupported { tag, .. }
-                    if tag == "clippath" || tag == "mask" || tag == "filter" => {}
+                    if tag == "clippath"
+                        || tag == "mask"
+                        || tag == "filter"
+                        || tag == "marker"
+                        || tag == "pattern" => {}
                 SvgNode::StyleSheet { .. }
                 | SvgNode::LinearGradient { .. }
                 | SvgNode::RadialGradient { .. }
@@ -2318,10 +2748,16 @@ impl SvgNode {
                 span: *span,
                 attrs: attrs.clone(),
             },
-            SvgNode::Text { id, span, attrs } => SvgNode::Text {
+            SvgNode::Text {
+                id,
+                span,
+                attrs,
+                content,
+            } => SvgNode::Text {
                 id: *id,
                 span: *span,
                 attrs: attrs.clone(),
+                content: content.clone(),
             },
             SvgNode::Definition {
                 id,
@@ -2600,8 +3036,17 @@ impl SvgDoc {
             s: svg_text,
             pos: 0,
             next_node_id: 0,
+            ns_stack: Vec::new(),
+            foreign_count: 0,
+            recovered: 0,
+            title: None,
+            desc: None,
         };
         let all_nodes = parser.parse_nodes();
+        let title = parser.title.clone();
+        let desc = parser.desc.clone();
+        let foreign_count = parser.foreign_count;
+        let recovered = parser.recovered;
 
         // Find the SVG root node and extract its attributes
         let (root_attrs, root_children) = all_nodes.into_iter().find_map(|n| {
@@ -2644,6 +3089,13 @@ impl SvgDoc {
             })
             .unwrap_or(0.0) as f32;
 
+        // Root aria-label is an a11y fallback when no <title> child is present.
+        let title = title.or_else(|| {
+            attr("aria-label")
+                .filter(|v| !v.trim().is_empty())
+                .map(bounded_a11y_text)
+        });
+
         Some(SvgDoc {
             root_attrs,
             viewbox,
@@ -2651,6 +3103,10 @@ impl SvgDoc {
             width,
             height,
             nodes: root_children,
+            title,
+            desc,
+            foreign_count,
+            recovered,
         })
     }
 }
@@ -2659,10 +3115,128 @@ impl SvgDoc {
 // Minimal XML parser
 // ---------------------------------------------------------------------------
 
+/// R12: maximum a11y metadata text length kept (`<title>`/`<desc>`).
+const MAX_A11Y_TEXT: usize = 1_024;
+/// R12: maximum nested xmlns scope frames tracked (bounds the namespace stack).
+const MAX_NS_DEPTH: usize = 256;
+
+/// One xmlns scope frame (R12). `default` is the no-prefix namespace in effect;
+/// `prefixes` maps declared `xmlns:p` prefixes to their namespace token.
+#[derive(Clone, Default)]
+struct NsFrame {
+    default: Namespace,
+    prefixes: Vec<(String, Namespace)>,
+}
+
+/// The small set of namespaces the renderer understands (R12). Everything else
+/// is `Foreign` and skipped-with-diagnostic rather than mis-parsed.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum Namespace {
+    #[default]
+    Svg,
+    Xlink,
+    Foreign,
+}
+
+fn classify_namespace(uri: &str) -> Namespace {
+    let u = uri.trim();
+    if u == "http://www.w3.org/2000/svg" || u.is_empty() {
+        Namespace::Svg
+    } else if u == "http://www.w3.org/1999/xlink" {
+        Namespace::Xlink
+    } else {
+        Namespace::Foreign
+    }
+}
+
+/// Apply any `xmlns` / `xmlns:prefix` declarations in a raw open-tag header to a
+/// namespace scope frame (R12). Bounded: a malformed header simply stops the
+/// scan; prefix names are case-sensitive, the `xmlns` keyword is not.
+fn apply_xmlns(header: &str, frame: &mut NsFrame) {
+    let bytes = header.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        while i < bytes.len()
+            && (bytes[i].is_ascii_whitespace() || bytes[i] == b'<' || bytes[i] == b'/')
+        {
+            i += 1;
+        }
+        let key_start = i;
+        while i < bytes.len() {
+            let b = bytes[i];
+            if b == b'=' || b.is_ascii_whitespace() || b == b'>' || b == b'/' {
+                break;
+            }
+            i += 1;
+        }
+        if i == key_start {
+            i += 1;
+            continue;
+        }
+        let key = &header[key_start..i];
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if bytes.get(i) != Some(&b'=') {
+            continue;
+        }
+        i += 1;
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let value = match bytes.get(i) {
+            Some(&q @ (b'"' | b'\'')) => {
+                i += 1;
+                let vs = i;
+                while i < bytes.len() && bytes[i] != q {
+                    i += 1;
+                }
+                let v = &header[vs..i.min(header.len())];
+                if i < bytes.len() {
+                    i += 1;
+                }
+                v
+            }
+            _ => "",
+        };
+        let key_lower = key.to_ascii_lowercase();
+        if key_lower == "xmlns" {
+            frame.default = classify_namespace(value);
+        } else if let Some(pfx) = key.get(..6).map(|h| h.eq_ignore_ascii_case("xmlns:")) {
+            if pfx {
+                let prefix = key[6..].to_owned();
+                let ns = classify_namespace(value);
+                if frame.prefixes.len() < MAX_NS_DEPTH {
+                    frame.prefixes.push((prefix, ns));
+                }
+            }
+        }
+    }
+}
+
+/// Collapse whitespace and truncate a11y text to `MAX_A11Y_TEXT` chars (R12).
+fn bounded_a11y_text(raw: &str) -> String {
+    let collapsed = collapse_text_whitespace(&unescape_xml(raw));
+    if collapsed.chars().count() > MAX_A11Y_TEXT {
+        collapsed.chars().take(MAX_A11Y_TEXT).collect()
+    } else {
+        collapsed
+    }
+}
+
 struct XmlParser<'a> {
     s: &'a str,
     pos: usize,
     next_node_id: u32,
+    /// R12 xmlns scope stack (innermost last).
+    ns_stack: Vec<NsFrame>,
+    /// R12 count of foreign-namespace elements skipped.
+    foreign_count: usize,
+    /// R12 count of recovered malformed constructs (mismatched/unclosed tags).
+    recovered: usize,
+    /// R12 first `<title>` / `<desc>` text encountered (bounded length).
+    title: Option<String>,
+    desc: Option<String>,
 }
 
 impl<'a> XmlParser<'a> {
@@ -2747,12 +3321,13 @@ impl<'a> XmlParser<'a> {
             self.pos += 1;
         }
         let tag_raw = &self.s[name_start..self.pos];
-        // Strip namespace prefix (e.g. "svg:rect" → "rect")
-        let tag = tag_raw
-            .rfind(':')
-            .map(|i| &tag_raw[i + 1..])
-            .unwrap_or(tag_raw)
-            .to_lowercase();
+        // Split a namespace prefix (e.g. "svg:rect" → prefix "svg", local "rect").
+        let (prefix, local) = match tag_raw.rfind(':') {
+            Some(i) => (Some(tag_raw[..i].to_owned()), &tag_raw[i + 1..]),
+            None => (None, tag_raw),
+        };
+        let tag = local.to_lowercase();
+        let header_start = self.pos;
 
         // Attributes
         let mut raw_attrs: Vec<(String, String)> = Vec::new();
@@ -2785,13 +3360,67 @@ impl<'a> XmlParser<'a> {
             }
         }
 
-        let is_container = is_container_tag(&tag);
-        let is_text = tag == "text" || tag == "tspan";
-        let is_style = tag == "style";
+        // R12: resolve this element's namespace within the xmlns scope, then
+        // push a scope frame (with any xmlns declared here) for its children.
+        let header = &self.s[header_start..self.pos];
+        let mut frame = self.ns_stack.last().cloned().unwrap_or_default();
+        apply_xmlns(header, &mut frame);
+        let elem_ns = match &prefix {
+            None => frame.default,
+            Some(p) if p.eq_ignore_ascii_case("svg") => frame
+                .prefixes
+                .iter()
+                .rev()
+                .find(|(k, _)| k == p)
+                .map(|(_, ns)| *ns)
+                .unwrap_or(Namespace::Svg),
+            Some(p) => frame
+                .prefixes
+                .iter()
+                .rev()
+                .find(|(k, _)| k == p)
+                .map(|(_, ns)| *ns)
+                .unwrap_or(Namespace::Foreign),
+        };
+        let foreign = elem_ns != Namespace::Svg;
+        if self.ns_stack.len() < MAX_NS_DEPTH {
+            self.ns_stack.push(frame);
+        }
+
+        let is_meta = tag == "title" || tag == "desc";
+        let is_container = is_container_tag(&tag) && !foreign;
+        let is_text = (tag == "text" || tag == "tspan") && !foreign;
+        let is_style = tag == "style" && !foreign;
         let id = SvgNodeId(self.next_node_id);
         self.next_node_id = self.next_node_id.saturating_add(1);
 
         let mut text_content = String::new();
+        // R12: foreign-namespace element or <title>/<desc> — consume the subtree
+        // (balanced) and produce no renderable node.
+        if (foreign || is_meta) && !self_closing && !is_text && !is_style {
+            let inner_start = self.pos;
+            // Balance nested elements so we land on the matching close tag.
+            let _ = self.parse_nodes();
+            let inner = self.s[inner_start..self.pos].to_owned();
+            self.consume_close_tag(&tag);
+            self.ns_stack.pop();
+            if foreign {
+                self.foreign_count += 1;
+            } else if tag == "title" && self.title.is_none() {
+                self.title = Some(bounded_a11y_text(&strip_tags(&inner)));
+            } else if tag == "desc" && self.desc.is_none() {
+                self.desc = Some(bounded_a11y_text(&strip_tags(&inner)));
+            }
+            return None;
+        }
+        if (foreign || is_meta) && self_closing {
+            self.ns_stack.pop();
+            if foreign {
+                self.foreign_count += 1;
+            }
+            return None;
+        }
+
         let children = if !self_closing && is_style {
             if let Some(relative) = self.s[self.pos..].to_ascii_lowercase().find("</style") {
                 let end = self.pos + relative;
@@ -2806,20 +3435,28 @@ impl<'a> XmlParser<'a> {
             Vec::new()
         } else if !self_closing && is_container {
             let ch = self.parse_nodes();
-            // Consume end tag
+            // R12: consume the close tag, recovering from mismatch/unclosed.
             if self.starts_with("</") {
-                self.consume(2);
-                self.consume_until(">");
-                self.consume(1);
+                self.consume_close_tag(&tag);
+            } else {
+                self.recovered += 1; // unclosed container element
             }
             ch
         } else if !self_closing && is_text {
-            // Consume until close tag (text content is skipped)
-            self.consume_until("</");
-            if self.starts_with("</") {
-                self.consume(2);
+            // Capture the raw inner markup (plain text + nested <tspan> runs)
+            // until the MATCHING close tag, so `<text>a<tspan>b</tspan></text>`
+            // is not cut at the first `</` (R11 raster text needs the content).
+            let close = format!("</{tag}");
+            if let Some(relative) = self.s[self.pos..].to_ascii_lowercase().find(&close) {
+                let end = self.pos + relative;
+                text_content = self.s[self.pos..end].to_owned();
+                self.pos = end;
+                self.consume(2 + tag.len());
                 self.consume_until(">");
                 self.consume(1);
+            } else {
+                // Unterminated text element — consume the rest, render nothing.
+                self.pos = self.s.len();
             }
             Vec::new()
         } else if !self_closing {
@@ -2844,11 +3481,34 @@ impl<'a> XmlParser<'a> {
             Vec::new()
         };
 
+        self.ns_stack.pop();
         let span = SvgSourceSpan {
             start: element_start,
             end: self.pos,
         };
         self.make_node(id, span, &tag, raw_attrs, children, text_content)
+    }
+
+    /// R12: consume a `</name>` close tag, counting a recovery when its name
+    /// does not match the element it is closing.
+    fn consume_close_tag(&mut self, expected: &str) {
+        self.consume(2); // "</"
+        self.skip_ws();
+        let name_start = self.pos;
+        while self.pos < self.s.len() {
+            let b = self.s.as_bytes()[self.pos];
+            if b.is_ascii_whitespace() || b == b'>' {
+                break;
+            }
+            self.pos += 1;
+        }
+        let raw = &self.s[name_start..self.pos];
+        let local = raw.rsplit(':').next().unwrap_or(raw).to_ascii_lowercase();
+        if local != expected {
+            self.recovered += 1;
+        }
+        self.consume_until(">");
+        self.consume(1);
     }
 
     fn parse_attr(&mut self) -> Option<(String, String)> {
@@ -2927,7 +3587,12 @@ impl<'a> XmlParser<'a> {
             "polyline" => Some(SvgNode::Polyline { id, span, attrs }),
             "polygon" => Some(SvgNode::Polygon { id, span, attrs }),
             "path" => Some(SvgNode::Path { id, span, attrs }),
-            "text" | "tspan" => Some(SvgNode::Text { id, span, attrs }),
+            "text" | "tspan" => Some(SvgNode::Text {
+                id,
+                span,
+                attrs,
+                content: text_content,
+            }),
             "defs" | "symbol" => Some(SvgNode::Definition {
                 id,
                 span,
@@ -2983,6 +3648,7 @@ fn is_container_tag(tag: &str) -> bool {
             | "style"
             | "switch"
             | "femerge"
+            | "fecomponenttransfer"
     )
 }
 
@@ -3154,12 +3820,14 @@ fn layer_for_group(
     let filter_ref = local_attr_ref(attrs, "filter");
     let opacity = style.opacity.clamp(0.0, 1.0);
     let isolate = parse_isolation(attrs);
+    let blend = parse_mix_blend_mode(attrs);
     if clip_ref.is_none()
         && mask_ref.is_none()
         && filter_ref.is_none()
         && overflow.is_none()
         && opacity >= 1.0
         && !isolate
+        && blend == BlendMode::Normal
     {
         return None;
     }
@@ -3173,8 +3841,16 @@ fn layer_for_group(
         overflow,
         opacity,
         isolate,
+        blend,
         source,
     })
+}
+
+/// `mix-blend-mode` (R10); unrecognised values fall back to `Normal`.
+fn parse_mix_blend_mode(attrs: &[(String, String)]) -> BlendMode {
+    final_style_property(attrs, "mix-blend-mode")
+        .and_then(parse_blend_mode)
+        .unwrap_or(BlendMode::Normal)
 }
 
 /// A `<g>`/shape `mask`/`filter` reference resolved to a local `url(#id)` target.
@@ -3192,7 +3868,8 @@ fn shape_layer(
 ) -> Option<LayerRaw> {
     let mask_ref = local_attr_ref(attrs, "mask");
     let filter_ref = local_attr_ref(attrs, "filter");
-    if mask_ref.is_none() && filter_ref.is_none() {
+    let blend = parse_mix_blend_mode(attrs);
+    if mask_ref.is_none() && filter_ref.is_none() && blend == BlendMode::Normal {
         return None;
     }
     Some(LayerRaw {
@@ -3205,8 +3882,909 @@ fn shape_layer(
         overflow: None,
         opacity: 1.0,
         isolate: false,
+        blend,
         source,
     })
+}
+
+// ---------------------------------------------------------------------------
+// R11: raster text (vector-outline snapshot via a bundled stroked font)
+// ---------------------------------------------------------------------------
+//
+// Image-mode text rendering uses an embedded public-domain stroked vector font
+// (Hershey "simplex", Allen V. Hershey, US Naval Weapons Laboratory — public
+// domain).  Coverage is ASCII 32..=126 only; every other character renders as
+// a tofu box with a diagnostic.  Glyph metrics: y-up, baseline at 0, capital
+// height 21 units, descender to -7; we treat 30 units as one em (cap height =
+// 0.70 em).  Each glyph is a set of polylines that are laid out in user space
+// and stroked through the existing stroke pipeline (so clips, masks, filters,
+// opacity, and gradient paint all apply to text exactly like to shapes).
+//
+// This is the *visual-fidelity snapshot* path: component import (svg_import.rs,
+// R6) keeps producing editable labels and is unchanged; choosing Image mode is
+// the opt-in to this raster snapshot, with the original source preserved.
+
+/// One em in glyph units (capital height 21 → 0.70 em).
+const HERSHEY_EM_UNITS: f64 = 30.0;
+/// Glyph stroke width in glyph units (2 units ≈ font_size / 15).
+const HERSHEY_STROKE_UNITS: f64 = 2.0;
+/// Maximum glyphs laid out per `<text>` element (R11).
+const MAX_TEXT_GLYPHS: usize = 4_096;
+
+/// Hershey simplex strokes for ASCII 32..=126.  Each entry is
+/// `[advance_width, x0, y0, x1, y1, ...]` with `(-1, -1)` pairs as pen-up
+/// markers (no real vertex has x = -1).  `^` is a simplified caret.
+const HERSHEY_SIMPLEX: [&[i8]; 95] = [
+    &[16],                                                    // space
+    &[10, 5, 21, 5, 7, -1, -1, 5, 2, 4, 1, 5, 0, 6, 1, 5, 2], // !
+    &[16, 4, 21, 4, 14, -1, -1, 12, 21, 12, 14],              // "
+    &[
+        21, 11, 25, 4, -7, -1, -1, 17, 25, 10, -7, -1, -1, 4, 12, 18, 12, -1, -1, 3, 6, 17, 6,
+    ], // #
+    &[
+        20, 8, 25, 8, -4, -1, -1, 12, 25, 12, -4, -1, -1, 17, 18, 15, 20, 12, 21, 8, 21, 5, 20, 3,
+        18, 3, 16, 4, 14, 5, 13, 7, 12, 13, 10, 15, 9, 16, 8, 17, 6, 17, 3, 15, 1, 12, 0, 8, 0, 5,
+        1, 3, 3,
+    ], // $
+    &[
+        24, 21, 21, 3, 0, -1, -1, 8, 21, 10, 19, 10, 17, 9, 15, 7, 14, 5, 14, 3, 16, 3, 18, 4, 20,
+        6, 21, 8, 21, 10, 20, 13, 19, 16, 19, 19, 20, 21, 21, -1, -1, 17, 7, 15, 6, 14, 4, 14, 2,
+        16, 0, 18, 0, 20, 1, 21, 3, 21, 5, 19, 7, 17, 7,
+    ], // %
+    &[
+        26, 23, 12, 23, 13, 22, 14, 21, 14, 20, 13, 19, 11, 17, 6, 15, 3, 13, 1, 11, 0, 7, 0, 5, 1,
+        4, 2, 3, 4, 3, 6, 4, 8, 5, 9, 12, 13, 13, 14, 14, 16, 14, 18, 13, 20, 11, 21, 9, 20, 8, 18,
+        8, 16, 9, 13, 11, 10, 16, 3, 18, 1, 20, 0, 22, 0, 23, 1, 23, 2,
+    ], // &
+    &[10, 5, 19, 4, 20, 5, 21, 6, 20, 6, 18, 5, 16, 4, 15],   // '
+    &[
+        14, 11, 25, 9, 23, 7, 20, 5, 16, 4, 11, 4, 7, 5, 2, 7, -2, 9, -5, 11, -7,
+    ], // (
+    &[
+        14, 3, 25, 5, 23, 7, 20, 9, 16, 10, 11, 10, 7, 9, 2, 7, -2, 5, -5, 3, -7,
+    ], // )
+    &[
+        16, 8, 21, 8, 9, -1, -1, 3, 18, 13, 12, -1, -1, 13, 18, 3, 12,
+    ], // *
+    &[26, 13, 18, 13, 0, -1, -1, 4, 9, 22, 9],                // +
+    &[10, 6, 1, 5, 0, 4, 1, 5, 2, 6, 1, 6, -1, 5, -3, 4, -4], // ,
+    &[26, 4, 9, 22, 9],                                       // -
+    &[10, 5, 2, 4, 1, 5, 0, 6, 1, 5, 2],                      // .
+    &[22, 20, 25, 2, -7],                                     // /
+    &[
+        20, 9, 21, 6, 20, 4, 17, 3, 12, 3, 9, 4, 4, 6, 1, 9, 0, 11, 0, 14, 1, 16, 4, 17, 9, 17, 12,
+        16, 17, 14, 20, 11, 21, 9, 21,
+    ], // 0
+    &[20, 6, 17, 8, 18, 11, 21, 11, 0],                       // 1
+    &[
+        20, 4, 16, 4, 17, 5, 19, 6, 20, 8, 21, 12, 21, 14, 20, 15, 19, 16, 17, 16, 15, 15, 13, 13,
+        10, 3, 0, 17, 0,
+    ], // 2
+    &[
+        20, 5, 21, 16, 21, 10, 13, 13, 13, 15, 12, 16, 11, 17, 8, 17, 6, 16, 3, 14, 1, 11, 0, 8, 0,
+        5, 1, 4, 2, 3, 4,
+    ], // 3
+    &[20, 13, 21, 3, 7, 18, 7, -1, -1, 13, 21, 13, 0],        // 4
+    &[
+        20, 15, 21, 5, 21, 4, 12, 5, 13, 8, 14, 11, 14, 14, 13, 16, 11, 17, 8, 17, 6, 16, 3, 14, 1,
+        11, 0, 8, 0, 5, 1, 4, 2, 3, 4,
+    ], // 5
+    &[
+        20, 16, 18, 15, 20, 12, 21, 10, 21, 7, 20, 5, 17, 4, 12, 4, 7, 5, 3, 7, 1, 10, 0, 11, 0,
+        14, 1, 16, 3, 17, 6, 17, 7, 16, 10, 14, 12, 11, 13, 10, 13, 7, 12, 5, 10, 4, 7,
+    ], // 6
+    &[20, 17, 21, 7, 0, -1, -1, 3, 21, 17, 21],               // 7
+    &[
+        20, 8, 21, 5, 20, 4, 18, 4, 16, 5, 14, 7, 13, 11, 12, 14, 11, 16, 9, 17, 7, 17, 4, 16, 2,
+        15, 1, 12, 0, 8, 0, 5, 1, 4, 2, 3, 4, 3, 7, 4, 9, 6, 11, 9, 12, 13, 13, 15, 14, 16, 16, 16,
+        18, 15, 20, 12, 21, 8, 21,
+    ], // 8
+    &[
+        20, 16, 14, 15, 11, 13, 9, 10, 8, 9, 8, 6, 9, 4, 11, 3, 14, 3, 15, 4, 18, 6, 20, 9, 21, 10,
+        21, 13, 20, 15, 18, 16, 14, 16, 9, 15, 4, 13, 1, 10, 0, 8, 0, 5, 1, 4, 3,
+    ], // 9
+    &[
+        10, 5, 14, 4, 13, 5, 12, 6, 13, 5, 14, -1, -1, 5, 2, 4, 1, 5, 0, 6, 1, 5, 2,
+    ], // :
+    &[
+        10, 5, 14, 4, 13, 5, 12, 6, 13, 5, 14, -1, -1, 6, 1, 5, 0, 4, 1, 5, 2, 6, 1, 6, -1, 5, -3,
+        4, -4,
+    ], // ;
+    &[24, 20, 18, 4, 9, 20, 0],                               // <
+    &[26, 4, 12, 22, 12, -1, -1, 4, 6, 22, 6],                // =
+    &[24, 4, 18, 20, 9, 4, 0],                                // >
+    &[
+        18, 3, 16, 3, 17, 4, 19, 5, 20, 7, 21, 11, 21, 13, 20, 14, 19, 15, 17, 15, 15, 14, 13, 13,
+        12, 9, 10, 9, 7, -1, -1, 9, 2, 8, 1, 9, 0, 10, 1, 9, 2,
+    ], // ?
+    &[
+        27, 18, 13, 17, 15, 15, 16, 12, 16, 10, 15, 9, 14, 8, 11, 8, 8, 9, 6, 11, 5, 14, 5, 16, 6,
+        17, 8, -1, -1, 12, 16, 10, 14, 9, 11, 9, 8, 10, 6, 11, 5, -1, -1, 18, 16, 17, 8, 17, 6, 19,
+        5, 21, 5, 23, 7, 24, 10, 24, 12, 23, 15, 22, 17, 20, 19, 18, 20, 15, 21, 12, 21, 9, 20, 7,
+        19, 5, 17, 4, 15, 3, 12, 3, 9, 4, 6, 5, 4, 7, 2, 9, 1, 12, 0, 15, 0, 18, 1, 20, 2, 21, 3,
+        -1, -1, 19, 16, 18, 8, 18, 6, 19, 5,
+    ], // @
+    &[18, 9, 21, 1, 0, -1, -1, 9, 21, 17, 0, -1, -1, 4, 7, 14, 7], // A
+    &[
+        21, 4, 21, 4, 0, -1, -1, 4, 21, 13, 21, 16, 20, 17, 19, 18, 17, 18, 15, 17, 13, 16, 12, 13,
+        11, -1, -1, 4, 11, 13, 11, 16, 10, 17, 9, 18, 7, 18, 4, 17, 2, 16, 1, 13, 0, 4, 0,
+    ], // B
+    &[
+        21, 18, 16, 17, 18, 15, 20, 13, 21, 9, 21, 7, 20, 5, 18, 4, 16, 3, 13, 3, 8, 4, 5, 5, 3, 7,
+        1, 9, 0, 13, 0, 15, 1, 17, 3, 18, 5,
+    ], // C
+    &[
+        21, 4, 21, 4, 0, -1, -1, 4, 21, 11, 21, 14, 20, 16, 18, 17, 16, 18, 13, 18, 8, 17, 5, 16,
+        3, 14, 1, 11, 0, 4, 0,
+    ], // D
+    &[
+        19, 4, 21, 4, 0, -1, -1, 4, 21, 17, 21, -1, -1, 4, 11, 12, 11, -1, -1, 4, 0, 17, 0,
+    ], // E
+    &[
+        18, 4, 21, 4, 0, -1, -1, 4, 21, 17, 21, -1, -1, 4, 11, 12, 11,
+    ], // F
+    &[
+        21, 18, 16, 17, 18, 15, 20, 13, 21, 9, 21, 7, 20, 5, 18, 4, 16, 3, 13, 3, 8, 4, 5, 5, 3, 7,
+        1, 9, 0, 13, 0, 15, 1, 17, 3, 18, 5, 18, 8, -1, -1, 13, 8, 18, 8,
+    ], // G
+    &[
+        22, 4, 21, 4, 0, -1, -1, 18, 21, 18, 0, -1, -1, 4, 11, 18, 11,
+    ], // H
+    &[8, 4, 21, 4, 0],                                        // I
+    &[
+        16, 12, 21, 12, 5, 11, 2, 10, 1, 8, 0, 6, 0, 4, 1, 3, 2, 2, 5, 2, 7,
+    ], // J
+    &[21, 4, 21, 4, 0, -1, -1, 18, 21, 4, 7, -1, -1, 9, 12, 18, 0], // K
+    &[17, 4, 21, 4, 0, -1, -1, 4, 0, 16, 0],                  // L
+    &[
+        24, 4, 21, 4, 0, -1, -1, 4, 21, 12, 0, -1, -1, 20, 21, 12, 0, -1, -1, 20, 21, 20, 0,
+    ], // M
+    &[22, 4, 21, 4, 0, -1, -1, 4, 21, 18, 0, -1, -1, 18, 21, 18, 0], // N
+    &[
+        22, 9, 21, 7, 20, 5, 18, 4, 16, 3, 13, 3, 8, 4, 5, 5, 3, 7, 1, 9, 0, 13, 0, 15, 1, 17, 3,
+        18, 5, 19, 8, 19, 13, 18, 16, 17, 18, 15, 20, 13, 21, 9, 21,
+    ], // O
+    &[
+        21, 4, 21, 4, 0, -1, -1, 4, 21, 13, 21, 16, 20, 17, 19, 18, 17, 18, 14, 17, 12, 16, 11, 13,
+        10, 4, 10,
+    ], // P
+    &[
+        22, 9, 21, 7, 20, 5, 18, 4, 16, 3, 13, 3, 8, 4, 5, 5, 3, 7, 1, 9, 0, 13, 0, 15, 1, 17, 3,
+        18, 5, 19, 8, 19, 13, 18, 16, 17, 18, 15, 20, 13, 21, 9, 21, -1, -1, 12, 4, 18, -2,
+    ], // Q
+    &[
+        21, 4, 21, 4, 0, -1, -1, 4, 21, 13, 21, 16, 20, 17, 19, 18, 17, 18, 15, 17, 13, 16, 12, 13,
+        11, 4, 11, -1, -1, 11, 11, 18, 0,
+    ], // R
+    &[
+        20, 17, 18, 15, 20, 12, 21, 8, 21, 5, 20, 3, 18, 3, 16, 4, 14, 5, 13, 7, 12, 13, 10, 15, 9,
+        16, 8, 17, 6, 17, 3, 15, 1, 12, 0, 8, 0, 5, 1, 3, 3,
+    ], // S
+    &[16, 8, 21, 8, 0, -1, -1, 1, 21, 15, 21],                // T
+    &[
+        22, 4, 21, 4, 6, 5, 3, 7, 1, 10, 0, 12, 0, 15, 1, 17, 3, 18, 6, 18, 21,
+    ], // U
+    &[18, 1, 21, 9, 0, -1, -1, 17, 21, 9, 0],                 // V
+    &[
+        24, 2, 21, 7, 0, -1, -1, 12, 21, 7, 0, -1, -1, 12, 21, 17, 0, -1, -1, 22, 21, 17, 0,
+    ], // W
+    &[20, 3, 21, 17, 0, -1, -1, 17, 21, 3, 0],                // X
+    &[18, 1, 21, 9, 11, 9, 0, -1, -1, 17, 21, 9, 11],         // Y
+    &[20, 17, 21, 3, 0, -1, -1, 3, 21, 17, 21, -1, -1, 3, 0, 17, 0], // Z
+    &[
+        14, 4, 25, 4, -7, -1, -1, 5, 25, 5, -7, -1, -1, 4, 25, 11, 25, -1, -1, 4, -7, 11, -7,
+    ], // [
+    &[14, 0, 21, 14, -3],                                     // backslash
+    &[
+        14, 9, 25, 9, -7, -1, -1, 10, 25, 10, -7, -1, -1, 3, 25, 10, 25, -1, -1, 3, -7, 10, -7,
+    ], // ]
+    &[16, 4, 14, 8, 21, 12, 14],                              // ^ (simplified caret)
+    &[16, 0, -2, 16, -2],                                     // _
+    &[10, 6, 21, 5, 20, 4, 18, 4, 16, 5, 15, 6, 16, 5, 17],   // `
+    &[
+        19, 15, 14, 15, 0, -1, -1, 15, 11, 13, 13, 11, 14, 8, 14, 6, 13, 4, 11, 3, 8, 3, 6, 4, 3,
+        6, 1, 8, 0, 11, 0, 13, 1, 15, 3,
+    ], // a
+    &[
+        19, 4, 21, 4, 0, -1, -1, 4, 11, 6, 13, 8, 14, 11, 14, 13, 13, 15, 11, 16, 8, 16, 6, 15, 3,
+        13, 1, 11, 0, 8, 0, 6, 1, 4, 3,
+    ], // b
+    &[
+        18, 15, 11, 13, 13, 11, 14, 8, 14, 6, 13, 4, 11, 3, 8, 3, 6, 4, 3, 6, 1, 8, 0, 11, 0, 13,
+        1, 15, 3,
+    ], // c
+    &[
+        19, 15, 21, 15, 0, -1, -1, 15, 11, 13, 13, 11, 14, 8, 14, 6, 13, 4, 11, 3, 8, 3, 6, 4, 3,
+        6, 1, 8, 0, 11, 0, 13, 1, 15, 3,
+    ], // d
+    &[
+        18, 3, 8, 15, 8, 15, 10, 14, 12, 13, 13, 11, 14, 8, 14, 6, 13, 4, 11, 3, 8, 3, 6, 4, 3, 6,
+        1, 8, 0, 11, 0, 13, 1, 15, 3,
+    ], // e
+    &[12, 10, 21, 8, 21, 6, 20, 5, 17, 5, 0, -1, -1, 2, 14, 9, 14], // f
+    &[
+        19, 15, 14, 15, -2, 14, -5, 13, -6, 11, -7, 8, -7, 6, -6, -1, -1, 15, 11, 13, 13, 11, 14,
+        8, 14, 6, 13, 4, 11, 3, 8, 3, 6, 4, 3, 6, 1, 8, 0, 11, 0, 13, 1, 15, 3,
+    ], // g
+    &[
+        19, 4, 21, 4, 0, -1, -1, 4, 10, 7, 13, 9, 14, 12, 14, 14, 13, 15, 10, 15, 0,
+    ], // h
+    &[8, 3, 21, 4, 20, 5, 21, 4, 22, 3, 21, -1, -1, 4, 14, 4, 0], // i
+    &[
+        10, 5, 21, 6, 20, 7, 21, 6, 22, 5, 21, -1, -1, 6, 14, 6, -3, 5, -6, 3, -7, 1, -7,
+    ], // j
+    &[17, 4, 21, 4, 0, -1, -1, 14, 14, 4, 4, -1, -1, 8, 8, 15, 0], // k
+    &[8, 4, 21, 4, 0],                                        // l
+    &[
+        30, 4, 14, 4, 0, -1, -1, 4, 10, 7, 13, 9, 14, 12, 14, 14, 13, 15, 10, 15, 0, -1, -1, 15,
+        10, 18, 13, 20, 14, 23, 14, 25, 13, 26, 10, 26, 0,
+    ], // m
+    &[
+        19, 4, 14, 4, 0, -1, -1, 4, 10, 7, 13, 9, 14, 12, 14, 14, 13, 15, 10, 15, 0,
+    ], // n
+    &[
+        19, 8, 14, 6, 13, 4, 11, 3, 8, 3, 6, 4, 3, 6, 1, 8, 0, 11, 0, 13, 1, 15, 3, 16, 6, 16, 8,
+        15, 11, 13, 13, 11, 14, 8, 14,
+    ], // o
+    &[
+        19, 4, 14, 4, -7, -1, -1, 4, 11, 6, 13, 8, 14, 11, 14, 13, 13, 15, 11, 16, 8, 16, 6, 15, 3,
+        13, 1, 11, 0, 8, 0, 6, 1, 4, 3,
+    ], // p
+    &[
+        19, 15, 14, 15, -7, -1, -1, 15, 11, 13, 13, 11, 14, 8, 14, 6, 13, 4, 11, 3, 8, 3, 6, 4, 3,
+        6, 1, 8, 0, 11, 0, 13, 1, 15, 3,
+    ], // q
+    &[13, 4, 14, 4, 0, -1, -1, 4, 8, 5, 11, 7, 13, 9, 14, 12, 14], // r
+    &[
+        17, 14, 11, 13, 13, 10, 14, 7, 14, 4, 13, 3, 11, 4, 9, 6, 8, 11, 7, 13, 6, 14, 4, 14, 3,
+        13, 1, 10, 0, 7, 0, 4, 1, 3, 3,
+    ], // s
+    &[12, 5, 21, 5, 4, 6, 1, 8, 0, 10, 0, -1, -1, 2, 14, 9, 14], // t
+    &[
+        19, 4, 14, 4, 4, 5, 1, 7, 0, 10, 0, 12, 1, 15, 4, -1, -1, 15, 14, 15, 0,
+    ], // u
+    &[16, 2, 14, 8, 0, -1, -1, 14, 14, 8, 0],                 // v
+    &[
+        22, 3, 14, 7, 0, -1, -1, 11, 14, 7, 0, -1, -1, 11, 14, 15, 0, -1, -1, 19, 14, 15, 0,
+    ], // w
+    &[17, 3, 14, 14, 0, -1, -1, 14, 14, 3, 0],                // x
+    &[
+        16, 2, 14, 8, 0, -1, -1, 14, 14, 8, 0, 6, -4, 4, -6, 2, -7, 1, -7,
+    ], // y
+    &[17, 14, 14, 3, 0, -1, -1, 3, 14, 14, 14, -1, -1, 3, 0, 14, 0], // z
+    &[
+        14, 9, 25, 7, 24, 6, 23, 5, 21, 5, 19, 6, 17, 7, 16, 8, 14, 8, 12, 6, 10, -1, -1, 7, 24, 6,
+        22, 6, 20, 7, 18, 8, 17, 9, 15, 9, 13, 8, 11, 4, 9, 8, 7, 9, 5, 9, 3, 8, 1, 7, 0, 6, -2, 6,
+        -4, 7, -6, -1, -1, 6, 8, 8, 6, 8, 4, 7, 2, 6, 1, 5, -1, 5, -3, 6, -5, 7, -6, 9, -7,
+    ], // {
+    &[8, 4, 25, 4, -7],                                       // |
+    &[
+        14, 5, 25, 7, 24, 8, 23, 9, 21, 9, 19, 8, 17, 7, 16, 6, 14, 6, 12, 8, 10, -1, -1, 7, 24, 8,
+        22, 8, 20, 7, 18, 6, 17, 5, 15, 5, 13, 6, 11, 10, 9, 6, 7, 5, 5, 5, 3, 6, 1, 7, 0, 8, -2,
+        8, -4, 7, -6, -1, -1, 8, 8, 6, 6, 6, 4, 7, 2, 8, 1, 9, -1, 9, -3, 8, -5, 7, -6, 5, -7,
+    ], // }
+    &[
+        24, 3, 6, 3, 8, 4, 11, 6, 12, 8, 12, 10, 11, 14, 8, 16, 7, 18, 7, 20, 8, 21, 10, -1, -1, 3,
+        8, 4, 10, 6, 11, 8, 11, 10, 10, 14, 7, 16, 6, 18, 6, 20, 7, 21, 9, 21, 11,
+    ], // ~
+];
+
+/// Look up the stroke set for an ASCII character.
+fn hershey_glyph(c: char) -> Option<&'static [i8]> {
+    let code = c as usize;
+    if !(32..=126).contains(&code) {
+        return None;
+    }
+    Some(HERSHEY_SIMPLEX[code - 32])
+}
+
+/// Tofu box strokes (drawn for any character outside the bundled coverage).
+const TOFU_STROKES: &[i8] = &[16, 3, 0, 13, 0, 13, 21, 3, 21, 3, 0];
+
+/// Advance width (glyph units) for a character, tofu included.
+fn glyph_advance_units(c: char) -> f64 {
+    hershey_glyph(c).unwrap_or(TOFU_STROKES)[0] as f64
+}
+
+/// One laid-out run of characters from a `<text>` element's inner markup.
+struct TextRun {
+    text: String,
+    /// Absolute reposition from a `<tspan x= y=>`, in user units.
+    x: Option<f32>,
+    y: Option<f32>,
+    /// Relative offsets from `<tspan dx= dy=>`, in user units.
+    dx: f32,
+    dy: f32,
+}
+
+/// Flags accumulated while scanning text content (each becomes a diagnostic).
+#[derive(Default)]
+struct TextScanFlags {
+    nested_tspan: bool,
+    styled_tspan: bool,
+    text_path: Option<TextPathRef>,
+}
+
+/// A `<textPath>` reference found inside a `<text>` element.
+struct TextPathRef {
+    href: Option<String>,
+    start_offset: Option<svg_core::SvgLength>,
+    text: String,
+}
+
+/// Collapse XML whitespace runs to single spaces (default `xml:space`).
+fn collapse_text_whitespace(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_ws = false;
+    for c in s.chars() {
+        if c.is_whitespace() {
+            if !in_ws && !out.is_empty() {
+                out.push(' ');
+            }
+            in_ws = true;
+        } else {
+            out.push(c);
+            in_ws = false;
+        }
+    }
+    if out.ends_with(' ') {
+        out.pop();
+    }
+    out
+}
+
+/// Extract the attribute list from a raw `<tag attr="v">` fragment.
+fn scan_tag_attrs(tag_body: &str) -> Vec<(String, String)> {
+    let mut parser = XmlParser {
+        s: tag_body,
+        pos: 0,
+        next_node_id: 0,
+        ns_stack: Vec::new(),
+        foreign_count: 0,
+        recovered: 0,
+        title: None,
+        desc: None,
+    };
+    let mut attrs = Vec::new();
+    while parser.pos < tag_body.len() {
+        if let Some((k, v)) = parser.parse_attr() {
+            attrs.push((k, v));
+        } else {
+            parser.consume(1);
+        }
+    }
+    attrs
+}
+
+/// Scan a `<text>` element's raw inner markup into flat character runs plus an
+/// optional `<textPath>` payload.  One level of `<tspan>` is honored
+/// (x/y/dx/dy); deeper nesting and other child tags are flattened to their
+/// text with a diagnostic flag.
+fn scan_text_runs(content: &str) -> (Vec<TextRun>, TextScanFlags) {
+    let mut runs = Vec::new();
+    let mut flags = TextScanFlags::default();
+    let lower = content.to_ascii_lowercase();
+    let mut pos = 0usize;
+
+    let push_plain = |text: &str, runs: &mut Vec<TextRun>| {
+        let collapsed = collapse_text_whitespace(&unescape_xml(text));
+        if !collapsed.is_empty() {
+            runs.push(TextRun {
+                text: collapsed,
+                x: None,
+                y: None,
+                dx: 0.0,
+                dy: 0.0,
+            });
+        }
+    };
+
+    while pos < content.len() {
+        let Some(open_rel) = lower[pos..].find('<') else {
+            push_plain(&content[pos..], &mut runs);
+            break;
+        };
+        let open = pos + open_rel;
+        push_plain(&content[pos..open], &mut runs);
+        let Some(gt_rel) = lower[open..].find('>') else {
+            break; // malformed tail — stop scanning
+        };
+        let tag_end = open + gt_rel;
+        let tag_body = &content[open + 1..tag_end];
+        let tag_lower = &lower[open + 1..tag_end];
+        if tag_lower.starts_with("tspan") {
+            let attrs = scan_tag_attrs(&tag_body["tspan".len()..]);
+            if attrs
+                .iter()
+                .any(|(k, _)| matches!(k.as_str(), "font-size" | "fill" | "stroke" | "style"))
+            {
+                flags.styled_tspan = true;
+            }
+            let self_closing = tag_body.trim_end().ends_with('/');
+            let (inner, after) = if self_closing {
+                ("", tag_end + 1)
+            } else if let Some(close_rel) = lower[tag_end..].find("</tspan") {
+                let close = tag_end + close_rel;
+                let inner = &content[tag_end + 1..close];
+                let after = lower[close..]
+                    .find('>')
+                    .map(|r| close + r + 1)
+                    .unwrap_or(content.len());
+                (inner, after)
+            } else {
+                (&content[tag_end + 1..], content.len())
+            };
+            if inner.to_ascii_lowercase().contains("<tspan") {
+                flags.nested_tspan = true;
+            }
+            // Flatten any nested markup inside the tspan to its text.
+            let inner_text = strip_tags(inner);
+            let collapsed = collapse_text_whitespace(&unescape_xml(&inner_text));
+            if !collapsed.is_empty() {
+                let num = |key: &str| {
+                    attr_get(&attrs, key)
+                        .and_then(svg_core::parse_length)
+                        .map(|l| l.value as f32)
+                };
+                runs.push(TextRun {
+                    text: collapsed,
+                    x: num("x"),
+                    y: num("y"),
+                    dx: num("dx").unwrap_or(0.0),
+                    dy: num("dy").unwrap_or(0.0),
+                });
+            }
+            pos = after;
+        } else if tag_lower.starts_with("textpath") {
+            let attrs = scan_tag_attrs(&tag_body["textpath".len()..]);
+            let (inner, after) = if let Some(close_rel) = lower[tag_end..].find("</textpath") {
+                let close = tag_end + close_rel;
+                let inner = &content[tag_end + 1..close];
+                let after = lower[close..]
+                    .find('>')
+                    .map(|r| close + r + 1)
+                    .unwrap_or(content.len());
+                (inner, after)
+            } else {
+                (&content[tag_end + 1..], content.len())
+            };
+            flags.text_path = Some(TextPathRef {
+                href: attr_get(&attrs, "href")
+                    .and_then(|v| v.trim().strip_prefix('#'))
+                    .map(ToOwned::to_owned),
+                start_offset: attr_get(&attrs, "startoffset").and_then(svg_core::parse_length),
+                text: collapse_text_whitespace(&unescape_xml(&strip_tags(inner))),
+            });
+            pos = after;
+        } else {
+            // Unknown child tag — skip the tag itself, keep scanning after it.
+            pos = tag_end + 1;
+        }
+    }
+    (runs, flags)
+}
+
+/// Remove markup tags, keeping text content.
+fn strip_tags(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_tag = false;
+    for c in s.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            c if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Character classes the bundled font cannot honestly render.
+fn char_needs_bidi(c: char) -> bool {
+    matches!(c as u32,
+        0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF | 0x200E..=0x200F | 0x202A..=0x202E)
+}
+
+fn char_needs_shaping(c: char) -> bool {
+    matches!(c as u32, 0x0300..=0x036F | 0x1AB0..=0x1AFF | 0x20D0..=0x20FF)
+}
+
+/// Append one glyph's strokes to `data`, placing each glyph-space vertex via
+/// `place` (which bakes scale, y-flip, pen position, and any rotation).
+fn append_glyph_strokes(
+    data: &mut PathData,
+    strokes: &[i8],
+    place: &dyn Fn(f64, f64) -> (f64, f64),
+) {
+    let mut current: Option<PathSubpath> = None;
+    let mut i = 1;
+    while i + 1 < strokes.len() {
+        let (gx, gy) = (strokes[i], strokes[i + 1]);
+        i += 2;
+        if gx == -1 && gy == -1 {
+            if let Some(sub) = current.take() {
+                if !sub.segments.is_empty() {
+                    data.subpaths.push(sub);
+                }
+            }
+            continue;
+        }
+        let to = place(gx as f64, gy as f64);
+        match current.as_mut() {
+            None => {
+                current = Some(PathSubpath {
+                    start: to,
+                    segments: Vec::new(),
+                    closed: false,
+                });
+            }
+            Some(sub) => sub.segments.push(PathSegment::Line { to }),
+        }
+    }
+    if let Some(sub) = current.take() {
+        if !sub.segments.is_empty() {
+            data.subpaths.push(sub);
+        }
+    }
+}
+
+/// Total advance of a string in glyph units.
+fn text_advance_units(text: &str) -> f64 {
+    text.chars().map(glyph_advance_units).sum()
+}
+
+/// Arc-length table over a flattened user-space path (R11 textPath).
+struct ArcLengthPath {
+    points: Vec<(f64, f64)>,
+    cumulative: Vec<f64>,
+}
+
+impl ArcLengthPath {
+    fn build(subpaths: &[FlattenedSubpath]) -> Option<Self> {
+        let mut points: Vec<(f64, f64)> = Vec::new();
+        for sub in subpaths {
+            points.extend(sub.points.iter().map(|&(x, y)| (x as f64, y as f64)));
+        }
+        if points.len() < 2 {
+            return None;
+        }
+        let mut cumulative = Vec::with_capacity(points.len());
+        let mut total = 0.0;
+        cumulative.push(0.0);
+        for pair in points.windows(2) {
+            total += (pair[1].0 - pair[0].0).hypot(pair[1].1 - pair[0].1);
+            cumulative.push(total);
+        }
+        Some(Self { points, cumulative })
+    }
+
+    fn total(&self) -> f64 {
+        *self.cumulative.last().unwrap_or(&0.0)
+    }
+
+    /// Point + tangent angle at arc distance `d`; `None` beyond the path end
+    /// (glyphs past the end are not rendered, per SVG).
+    fn at(&self, d: f64) -> Option<((f64, f64), f64)> {
+        if d < 0.0 || d > self.total() {
+            return None;
+        }
+        let idx = match self
+            .cumulative
+            .binary_search_by(|probe| probe.partial_cmp(&d).unwrap_or(std::cmp::Ordering::Less))
+        {
+            Ok(i) => i.min(self.points.len() - 2),
+            Err(i) => i.saturating_sub(1).min(self.points.len() - 2),
+        };
+        let seg = self.cumulative[idx + 1] - self.cumulative[idx];
+        let t = if seg > 1.0e-12 {
+            (d - self.cumulative[idx]) / seg
+        } else {
+            0.0
+        };
+        let (p0, p1) = (self.points[idx], self.points[idx + 1]);
+        let pos = (p0.0 + (p1.0 - p0.0) * t, p0.1 + (p1.1 - p0.1) * t);
+        let angle = (p1.1 - p0.1).atan2(p1.0 - p0.0);
+        Some((pos, angle))
+    }
+}
+
+/// Flatten a referenced geometry into user-space polylines for textPath.
+fn user_space_subpaths(geometry: &ShapeGeometry) -> Vec<FlattenedSubpath> {
+    match geometry {
+        ShapeGeometry::Path { data } => flatten_path_data(data, &Transform::identity(), 0.25),
+        ShapeGeometry::Poly { points, closed } => vec![FlattenedSubpath {
+            points: points.clone(),
+            closed: *closed,
+        }],
+        ShapeGeometry::Line { from, to } => vec![FlattenedSubpath {
+            points: vec![*from, *to],
+            closed: false,
+        }],
+        ShapeGeometry::Rect {
+            x,
+            y,
+            width,
+            height,
+            rx,
+            ry,
+        } => vec![FlattenedSubpath {
+            points: rounded_rect_pts(*x, *y, *width, *height, *rx, *ry),
+            closed: true,
+        }],
+        ShapeGeometry::Ellipse { cx, cy, rx, ry } => vec![FlattenedSubpath {
+            points: ellipse_pts(*cx, *cy, *rx, *ry),
+            closed: true,
+        }],
+    }
+}
+
+/// Lower a `<text>` element into a stroked-glyph `Shape` command (R11).  All
+/// glyph layout happens in user space; the resulting `PathData` flows through
+/// the normal shape render path, so clips, masks, filters, opacity, and
+/// gradient paint apply to text exactly like to shapes.
+fn lower_text_command(
+    scene: &SvgScene,
+    item: &SvgSceneItem,
+    node_xform: Transform,
+    mut diagnostics: Vec<PendingDiagnostic>,
+    source: SvgRenderSource,
+) -> DrawCommand {
+    let SvgNode::Text { attrs, content, .. } = &item.node else {
+        return DrawCommand::SkippedShape {
+            diagnostics,
+            source,
+        };
+    };
+    let lb = item.length_bases;
+    let font_size = item
+        .style
+        .font_size
+        .resolve(svg_core::SvgLengthContext::user_units(lb.other))
+        .filter(|v| *v > 0.0)
+        .unwrap_or(16.0);
+    let scale = font_size / HERSHEY_EM_UNITS;
+
+    // First value of a possibly-listed coordinate attribute, in user units.
+    let mut position_list = false;
+    let mut first_coord = |key: &str, base: f64| -> f32 {
+        match attr_get(attrs, key) {
+            None => 0.0,
+            Some(value) => {
+                let nums = svg_core::parse_numbers(value);
+                if nums.len() > 1 {
+                    position_list = true;
+                }
+                match nums.first() {
+                    Some(n) => *n as f32,
+                    None => attr_f32(attrs, key, base, 0.0),
+                }
+            }
+        }
+    };
+    let origin_x = first_coord("x", lb.horizontal) as f64;
+    let origin_y = first_coord("y", lb.vertical) as f64;
+    if position_list {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "text.position_list_approximated",
+            message: "per-glyph x/y position lists are approximated by their first value",
+        });
+    }
+
+    let (runs, flags) = scan_text_runs(content);
+    if flags.nested_tspan {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "text.tspan_nested_flattened",
+            message: "tspan nesting beyond one level was flattened to plain text",
+        });
+    }
+    if flags.styled_tspan {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "text.tspan_style_ignored",
+            message: "per-tspan font/paint styling is ignored; the text element style is used",
+        });
+    }
+
+    let mut data = PathData::default();
+    let mut glyph_count = 0usize;
+    let mut truncated = false;
+    let mut tofu = false;
+    let mut bidi = false;
+    let mut shaping = false;
+
+    // Resolve the strokes for one character, recording honesty flags.
+    let mut strokes_for = |c: char| -> &'static [i8] {
+        if char_needs_bidi(c) {
+            bidi = true;
+            TOFU_STROKES
+        } else if char_needs_shaping(c) {
+            shaping = true;
+            TOFU_STROKES
+        } else {
+            hershey_glyph(c).unwrap_or_else(|| {
+                tofu = true;
+                TOFU_STROKES
+            })
+        }
+    };
+
+    if let Some(text_path) = &flags.text_path {
+        // --- textPath: glyphs along a referenced path, arc-length sampled ---
+        let resolved = text_path
+            .href
+            .as_ref()
+            .and_then(|id| scene.references.by_xml_id.get(id))
+            .and_then(|node_id| scene.references.nodes_by_id.get(node_id))
+            .and_then(|node| lower_shape_geometry(node, lb))
+            .map(|geometry| user_space_subpaths(&geometry))
+            .and_then(|subs| ArcLengthPath::build(&subs));
+        match resolved {
+            None => {
+                diagnostics.push(PendingDiagnostic::Warning {
+                    code: "textpath.unresolved",
+                    message:
+                        "textPath references an unavailable or empty local path; the text was not rendered",
+                });
+            }
+            Some(arc) => {
+                let total_advance = text_advance_units(&text_path.text) * scale;
+                let start = match text_path.start_offset {
+                    Some(len) if len.unit == svg_core::SvgLengthUnit::Percent => {
+                        arc.total() * len.value / 100.0
+                    }
+                    Some(len) => len.value,
+                    None => 0.0,
+                } + match item.style.text_anchor {
+                    TextAnchor::Start => 0.0,
+                    TextAnchor::Middle => -total_advance / 2.0,
+                    TextAnchor::End => -total_advance,
+                };
+                let mut pen = start;
+                for c in text_path.text.chars() {
+                    if glyph_count >= MAX_TEXT_GLYPHS {
+                        truncated = true;
+                        break;
+                    }
+                    let strokes = strokes_for(c);
+                    let advance = strokes[0] as f64 * scale;
+                    // Sample position at the glyph origin and the tangent at the
+                    // glyph midpoint, so rotation follows the curve smoothly.
+                    if let Some((pos, _)) = arc.at(pen) {
+                        let angle = arc
+                            .at(pen + advance * 0.5)
+                            .map(|(_, a)| a)
+                            .unwrap_or_else(|| arc.at(pen).map(|(_, a)| a).unwrap_or(0.0));
+                        let (sin, cos) = angle.sin_cos();
+                        append_glyph_strokes(&mut data, strokes, &|gx, gy| {
+                            let (lx, ly) = (gx * scale, -gy * scale);
+                            (pos.0 + lx * cos - ly * sin, pos.1 + lx * sin + ly * cos)
+                        });
+                        glyph_count += 1;
+                    }
+                    pen += advance;
+                }
+            }
+        }
+    } else {
+        // --- plain text: horizontal pen, x/y/dx/dy runs, whole-run anchor ---
+        let total_advance: f64 = runs
+            .iter()
+            .map(|run| text_advance_units(&run.text))
+            .sum::<f64>()
+            * scale;
+        let anchor_shift = match item.style.text_anchor {
+            TextAnchor::Start => 0.0,
+            TextAnchor::Middle => -total_advance / 2.0,
+            TextAnchor::End => -total_advance,
+        };
+        let mut pen_x = origin_x + anchor_shift;
+        let mut pen_y = origin_y;
+        'runs: for run in &runs {
+            if let Some(x) = run.x {
+                pen_x = x as f64 + anchor_shift;
+            }
+            if let Some(y) = run.y {
+                pen_y = y as f64;
+            }
+            pen_x += run.dx as f64;
+            pen_y += run.dy as f64;
+            for c in run.text.chars() {
+                if glyph_count >= MAX_TEXT_GLYPHS {
+                    truncated = true;
+                    break 'runs;
+                }
+                let strokes = strokes_for(c);
+                let (gx0, gy0) = (pen_x, pen_y);
+                append_glyph_strokes(&mut data, strokes, &|gx, gy| {
+                    (gx0 + gx * scale, gy0 - gy * scale)
+                });
+                pen_x += strokes[0] as f64 * scale;
+                glyph_count += 1;
+            }
+        }
+    }
+
+    if truncated {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "limit.text_glyphs",
+            message: "text exceeded the renderer glyph limit; remaining glyphs skipped",
+        });
+    }
+    if tofu {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "text.glyph_unsupported",
+            message:
+                "characters outside the bundled ASCII glyph set were rendered as placeholder boxes",
+        });
+    }
+    if bidi {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "text.bidi_unsupported",
+            message: "bidirectional text is not supported; affected characters render as placeholder boxes",
+        });
+    }
+    if shaping {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "text.shaping_unsupported",
+            message: "combining marks / complex shaping are not supported; affected characters render as placeholder boxes",
+        });
+    }
+
+    if data.subpaths.is_empty() {
+        return DrawCommand::SkippedShape {
+            diagnostics,
+            source,
+        };
+    }
+
+    diagnostics.push(PendingDiagnostic::Warning {
+        code: "text.raster_snapshot",
+        message:
+            "text rendered with the bundled stroked vector font (font-family substituted, approximate metrics)",
+    });
+
+    // Text is painted with the element's *fill* through the stroke pipeline
+    // (a stroked font has no fillable outline); stroke styling is not applied.
+    let glyph_style = Style {
+        fill: Paint::None,
+        stroke: item.style.fill.clone(),
+        stroke_width: svg_core::SvgLength {
+            value: font_size * HERSHEY_STROKE_UNITS / HERSHEY_EM_UNITS,
+            unit: svg_core::SvgLengthUnit::Number,
+        },
+        stroke_linecap: StrokeLineCap::Round,
+        stroke_linejoin: StrokeLineJoin::Round,
+        stroke_miterlimit: 4.0,
+        stroke_dasharray: None,
+        stroke_dashoffset: zero_stroke_length(),
+        stroke_opacity: item.style.fill_opacity,
+        ..item.style.clone()
+    };
+
+    let geometry = ShapeGeometry::Path { data };
+    let clip = clip_path_ref(attrs).and_then(|id| {
+        let bbox = Some(geometry_local_bounds(&geometry));
+        let mut visited = Vec::new();
+        resolve_clip(
+            scene,
+            &id,
+            node_xform,
+            bbox,
+            lb,
+            &mut visited,
+            &mut diagnostics,
+        )
+    });
+    DrawCommand::Shape {
+        geometry: Some(geometry),
+        transform: node_xform,
+        style: Box::new(glyph_style),
+        length_bases: lb,
+        path_length: None,
+        clip,
+        markers: None,
+        diagnostics,
+        source,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3585,7 +5163,10 @@ enum MaskMode {
     Alpha,
 }
 
-/// One renderable shape lowered from a `<mask>` subtree.
+/// One renderable shape lowered from a `<mask>` subtree.  Reused for `<marker>`
+/// and `<pattern>` content lowering (R9): the transform is content-relative and a
+/// base transform is applied at render time.
+#[derive(Clone)]
 struct MaskItem {
     geometry: ShapeGeometry,
     transform: Transform,
@@ -3606,24 +5187,19 @@ impl MaskDef {
     /// gradient/solid mask content works identically to normal painting.
     fn build_alpha(&self, w: usize, h: usize, paint_servers: &PaintServerTable) -> ClipMask {
         let mut buf = vec![0u8; w * h * 4];
-        for item in &self.items {
-            let mut target = RasterTarget {
-                buf: &mut buf,
-                width: w,
-                height: h,
-                premultiplied: true,
-                clip: None,
-            };
-            render_shape(
-                &item.geometry,
-                &item.transform,
-                &item.style,
-                item.length_bases,
-                item.path_length,
-                paint_servers,
-                &mut target,
-            );
-        }
+        let mut target = RasterTarget {
+            buf: &mut buf,
+            width: w,
+            height: h,
+            premultiplied: true,
+            clip: None,
+        };
+        render_content_items(
+            &self.items,
+            Transform::identity(),
+            paint_servers,
+            &mut target,
+        );
         let mut alpha = vec![0u8; w * h];
         for (i, slot) in alpha.iter_mut().enumerate() {
             let r = buf[i * 4] as f32;
@@ -3748,6 +5324,30 @@ fn collect_mask_items(
     }
 }
 
+/// Render a list of content items (shapes lowered from a `<mask>`, `<marker>`,
+/// or `<pattern>` subtree) under `base` into `target`, reusing the shape
+/// renderer so gradient/solid/pattern paint behaves identically to normal
+/// painting.  Each item's transform is content-relative; `base` maps content
+/// space into the target's device (or tile) space (R7/R9).
+fn render_content_items(
+    items: &[MaskItem],
+    base: Transform,
+    paint_servers: &PaintServerTable,
+    target: &mut RasterTarget<'_>,
+) {
+    for item in items {
+        render_shape(
+            &item.geometry,
+            &base.concat(item.transform),
+            &item.style,
+            item.length_bases,
+            item.path_length,
+            paint_servers,
+            target,
+        );
+    }
+}
+
 /// Multiply a premultiplied RGBA buffer in place by a coverage mask (all four
 /// channels scale, preserving premultiplication).
 fn apply_mask_to_offscreen(buf: &mut [u8], mask: &ClipMask, w: usize, h: usize) {
@@ -3761,6 +5361,494 @@ fn apply_mask_to_offscreen(buf: &mut [u8], mask: &ClipMask, w: usize, h: usize) 
             buf[idx] = ((buf[idx] as u16 * m + 127) / 255) as u8;
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// R9: markers (start/mid/end symbols placed on path vertices)
+// ---------------------------------------------------------------------------
+
+/// `markerUnits` (R9). `strokeWidth` scales marker content by the referencing
+/// element's stroke width; `userSpaceOnUse` leaves it at 1:1.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MarkerUnits {
+    StrokeWidth,
+    UserSpaceOnUse,
+}
+
+/// `orient` (R9). `auto` aligns to the vertex tangent, `auto-start-reverse`
+/// additionally flips the start marker, and a fixed angle is in radians.
+#[derive(Clone, Copy)]
+enum MarkerOrient {
+    Auto,
+    AutoStartReverse,
+    Angle(f64),
+}
+
+/// Which path vertex a marker sits on.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MarkerRole {
+    Start,
+    Mid,
+    End,
+}
+
+/// A resolved `<marker>` definition: its lowered content plus viewport/orient
+/// parameters (R9).
+struct MarkerDef {
+    items: Vec<MaskItem>,
+    marker_w: f64,
+    marker_h: f64,
+    ref_x: f64,
+    ref_y: f64,
+    view_box: Option<[f64; 4]>,
+    aspect: svg_core::SvgPreserveAspectRatio,
+    units: MarkerUnits,
+    orient: MarkerOrient,
+    overflow_hidden: bool,
+}
+
+/// A raw marker vertex during extraction: position plus optional incoming and
+/// outgoing tangent directions (before role assignment / angle resolution).
+type MarkerRawVertex = ((f64, f64), Option<(f64, f64)>, Option<(f64, f64)>);
+
+/// One path vertex with its auto-orient tangent angle and role.
+struct MarkerVertex {
+    pos: (f64, f64),
+    angle: f64,
+    role: MarkerRole,
+}
+
+/// One placed marker instance: the content→device transform, the device-space
+/// viewport rect (for overflow clipping), and which resolved def to draw.
+struct MarkerPlacement {
+    def_index: usize,
+    content_to_device: Transform,
+    viewport_corners: Vec<(f32, f32)>,
+    overflow_hidden: bool,
+}
+
+/// All markers resolved for one shape.
+struct MarkerSet {
+    defs: Vec<MarkerDef>,
+    placements: Vec<MarkerPlacement>,
+}
+
+fn parse_marker_orient(value: Option<&str>) -> MarkerOrient {
+    match value.map(str::trim) {
+        Some("auto") => MarkerOrient::Auto,
+        Some("auto-start-reverse") => MarkerOrient::AutoStartReverse,
+        Some(v) => MarkerOrient::Angle(parse_angle_radians(v).unwrap_or(0.0)),
+        None => MarkerOrient::Angle(0.0),
+    }
+}
+
+/// Parse an SVG `<angle>` (number with optional deg/grad/rad unit; bare numbers
+/// are degrees) into radians.
+fn parse_angle_radians(value: &str) -> Option<f64> {
+    let v = value.trim();
+    let lower = v.to_ascii_lowercase();
+    let (num, to_rad): (&str, fn(f64) -> f64) = if let Some(n) = lower.strip_suffix("grad") {
+        (n, |g| g * std::f64::consts::PI / 200.0)
+    } else if let Some(n) = lower.strip_suffix("rad") {
+        (n, |r| r)
+    } else if let Some(n) = lower.strip_suffix("deg") {
+        (n, f64::to_radians)
+    } else {
+        (lower.as_str(), f64::to_radians)
+    };
+    num.trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|n| n.is_finite())
+        .map(to_rad)
+}
+
+fn marker_ref(attrs: &[(String, String)], which: &str) -> Option<String> {
+    final_style_property(attrs, which)
+        .and_then(local_url_reference)
+        .map(str::to_owned)
+        .or_else(|| {
+            final_style_property(attrs, "marker")
+                .and_then(local_url_reference)
+                .map(str::to_owned)
+        })
+}
+
+fn resolve_marker(
+    scene: &SvgScene,
+    marker_id: &str,
+    diagnostics: &mut Vec<PendingDiagnostic>,
+) -> Option<MarkerDef> {
+    let node = scene
+        .references
+        .by_xml_id
+        .get(marker_id)
+        .and_then(|id| scene.references.nodes_by_id.get(id));
+    let Some(SvgNode::Unsupported {
+        tag,
+        attrs,
+        children,
+        ..
+    }) = node
+    else {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "marker.unresolved",
+            message: "marker references an unavailable local id; no marker was drawn",
+        });
+        return None;
+    };
+    if tag != "marker" {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "marker.unresolved",
+            message: "marker target is not a marker element; no marker was drawn",
+        });
+        return None;
+    }
+    let len = |key: &str| attr_get(attrs, key).and_then(svg_core::parse_length);
+    let marker_w = len("markerwidth")
+        .map(|l| l.value)
+        .filter(|v| *v > 0.0)
+        .unwrap_or(3.0);
+    let marker_h = len("markerheight")
+        .map(|l| l.value)
+        .filter(|v| *v > 0.0)
+        .unwrap_or(3.0);
+    let ref_x = len("refx").map(|l| l.value).unwrap_or(0.0);
+    let ref_y = len("refy").map(|l| l.value).unwrap_or(0.0);
+    let view_box = parse_view_box(attrs);
+    let aspect =
+        svg_core::parse_preserve_aspect_ratio(attr_get(attrs, "preserveaspectratio").unwrap_or(""));
+    let units = match attr_get(attrs, "markerunits").map(|v| v.trim().to_ascii_lowercase()) {
+        Some(s) if s == "userspaceonuse" => MarkerUnits::UserSpaceOnUse,
+        _ => MarkerUnits::StrokeWidth,
+    };
+    let orient = parse_marker_orient(attr_get(attrs, "orient"));
+    // SVG markers default to overflow:hidden (content clipped to the viewport).
+    let overflow_hidden = !attr_get(attrs, "overflow").is_some_and(|v| {
+        let v = v.trim();
+        v.eq_ignore_ascii_case("visible") || v.eq_ignore_ascii_case("auto")
+    });
+    let content_bases = match view_box {
+        Some([_, _, w, h]) if w > 0.0 && h > 0.0 => SvgLengthBases::new(w.abs(), h.abs()),
+        _ => SvgLengthBases::new(marker_w, marker_h),
+    };
+    let root_style = Style::default();
+    let mut items = Vec::new();
+    collect_mask_items(
+        children,
+        Transform::identity(),
+        content_bases,
+        &root_style,
+        &scene.stylesheet,
+        &mut items,
+    );
+    items.truncate(MAX_MARKER_CONTENT_ITEMS);
+    Some(MarkerDef {
+        items,
+        marker_w,
+        marker_h,
+        ref_x,
+        ref_y,
+        view_box,
+        aspect,
+        units,
+        orient,
+        overflow_hidden,
+    })
+}
+
+/// `Some(v)` if `v` has non-negligible length, else `None`.
+fn nonzero_dir(d: (f64, f64)) -> Option<(f64, f64)> {
+    if d.0.hypot(d.1) > 1.0e-9 {
+        Some(d)
+    } else {
+        None
+    }
+}
+
+/// Tangent directions (initial, final) and endpoint of one path segment.
+fn segment_tangents(from: (f64, f64), seg: &PathSegment) -> ((f64, f64), (f64, f64), (f64, f64)) {
+    let sub = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0, a.1 - b.1);
+    let pick = |cands: &[(f64, f64)]| {
+        cands
+            .iter()
+            .copied()
+            .find(|d| nonzero_dir(*d).is_some())
+            .unwrap_or(*cands.last().unwrap())
+    };
+    match seg {
+        PathSegment::Line { to } => {
+            let d = sub(*to, from);
+            (d, d, *to)
+        }
+        PathSegment::Cubic { ctrl1, ctrl2, to } => {
+            let init = pick(&[sub(*ctrl1, from), sub(*ctrl2, from), sub(*to, from)]);
+            let finl = pick(&[sub(*to, *ctrl2), sub(*to, *ctrl1), sub(*to, from)]);
+            (init, finl, *to)
+        }
+        PathSegment::Quadratic { ctrl, to } => {
+            let init = pick(&[sub(*ctrl, from), sub(*to, from)]);
+            let finl = pick(&[sub(*to, *ctrl), sub(*to, from)]);
+            (init, finl, *to)
+        }
+        PathSegment::Arc { to, .. } => {
+            let d = sub(*to, from);
+            (d, d, *to)
+        }
+    }
+}
+
+/// Auto-orient angle (radians) at a vertex from its incoming/outgoing tangents.
+fn auto_marker_angle(
+    in_dir: Option<(f64, f64)>,
+    out_dir: Option<(f64, f64)>,
+    role: MarkerRole,
+) -> f64 {
+    let angle = |d: (f64, f64)| d.1.atan2(d.0);
+    let unit = |d: (f64, f64)| {
+        let l = d.0.hypot(d.1);
+        (d.0 / l, d.1 / l)
+    };
+    match role {
+        MarkerRole::Start => out_dir.or(in_dir).map(angle).unwrap_or(0.0),
+        MarkerRole::End => in_dir.or(out_dir).map(angle).unwrap_or(0.0),
+        MarkerRole::Mid => match (in_dir, out_dir) {
+            (Some(i), Some(o)) => {
+                let (i, o) = (unit(i), unit(o));
+                let s = (i.0 + o.0, i.1 + o.1);
+                nonzero_dir(s).map(angle).unwrap_or_else(|| angle(o))
+            }
+            (Some(i), None) => angle(i),
+            (None, Some(o)) => angle(o),
+            (None, None) => 0.0,
+        },
+    }
+}
+
+/// Assign Start/Mid/End roles by global position and compute auto angles.
+fn finalize_marker_vertices(raw: Vec<MarkerRawVertex>) -> Vec<MarkerVertex> {
+    let n = raw.len();
+    raw.into_iter()
+        .enumerate()
+        .map(|(i, (pos, in_dir, out_dir))| {
+            let role = if i == 0 {
+                MarkerRole::Start
+            } else if i + 1 == n {
+                MarkerRole::End
+            } else {
+                MarkerRole::Mid
+            };
+            MarkerVertex {
+                pos,
+                angle: auto_marker_angle(in_dir, out_dir, role),
+                role,
+            }
+        })
+        .collect()
+}
+
+/// Extract marker vertices (with tangents) from a markable geometry. Markers
+/// apply only to `line`/`polyline`/`polygon`/`path`; other shapes yield none.
+fn marker_vertices(geometry: &ShapeGeometry) -> Vec<MarkerVertex> {
+    let mut raw: Vec<MarkerRawVertex> = Vec::new();
+    match geometry {
+        ShapeGeometry::Line { from, to } => {
+            let from = (from.0 as f64, from.1 as f64);
+            let to = (to.0 as f64, to.1 as f64);
+            let d = nonzero_dir((to.0 - from.0, to.1 - from.1));
+            raw.push((from, None, d));
+            raw.push((to, d, None));
+        }
+        ShapeGeometry::Poly { points, closed } => {
+            let pts: Vec<(f64, f64)> = points.iter().map(|&(x, y)| (x as f64, y as f64)).collect();
+            push_polyline_vertices(&pts, *closed, &mut raw);
+        }
+        ShapeGeometry::Path { data } => {
+            for sub in &data.subpaths {
+                if raw.len() >= MAX_MARKER_PLACEMENTS {
+                    break;
+                }
+                let mut sv: Vec<MarkerRawVertex> = vec![(sub.start, None, None)];
+                let mut from = sub.start;
+                for seg in &sub.segments {
+                    let (init, finl, end) = segment_tangents(from, seg);
+                    if let Some(last) = sv.last_mut() {
+                        last.2 = last.2.or(nonzero_dir(init));
+                    }
+                    sv.push((end, nonzero_dir(finl), None));
+                    from = end;
+                }
+                if sub.closed {
+                    let d = nonzero_dir((sub.start.0 - from.0, sub.start.1 - from.1));
+                    if let Some(last) = sv.last_mut() {
+                        last.2 = last.2.or(d);
+                    }
+                    if let Some(first) = sv.first_mut() {
+                        first.1 = first.1.or(d);
+                    }
+                }
+                raw.extend(sv);
+            }
+        }
+        _ => {}
+    }
+    raw.truncate(MAX_MARKER_PLACEMENTS);
+    finalize_marker_vertices(raw)
+}
+
+fn push_polyline_vertices(pts: &[(f64, f64)], closed: bool, raw: &mut Vec<MarkerRawVertex>) {
+    if pts.is_empty() {
+        return;
+    }
+    let mut sv: Vec<MarkerRawVertex> = vec![(pts[0], None, None)];
+    for pair in pts.windows(2) {
+        let d = nonzero_dir((pair[1].0 - pair[0].0, pair[1].1 - pair[0].1));
+        if let Some(last) = sv.last_mut() {
+            last.2 = d;
+        }
+        sv.push((pair[1], d, None));
+    }
+    if closed {
+        if let (Some(first), Some(last)) = (pts.first(), pts.last()) {
+            let d = nonzero_dir((first.0 - last.0, first.1 - last.1));
+            if let Some(v) = sv.last_mut() {
+                v.2 = v.2.or(d);
+            }
+            if let Some(v) = sv.first_mut() {
+                v.1 = v.1.or(d);
+            }
+        }
+    }
+    raw.extend(sv);
+}
+
+fn push_marker_def(
+    scene: &SvgScene,
+    opt_id: Option<String>,
+    defs: &mut Vec<MarkerDef>,
+    diagnostics: &mut Vec<PendingDiagnostic>,
+) -> Option<usize> {
+    let id = opt_id?;
+    let def = resolve_marker(scene, &id, diagnostics)?;
+    defs.push(def);
+    Some(defs.len() - 1)
+}
+
+fn marker_placement(
+    def: &MarkerDef,
+    def_index: usize,
+    vertex: &MarkerVertex,
+    stroke_w: f64,
+    node_xform: &Transform,
+) -> MarkerPlacement {
+    let angle = match def.orient {
+        MarkerOrient::Angle(a) => a,
+        MarkerOrient::Auto => vertex.angle,
+        MarkerOrient::AutoStartReverse => {
+            if vertex.role == MarkerRole::Start {
+                vertex.angle + std::f64::consts::PI
+            } else {
+                vertex.angle
+            }
+        }
+    };
+    let mut m = Transform::translate(vertex.pos.0, vertex.pos.1)
+        .multiply(Transform::rotate(angle.to_degrees()));
+    if def.units == MarkerUnits::StrokeWidth {
+        m = m.multiply(Transform::scale(stroke_w, stroke_w));
+    }
+    let (content_to_user, viewport_to_user) = if let Some(vb) = def.view_box {
+        let vb_ts =
+            svg_core::viewbox_transform(vb, [0.0, 0.0, def.marker_w, def.marker_h], def.aspect)
+                .unwrap_or_else(Transform::identity);
+        let (rx, ry) = vb_ts.apply(def.ref_x, def.ref_y);
+        let m = m.multiply(Transform::translate(-rx, -ry));
+        (m.multiply(vb_ts), m)
+    } else {
+        let m = m.multiply(Transform::translate(-def.ref_x, -def.ref_y));
+        (m, m)
+    };
+    let content_to_device = node_xform.concat(content_to_user);
+    let viewport_to_device = node_xform.concat(viewport_to_user);
+    let corners = vec![
+        viewport_to_device.apply_f32(0.0, 0.0),
+        viewport_to_device.apply_f32(def.marker_w as f32, 0.0),
+        viewport_to_device.apply_f32(def.marker_w as f32, def.marker_h as f32),
+        viewport_to_device.apply_f32(0.0, def.marker_h as f32),
+    ];
+    MarkerPlacement {
+        def_index,
+        content_to_device,
+        viewport_corners: corners,
+        overflow_hidden: def.overflow_hidden,
+    }
+}
+
+/// Resolve and place start/mid/end markers for a shape. Returns `None` when the
+/// shape is not markable or no marker references resolve. Bounded by
+/// `MAX_MARKER_PLACEMENTS` with a `limit.marker_count` diagnostic on truncation.
+fn build_markers(
+    scene: &SvgScene,
+    attrs: &[(String, String)],
+    style: &Style,
+    length_bases: SvgLengthBases,
+    geometry: &ShapeGeometry,
+    node_xform: &Transform,
+    diagnostics: &mut Vec<PendingDiagnostic>,
+) -> Option<Box<MarkerSet>> {
+    let start_ref = marker_ref(attrs, "marker-start");
+    let mid_ref = marker_ref(attrs, "marker-mid");
+    let end_ref = marker_ref(attrs, "marker-end");
+    if start_ref.is_none() && mid_ref.is_none() && end_ref.is_none() {
+        return None;
+    }
+    let vertices = marker_vertices(geometry);
+    if vertices.is_empty() {
+        return None;
+    }
+    let mut defs = Vec::new();
+    let start_i = push_marker_def(scene, start_ref, &mut defs, diagnostics);
+    let mid_i = push_marker_def(scene, mid_ref, &mut defs, diagnostics);
+    let end_i = push_marker_def(scene, end_ref, &mut defs, diagnostics);
+    if defs.is_empty() {
+        return None;
+    }
+    let stroke_w = resolve_stroke_length(style.stroke_width, length_bases)
+        .filter(|w| *w > 0.0)
+        .unwrap_or(1.0);
+    let mut placements = Vec::new();
+    let mut truncated = false;
+    for vertex in &vertices {
+        let def_index = match vertex.role {
+            MarkerRole::Start => start_i,
+            MarkerRole::Mid => mid_i,
+            MarkerRole::End => end_i,
+        };
+        let Some(def_index) = def_index else {
+            continue;
+        };
+        if placements.len() >= MAX_MARKER_PLACEMENTS {
+            truncated = true;
+            break;
+        }
+        placements.push(marker_placement(
+            &defs[def_index],
+            def_index,
+            vertex,
+            stroke_w,
+            node_xform,
+        ));
+    }
+    if truncated {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "limit.marker_count",
+            message: "marker placements exceeded the renderer limit; remaining markers skipped",
+        });
+    }
+    if placements.is_empty() {
+        return None;
+    }
+    Some(Box::new(MarkerSet { defs, placements }))
 }
 
 // ---------------------------------------------------------------------------
@@ -3799,8 +5887,116 @@ enum FilterKind {
         sy: f64,
         color: [u8; 4],
     },
+    /// R10 `feComposite` — Porter-Duff + arithmetic, on premultiplied pixels.
+    Composite {
+        op: CompositeOp,
+        input2: FilterInput,
+    },
+    /// R10 `feBlend` — separable blend of `in` over `in2`.
+    Blend {
+        mode: BlendMode,
+        input2: FilterInput,
+    },
+    /// R10 `feComponentTransfer` — per-channel transfer functions (R, G, B, A).
+    ComponentTransfer {
+        funcs: [TransferFunc; 4],
+    },
+    /// R10 `feMorphology` — dilate/erode over a bounded radius.
+    Morphology {
+        dilate: bool,
+        rx: usize,
+        ry: usize,
+    },
     /// Unsupported primitive passed through (partial output) with a diagnostic.
     Identity,
+}
+
+/// `feComposite` operator (R10). Inputs are premultiplied.
+#[derive(Clone, Copy)]
+enum CompositeOp {
+    Over,
+    In,
+    Out,
+    Atop,
+    Xor,
+    Arithmetic { k1: f32, k2: f32, k3: f32, k4: f32 },
+}
+
+/// Separable blend, shared by `feBlend` and `mix-blend-mode` (R10).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BlendMode {
+    Normal,
+    Multiply,
+    Screen,
+    Darken,
+    Lighten,
+}
+
+fn parse_blend_mode(value: &str) -> Option<BlendMode> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "normal" => Some(BlendMode::Normal),
+        "multiply" => Some(BlendMode::Multiply),
+        "screen" => Some(BlendMode::Screen),
+        "darken" => Some(BlendMode::Darken),
+        "lighten" => Some(BlendMode::Lighten),
+        _ => None,
+    }
+}
+
+/// Per-channel `feComponentTransfer` transfer function (R10).
+#[derive(Clone)]
+enum TransferFunc {
+    Identity,
+    Table(Vec<f32>),
+    Discrete(Vec<f32>),
+    Linear {
+        slope: f32,
+        intercept: f32,
+    },
+    Gamma {
+        amplitude: f32,
+        exponent: f32,
+        offset: f32,
+    },
+}
+
+impl TransferFunc {
+    /// Map a straight channel value in `[0,1]` through this function.
+    fn apply(&self, c: f32) -> f32 {
+        let c = c.clamp(0.0, 1.0);
+        let out = match self {
+            TransferFunc::Identity => c,
+            TransferFunc::Linear { slope, intercept } => slope * c + intercept,
+            TransferFunc::Gamma {
+                amplitude,
+                exponent,
+                offset,
+            } => amplitude * c.powf(*exponent) + offset,
+            TransferFunc::Table(values) => {
+                if values.is_empty() {
+                    c
+                } else if values.len() == 1 {
+                    values[0]
+                } else {
+                    let n = values.len() - 1;
+                    let scaled = c * n as f32;
+                    let k = (scaled.floor() as usize).min(n - 1);
+                    let frac = scaled - k as f32;
+                    values[k] + frac * (values[k + 1] - values[k])
+                }
+            }
+            TransferFunc::Discrete(values) => {
+                if values.is_empty() {
+                    c
+                } else {
+                    let n = values.len();
+                    let k = ((c * n as f32).floor() as usize).min(n - 1);
+                    values[k]
+                }
+            }
+        };
+        out.clamp(0.0, 1.0)
+    }
 }
 
 struct FilterPrimitive {
@@ -3811,13 +6007,54 @@ struct FilterPrimitive {
 
 struct FilterGraph {
     primitives: Vec<FilterPrimitive>,
+    /// `color-interpolation-filters` (R10): `true` = run in linearRGB (the SVG
+    /// default), `false` = sRGB (`color-interpolation-filters: sRGB`).
+    linear: bool,
+    /// Filter region (R10): the result is clipped to this rect.
+    region: FilterRegion,
+}
+
+/// Filter region from `filterUnits` + filter `x/y/width/height` (R10). The
+/// result of the primitive graph is clipped to this rect.
+#[derive(Clone, Copy)]
+enum FilterRegion {
+    /// `filterUnits="userSpaceOnUse"`: an explicit device-space rect
+    /// `[x0, y0, x1, y1]`.
+    UserSpace([f64; 4]),
+    /// `filterUnits="objectBoundingBox"` (default): fractions of the element
+    /// bounding box (default `-10% -10% 120% 120%`). Resolved in `apply` against
+    /// the source content's device-space alpha extent.
+    ObjectBoundingBox { fx: f64, fy: f64, fw: f64, fh: f64 },
+}
+
+impl Default for FilterRegion {
+    fn default() -> Self {
+        FilterRegion::ObjectBoundingBox {
+            fx: -0.1,
+            fy: -0.1,
+            fw: 1.2,
+            fh: 1.2,
+        }
+    }
 }
 
 impl FilterGraph {
     /// Run the primitive graph over a premultiplied source-graphic buffer,
     /// returning the premultiplied result. Bounded by buffer size and primitive
     /// count; never panics.
-    fn apply(&self, source: &[u8], w: usize, h: usize) -> Vec<u8> {
+    ///
+    /// R10: when `self.linear`, the source is converted sRGB->linearRGB
+    /// (premultiplied-aware) before the graph and back to sRGB after, and any
+    /// sRGB-specified primitive colour (`feFlood`/`feDropShadow`) is linearised
+    /// so all per-channel math runs in linear light.
+    fn apply(&self, source_srgb: &[u8], w: usize, h: usize) -> Vec<u8> {
+        let owned_linear;
+        let source: &[u8] = if self.linear {
+            owned_linear = srgb_to_linear_premul(source_srgb);
+            &owned_linear
+        } else {
+            source_srgb
+        };
         let source_alpha = source_alpha_buffer(source);
         let mut named: HashMap<String, Vec<u8>> = HashMap::new();
         let mut previous = source.to_vec();
@@ -3826,7 +6063,9 @@ impl FilterGraph {
             let out = match &prim.kind {
                 FilterKind::GaussianBlur { sx, sy } => gaussian_blur(&input, w, h, *sx, *sy),
                 FilterKind::Offset { dx, dy } => offset_buffer(&input, w, h, *dx, *dy),
-                FilterKind::Flood { color } => flood_buffer(*color, w, h),
+                FilterKind::Flood { color } => {
+                    flood_buffer(linearize_color(*color, self.linear), w, h)
+                }
                 FilterKind::ColorMatrix { m } => color_matrix(&input, m),
                 FilterKind::Merge { inputs } => {
                     let mut acc = vec![0u8; w * h * 4];
@@ -3844,11 +6083,26 @@ impl FilterGraph {
                     sy,
                     color,
                 } => {
-                    let mut shadow = flood_masked(&source_alpha, *color);
+                    let mut shadow =
+                        flood_masked(&source_alpha, linearize_color(*color, self.linear));
                     shadow = gaussian_blur(&shadow, w, h, *sx, *sy);
                     shadow = offset_buffer(&shadow, w, h, *dx, *dy);
                     composite_premultiplied_over(&mut shadow, source);
                     shadow
+                }
+                FilterKind::Composite { op, input2 } => {
+                    let in2 =
+                        resolve_filter_input(input2, source, &source_alpha, &named, &previous);
+                    composite_filter(&input, &in2, *op)
+                }
+                FilterKind::Blend { mode, input2 } => {
+                    let in2 =
+                        resolve_filter_input(input2, source, &source_alpha, &named, &previous);
+                    blend_filter(&input, &in2, *mode)
+                }
+                FilterKind::ComponentTransfer { funcs } => component_transfer(&input, funcs),
+                FilterKind::Morphology { dilate, rx, ry } => {
+                    morphology(&input, w, h, *dilate, *rx, *ry)
                 }
                 FilterKind::Identity => input.clone(),
             };
@@ -3857,8 +6111,139 @@ impl FilterGraph {
             }
             previous = out;
         }
-        previous
+        let mut result = if self.linear {
+            linear_to_srgb_premul(&previous)
+        } else {
+            previous
+        };
+        clip_to_filter_region(&mut result, w, h, self.region, source_srgb);
+        result
     }
+}
+
+/// Device-space alpha bounding box `[minx, miny, maxx, maxy]` of a buffer, or
+/// `None` when fully transparent.
+fn alpha_extent(buf: &[u8], w: usize, h: usize) -> Option<[usize; 4]> {
+    let (mut minx, mut miny, mut maxx, mut maxy) = (usize::MAX, usize::MAX, 0usize, 0usize);
+    let mut any = false;
+    for y in 0..h {
+        for x in 0..w {
+            if buf[(y * w + x) * 4 + 3] != 0 {
+                any = true;
+                minx = minx.min(x);
+                miny = miny.min(y);
+                maxx = maxx.max(x);
+                maxy = maxy.max(y);
+            }
+        }
+    }
+    any.then_some([minx, miny, maxx, maxy])
+}
+
+/// Zero every pixel of `buf` outside the resolved filter region (R10). For
+/// objectBoundingBox units the element bbox is taken from the source content's
+/// device-space alpha extent (a deterministic proxy that also works for groups,
+/// which have no single geometric bbox).
+fn clip_to_filter_region(
+    buf: &mut [u8],
+    w: usize,
+    h: usize,
+    region: FilterRegion,
+    source_srgb: &[u8],
+) {
+    let rect = match region {
+        FilterRegion::UserSpace(rect) => rect,
+        FilterRegion::ObjectBoundingBox { fx, fy, fw, fh } => {
+            let Some([minx, miny, maxx, maxy]) = alpha_extent(source_srgb, w, h) else {
+                return; // no source content — nothing to bound
+            };
+            let (bx, by) = (minx as f64, miny as f64);
+            let bw = (maxx - minx + 1) as f64;
+            let bh = (maxy - miny + 1) as f64;
+            [
+                bx + fx * bw,
+                by + fy * bh,
+                bx + (fx + fw) * bw,
+                by + (fy + fh) * bh,
+            ]
+        }
+    };
+    let (x0, y0, x1, y1) = (rect[0], rect[1], rect[2], rect[3]);
+    for y in 0..h {
+        let py = y as f64 + 0.5;
+        for x in 0..w {
+            let px = x as f64 + 0.5;
+            if px < x0 || px >= x1 || py < y0 || py >= y1 {
+                let idx = (y * w + x) * 4;
+                buf[idx..idx + 4].fill(0);
+            }
+        }
+    }
+}
+
+/// sRGB transfer (component in `[0,1]`) -> linear light.
+#[inline]
+fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Linear light (component in `[0,1]`) -> sRGB transfer.
+#[inline]
+fn linear_to_srgb(c: f32) -> f32 {
+    if c <= 0.003_130_8 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+/// Convert a premultiplied sRGB buffer to premultiplied linearRGB (alpha kept).
+fn srgb_to_linear_premul(buf: &[u8]) -> Vec<u8> {
+    convert_premul(buf, srgb_to_linear)
+}
+
+/// Convert a premultiplied linearRGB buffer back to premultiplied sRGB.
+fn linear_to_srgb_premul(buf: &[u8]) -> Vec<u8> {
+    convert_premul(buf, linear_to_srgb)
+}
+
+/// Apply a colour-transfer function to each RGB channel of a premultiplied
+/// buffer (unpremultiply -> transfer -> re-premultiply); alpha is unchanged.
+fn convert_premul(buf: &[u8], transfer: fn(f32) -> f32) -> Vec<u8> {
+    let mut out = vec![0u8; buf.len()];
+    for (px, dst) in buf.chunks_exact(4).zip(out.chunks_exact_mut(4)) {
+        let a = px[3] as f32 / 255.0;
+        for c in 0..3 {
+            let straight = if a > 0.0 {
+                px[c] as f32 / 255.0 / a
+            } else {
+                0.0
+            };
+            dst[c] = (transfer(straight.clamp(0.0, 1.0)) * a * 255.0)
+                .round()
+                .clamp(0.0, 255.0) as u8;
+        }
+        dst[3] = px[3];
+    }
+    out
+}
+
+/// Linearise an sRGB-specified `[u8;4]` colour (RGB only) when running a filter
+/// graph in linearRGB; a no-op in sRGB mode.
+fn linearize_color(color: [u8; 4], linear: bool) -> [u8; 4] {
+    if !linear {
+        return color;
+    }
+    let conv = |c: u8| {
+        (srgb_to_linear(c as f32 / 255.0) * 255.0)
+            .round()
+            .clamp(0.0, 255.0) as u8
+    };
+    [conv(color[0]), conv(color[1]), conv(color[2]), color[3]]
 }
 
 fn resolve_filter_input(
@@ -4061,6 +6446,134 @@ fn composite_premultiplied_over(dst: &mut [u8], src: &[u8]) {
     }
 }
 
+/// R10 `feComposite`: Porter-Duff and arithmetic compositing of premultiplied
+/// `in` (i) and `in2` (i2). Channels are treated in `[0,1]` premultiplied.
+fn composite_filter(i: &[u8], i2: &[u8], op: CompositeOp) -> Vec<u8> {
+    let n = i.len().min(i2.len());
+    let mut out = vec![0u8; n];
+    let mut p = 0;
+    while p + 3 < n {
+        let sa = i[p + 3] as f32 / 255.0;
+        let da = i2[p + 3] as f32 / 255.0;
+        for c in 0..4 {
+            let s = i[p + c] as f32 / 255.0;
+            let d = i2[p + c] as f32 / 255.0;
+            let v = match op {
+                CompositeOp::Over => s + d * (1.0 - sa),
+                CompositeOp::In => s * da,
+                CompositeOp::Out => s * (1.0 - da),
+                CompositeOp::Atop => s * da + d * (1.0 - sa),
+                CompositeOp::Xor => s * (1.0 - da) + d * (1.0 - sa),
+                CompositeOp::Arithmetic { k1, k2, k3, k4 } => k1 * s * d + k2 * s + k3 * d + k4,
+            };
+            out[p + c] = (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        }
+        // Keep alpha consistent with the premultiplied colour (clamp rgb <= a).
+        let a = out[p + 3];
+        for c in 0..3 {
+            if out[p + c] > a {
+                out[p + c] = a;
+            }
+        }
+        p += 4;
+    }
+    out
+}
+
+/// R10 separable blend `B(cb, cs)` for `feBlend` / `mix-blend-mode`.
+#[inline]
+fn blend_channel(mode: BlendMode, cb: f32, cs: f32) -> f32 {
+    match mode {
+        BlendMode::Normal => cs,
+        BlendMode::Multiply => cb * cs,
+        BlendMode::Screen => cb + cs - cb * cs,
+        BlendMode::Darken => cb.min(cs),
+        BlendMode::Lighten => cb.max(cs),
+    }
+}
+
+/// R10 `feBlend`: blend premultiplied source `i` over backdrop `i2`.
+/// Uses the premultiplied separable-blend formula:
+///   Co = (1-ab)*Cs + (1-as)*Cb + as*ab*B(Cs/as, Cb/ab)
+///   Ao = as + ab - as*ab
+fn blend_filter(i: &[u8], i2: &[u8], mode: BlendMode) -> Vec<u8> {
+    let n = i.len().min(i2.len());
+    let mut out = vec![0u8; n];
+    let mut p = 0;
+    while p + 3 < n {
+        let asrc = i[p + 3] as f32 / 255.0;
+        let aback = i2[p + 3] as f32 / 255.0;
+        let ao = asrc + aback - asrc * aback;
+        for c in 0..3 {
+            let scp = i[p + c] as f32 / 255.0; // premultiplied source channel
+            let bcp = i2[p + c] as f32 / 255.0; // premultiplied backdrop channel
+            let sc = if asrc > 0.0 { scp / asrc } else { 0.0 };
+            let bc = if aback > 0.0 { bcp / aback } else { 0.0 };
+            let co = (1.0 - aback) * scp
+                + (1.0 - asrc) * bcp
+                + asrc * aback * blend_channel(mode, bc, sc);
+            out[p + c] = (co.clamp(0.0, ao.max(0.0)).min(1.0) * 255.0).round() as u8;
+        }
+        out[p + 3] = (ao.clamp(0.0, 1.0) * 255.0).round() as u8;
+        p += 4;
+    }
+    out
+}
+
+/// R10 `feComponentTransfer`: per-channel transfer on straight (unpremultiplied)
+/// colour, re-premultiplied at the end.
+fn component_transfer(src: &[u8], funcs: &[TransferFunc; 4]) -> Vec<u8> {
+    let mut out = vec![0u8; src.len()];
+    for (px, dst) in src.chunks_exact(4).zip(out.chunks_exact_mut(4)) {
+        let a = px[3] as f32 / 255.0;
+        let straight = |c: usize| {
+            if a > 0.0 {
+                px[c] as f32 / 255.0 / a
+            } else {
+                0.0
+            }
+        };
+        let nr = funcs[0].apply(straight(0));
+        let ng = funcs[1].apply(straight(1));
+        let nb = funcs[2].apply(straight(2));
+        let na = funcs[3].apply(a);
+        dst[0] = (nr * na * 255.0).round().clamp(0.0, 255.0) as u8;
+        dst[1] = (ng * na * 255.0).round().clamp(0.0, 255.0) as u8;
+        dst[2] = (nb * na * 255.0).round().clamp(0.0, 255.0) as u8;
+        dst[3] = (na * 255.0).round().clamp(0.0, 255.0) as u8;
+    }
+    out
+}
+
+/// R10 `feMorphology`: dilate (max) or erode (min) each premultiplied channel
+/// over a `(2rx+1) x (2ry+1)` window. Radii are capped by the caller.
+fn morphology(src: &[u8], w: usize, h: usize, dilate: bool, rx: usize, ry: usize) -> Vec<u8> {
+    if (rx == 0 && ry == 0) || w == 0 || h == 0 {
+        return src.to_vec();
+    }
+    let mut out = vec![0u8; src.len()];
+    for y in 0..h {
+        let y0 = y.saturating_sub(ry);
+        let y1 = (y + ry).min(h - 1);
+        for x in 0..w {
+            let x0 = x.saturating_sub(rx);
+            let x1 = (x + rx).min(w - 1);
+            for c in 0..4 {
+                let mut acc: u8 = if dilate { 0 } else { 255 };
+                for yy in y0..=y1 {
+                    let row = yy * w;
+                    for xx in x0..=x1 {
+                        let v = src[(row + xx) * 4 + c];
+                        acc = if dilate { acc.max(v) } else { acc.min(v) };
+                    }
+                }
+                out[(y * w + x) * 4 + c] = acc;
+            }
+        }
+    }
+    out
+}
+
 fn parse_filter(
     scene: &SvgScene,
     filter_id: &str,
@@ -4072,7 +6585,13 @@ fn parse_filter(
         .by_xml_id
         .get(filter_id)
         .and_then(|id| scene.references.nodes_by_id.get(id));
-    let Some(SvgNode::Unsupported { tag, children, .. }) = node else {
+    let Some(SvgNode::Unsupported {
+        tag,
+        attrs: filter_attrs,
+        children,
+        ..
+    }) = node
+    else {
         diagnostics.push(PendingDiagnostic::Warning {
             code: "filter.unresolved",
             message: "filter references an unavailable local id; no filter was applied",
@@ -4086,6 +6605,10 @@ fn parse_filter(
         });
         return None;
     }
+    // `color-interpolation-filters` defaults to linearRGB; only an explicit
+    // `sRGB` opts out (auto/linearRGB both stay linear).
+    let linear = !final_style_property(filter_attrs, "color-interpolation-filters")
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("sRGB"));
     let scale = affine_max_scale(ctm).max(1.0e-6);
     let mut primitives = Vec::new();
     for child in children {
@@ -4146,6 +6669,33 @@ fn parse_filter(
                     color: flood_color(attrs),
                 }
             }
+            "fecomposite" => FilterKind::Composite {
+                op: parse_composite_op(attrs),
+                input2: parse_filter_input(attr_get(attrs, "in2")),
+            },
+            "feblend" => {
+                let mode = attr_get(attrs, "mode")
+                    .and_then(parse_blend_mode)
+                    .unwrap_or(BlendMode::Normal);
+                FilterKind::Blend {
+                    mode,
+                    input2: parse_filter_input(attr_get(attrs, "in2")),
+                }
+            }
+            "fecomponenttransfer" => FilterKind::ComponentTransfer {
+                funcs: parse_component_transfer(child),
+            },
+            "femorphology" => {
+                let dilate = attr_get(attrs, "operator")
+                    .map(|v| v.trim().eq_ignore_ascii_case("dilate"))
+                    .unwrap_or(false);
+                let (rx, ry) = parse_std_deviation(attr_get(attrs, "radius"));
+                FilterKind::Morphology {
+                    dilate,
+                    rx: ((rx * scale).round().max(0.0) as usize).min(MAX_MORPH_RADIUS),
+                    ry: ((ry * scale).round().max(0.0) as usize).min(MAX_MORPH_RADIUS),
+                }
+            }
             other => {
                 diagnostics.push(PendingDiagnostic::Warning {
                     code: "filter.unsupported_primitive",
@@ -4164,7 +6714,67 @@ fn parse_filter(
     if primitives.is_empty() {
         return None;
     }
-    Some(FilterGraph { primitives })
+    let region = parse_filter_region(filter_attrs, ctm, diagnostics);
+    Some(FilterGraph {
+        primitives,
+        linear,
+        region,
+    })
+}
+
+/// Parse the filter region from `filterUnits` + filter `x/y/width/height` (R10).
+/// objectBoundingBox (default) yields bbox fractions; userSpaceOnUse yields an
+/// explicit device rect (percentage lengths there are approximated + diagnosed).
+fn parse_filter_region(
+    attrs: &[(String, String)],
+    ctm: Transform,
+    diagnostics: &mut Vec<PendingDiagnostic>,
+) -> FilterRegion {
+    let obbox = !attr_get(attrs, "filterunits")
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("userSpaceOnUse"));
+    if obbox {
+        // Fractions of the bounding box: number as-is, percent / 100.
+        let frac = |key: &str, default: f64| {
+            attr_get(attrs, key)
+                .and_then(svg_core::parse_length)
+                .map(|l| match l.unit {
+                    svg_core::SvgLengthUnit::Percent => l.value / 100.0,
+                    _ => l.value,
+                })
+                .unwrap_or(default)
+        };
+        FilterRegion::ObjectBoundingBox {
+            fx: frac("x", -0.1),
+            fy: frac("y", -0.1),
+            fw: frac("width", 1.2),
+            fh: frac("height", 1.2),
+        }
+    } else {
+        // userSpaceOnUse: explicit user lengths -> device rect via the CTM.
+        let parse_len = |key: &str| attr_get(attrs, key).and_then(svg_core::parse_length);
+        if ["x", "y", "width", "height"]
+            .iter()
+            .any(|k| matches!(parse_len(k), Some(l) if l.unit == svg_core::SvgLengthUnit::Percent))
+        {
+            diagnostics.push(PendingDiagnostic::Warning {
+                code: "filter.region_percent_approximated",
+                message:
+                    "percentage filter region with userSpaceOnUse is approximated as a user-unit value",
+            });
+        }
+        let num = |key: &str| parse_len(key).map(|l| l.value);
+        let (x, y) = (num("x").unwrap_or(0.0), num("y").unwrap_or(0.0));
+        let (wd, ht) = (num("width"), num("height"));
+        match (wd, ht) {
+            (Some(wd), Some(ht)) if wd > 0.0 && ht > 0.0 => {
+                let (dx0, dy0) = ctm.apply(x, y);
+                let (dx1, dy1) = ctm.apply(x + wd, y + ht);
+                FilterRegion::UserSpace([dx0.min(dx1), dy0.min(dy1), dx0.max(dx1), dy0.max(dy1)])
+            }
+            // No usable explicit region — fall back to the bbox default.
+            _ => FilterRegion::default(),
+        }
+    }
 }
 
 fn parse_filter_input(value: Option<&str>) -> FilterInput {
@@ -4264,12 +6874,90 @@ fn parse_color_matrix(attrs: &[(String, String)]) -> [f32; 20] {
     }
 }
 
+/// Parse a `feComposite` `operator` (+ arithmetic k1..k4) (R10).
+fn parse_composite_op(attrs: &[(String, String)]) -> CompositeOp {
+    let k = |name: &str| attr_get(attrs, name).and_then(parse_f64).unwrap_or(0.0) as f32;
+    match attr_get(attrs, "operator")
+        .map(|v| v.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("in") => CompositeOp::In,
+        Some("out") => CompositeOp::Out,
+        Some("atop") => CompositeOp::Atop,
+        Some("xor") => CompositeOp::Xor,
+        Some("arithmetic") => CompositeOp::Arithmetic {
+            k1: k("k1"),
+            k2: k("k2"),
+            k3: k("k3"),
+            k4: k("k4"),
+        },
+        _ => CompositeOp::Over,
+    }
+}
+
+/// Parse `feFuncR/G/B/A` children into per-channel transfer functions (R10).
+fn parse_component_transfer(node: &SvgNode) -> [TransferFunc; 4] {
+    let mut funcs = [
+        TransferFunc::Identity,
+        TransferFunc::Identity,
+        TransferFunc::Identity,
+        TransferFunc::Identity,
+    ];
+    for child in node.children().unwrap_or_default() {
+        let SvgNode::Unsupported { tag, attrs, .. } = child else {
+            continue;
+        };
+        let idx = match tag.as_str() {
+            "fefuncr" => 0,
+            "fefuncg" => 1,
+            "fefuncb" => 2,
+            "fefunca" => 3,
+            _ => continue,
+        };
+        funcs[idx] = parse_transfer_func(attrs);
+    }
+    funcs
+}
+
+fn parse_transfer_func(attrs: &[(String, String)]) -> TransferFunc {
+    let f = |name: &str, default: f32| {
+        attr_get(attrs, name)
+            .and_then(parse_f64)
+            .map(|v| v as f32)
+            .unwrap_or(default)
+    };
+    let table = || {
+        svg_core::parse_numbers(attr_get(attrs, "tablevalues").unwrap_or(""))
+            .into_iter()
+            .map(|v| v as f32)
+            .collect::<Vec<f32>>()
+    };
+    match attr_get(attrs, "type")
+        .map(|v| v.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("table") => TransferFunc::Table(table()),
+        Some("discrete") => TransferFunc::Discrete(table()),
+        Some("linear") => TransferFunc::Linear {
+            slope: f("slope", 1.0),
+            intercept: f("intercept", 0.0),
+        },
+        Some("gamma") => TransferFunc::Gamma {
+            amplitude: f("amplitude", 1.0),
+            exponent: f("exponent", 1.0),
+            offset: f("offset", 0.0),
+        },
+        _ => TransferFunc::Identity,
+    }
+}
+
 /// Fully-resolved layer payload carried by `DrawCommand::BeginLayer`.
 struct ResolvedLayer {
     clip: Option<ClipDef>,
     mask: Option<MaskDef>,
     filter: Option<FilterGraph>,
     opacity: f32,
+    blend: BlendMode,
     needs_offscreen: bool,
     diagnostics: Vec<PendingDiagnostic>,
     source: SvgRenderSource,
@@ -4309,13 +6997,17 @@ impl ResolvedLayer {
             .filter_ref
             .as_ref()
             .and_then(|id| parse_filter(scene, id, element_ctm, &mut diagnostics));
-        let needs_offscreen =
-            raw.opacity < 1.0 || raw.isolate || mask.is_some() || filter.is_some();
+        let needs_offscreen = raw.opacity < 1.0
+            || raw.isolate
+            || mask.is_some()
+            || filter.is_some()
+            || raw.blend != BlendMode::Normal;
         ResolvedLayer {
             clip,
             mask,
             filter,
             opacity: raw.opacity.clamp(0.0, 1.0),
+            blend: raw.blend,
             needs_offscreen,
             diagnostics,
             source: raw.source,
@@ -4337,6 +7029,8 @@ enum DrawCommand {
         length_bases: SvgLengthBases,
         path_length: Option<f64>,
         clip: Option<ClipDef>,
+        /// R9 start/mid/end markers resolved + placed on this shape's vertices.
+        markers: Option<Box<MarkerSet>>,
         diagnostics: Vec<PendingDiagnostic>,
         source: SvgRenderSource,
     },
@@ -4367,11 +7061,6 @@ enum DrawCommand {
     },
     /// A group container — carried only so attribute diagnostics still fire.
     GroupDiagnostics {
-        diagnostics: Vec<PendingDiagnostic>,
-        source: SvgRenderSource,
-    },
-    /// Text — preserved in source but not rasterized.
-    UnsupportedText {
         diagnostics: Vec<PendingDiagnostic>,
         source: SvgRenderSource,
     },
@@ -4411,10 +7100,17 @@ impl DisplayList {
                     diagnostics,
                     source,
                 },
-                SvgNode::Text { .. } => DrawCommand::UnsupportedText {
-                    diagnostics,
-                    source,
-                },
+                SvgNode::Text { .. } => {
+                    if item.skipped_by_unsupported_ancestor {
+                        DrawCommand::SkippedShape {
+                            diagnostics,
+                            source,
+                        }
+                    } else {
+                        // R11: raster text snapshot via the bundled vector font.
+                        lower_text_command(scene, item, node_xform, diagnostics, source)
+                    }
+                }
                 SvgNode::Unsupported { tag, attrs, .. } if tag == "image" => {
                     let lb = item.length_bases;
                     let x = attr_f32(attrs, "x", lb.horizontal, 0.0) as f64;
@@ -4512,6 +7208,17 @@ impl DisplayList {
                                 &mut diagnostics,
                             )
                         });
+                        let markers = geometry.as_ref().and_then(|geometry| {
+                            build_markers(
+                                scene,
+                                shape_node.attrs(),
+                                &item.style,
+                                item.length_bases,
+                                geometry,
+                                &node_xform,
+                                &mut diagnostics,
+                            )
+                        });
                         DrawCommand::Shape {
                             geometry,
                             transform: node_xform,
@@ -4519,6 +7226,7 @@ impl DisplayList {
                             length_bases: item.length_bases,
                             path_length: parsed_path_length(shape_node.attrs()),
                             clip,
+                            markers,
                             diagnostics,
                             source,
                         }
@@ -4562,6 +7270,7 @@ impl DisplayList {
                             offscreens.push(Offscreen {
                                 buf: vec![0u8; bytes],
                                 opacity: layer.opacity,
+                                blend: layer.blend,
                             });
                             offscreen_bytes += bytes;
                             pushed_offscreen = true;
@@ -4617,12 +7326,15 @@ impl DisplayList {
                     length_bases,
                     path_length,
                     clip,
+                    markers,
                     diagnostics,
                     source,
                 } => {
                     emit_diagnostics(diagnostics, *source, report);
                     for (property, id) in style.paint_server_references() {
-                        if !self.paint_servers.servers.contains_key(id) {
+                        if !self.paint_servers.servers.contains_key(id)
+                            && !self.paint_servers.patterns.contains_key(id)
+                        {
                             report.warning_at(
                                 "paint.unresolved_server",
                                 format!(
@@ -4691,6 +7403,58 @@ impl DisplayList {
                         report.rendered();
                     } else {
                         report.skipped();
+                    }
+                    // R9: draw resolved markers on this shape's vertices, each
+                    // clipped to its viewport rect (overflow:hidden) intersected
+                    // with the ancestor clip.
+                    if let Some(set) = markers {
+                        for placement in &set.placements {
+                            let def = &set.defs[placement.def_index];
+                            let marker_clip = placement.overflow_hidden.then(|| {
+                                ClipDef {
+                                    shapes: vec![ClipShape {
+                                        device_subpaths: vec![placement.viewport_corners.clone()],
+                                        fill_rule: FillRule::Nonzero,
+                                    }],
+                                    nested: None,
+                                }
+                                .build_mask(w, h)
+                            });
+                            let combined =
+                                combine_clips(effective_clip.as_ref(), marker_clip.as_ref());
+                            match offscreens.last_mut() {
+                                Some(off) => {
+                                    let mut target = RasterTarget {
+                                        buf: &mut off.buf,
+                                        width: w,
+                                        height: h,
+                                        premultiplied: true,
+                                        clip: combined.as_ref(),
+                                    };
+                                    render_content_items(
+                                        &def.items,
+                                        placement.content_to_device,
+                                        &self.paint_servers,
+                                        &mut target,
+                                    );
+                                }
+                                None => {
+                                    let mut target = RasterTarget {
+                                        buf,
+                                        width: w,
+                                        height: h,
+                                        premultiplied: false,
+                                        clip: combined.as_ref(),
+                                    };
+                                    render_content_items(
+                                        &def.items,
+                                        placement.content_to_device,
+                                        &self.paint_servers,
+                                        &mut target,
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
                 DrawCommand::Image {
@@ -4766,18 +7530,6 @@ impl DisplayList {
                     source,
                 } => {
                     emit_diagnostics(diagnostics, *source, report);
-                    report.skipped();
-                }
-                DrawCommand::UnsupportedText {
-                    diagnostics,
-                    source,
-                } => {
-                    emit_diagnostics(diagnostics, *source, report);
-                    report.unsupported_at(
-                        "text",
-                        "text elements are preserved in source but not rasterized yet",
-                        Some(*source),
-                    );
                     report.skipped();
                 }
                 DrawCommand::UnsupportedNode {
@@ -4975,6 +7727,8 @@ fn combine_clips(ancestor: Option<&ClipMask>, local: Option<&ClipMask>) -> Optio
 struct Offscreen {
     buf: Vec<u8>,
     opacity: f32,
+    /// `mix-blend-mode` used when compositing this layer back into its parent.
+    blend: BlendMode,
 }
 
 /// One open layer scope in `DisplayList::execute`'s layer stack.
@@ -6867,6 +9621,10 @@ fn composite_offscreen(parent: &mut [u8], parent_premultiplied: bool, offscreen:
     if opacity <= 0.0 {
         return;
     }
+    if offscreen.blend != BlendMode::Normal {
+        composite_offscreen_blended(parent, parent_premultiplied, offscreen, opacity);
+        return;
+    }
     let src = &offscreen.buf;
     let count = parent.len().min(src.len()) / 4;
     for pixel in 0..count {
@@ -6909,6 +9667,67 @@ fn composite_offscreen(parent: &mut [u8], parent_premultiplied: bool, offscreen:
                     .clamp(0.0, 255.0) as u8;
                 parent[idx + 3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
             }
+        }
+    }
+}
+
+/// R10 `mix-blend-mode` composite: blend an isolated group offscreen
+/// (premultiplied, faded by `opacity`) into its parent with a separable blend.
+/// Works in premultiplied space; converts to/from a straight parent at the edge.
+fn composite_offscreen_blended(
+    parent: &mut [u8],
+    parent_premultiplied: bool,
+    offscreen: &Offscreen,
+    opacity: f32,
+) {
+    let src = &offscreen.buf;
+    let count = parent.len().min(src.len()) / 4;
+    for pixel in 0..count {
+        let idx = pixel * 4;
+        let sa = src[idx + 3] as f32 * opacity / 255.0;
+        // Source premultiplied channels, faded by group opacity.
+        let s = [
+            src[idx] as f32 * opacity / 255.0,
+            src[idx + 1] as f32 * opacity / 255.0,
+            src[idx + 2] as f32 * opacity / 255.0,
+        ];
+        let ab = parent[idx + 3] as f32 / 255.0;
+        // Backdrop premultiplied channels.
+        let d = if parent_premultiplied {
+            [
+                parent[idx] as f32 / 255.0,
+                parent[idx + 1] as f32 / 255.0,
+                parent[idx + 2] as f32 / 255.0,
+            ]
+        } else {
+            [
+                parent[idx] as f32 / 255.0 * ab,
+                parent[idx + 1] as f32 / 255.0 * ab,
+                parent[idx + 2] as f32 / 255.0 * ab,
+            ]
+        };
+        if sa <= 0.0 && ab <= 0.0 {
+            continue;
+        }
+        let ao = sa + ab - sa * ab;
+        let mut co = [0.0f32; 3];
+        for c in 0..3 {
+            let sc = if sa > 0.0 { s[c] / sa } else { 0.0 };
+            let bc = if ab > 0.0 { d[c] / ab } else { 0.0 };
+            co[c] = (1.0 - ab) * s[c]
+                + (1.0 - sa) * d[c]
+                + sa * ab * blend_channel(offscreen.blend, bc, sc);
+        }
+        if parent_premultiplied {
+            for c in 0..3 {
+                parent[idx + c] = (co[c] * 255.0).round().clamp(0.0, 255.0) as u8;
+            }
+            parent[idx + 3] = (ao * 255.0).round().clamp(0.0, 255.0) as u8;
+        } else if ao > 0.0 {
+            for c in 0..3 {
+                parent[idx + c] = (co[c] / ao * 255.0).round().clamp(0.0, 255.0) as u8;
+            }
+            parent[idx + 3] = (ao * 255.0).round().clamp(0.0, 255.0) as u8;
         }
     }
 }
@@ -8309,19 +11128,25 @@ mod tests {
 
     #[test]
     fn render_report_counts_rendered_skipped_and_text_limitations() {
+        // R11: <text> now renders via the bundled vector font (with an honest
+        // text.raster_snapshot approximation warning) instead of being skipped.
         let svg = r##"<svg viewBox="0 0 20 20">
 <rect width="10" height="10" fill="#ff0000"/>
 <rect x="12" width="0" height="5" fill="#00ff00"/>
-<text x="1" y="18">Skipped text</text>
+<text x="1" y="18">Hi</text>
 </svg>"##;
         let output = rasterize_with_report(svg, 20, 20).unwrap();
 
-        assert_eq!(output.report.rendered_element_count, 1);
-        assert_eq!(output.report.skipped_element_count, 2);
-        assert_eq!(output.report.warning_count, 0);
-        assert_eq!(output.report.unsupported_feature_count, 1);
-        assert_eq!(output.report.unsupported_features[0].feature, "text");
-        let source = output.report.unsupported_features[0].source.unwrap();
+        assert_eq!(output.report.rendered_element_count, 2);
+        assert_eq!(output.report.skipped_element_count, 1);
+        assert_eq!(output.report.unsupported_feature_count, 0);
+        let snapshot = output
+            .report
+            .warnings
+            .iter()
+            .find(|w| w.code == "text.raster_snapshot")
+            .expect("raster snapshot warning");
+        let source = snapshot.source.unwrap();
         assert!(svg[source.byte_start..source.byte_end].starts_with("<text"));
         assert_eq!(output.report.fidelity, SvgRenderFidelity::Medium);
         assert_eq!(pixel(&output.image, 5, 5), [255, 0, 0, 255]);
@@ -8329,11 +11154,12 @@ mod tests {
 
     #[test]
     fn render_report_flags_unsupported_feature_buckets() {
-        // clipPath (R4) and filter (R7) now render; patterns remain unsupported.
+        // clipPath (R4), filter (R7), and pattern (R9) all render now — none
+        // should appear as unsupported feature buckets.
         let svg = r##"<svg viewBox="0 0 20 20">
 <defs>
   <clipPath id="c"><rect width="10" height="10"/></clipPath>
-  <pattern id="p" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="2" height="2"/></pattern>
+  <pattern id="p" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="2" height="2" fill="#ff0000"/></pattern>
   <filter id="f"><feGaussianBlur stdDeviation="1"/></filter>
 </defs>
 <rect width="20" height="20" fill="url(#p)" clip-path="url(#c)" filter="url(#f)"/>
@@ -8346,14 +11172,19 @@ mod tests {
             .map(|u| u.feature.as_str())
             .collect();
 
-        // clipPath (R4) and filter (R7) render → not unsupported buckets.
+        // clipPath (R4), filter (R7), and pattern (R9) render → no unsupported.
         assert!(!features.contains(&"clipPath"));
         assert!(!features.contains(&"clip-path attribute"));
         assert!(!features.contains(&"filter"));
         assert!(!features.contains(&"filter attribute"));
-        // Patterns remain explicitly unsupported.
-        assert!(features.contains(&"pattern"));
-        assert_eq!(output.report.fidelity, SvgRenderFidelity::Low);
+        assert!(!features.contains(&"pattern"));
+        // No `paint.unresolved_server` warning for a resolvable pattern.
+        assert!(!output
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.code == "paint.unresolved_server"));
+        assert!(output.report.rendered_element_count >= 1);
     }
 
     #[test]
@@ -9128,7 +11959,10 @@ mod tests {
     }
 
     #[test]
-    fn gradient_cycles_and_patterns_remain_explicit_diagnostics() {
+    fn gradient_cycles_are_diagnosed_and_patterns_resolve() {
+        // The gradient href cycle is still diagnosed; the pattern (R9) now
+        // resolves as a paint server rather than landing in the unsupported
+        // bucket, even when it has no renderable content.
         let svg = r##"<svg viewBox="0 0 10 10">
 <defs>
 <linearGradient id="a" href="#b"/><linearGradient id="b" href="#a"/>
@@ -9144,14 +11978,18 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning.code == "reference.gradient_cycle"));
-        let pattern = output
+        // Pattern is resolved: not an unsupported feature, no unresolved-server.
+        assert!(!output
             .report
             .unsupported_features
             .iter()
-            .find(|feature| feature.feature == "pattern")
-            .expect("pattern diagnostic");
-        assert!(pattern.message.contains("patternunits"));
-        assert!(pattern.message.contains("patterntransform"));
+            .any(|feature| feature.feature == "pattern"));
+        assert!(!output
+            .report
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "paint.unresolved_server"
+                && warning.message.contains("#p")));
     }
 
     #[test]
@@ -9191,7 +12029,7 @@ mod tests {
     }
 
     #[test]
-    fn gradients_are_deterministic_high_fidelity_while_patterns_are_not() {
+    fn gradients_and_patterns_render_deterministically_and_high_fidelity() {
         let gradient = r##"<svg viewBox="0 0 12 4"><defs>
 <linearGradient id="g"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient>
 </defs><rect width="12" height="4" fill="url(#g)"/></svg>"##;
@@ -9201,21 +12039,27 @@ mod tests {
         assert_eq!(first.report.fidelity, SvgRenderFidelity::High);
         assert_eq!(first.report.unsupported_feature_count, 0);
 
+        // R9: patterns now tile and render (not diagnosed-transparent), so the
+        // fill is no longer flagged unsupported and produces real pixels.
         let pattern = r##"<svg viewBox="0 0 12 4"><defs>
-<pattern id="p" width="2" height="2" patternUnits="userSpaceOnUse"><rect width="1" height="1"/></pattern>
+<pattern id="p" width="2" height="2" patternUnits="userSpaceOnUse"><rect width="1" height="1" fill="#ff0000"/></pattern>
 </defs><rect width="12" height="4" fill="url(#p)"/></svg>"##;
-        let output = rasterize_with_report(pattern, 12, 4).unwrap();
-        assert_eq!(output.report.fidelity, SvgRenderFidelity::Low);
-        assert!(output
+        let pfirst = rasterize_with_report(pattern, 12, 4).unwrap();
+        let psecond = rasterize_with_report(pattern, 12, 4).unwrap();
+        assert_eq!(pfirst.image.pixels, psecond.image.pixels);
+        assert!(!pfirst
             .report
             .unsupported_features
             .iter()
             .any(|feature| feature.feature == "pattern"));
-        assert!(output
+        assert!(!pfirst
             .report
             .warnings
             .iter()
             .any(|warning| warning.code == "paint.unresolved_server"));
+        // The tile (a red square in the top-left of each 2x2 cell) actually paints.
+        assert_eq!(pixel(&pfirst.image, 0, 0), [255, 0, 0, 255]);
+        assert_eq!(pixel(&pfirst.image, 1, 0), [0, 0, 0, 0]);
     }
 
     #[test]
@@ -9820,7 +12664,8 @@ mod tests {
 
     #[test]
     fn gaussian_blur_softens_a_hard_edge() {
-        let svg = r##"<svg viewBox="0 0 8 8"><filter id="f"><feGaussianBlur stdDeviation="1.2"/></filter><rect x="2" y="2" width="4" height="4" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        // Explicit region so the blur halo survives R10 filter-region clipping.
+        let svg = r##"<svg viewBox="0 0 8 8"><filter id="f" x="-25%" y="-25%" width="150%" height="150%"><feGaussianBlur stdDeviation="1.2"/></filter><rect x="2" y="2" width="4" height="4" fill="#ff0000" filter="url(#f)"/></svg>"##;
         let out = rasterize(svg, 8, 8).unwrap();
         // Blur bleeds partial alpha outside the original sharp 4x4 rect.
         assert!(out.pixels.iter().any(|c| c.a() > 0 && c.a() < 255));
@@ -9840,7 +12685,8 @@ mod tests {
 
     #[test]
     fn fedropshadow_adds_offset_shadow() {
-        let svg = r##"<svg viewBox="0 0 6 6"><filter id="f"><feDropShadow dx="2" dy="2" stdDeviation="0" flood-color="#000000"/></filter><rect width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        // Explicit region so the offset shadow survives R10 region clipping.
+        let svg = r##"<svg viewBox="0 0 6 6"><filter id="f" x="0" y="0" width="250%" height="250%"><feDropShadow dx="2" dy="2" stdDeviation="0" flood-color="#000000"/></filter><rect width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##;
         let out = rasterize(svg, 6, 6).unwrap();
         // Source stays red at the origin; a dark shadow appears at the offset.
         assert_eq!(pixel(&out, 0, 0), [255, 0, 0, 255]);
@@ -9967,6 +12813,401 @@ mod tests {
                 .any(|w| w.code == "vector_effect.unsupported"),
             "unsupported vector-effect value must be diagnosed"
         );
+    }
+
+    // --- R9: markers ---------------------------------------------------------
+
+    #[test]
+    fn markers_render_on_start_mid_end_vertices() {
+        // 2x2 red markers centred (refX/refY=1) on every vertex of a 3-point
+        // polyline; check a red pixel lands at each vertex.
+        let svg = r##"<svg viewBox="0 0 12 4"><defs><marker id="m" markerWidth="2" markerHeight="2" refX="1" refY="1" markerUnits="userSpaceOnUse"><rect width="2" height="2" fill="#ff0000"/></marker></defs><polyline points="1,2 6,2 11,2" fill="none" stroke="#0000ff" stroke-width="1" marker-start="url(#m)" marker-mid="url(#m)" marker-end="url(#m)"/></svg>"##;
+        let out = rasterize_with_report(svg, 12, 4).unwrap();
+        for vx in [1usize, 6, 11] {
+            assert_eq!(
+                pixel(&out.image, vx.min(11), 1),
+                [255, 0, 0, 255],
+                "marker missing at vertex x={vx}"
+            );
+        }
+        assert!(out
+            .report
+            .warnings
+            .iter()
+            .all(|w| w.code != "marker.unresolved"));
+    }
+
+    #[test]
+    fn auto_orient_marker_renders_and_is_deterministic() {
+        let svg = r##"<svg viewBox="0 0 8 8"><defs><marker id="a" markerWidth="3" markerHeight="3" refX="0" refY="1.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0 L3 1.5 L0 3 Z" fill="#00ff00"/></marker></defs><line x1="1" y1="4" x2="5" y2="4" stroke="#000000" stroke-width="1" marker-end="url(#a)"/></svg>"##;
+        let a = rasterize(svg, 8, 8).unwrap();
+        let b = rasterize(svg, 8, 8).unwrap();
+        assert_eq!(a.pixels, b.pixels, "marker render must be deterministic");
+        // The green arrowhead tip lands near the line end (x≈5, y≈4).
+        assert_eq!(pixel(&a, 5, 4), [0, 255, 0, 255]);
+    }
+
+    #[test]
+    fn missing_marker_reference_is_diagnosed_not_fatal() {
+        let svg = r##"<svg viewBox="0 0 8 8"><line x1="0" y1="4" x2="8" y2="4" stroke="#0000ff" stroke-width="2" marker-end="url(#nope)"/></svg>"##;
+        let out = rasterize_with_report(svg, 8, 8).unwrap();
+        assert!(out
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.code == "marker.unresolved"));
+        // The line itself still renders.
+        assert!(out.report.rendered_element_count >= 1);
+    }
+
+    #[test]
+    fn marker_units_userspaceonuse_ignores_stroke_width() {
+        // userSpaceOnUse markers are NOT scaled by stroke-width; a 2x2 marker
+        // stays 2 device px wide regardless of a thick stroke.
+        let svg = r##"<svg viewBox="0 0 8 8"><defs><marker id="m" markerWidth="2" markerHeight="2" refX="0" refY="0" markerUnits="userSpaceOnUse"><rect width="2" height="2" fill="#ff0000"/></marker></defs><line x1="1" y1="1" x2="6" y2="1" stroke="#0000ff" stroke-width="4" marker-start="url(#m)"/></svg>"##;
+        let out = rasterize(svg, 8, 8).unwrap();
+        // Marker placed at (1,1), spanning device x 1..3, y 1..3 (2px, not 8px).
+        assert_eq!(pixel(&out, 1, 1), [255, 0, 0, 255]);
+        assert_eq!(pixel(&out, 2, 2), [255, 0, 0, 255]);
+        assert_eq!(pixel(&out, 4, 1), [0, 0, 255, 255]); // beyond marker → blue stroke
+    }
+
+    // --- R9: pattern robustness ----------------------------------------------
+
+    #[test]
+    fn pattern_href_cycle_is_bounded_and_diagnosed() {
+        let svg = r##"<svg viewBox="0 0 8 8"><defs>
+<pattern id="a" href="#b" width="2" height="2" patternUnits="userSpaceOnUse"/>
+<pattern id="b" href="#a" width="2" height="2" patternUnits="userSpaceOnUse"><rect width="1" height="1" fill="#ff0000"/></pattern>
+</defs><rect width="8" height="8" fill="url(#a)"/></svg>"##;
+        let out = rasterize_with_report(svg, 8, 8).unwrap();
+        assert!(out
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.code == "reference.pattern_cycle"));
+    }
+
+    #[test]
+    fn self_referential_pattern_content_terminates() {
+        // A pattern whose own content paints with itself must not recurse
+        // forever — the inner reference is dropped to transparent.
+        let svg = r##"<svg viewBox="0 0 8 8"><defs>
+<pattern id="p" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="4" height="4" fill="url(#p)"/></pattern>
+</defs><rect width="8" height="8" fill="url(#p)"/></svg>"##;
+        let out = rasterize(svg, 8, 8).unwrap();
+        // Fully transparent (the only content paints with the removed pattern).
+        assert_eq!(pixel(&out, 4, 4), [0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn oversized_pattern_tile_is_capped_without_panic() {
+        // A huge tile under a large scale would blow memory if uncapped; the
+        // tile pixel budget clamps it and the render still completes.
+        let svg = r##"<svg viewBox="0 0 64 64"><defs>
+<pattern id="p" width="5000" height="5000" patternUnits="userSpaceOnUse"><rect width="2500" height="2500" fill="#00ff00"/></pattern>
+</defs><rect width="64" height="64" fill="url(#p)"/></svg>"##;
+        let out = rasterize(svg, 64, 64).unwrap();
+        assert_eq!(out.size, [64, 64]);
+    }
+
+    #[test]
+    fn pattern_object_bounding_box_tiles_render() {
+        let svg = r##"<svg viewBox="0 0 4 4"><defs>
+<pattern id="p" width="0.5" height="0.5" patternUnits="objectBoundingBox" patternContentUnits="objectBoundingBox"><rect width="0.25" height="0.5" fill="#0000ff"/></pattern>
+</defs><rect width="4" height="4" fill="url(#p)"/></svg>"##;
+        let out = rasterize(svg, 4, 4).unwrap();
+        assert_eq!(pixel(&out, 0, 0), [0, 0, 255, 255]);
+        assert_eq!(pixel(&out, 1, 0), [0, 0, 0, 0]);
+        assert_eq!(pixel(&out, 2, 0), [0, 0, 255, 255]);
+    }
+
+    // --- R10: tier-2 filter primitives --------------------------------------
+
+    #[test]
+    fn feblend_multiply_and_screen_differ_and_are_deterministic() {
+        let multiply = r##"<svg viewBox="0 0 4 4"><filter id="f"><feFlood flood-color="#00ff00" result="b"/><feBlend mode="multiply" in="SourceGraphic" in2="b"/></filter><rect width="4" height="4" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        let screen = r##"<svg viewBox="0 0 4 4"><filter id="f"><feFlood flood-color="#00ff00" result="b"/><feBlend mode="screen" in="SourceGraphic" in2="b"/></filter><rect width="4" height="4" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        let m1 = rasterize(multiply, 4, 4).unwrap();
+        let m2 = rasterize(multiply, 4, 4).unwrap();
+        assert_eq!(m1.pixels, m2.pixels, "feBlend must be deterministic");
+        // multiply(red, green) = black; screen(red, green) = yellow.
+        assert_eq!(pixel(&m1, 0, 0), [0, 0, 0, 255]);
+        let s = rasterize(screen, 4, 4).unwrap();
+        assert_eq!(pixel(&s, 0, 0), [255, 255, 0, 255]);
+    }
+
+    #[test]
+    fn fecomposite_arithmetic_and_porterduff_render() {
+        // arithmetic add of red over green flood = yellow.
+        let add = r##"<svg viewBox="0 0 2 2"><filter id="f"><feFlood flood-color="#00ff00" result="g"/><feComposite operator="arithmetic" k1="0" k2="1" k3="1" k4="0" in="SourceGraphic" in2="g"/></filter><rect width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        assert_eq!(
+            pixel(&rasterize(add, 2, 2).unwrap(), 0, 0),
+            [255, 255, 0, 255]
+        );
+        // operator="in" keeps source only where the backdrop (flood) is present.
+        let op_in = r##"<svg viewBox="0 0 2 2"><filter id="f"><feFlood flood-color="#0000ff" result="g"/><feComposite operator="in" in="SourceGraphic" in2="g"/></filter><rect width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        assert_eq!(
+            pixel(&rasterize(op_in, 2, 2).unwrap(), 0, 0),
+            [255, 0, 0, 255]
+        );
+    }
+
+    #[test]
+    fn fecomponent_transfer_gamma_and_linear_are_applied() {
+        // gamma exponent=2 on a mid grey (0.5) -> 0.25.
+        assert_eq!(
+            TransferFunc::Gamma {
+                amplitude: 1.0,
+                exponent: 2.0,
+                offset: 0.0,
+            }
+            .apply(0.5),
+            0.25
+        );
+        // linear slope=0 intercept=1 forces the channel to full.
+        assert_eq!(
+            TransferFunc::Linear {
+                slope: 0.0,
+                intercept: 1.0,
+            }
+            .apply(0.0),
+            1.0
+        );
+        // table inversion renders (red -> cyan) end to end.
+        let svg = r##"<svg viewBox="0 0 2 2"><filter id="f"><feComponentTransfer><feFuncR type="table" tableValues="1 0"/></feComponentTransfer></filter><rect width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        assert_eq!(pixel(&rasterize(svg, 2, 2).unwrap(), 0, 0), [0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn femorphology_dilate_grows_and_huge_radius_is_bounded() {
+        let svg = r##"<svg viewBox="0 0 8 8"><filter id="f" x="-50%" y="-50%" width="200%" height="200%"><feMorphology operator="dilate" radius="1"/></filter><rect x="3" y="3" width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        let out = rasterize(svg, 8, 8).unwrap();
+        // Dilation reaches the pixel just outside the original 2x2 square.
+        assert_eq!(pixel(&out, 2, 2), [255, 0, 0, 255]);
+        // A pathological radius must complete (capped) without panicking.
+        let bomb = r##"<svg viewBox="0 0 8 8"><filter id="f"><feMorphology operator="dilate" radius="100000"/></filter><rect width="8" height="8" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        assert_eq!(rasterize(bomb, 8, 8).unwrap().size, [8, 8]);
+    }
+
+    #[test]
+    fn color_interpolation_filters_linear_default_lightens_blur_midpoint() {
+        // Blur a black|white seam. In linearRGB (default) the blurred midpoint is
+        // lighter than in sRGB, because averaging happens in linear light.
+        let linear = r##"<svg viewBox="0 0 8 4"><filter id="f"><feGaussianBlur stdDeviation="1.2"/></filter><g filter="url(#f)"><rect width="4" height="4" fill="#000000"/><rect x="4" width="4" height="4" fill="#ffffff"/></g></svg>"##;
+        let srgb = r##"<svg viewBox="0 0 8 4"><filter id="f" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="1.2"/></filter><g filter="url(#f)"><rect width="4" height="4" fill="#000000"/><rect x="4" width="4" height="4" fill="#ffffff"/></g></svg>"##;
+        let lin = rasterize(linear, 8, 4).unwrap();
+        let srg = rasterize(srgb, 8, 4).unwrap();
+        // Same seam pixel, just-left-of-centre (still inside the black half).
+        let lp = pixel(&lin, 3, 2);
+        let sp = pixel(&srg, 3, 2);
+        assert!(
+            lp[0] > sp[0] + 10,
+            "linearRGB blur must lighten the midpoint vs sRGB: linear={lp:?} srgb={sp:?}"
+        );
+        // Determinism.
+        assert_eq!(lin.pixels, rasterize(linear, 8, 4).unwrap().pixels);
+    }
+
+    #[test]
+    fn filter_region_clips_default_and_userspace() {
+        // Default objectBoundingBox region clips an feFlood to the bbox+margin,
+        // not the whole canvas.
+        let default_region = r##"<svg viewBox="0 0 6 6"><filter id="f"><feFlood flood-color="#0000ff"/></filter><rect x="2" y="2" width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        let out = rasterize(default_region, 6, 6).unwrap();
+        assert_eq!(pixel(&out, 2, 2), [0, 0, 255, 255]); // inside region
+        assert_eq!(pixel(&out, 0, 0), [0, 0, 0, 0]); // corner clipped out
+                                                     // userSpaceOnUse region with an explicit rect bounds the flood exactly.
+        let user = r##"<svg viewBox="0 0 6 6"><filter id="f" filterUnits="userSpaceOnUse" x="1" y="1" width="2" height="2"><feFlood flood-color="#0000ff"/></filter><rect width="6" height="6" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        let u = rasterize(user, 6, 6).unwrap();
+        assert_eq!(pixel(&u, 1, 1), [0, 0, 255, 255]); // inside [1,3)
+        assert_eq!(pixel(&u, 4, 4), [0, 0, 0, 0]); // outside the explicit region
+    }
+
+    // --- R11: raster text ----------------------------------------------------
+
+    #[test]
+    fn raster_text_renders_deterministically_and_reports_snapshot() {
+        let svg = r##"<svg viewBox="0 0 16 16"><text x="1" y="12" font-size="12" fill="#ff0000">Hi</text></svg>"##;
+        let a = rasterize_with_report(svg, 16, 16).unwrap();
+        let b = rasterize_with_report(svg, 16, 16).unwrap();
+        assert_eq!(a.image.pixels, b.image.pixels, "text render deterministic");
+        // Pixels actually land (H left stem near x=2).
+        assert!(a.image.pixels.iter().any(|c| c.r() > 200 && c.a() > 200));
+        assert!(a
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.code == "text.raster_snapshot"));
+        assert_eq!(a.report.rendered_element_count, 1);
+        // No "text" unsupported bucket anymore.
+        assert!(!a
+            .report
+            .unsupported_features
+            .iter()
+            .any(|f| f.feature == "text"));
+    }
+
+    #[test]
+    fn unknown_glyphs_render_tofu_with_diagnostic() {
+        let svg = r##"<svg viewBox="0 0 24 24"><text x="2" y="18" font-size="16" fill="#000000">日</text></svg>"##;
+        let out = rasterize_with_report(svg, 24, 24).unwrap();
+        assert!(out
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.code == "text.glyph_unsupported"));
+        // The tofu box paints something.
+        assert!(out.image.pixels.iter().any(|c| c.a() > 200));
+    }
+
+    #[test]
+    fn bidi_text_is_diagnosed_not_silently_wrong() {
+        let svg = r##"<svg viewBox="0 0 24 24"><text x="2" y="18" font-size="16" fill="#000000">ש</text></svg>"##;
+        let out = rasterize_with_report(svg, 24, 24).unwrap();
+        assert!(out
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.code == "text.bidi_unsupported"));
+    }
+
+    #[test]
+    fn tspan_runs_offset_and_unresolved_textpath_is_diagnosed() {
+        // dy-shifted tspan lands lower than the base run.
+        let svg = r##"<svg viewBox="0 0 32 32"><text x="2" y="10" font-size="10" fill="#ff0000">l<tspan dy="12">l</tspan></text></svg>"##;
+        let out = rasterize(svg, 32, 32).unwrap();
+        // Threshold 50: the 0.67px glyph stroke can straddle a pixel boundary
+        // and split its anti-aliased coverage across two columns.
+        let inked_rows: Vec<usize> = (0..32)
+            .filter(|&y| (0..32).any(|x| pixel(&out, x, y)[3] > 50))
+            .collect();
+        // Two stems: one ending near y=10, one near y=22.
+        assert!(inked_rows.iter().any(|&y| y < 11), "rows: {inked_rows:?}");
+        assert!(inked_rows.iter().any(|&y| y > 16), "rows: {inked_rows:?}");
+
+        let missing = r##"<svg viewBox="0 0 16 16"><text font-size="10"><textPath href="#nope">x</textPath></text></svg>"##;
+        let rep = rasterize_with_report(missing, 16, 16).unwrap();
+        assert!(rep
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.code == "textpath.unresolved"));
+    }
+
+    #[test]
+    fn text_glyph_limit_is_bounded_with_diagnostic() {
+        let long: String = "x".repeat(MAX_TEXT_GLYPHS + 50);
+        let svg = format!(
+            r##"<svg viewBox="0 0 64 64"><text x="1" y="32" font-size="8">{long}</text></svg>"##
+        );
+        let out = rasterize_with_report(&svg, 64, 64).unwrap();
+        assert!(out
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.code == "limit.text_glyphs"));
+    }
+
+    #[test]
+    fn mix_blend_mode_group_blends_with_backdrop() {
+        // Green group with mix-blend-mode:multiply over a red backdrop -> black.
+        let blended = r##"<svg viewBox="0 0 4 4"><rect width="4" height="4" fill="#ff0000"/><g style="mix-blend-mode: multiply"><rect width="4" height="4" fill="#00ff00"/></g></svg>"##;
+        let out = rasterize(blended, 4, 4).unwrap();
+        assert_eq!(pixel(&out, 1, 1), [0, 0, 0, 255]);
+        // Without the blend, the green group is plain src-over -> green wins.
+        let normal = r##"<svg viewBox="0 0 4 4"><rect width="4" height="4" fill="#ff0000"/><g><rect width="4" height="4" fill="#00ff00"/></g></svg>"##;
+        assert_eq!(
+            pixel(&rasterize(normal, 4, 4).unwrap(), 1, 1),
+            [0, 255, 0, 255]
+        );
+    }
+
+    // --- R12: namespace model + malformed recovery + a11y metadata ----------
+
+    #[test]
+    fn foreign_namespace_element_is_skipped_not_misrendered() {
+        // A custom-namespace <c:rect> must NOT render as an SVG <rect>; the real
+        // svg rect still renders, and xlink:href on <use> still resolves.
+        let svg = r##"<svg viewBox="0 0 10 10" xmlns:c="urn:custom">
+<c:rect width="10" height="10" fill="#ff0000"/>
+<rect x="0" y="0" width="4" height="4" fill="#00ff00"/>
+</svg>"##;
+        let out = rasterize_with_report(svg, 10, 10).unwrap();
+        // green rect rendered...
+        assert_eq!(pixel(&out.image, 1, 1), [0, 255, 0, 255]);
+        // ...but the foreign c:rect did not paint red over the rest.
+        assert_eq!(pixel(&out.image, 8, 8), [0, 0, 0, 0]);
+        assert!(out
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.code == "namespace.foreign_element"));
+    }
+
+    #[test]
+    fn xlink_href_use_still_resolves() {
+        let svg = r##"<svg viewBox="0 0 4 4" xmlns:xlink="http://www.w3.org/1999/xlink"><defs><rect id="r" width="2" height="4" fill="#ff0000"/></defs><use xlink:href="#r" x="2"/></svg>"##;
+        let out = rasterize(svg, 4, 4).unwrap();
+        assert_eq!(pixel(&out, 3, 1), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn malformed_markup_recovers_with_partial_render_and_diagnostic() {
+        // Mismatched close tag + stray junk: should still render the rect and
+        // report a recovery, never ParseFailed or panic.
+        let svg = r##"<svg viewBox="0 0 4 4"><g><rect width="4" height="4" fill="#ff0000"/></span> junk text <</svg>"##;
+        let out = rasterize_with_report(svg, 4, 4).unwrap();
+        assert_eq!(pixel(&out.image, 2, 2), [255, 0, 0, 255]);
+        assert!(out.report.recovered_error_count > 0);
+        assert!(out
+            .report
+            .warnings
+            .iter()
+            .any(|w| w.code == "recovery.malformed_markup"));
+        // Determinism.
+        let again = rasterize(svg, 4, 4).unwrap();
+        assert_eq!(out.image.pixels, again.pixels);
+    }
+
+    #[test]
+    fn title_and_desc_are_extracted_and_bounded() {
+        let svg = r##"<svg viewBox="0 0 4 4"><title>My Chart</title><desc>A red square</desc><rect width="4" height="4" fill="#ff0000"/></svg>"##;
+        let out = rasterize_with_report(svg, 4, 4).unwrap();
+        assert_eq!(out.report.title.as_deref(), Some("My Chart"));
+        assert_eq!(out.report.desc.as_deref(), Some("A red square"));
+        // <title> text does not render as glyphs.
+        assert_eq!(out.report.rendered_element_count, 1);
+        // Length bound.
+        let long = "x".repeat(MAX_A11Y_TEXT + 500);
+        let big = format!(
+            r##"<svg viewBox="0 0 4 4"><title>{long}</title><rect width="4" height="4"/></svg>"##
+        );
+        let out2 = rasterize_with_report(&big, 4, 4).unwrap();
+        assert_eq!(out2.report.title.unwrap().chars().count(), MAX_A11Y_TEXT);
+    }
+
+    #[test]
+    fn aria_label_is_a11y_title_fallback() {
+        let svg = r##"<svg viewBox="0 0 4 4" aria-label="Icon"><rect width="4" height="4" fill="#ff0000"/></svg>"##;
+        let out = rasterize_with_report(svg, 4, 4).unwrap();
+        assert_eq!(out.report.title.as_deref(), Some("Icon"));
+    }
+
+    #[test]
+    fn security_gates_survive_recovery_policy() {
+        // Recovery must NOT weaken the secure-static profile.
+        for bad in [
+            r##"<!DOCTYPE svg><svg viewBox="0 0 4 4"><rect width="4" height="4"/></svg>"##,
+            r##"<svg viewBox="0 0 4 4"><script>x()</script><rect width="4" height="4"/></svg>"##,
+            r##"<svg viewBox="0 0 4 4"><image href="https://evil.invalid/a.png" width="4" height="4"/></svg>"##,
+        ] {
+            assert_eq!(
+                rasterize(bad, 4, 4),
+                Err(SvgRasterError::ForbiddenContent),
+                "must stay rejected: {bad}"
+            );
+        }
     }
 
     // --- R8.1: in-repo fuzz harness + memory/CPU cap regressions ------------

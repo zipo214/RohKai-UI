@@ -255,6 +255,24 @@ fn flush_pending_child(pending: &mut Option<ParsedWidget>, report: &mut ParseRep
     }
 }
 
+/// Assign `widget.binding` from a parsed line, intercepting the malformed-binding
+/// sentinel returned by `extract_binding_name`.  When malformed, emits a diagnostic
+/// and leaves `widget.binding` unchanged so no prior valid binding is clobbered.
+fn apply_binding(widget: &mut ParsedWidget, line: &str, line_no: usize, report: &mut ParseReport) {
+    match extract_binding_name(line) {
+        Some(b) if b == "_malformed_binding_" => {
+            push_error(
+                report,
+                line_no,
+                "malformed binding: expected identifier after 'self.'",
+            );
+        }
+        b => {
+            widget.binding = Some(b);
+        }
+    }
+}
+
 fn parse_widget_line(
     widget: &mut ParsedWidget,
     line: &str,
@@ -282,17 +300,17 @@ fn parse_widget_line(
         parse_add_sized(widget, line, line_no, report);
     } else if line.starts_with("ui.label(") || line.contains("egui::Label::new(") {
         widget.kind = Some(WidgetKind::Label);
-        widget.binding = Some(extract_binding_name(line));
+        apply_binding(widget, line, line_no, report);
         if widget.binding.as_ref().and_then(|b| b.as_ref()).is_none() {
             widget.label = extract_string_literal(line);
         }
     } else if line.contains("egui::TextEdit::singleline(") {
         widget.kind = Some(WidgetKind::TextInput);
-        widget.binding = Some(extract_binding_name(line));
+        apply_binding(widget, line, line_no, report);
         parse_add_sized(widget, line, line_no, report);
     } else if line.contains("egui::Slider::new(") {
         widget.kind = Some(WidgetKind::Slider);
-        widget.binding = Some(extract_binding_name(line));
+        apply_binding(widget, line, line_no, report);
         widget.label = extract_string_literal(line);
         if let Some((min, max)) = extract_range(line) {
             widget.min = Some(min);
@@ -301,7 +319,7 @@ fn parse_widget_line(
         parse_add_sized(widget, line, line_no, report);
     } else if line.contains("egui::Checkbox::new(") {
         widget.kind = Some(WidgetKind::Checkbox);
-        widget.binding = Some(extract_binding_name(line));
+        apply_binding(widget, line, line_no, report);
         widget.label = extract_string_literal(line);
         parse_add_sized(widget, line, line_no, report);
     } else if line.contains("egui::ComboBox::from_label(") {
@@ -313,7 +331,7 @@ fn parse_widget_line(
         }
     } else if line.contains("ui.radio_value(") {
         widget.kind = Some(WidgetKind::RadioButton);
-        widget.binding = Some(extract_binding_name(line));
+        apply_binding(widget, line, line_no, report);
         widget.label = extract_string_literal(line);
     } else if line.contains("egui::ProgressBar::new(") {
         widget.kind = Some(WidgetKind::ProgressBar);
@@ -338,8 +356,18 @@ fn parse_widget_line(
             widget.label = extract_string_literal(line);
         }
         if widget.binding.is_none() {
-            if let Some(b) = extract_binding_name(line) {
-                widget.binding = Some(Some(b));
+            match extract_binding_name(line) {
+                Some(b) if b == "_malformed_binding_" => {
+                    push_error(
+                        report,
+                        line_no,
+                        "malformed binding: expected identifier after 'self.'",
+                    );
+                }
+                Some(b) => {
+                    widget.binding = Some(Some(b));
+                }
+                None => {}
             }
         }
     }
@@ -484,7 +512,18 @@ fn extract_binding_name(line: &str) -> Option<String> {
                 .find(|c: char| !c.is_alphanumeric() && c != '_')
                 .unwrap_or(rest.len());
             if end > 0 {
-                return Some(rest[..end].to_owned());
+                let name = rest[..end].to_owned();
+                if crate::codegen::rust::is_valid_identifier(&name) {
+                    return Some(name);
+                }
+                // Invalid (keyword, leading digit, etc.): drop rather than
+                // salvage — a prefixed name could collide with an existing
+                // binding and the canvas UI already blocks invalid input at
+                // edit time, so rejection is the safer default.
+                return None;
+            } else if !rest.is_empty() && (rest.starts_with(')') || rest.starts_with(',')) {
+                // Matched "self." but nothing follows — malformed; signal caller
+                return Some("_malformed_binding_".to_owned());
             }
         }
     }
@@ -664,13 +703,21 @@ mod tests {
 
         let report = parse_egui_output(&code);
         assert!(!report.has_errors(), "{:?}", report.diagnostics);
-        let parsed = report.widgets.iter().find(|w| w.id == id).unwrap();
+        let parsed = report
+            .widgets
+            .iter()
+            .find(|w| w.id == id)
+            .expect("widget must be in parse report after successful parse");
         let span = parsed.source_span.as_ref().expect("source span");
         assert!(code[span.bytes.clone()].starts_with("egui::Area::new"));
         assert!(!code[span.bytes.clone()].contains("CentralPanel"));
         apply_parsed(&mut tree, &report.widgets);
 
-        let edited = tree.widgets.iter().find(|w| w.id == id).unwrap();
+        let edited = tree
+            .widgets
+            .iter()
+            .find(|w| w.id == id)
+            .expect("widget must remain in tree after apply_parsed");
         assert_eq!(edited.rect.x, 42.0);
         assert_eq!(edited.rect.y, 56.0);
     }
@@ -779,9 +826,11 @@ mod tests {
         );
         let report = parse_egui_output(&code);
         assert!(!report.has_errors(), "{:?}", report.diagnostics);
-        let pw = report.widgets.iter().find(|w| w.id == id);
-        assert!(pw.is_some(), "widget not found in parse output");
-        let pw = pw.unwrap();
+        let pw = report
+            .widgets
+            .iter()
+            .find(|w| w.id == id)
+            .expect("widget must be in parse output");
         assert_eq!(pw.kind, None, "Custom kind must not be inferred");
         assert_eq!(pw.label.as_deref(), Some("Hello World"));
         assert_eq!(
@@ -812,7 +861,11 @@ mod tests {
         );
         let report = parse_egui_output(&code);
         assert!(!report.has_errors(), "{:?}", report.diagnostics);
-        let pw = report.widgets.iter().find(|w| w.id == id).unwrap();
+        let pw = report
+            .widgets
+            .iter()
+            .find(|w| w.id == id)
+            .expect("widget must be in parse report");
         assert_eq!(pw.label.as_deref(), Some("Btn"));
         assert_eq!(
             pw.binding
@@ -897,6 +950,49 @@ mod tests {
                 .find(|w| w.id == parent_id)
                 .unwrap();
             assert_eq!(restored.children, vec![child_id]);
+        }
+    }
+
+    #[test]
+    fn leading_digit_binding_is_rejected_not_salvaged() {
+        // "self.1abc" starts with a digit; salvage (prefix "_") is rejected
+        // because the resulting "_1abc" could collide with a real binding.
+        let code =
+            "            ui.add_sized([100.0, 30.0], egui::TextEdit::singleline(&mut self.1abc))";
+        let report = parse_egui_output(code);
+        if let Some(w) = report.widgets.first() {
+            let extracted = w.binding.as_ref().and_then(|b| b.as_deref());
+            assert_ne!(
+                extracted,
+                Some("_1abc"),
+                "leading-digit binding must not be salvaged"
+            );
+            // Binding must be absent (None) or not start with "_1"
+            assert!(
+                extracted.is_none_or(|b| !b.starts_with("_1")),
+                "salvaged _1... name must not appear"
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_binding_emits_error_not_sentinel() {
+        // "self." with nothing after it (followed by ')') must produce a diagnostic
+        // and must NOT store the "_malformed_binding_" sentinel in widget.binding.
+        let code =
+            "            ui.add_sized([100.0, 30.0], egui::TextEdit::singleline(&mut self.))";
+        let report = parse_egui_output(code);
+        assert!(
+            report.has_errors(),
+            "malformed 'self.' must emit a parse error; diagnostics: {:?}",
+            report.diagnostics
+        );
+        if let Some(w) = report.widgets.first() {
+            assert_ne!(
+                w.binding.as_ref().and_then(|b| b.as_deref()),
+                Some("_malformed_binding_"),
+                "sentinel must not leak into widget.binding"
+            );
         }
     }
 }

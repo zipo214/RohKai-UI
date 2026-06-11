@@ -2,6 +2,312 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-10 — SVG R12 complete: namespace + recovery + a11y (post-R8 lane 5/5)
+
+### Context Reviewed Before Editing
+- `docs/svg-goal-plan-prompts/R12-namespace-recovery-a11y.goal.md`; svg-zero-dep
+- `src/canvas/svg_rasterizer.rs`: XmlParser/parse_element (prefix stripping),
+  SvgDoc::parse (only None on no-root → ParseFailed; otherwise already lenient),
+  SvgRenderReport, rasterize_with_report; `src/panels/svg_report.rs` report rows
+
+### Derive + report (lane requirement)
+1. `parse_element` stripped namespace prefixes (`svg:rect`→`rect`) with no scope
+   tracking → a foreign `<custom:rect>` mis-rendered as a `rect`. xmlns must be
+   read from the raw open-tag header (parse_attr strips prefixes from attr keys).
+2. Hard-reject paths: only `svg_text_allowed` (DOCTYPE/entity/script/external)
+   and "no `<svg>` root" → ParseFailed; the parser is otherwise lenient already
+   (unclosed/junk recover by consuming), but recoveries weren't counted/diagnosed.
+3. `<title>`/`<desc>` dropped (make_node returns None for them); aria-label/role
+   unused.
+
+### Changes (all in `src/canvas/svg_rasterizer.rs`; commit a0b563f)
+- Namespace: `NsFrame` scope stack on `XmlParser` (bounded `MAX_NS_DEPTH`);
+  `apply_xmlns` parses xmlns/xmlns:prefix from the raw header; `Namespace`
+  {Svg,Xlink,Foreign} via `classify_namespace`; element qualified name resolved
+  in scope (undeclared prefix → Foreign, except lenient `svg:`); foreign elements
+  consume their balanced subtree, emit no node, bump `foreign_count`. xlink:href
+  attrs still resolve (already stripped to `href`).
+- Recovery: `consume_close_tag` compares the close-tag local name to the open
+  element and bumps `recovered` on mismatch; unclosed containers bump it too.
+  Surfaced as `recovery.malformed_markup` + `report.recovered_error_count`. Never
+  ParseFailed/panic for malformed-but-rooted documents; security gates unchanged.
+- a11y: `<title>`/`<desc>` captured inline in `parse_element` (balanced subtree,
+  `strip_tags` + `bounded_a11y_text`, first-wins) — deliberately NOT as an
+  `SvgNode`, so R11 text rendering does not draw them as glyphs; root aria-label
+  is a title fallback. `SvgDoc`/`SvgScene` carry title/desc/foreign/recovered →
+  `SvgRenderReport.title`/`desc`/`recovered_error_count`; `report_summary` adds
+  Title/Description/Recovered rows. Export preserves via verbatim `svg_source`.
+
+### Tests
+foreign-ns element skipped (not mis-rendered) + diagnostic; xlink:href use
+resolves; malformed recovery partial render + diagnostic + determinism;
+title/desc extraction + `MAX_A11Y_TEXT` bound + aria-label fallback; security
+regression (DOCTYPE/script/external still `ForbiddenContent`); panel a11y/recovery
+rows; export-parity `embedded_rasterizer_includes_r12_paths`.
+
+### Verification
+- `cargo fmt --check` clean; `cargo check` clean; `cargo test` **335 pass / 6
+  ignored / 0 fail**; `cargo clippy --all-targets -- -D warnings` clean;
+  `validate-svg-import.ps1` + `check-text-encoding.ps1` pass. No new dependencies.
+
+### Status / Follow-ups
+- **The post-R8 SVG renderer roadmap (R8.1, R9–R12) is complete.** Remaining gaps
+  are explicit out-of-profile non-goals: real font-file glyphs + shaping/bidi,
+  tier-3 filter primitives, progressive/CMYK JPEG, ICC colour, `foreignObject`.
+- Namespace model is bounded/heuristic (lenient `svg:` prefix; per-attribute
+  namespace not fully tracked beyond xlink); full DOM recovery out of scope.
+- Next work is outside the SVG renderer: `docs/ROADMAP.md` open stages (12/13/15)
+  or the deferred Stage 9 parallel-processing cluster.
+
+## 2026-06-10 — SVG R11 complete: raster text + textPath (post-R8 lane 4/5)
+
+### Context Reviewed Before Editing
+- `docs/svg-goal-plan-prompts/R11-raster-text-textpath.goal.md` (lane spec);
+  `svg-zero-dep` skill; `docs/TEXT_IMPORT_PLAN.md`
+- `src/canvas/svg_rasterizer.rs`: XmlParser is_text branch (content skipped!),
+  SvgNode::Text (attrs only), DisplayList UnsupportedText path, Style model,
+  stroke pipeline (stroke_polyline/render_shape), flatten_path_data
+- `src/svg_import.rs` R6 TextChunk model (NOT reused — rasterizer must stay
+  std-only/self-contained for export embedding)
+
+### Glyph-set decision (lane requirement: derive + report)
+Bundled **Hershey simplex** (Allen V. Hershey, US Naval Weapons Laboratory —
+public domain), embedded as `HERSHEY_SIMPLEX: [&[i8]; 95]` inside
+`svg_rasterizer.rs` (it must live in that file: export embeds it verbatim under
+the single-`crate::` contract; an `include_str!` data file would break the
+exported copy). Coverage: ASCII 32..=126 only; `^` is a simplified caret
+substitute. Metrics: y-up, baseline 0, cap height 21 units, descender −7;
+30 units = 1 em (cap = 0.70 em); stroke width 2 units = font_size/15, round
+caps/joins. Everything else renders a tofu box + diagnostic. Transcription risk
+of individual glyph data is bounded by goldens for tested glyphs and by the
+deterministic/bounded contract for the rest.
+
+### Changes (all in `src/canvas/svg_rasterizer.rs` unless noted; commit e8eae08)
+- Parser: `<text>`/`<tspan>` capture raw inner markup to the *matching* close
+  tag into new `SvgNode::Text.content` (old `consume_until("</")` cut nested
+  tspans at the first `</`).
+- `scan_text_runs`: flat TextRuns from plain text + one `<tspan>` level
+  (x/y/dx/dy); deeper nesting → `text.tspan_nested_flattened`; styled tspans →
+  `text.tspan_style_ignored`; `<textPath>` extracted (href, startOffset, text).
+- Style: inherited `font_size` (SvgLength) + `text_anchor` parsed via
+  apply_declaration (presentation attrs, CSS, inline style all work).
+- `lower_text_command`: resolves font-size, applies whole-run text-anchor,
+  x/y position lists approximated by first value (+ diagnostic), lays glyphs in
+  user space, and emits ONE stroked-glyph `DrawCommand::Shape`
+  (`ShapeGeometry::Path` of polyline subpaths) — full reuse of the stroke
+  pipeline, R4 clip, masks/filters (via shape_layer), opacity, and gradient
+  paint (text fill drives the glyph stroke paint; `stroke_opacity` =
+  fill_opacity).
+- textPath: referenced path lowered to user-space polylines
+  (`user_space_subpaths`), `ArcLengthPath` arc-length table, glyph origin at
+  pen distance with midpoint-tangent rotation; startOffset user units +
+  percent; glyphs beyond path end not rendered (per SVG); missing href →
+  `textpath.unresolved`.
+- Honesty/diagnostics: `text.raster_snapshot` on every rendered text element
+  (font-family substituted, approximate metrics → Medium fidelity by design);
+  `text.glyph_unsupported` (tofu), `text.bidi_unsupported`,
+  `text.shaping_unsupported` (combining marks), `limit.text_glyphs`
+  (MAX_TEXT_GLYPHS = 4096/element).
+- `DrawCommand::UnsupportedText` removed; `<text>` flips unsupported→rendered.
+
+### Justified test changes
+- `render_report_counts_rendered_skipped_and_text_limitations` previously
+  asserted `<text>` lands in the `text` unsupported bucket with zero warnings;
+  it now asserts the rendered count includes text, no `text` unsupported
+  bucket, and the source-spanned `text.raster_snapshot` warning (fidelity stays
+  Medium — same honest outcome, new mechanism).
+
+### Tests / goldens
+Goldens: `r11_text_word` ("Hi", legible H+i), `r11_text_anchor_middle`,
+`r11_textpath_diagonal` (glyphs rotated along a rising diagonal). Unit tests:
+determinism + snapshot diagnostic + no unsupported bucket, tofu (CJK), bidi
+(Hebrew), tspan dy offset + unresolved textPath, glyph-cap bound. Export-parity
+`embedded_rasterizer_includes_r11_render_paths`. Editable-first regression: all
+svg_import tests unchanged and green. Note for future text tests: the ~0.67px
+glyph stroke AA-splits across two pixel columns when a stem straddles a pixel
+boundary — assert alpha > 50.
+
+### Verification
+- `cargo fmt --check` clean; `cargo check` clean; `cargo test` **327 pass / 6
+  ignored / 0 fail**; `cargo clippy --all-targets -- -D warnings` clean;
+  `validate-svg-import.ps1` + `check-text-encoding.ps1` pass; `cargo run`
+  launch smoke OK (first attempt hit a transient console interrupt
+  0xC000013A, clean re-run). No new dependencies.
+
+### Risks / Follow-ups
+- Glyph fidelity: bundled stroked font ≠ requested font-family; metrics are
+  approximate by design and diagnosed. Real font-file glyph rendering/shaping
+  stays out of scope (zero-dependency profile).
+- Per-glyph x/y position lists approximated by first value; per-tspan styling
+  ignored (both diagnosed).
+- textPath uses the first+subsequent flattened subpaths concatenated; multi-
+  subpath start offsets are approximate across subpath joins.
+- **Next: R12** — namespace model, malformed-document recovery, title/desc
+  a11y extraction (final open lane).
+
+## 2026-06-10 — SVG R10 complete: filter correctness + tier-2 + blend (post-R8 lane 3/5)
+
+### Context Reviewed Before Editing
+- `docs/svg-goal-plan-prompts/R10-filter-correctness-tier2.goal.md` (lane spec)
+- `docs/SVG_RENDERER_ROADMAP.md` Post-R8 gap matrix + lanes; `svg-zero-dep` skill
+- `src/canvas/svg_rasterizer.rs` R7 filter machinery: FilterGraph/FilterKind/
+  FilterPrimitive::apply, gaussian_blur, color_matrix,
+  composite_premultiplied_over, parse_filter, ResolvedLayer/LayerRaw/Offscreen,
+  composite_offscreen, layer_for_group/shape_layer
+
+### Changes (all in `src/canvas/svg_rasterizer.rs`; embedded verbatim into exports)
+Shipped as four verified, separately-committed increments:
+- **Tier-2 primitives** (commit e268e9d): feComposite (over/in/out/atop/xor/
+  arithmetic), feBlend (normal/multiply/screen/darken/lighten via premultiplied
+  separable-blend), feComponentTransfer (identity/table/discrete/linear/gamma),
+  feMorphology (dilate/erode, `MAX_MORPH_RADIUS`-capped). `<feComponentTransfer>`
+  added to `is_container_tag` so its feFunc* children parse. Tier-3 stays
+  Identity + `filter.unsupported_primitive`.
+- **mix-blend-mode** (commit 4709d80): `BlendMode` (shared with feBlend) threaded
+  LayerRaw→ResolvedLayer→Offscreen; non-Normal forces an offscreen and composites
+  via `composite_offscreen_blended`. Normal path byte-identical.
+- **linearRGB color-interpolation-filters** (commit 4e112ea): default linearRGB;
+  `apply` converts source sRGB→linear (premultiplied-aware) before the graph and
+  back after; feFlood/feDropShadow colours linearised; `sRGB` opts out.
+- **Precise filter region** (commit 1a141ba): `FilterRegion` from filterUnits +
+  x/y/w/h (default obbox −10%..110% via source alpha extent; userSpaceOnUse exact
+  via CTM); `clip_to_filter_region` clips the result.
+
+### Tests / goldens
+New goldens: r10_composite_arithmetic_add, r10_blend_multiply,
+r10_component_transfer_invert, r10_morphology_dilate, r10_mix_blend_multiply_group,
+r10_filter_region_clips_flood. New unit tests: blend determinism + multiply/
+screen, composite arithmetic/in, transfer gamma/linear/table, morphology growth +
+radius cap, mix-blend vs src-over, linearRGB-vs-sRGB blur midpoint (pixel-exact),
+filter region default + userSpaceOnUse. Three R10 export-parity markers added.
+
+### Justified golden/test changes (region clipping)
+Filter-region clipping is spec-correct and clips output beyond the element bbox.
+feoffset_shifts_right, feflood_femerge, r10_composite_arithmetic_add,
+r10_morphology_dilate (goldens) and gaussian_blur_softens_a_hard_edge,
+fedropshadow_adds_offset_shadow, femorphology_dilate_grows... (unit tests) were
+given explicit filter regions (documented inline) matching their intent, so their
+expected output is preserved — not rebaked to clipped output. linearRGB perturbed
+no golden (all use pure 0/255 colours; sRGB↔linear identity there).
+
+### Verification
+- `cargo fmt --check` clean; `cargo check` clean; `cargo test` **321 pass / 6
+  ignored / 0 fail**; `cargo clippy --all-targets -- -D warnings` clean;
+  `pwsh scripts/validate-svg-import.ps1` + `check-text-encoding.ps1` pass;
+  `cargo run` launch smoke. No new dependencies.
+
+### Risks / Follow-ups
+- objectBoundingBox filter regions use the source alpha extent as a bbox proxy
+  (exact geometric bbox is not threaded to the layer); userSpaceOnUse percentage
+  lengths are approximated as user units + diagnosed.
+- color-interpolation-filters is filter-level, not per-primitive.
+- Tier-3 primitives (turbulence/displacement/convolution/lighting/tile/image)
+  remain diagnosed.
+- **Next: R11** (raster text & textPath) — heavy; gate on real product need.
+
+## 2026-06-09 — Engineering invariants doc (process hardening)
+
+### Context Reviewed Before Editing
+- PR #4 CodeRabbit review batch (32 comments) — the bug classes underneath them
+- `CLAUDE.md`/`AGENTS.md` Architecture + Session Rules; `scripts/preflight-context.ps1`
+- `src/app.rs` (`set_preview_mode`/`refresh_preview_state`) to confirm the one
+  finding lacking a ✅ reply was already addressed
+
+### Changes
+- Triage: every substantive PR #4 finding is already fixed in current code
+  (preview re-seed, apply_theme reset, undo/redo focus gate, ruler layer
+  ownership, aspect-lock preset bypass, `has_handler` via `supported_events()`,
+  codegen module boundary + safe identifiers, UTF-8 char-safe truncation). No
+  code fix required.
+- New `docs/ENGINEERING_INVARIANTS.md`: a read-on-demand bug-class → invariant →
+  cheap-guard table (parity, single-source-of-truth, input ownership, reset
+  paths, generated-identifier safety, string byte-slicing, filename sanitizing,
+  conservative defaults, doc consistency) plus the systemic-fix workflow and the
+  `--all-targets` verification gate.
+- Reinforced two always-on rules in `CLAUDE.md` + `AGENTS.md` (codegen identifier
+  safety; surface parity / single-source-of-truth), bumped the documented clippy
+  gate to `--all-targets`, and added doc + workflow pointers. Preflight now prints
+  a one-line Engineering-Invariants reminder.
+
+### Verification
+- `pwsh scripts/check-text-encoding.ps1` OK; preflight runs clean and surfaces the
+  new reminder. Docs/script-only change — no cargo build affected.
+
+### Risks / Follow-ups
+- The invariants doc is read-on-demand (kept out of the low-token default to avoid
+  a bottleneck); discoverability relies on the CLAUDE/AGENTS/preflight pointers.
+- Most invariants are enforced by convention + targeted tests, not automation;
+  add per-class regression tests as those areas are next touched.
+
+## 2026-06-09 — SVG R9 complete: markers + pattern tiling (post-R8 lane 2/5)
+
+### Context Reviewed Before Editing
+- `CLAUDE.md`/`AGENTS.md` SVG roadmap step protocol; `svg-zero-dep` skill;
+  preflight output
+- `docs/svg-goal-plan-prompts/R9-markers-vector-effect-patterns.goal.md` (lane spec)
+- `docs/SVG_RENDERER_ROADMAP.md` Post-R8 gap matrix + lanes
+- `src/canvas/svg_rasterizer.rs` landmarks: `PaintServerTable`/`PaintSampler`,
+  `MaskDef::build_alpha`, `resolve_clip`/`collect_mask_items`, `DisplayList::build`/
+  `execute`, `render_shape`/`flatten_path_data`, scene `build_items`, caps;
+  `src/canvas/svg_golden.rs`; `src/codegen/export.rs` single-`crate::` contract
+
+### Changes (all in `src/canvas/svg_rasterizer.rs` unless noted)
+- **Vector-effect** was already shipped + committed in `61f3d66` (VectorEffect
+  enum, `effective_device_stroke`, `vector_effect.unsupported` diag, golden
+  `r9_non_scaling_stroke`). This session added the remaining two pillars.
+- **Pattern tiling.** `PaintServerTable` gained `patterns: HashMap<String,
+  PatternDef>`, built in a second pass after gradients (`build_pattern_def`:
+  `href` attribute+content merge bounded by `MAX_PATTERN_REFERENCE_DEPTH`, cyclic
+  href → `reference.pattern_cycle`). New `PaintSampler::Pattern` variant samples a
+  pre-rendered straight-RGBA tile with `rem_euclid` wrap. `build_pattern_sampler`
+  resolves the tile rect (patternUnits objectBoundingBox/userSpaceOnUse), maps
+  content via viewBox/patternContentUnits, renders the tile once through the new
+  shared `render_content_items` helper (extracted from `MaskDef::build_alpha`),
+  caps tile pixels at `MAX_PATTERN_TILE_PIXELS`, and breaks content
+  self-reference by rendering with the pattern removed from a cloned table.
+- **Markers.** New `MarkerDef`/`MarkerSet`/`MarkerPlacement` + `build_markers`
+  (in `DisplayList::build`, stored on `DrawCommand::Shape`): resolves
+  `marker-start/mid/end` (+`marker` shorthand) via `final_style_property`,
+  extracts vertices and in/out tangents from line/polyline/polygon/path geometry,
+  computes orient (`auto`/`auto-start-reverse`/`<angle>`), builds the
+  content→device transform honoring `markerUnits`, `viewBox`/`refX`/`refY`/
+  `markerWidth`/`markerHeight`, and draws each placement in `execute()` after the
+  shape, clipped to its viewport rect (overflow:hidden) ∩ ancestor clip. Bounded
+  by `MAX_MARKER_PLACEMENTS` (`limit.marker_count`) / `MAX_MARKER_CONTENT_ITEMS`;
+  missing/non-marker target → `marker.unresolved`.
+- Scene build now skips `<marker>`/`<pattern>` def nodes like clipPath/mask/filter
+  (they render only when referenced), so they no longer emit unsupported diags.
+- **Tests/goldens:** 4 new goldens (`r9_marker_start_mid_end`,
+  `r9_marker_auto_orient`, `r9_pattern_userspace_tile`,
+  `r9_pattern_objectbbox_tile`); 7 new unit tests (marker placement, auto-orient
+  determinism, missing-marker diag, userSpaceOnUse-ignores-stroke-width, pattern
+  href cycle, self-referential pattern terminates, oversized tile capped, OBB
+  tile); updated 3 existing tests that asserted patterns-unsupported; new
+  `embedded_rasterizer_includes_r9_render_paths` export-parity test in
+  `src/codegen/export.rs`. Embedded source stays std-only, single `crate::`.
+- **Docs:** flipped R9 lane + Patterns/Markers/vector-effect gap rows + maturity
+  assessment in `SVG_RENDERER_ROADMAP.md`; updated `SVG_IMPORT.md` and
+  `docs/feature-evaluation/svg-import-renderer.md`; appended CODE_COOP handoff.
+
+### Verification
+- `cargo fmt --check` clean; `cargo check` clean; `cargo test` **313 pass / 6
+  ignored / 0 fail**; `cargo clippy --all-targets -- -D warnings` clean;
+  `pwsh scripts/validate-svg-import.ps1` passed (banned-crate grep + determinism +
+  fixtures + clippy); `pwsh scripts/check-text-encoding.ps1` OK; `cargo run`
+  launch smoke (25s, no early crash). No new dependencies.
+
+### Risks / Follow-ups
+- Marker/pattern content lowered via `collect_mask_items` ignores `<use>`
+  expansion (same limitation as masks) — `<use>`-based marker/pattern content
+  won't render; bounded + safe, documented.
+- Pattern tile clipping does not wrap shapes across the tile edge (content
+  overflowing the tile rect is clipped, not repeated). Acceptable for R9; note for
+  any future fidelity pass.
+- Tile/marker rendering composites in straight-sRGB like the rest of the base
+  pipeline; gamma/linearRGB tuning is the R10 boundary.
+- **Next: R10** (filter linearRGB color-interpolation, precise filter regions,
+  tier-2 feComposite/feBlend/mix-blend-mode). Read `R10-*.goal.md` first.
+
 ## 2026-06-07 — SVG R8.1: Conformance + Security Hardening (post-R8 lane 1/5)
 
 ### Context Reviewed Before Editing

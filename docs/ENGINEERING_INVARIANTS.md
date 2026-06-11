@@ -1,0 +1,66 @@
+# RohKai Engineering Invariants
+
+Recurring bug *classes* and the invariant that prevents each. This is a
+read-on-demand reference (like `ARCHITECTURE.md`), not part of the low-token
+preflight default. Read the relevant row before touching the layer it names;
+read the whole file when fixing a reviewer finding so the same class does not
+return.
+
+These rows were distilled from real review findings. The point is not to memorize
+fixes — it is to fix the *class*, add a `class`-level regression test, and keep
+the patch minimal.
+
+## Systemic-fix workflow (use for any bug or reviewer finding)
+
+Before editing code:
+
+1. Identify the requested change.
+2. Identify the **root cause**, not the visible symptom.
+3. Identify all **sibling surfaces** that may need parity (see Invariant 1):
+   canvas/editor · preview · export/codegen · persistence (save/load) · docs · tests.
+4. Identify the project **invariant** this change touches (the table below). If
+   none exists yet, add a row here.
+5. Add or update a regression test for the **bug class**, not only the exact bug.
+6. Prefer single-source-of-truth APIs over duplicated logic (Invariant 2).
+7. Do not add logic to the wrong architectural layer (e.g. Rust-syntax strings
+   only in `src/codegen/`).
+8. Keep the patch minimal, but make the fix systemic enough that the class is
+   less likely to recur.
+
+Completion report should state: root cause fixed · files changed · tests added/
+updated · invariant(s) added or reinforced · validation commands run · any
+skipped reviewer finding with reason · any remaining risk.
+
+## Invariant table
+
+| # | Bug class | Invariant | Cheap guard |
+|---|---|---|---|
+| 1 | **Surface parity drift** — a behavior changes in one render/state surface but not its siblings (e.g. radio write-back works in export but not preview; image renders on canvas but is a placeholder in preview; state not re-seeded after a tree swap). | A behavior visible in any of {canvas, preview, export/codegen} must be matched in the others, or carry an explicit, tested reason for differing. Tree/state replacement goes through one helper that also refreshes derived state (e.g. `refresh_preview_state`). | Parity unit test, or a `// PARITY:` comment naming the surface + why it differs. |
+| 2 | **Classification duplication** — re-listing members the canonical API already owns (e.g. an overlay hardcoding which `WidgetKind`s are click-capable instead of asking `WidgetKind::supported_events()`). | Derive from the authoritative source (`UiTree`, `WidgetKind::supported_events()`, `kind_table`, schema). Never copy its member list into a second place. | Match/iterate the canonical source; a test asserting the two agree. |
+| 3 | **Input-ownership gaps** — a global handler fires without checking who owns the input (undo/redo during text edit; guide create/drag under a floating window; a post-panel correction that runs after *any* change and clobbers an explicit choice). | Global shortcuts gate on `ctx.wants_keyboard_input()` / editor focus. Canvas pointer actions gate on `ui.ctx().layer_id_at(pos) == Some(ui.layer_id())` **and** rect containment. Post-edit corrections gate on *which* control actually changed. | Reuse the existing ownership helper in `src/canvas/interaction.rs`; unit-test the gate. |
+| 4 | **Reset/default no-op** — a reset or "load without overrides" path skips the set entirely, leaving stale state (e.g. `apply_theme` only setting style when an override is present). | Reset/apply paths build from a fresh base and set state **unconditionally**; absence of an override means "restore base", never "do nothing". | Test that reset after a change returns to base. |
+| 5 | **Unsafe generated identifiers** — codegen emits field/handler names that are invalid Rust idents, keyword-collisions, or name-collisions; or Rust-syntax strings leak outside `src/codegen/`. | Codegen lives **entirely** in `src/codegen/`. Generated identifiers must be: valid (no leading digit / empty), keyword-escaped, collision-resistant (deterministic suffix from a stable id), and deterministic. The exported project must `cargo check`. | Sanitizer unit tests (leading-digit, keyword, collision); the ignored exported-project cargo-check test. |
+| 6 | **String byte-slicing panic** — `s[..n]` / `&s[a..b]` on user/label/text strings panics on a multi-byte UTF-8 boundary. | Never byte-index a `&str` for truncation/display. Use `chars().take(n)` or `char_indices()`. | A unit test that truncates a label containing a multi-byte char (emoji/CJK). |
+| 7 | **Incomplete filename sanitizing** — only replacing `.`/`/` leaves Windows-reserved (`<>:"\|?*\`) and control bytes that break save on the primary OS (Windows). | Filename sanitizers whitelist `[A-Za-z0-9_-]` (mapping the rest to `-`/`_`) or explicitly strip Windows-reserved + control chars. Sanitize for the strictest target OS. | Unit test with reserved/control chars in the id. |
+| 8 | **Permissive shipped defaults** — a default value that flows into a generated artifact is unsafe (e.g. cargo dep version `"*"`). | Defaults that reach generated output are conservative (e.g. cargo version `"0.1"`/`"1"`, never `"*"`); match the field's own hint text. | Snapshot/export test asserting the conservative default. |
+| 9 | **Doc contradiction / lint** — related docs disagree (status "closed" while a "Later Tasks" list still shows the item open), redundant phrasing ("SVG Image" — the G is "graphics"), or a fenced block with no language. | When you change one doc's status/scope, reconcile sibling docs in the same pass. Fenced code blocks carry a language (` ```text `). | `markdownlint`-style review; grep for the changed claim across `docs/`. |
+
+## The verification gate
+
+The gate that actually catches these is **`--all-targets`** clippy plus the full
+test run. Plain `cargo clippy` skips `examples/` and `tests/`; reviewer findings
+in this repo have included lints living exactly there.
+
+Run, one cargo at a time, before any code session is "done":
+
+```text
+cargo fmt --check
+cargo check
+cargo test
+cargo clippy --all-targets -- -D warnings
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\validate-svg-import.ps1   # SVG/codegen-adjacent work
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1
+```
+
+Zero warnings is required. If a step cannot be run, say exactly why and what risk
+remains.

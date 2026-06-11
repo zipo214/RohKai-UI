@@ -269,16 +269,21 @@ pub fn fixtures() -> Vec<GoldenFixture> {
         },
         GoldenFixture {
             // R7: feOffset shifts the blue strip two user units to the right.
+            // R10: an explicit filter region (x/y/width/height) is needed now
+            // that the result is clipped to the region; the default bbox region
+            // would clip the offset output back to the source bbox.
             name: "feoffset_shifts_right",
-            svg: r##"<svg viewBox="0 0 4 4"><filter id="f"><feOffset dx="2" dy="0"/></filter><rect width="2" height="4" fill="#0000ff" filter="url(#f)"/></svg>"##,
+            svg: r##"<svg viewBox="0 0 4 4"><filter id="f" x="0" y="0" width="200%" height="100%"><feOffset dx="2" dy="0"/></filter><rect width="2" height="4" fill="#0000ff" filter="url(#f)"/></svg>"##,
             width: 4,
             height: 4,
             golden: "..BB\n..BB\n..BB\n..BB",
         },
         GoldenFixture {
             // R7: feFlood (green) + feMerge with SourceGraphic (red 2x2 on top).
+            // R10: explicit region (200%x200% of the 2x2 bbox = the 4x4 canvas)
+            // so the flood still fills the canvas under region clipping.
             name: "feflood_femerge",
-            svg: r##"<svg viewBox="0 0 4 4"><filter id="f"><feFlood flood-color="#00ff00" result="bg"/><feMerge><feMergeNode in="bg"/><feMergeNode in="SourceGraphic"/></feMerge></filter><rect width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##,
+            svg: r##"<svg viewBox="0 0 4 4"><filter id="f" x="0" y="0" width="200%" height="200%"><feFlood flood-color="#00ff00" result="bg"/><feMerge><feMergeNode in="bg"/><feMergeNode in="SourceGraphic"/></feMerge></filter><rect width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##,
             width: 4,
             height: 4,
             golden: "RRGG\nRRGG\nGGGG\nGGGG",
@@ -378,6 +383,132 @@ pub fn fixtures() -> Vec<GoldenFixture> {
             width: 8,
             height: 8,
             golden: "...BB...\n...BB...\n...BB...\n...BB...\n...BB...\n...BB...\n...BB...\n...BB...",
+        },
+        GoldenFixture {
+            // R9: a 2x2 userSpaceOnUse <marker> drawn on every vertex of a
+            // 3-point polyline (marker-start/mid/end), refX/refY centring the
+            // red square on each vertex over the blue stroke.
+            name: "r9_marker_start_mid_end",
+            svg: r##"<svg viewBox="0 0 12 4"><defs><marker id="m" markerWidth="2" markerHeight="2" refX="1" refY="1" markerUnits="userSpaceOnUse"><rect width="2" height="2" fill="#ff0000"/></marker></defs><polyline points="1,2 6,2 11,2" fill="none" stroke="#0000ff" stroke-width="1" marker-start="url(#m)" marker-mid="url(#m)" marker-end="url(#m)"/></svg>"##,
+            width: 12,
+            height: 4,
+            golden: "............\nRRoooRRoooRR\nRRoooRRoooRR\n............",
+        },
+        GoldenFixture {
+            // R9: orient="auto" rotates the marker to the segment tangent; a
+            // right-pointing green triangle at the end of a horizontal line.
+            name: "r9_marker_auto_orient",
+            svg: r##"<svg viewBox="0 0 8 8"><defs><marker id="a" markerWidth="3" markerHeight="3" refX="0" refY="1.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0 L3 1.5 L0 3 Z" fill="#00ff00"/></marker></defs><line x1="1" y1="4" x2="5" y2="4" stroke="#000000" stroke-width="1" marker-end="url(#a)"/></svg>"##,
+            width: 8,
+            height: 8,
+            golden: "........\n........\n.....o..\n.ooooGoo\n.ooooGoo\n.....o..\n........\n........",
+        },
+        GoldenFixture {
+            // R9: userSpaceOnUse pattern tiling — a 2x2 tile with two opposite
+            // red cells repeats into a checkerboard across the fill.
+            name: "r9_pattern_userspace_tile",
+            svg: r##"<svg viewBox="0 0 8 4"><defs><pattern id="p" width="2" height="2" patternUnits="userSpaceOnUse"><rect width="1" height="1" fill="#ff0000"/><rect x="1" y="1" width="1" height="1" fill="#ff0000"/></pattern></defs><rect width="8" height="4" fill="url(#p)"/></svg>"##,
+            width: 8,
+            height: 4,
+            golden: "R.R.R.R.\n.R.R.R.R\nR.R.R.R.\n.R.R.R.R",
+        },
+        GoldenFixture {
+            // R9: objectBoundingBox pattern (+ objectBoundingBox content units) —
+            // tile = half the bbox; content fills the left half of each tile, so
+            // the fill becomes vertical blue stripes.
+            name: "r9_pattern_objectbbox_tile",
+            svg: r##"<svg viewBox="0 0 4 4"><defs><pattern id="p" width="0.5" height="0.5" patternUnits="objectBoundingBox" patternContentUnits="objectBoundingBox"><rect width="0.25" height="0.5" fill="#0000ff"/></pattern></defs><rect width="4" height="4" fill="url(#p)"/></svg>"##,
+            width: 4,
+            height: 4,
+            golden: "B.B.\nB.B.\nB.B.\nB.B.",
+        },
+        GoldenFixture {
+            // R10: feComposite operator="arithmetic" (k2=k3=1 -> additive). A 2x2
+            // red source added to a green flood is yellow where they overlap and
+            // green elsewhere.
+            // The explicit region (200%x200% of the 2x2 bbox) lets the green
+            // flood fill the canvas under R10 filter-region clipping.
+            name: "r10_composite_arithmetic_add",
+            svg: r##"<svg viewBox="0 0 4 4"><filter id="f" x="0" y="0" width="200%" height="200%"><feFlood flood-color="#00ff00" result="g"/><feComposite operator="arithmetic" k1="0" k2="1" k3="1" k4="0" in="SourceGraphic" in2="g"/></filter><rect width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##,
+            width: 4,
+            height: 4,
+            golden: "RRGG\nRRGG\nGGGG\nGGGG",
+        },
+        GoldenFixture {
+            // R10: feBlend mode="multiply" — red source over a green backdrop
+            // multiplies to black across the fill.
+            name: "r10_blend_multiply",
+            svg: r##"<svg viewBox="0 0 4 4"><filter id="f"><feFlood flood-color="#00ff00" result="bg"/><feBlend mode="multiply" in="SourceGraphic" in2="bg"/></filter><rect width="4" height="4" fill="#ff0000" filter="url(#f)"/></svg>"##,
+            width: 4,
+            height: 4,
+            golden: "KKKK\nKKKK\nKKKK\nKKKK",
+        },
+        GoldenFixture {
+            // R10: feComponentTransfer table="1 0" inverts each RGB channel, so a
+            // red fill becomes cyan.
+            name: "r10_component_transfer_invert",
+            svg: r##"<svg viewBox="0 0 4 4"><filter id="f"><feComponentTransfer><feFuncR type="table" tableValues="1 0"/><feFuncG type="table" tableValues="1 0"/><feFuncB type="table" tableValues="1 0"/></feComponentTransfer></filter><rect width="4" height="4" fill="#ff0000" filter="url(#f)"/></svg>"##,
+            width: 4,
+            height: 4,
+            golden: "GGGG\nGGGG\nGGGG\nGGGG",
+        },
+        GoldenFixture {
+            // R10: feMorphology operator="dilate" radius="1" grows a 2x2 red
+            // square (cols/rows 3-4) outward by one pixel each side. The explicit
+            // region (-50%..150% of the bbox) is sized to contain the dilation
+            // under filter-region clipping.
+            name: "r10_morphology_dilate",
+            svg: r##"<svg viewBox="0 0 8 8"><filter id="f" x="-50%" y="-50%" width="200%" height="200%"><feMorphology operator="dilate" radius="1"/></filter><rect x="3" y="3" width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##,
+            width: 8,
+            height: 8,
+            golden: "........\n........\n..RRRR..\n..RRRR..\n..RRRR..\n..RRRR..\n........\n........",
+        },
+        GoldenFixture {
+            // R10: the DEFAULT filter region (objectBoundingBox -10%..110%) clips
+            // an feFlood to the element's bbox+margin instead of the whole canvas
+            // -- proving region clipping. The 2x2 source at (2,2) bounds the blue
+            // flood to roughly the centre, not the 6x6 canvas.
+            name: "r10_filter_region_clips_flood",
+            svg: r##"<svg viewBox="0 0 6 6"><filter id="f"><feFlood flood-color="#0000ff"/></filter><rect x="2" y="2" width="2" height="2" fill="#ff0000" filter="url(#f)"/></svg>"##,
+            width: 6,
+            height: 6,
+            golden: "......\n......\n..BB..\n..BB..\n......\n......",
+        },
+        GoldenFixture {
+            // R10: mix-blend-mode on a group. A green group with
+            // mix-blend-mode:multiply over a red backdrop multiplies to black.
+            name: "r10_mix_blend_multiply_group",
+            svg: r##"<svg viewBox="0 0 4 4"><rect width="4" height="4" fill="#ff0000"/><g style="mix-blend-mode: multiply"><rect width="4" height="4" fill="#00ff00"/></g></svg>"##,
+            width: 4,
+            height: 4,
+            golden: "KKKK\nKKKK\nKKKK\nKKKK",
+        },
+        GoldenFixture {
+            // R11: raster text snapshot — the word "Hi" stroked with the bundled
+            // Hershey simplex font at font-size 12 (baseline y=12).
+            name: "r11_text_word",
+            svg: r##"<svg viewBox="0 0 16 16"><text x="1" y="12" font-size="12" fill="#ff0000">Hi</text></svg>"##,
+            width: 16,
+            height: 16,
+            golden: "................\n................\n...........o....\n..o....oo.oRo...\n..o....oo.oo....\n..o....oo.......\n..o....oo..o....\n..RooooRo..o....\n..o....oo..o....\n..o....oo..o....\n..o....oo..o....\n..o....oo..o....\n..o....oo..o....\n................\n................\n................",
+        },
+        GoldenFixture {
+            // R11: text-anchor="middle" centres the run on x=8 (compare with the
+            // start-anchored fixture above).
+            name: "r11_text_anchor_middle",
+            svg: r##"<svg viewBox="0 0 16 16"><text x="8" y="12" font-size="12" fill="#0000ff" text-anchor="middle">Hi</text></svg>"##,
+            width: 16,
+            height: 16,
+            golden: "................\n................\n............o...\n...o....oo.oBo..\n...o....oo.oo...\n...o....oo......\n...o....oo..o...\n...BooooBo..o...\n...o....oo..o...\n...o....oo..o...\n...o....oo..o...\n...o....oo..o...\n...o....oo..o...\n................\n................\n................",
+        },
+        GoldenFixture {
+            // R11: textPath places glyphs along a referenced path by arc-length
+            // ("ll" along a rising diagonal — two strokes following the slope).
+            name: "r11_textpath_diagonal",
+            svg: r##"<svg viewBox="0 0 16 16"><defs><path id="p" d="M2 14 L14 2"/></defs><text font-size="10" fill="#00aa00"><textPath href="#p">ll</textPath></text></svg>"##,
+            width: 16,
+            height: 16,
+            golden: "................\n................\n................\n................\n................\n................\noo..............\nooo.............\n.ooo............\no.ooo...........\noo.ooo..........\nooo.oo..........\n.ooo............\n..oo............\n................\n................",
         },
         GoldenFixture {
             name: "unsafe_external_href_rejected",
