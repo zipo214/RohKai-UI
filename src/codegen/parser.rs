@@ -516,11 +516,10 @@ fn extract_binding_name(line: &str) -> Option<String> {
                 if crate::codegen::rust::is_valid_identifier(&name) {
                     return Some(name);
                 }
-                // Leading digit: prepend underscore to salvage the binding
-                if name.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-                    return Some(format!("_{name}"));
-                }
-                // Otherwise (keyword already blocked by is_valid_identifier): drop
+                // Invalid (keyword, leading digit, etc.): drop rather than
+                // salvage — a prefixed name could collide with an existing
+                // binding and the canvas UI already blocks invalid input at
+                // edit time, so rejection is the safer default.
                 return None;
             } else if !rest.is_empty() && (rest.starts_with(')') || rest.starts_with(',')) {
                 // Matched "self." but nothing follows — malformed; signal caller
@@ -951,6 +950,28 @@ mod tests {
                 .find(|w| w.id == parent_id)
                 .unwrap();
             assert_eq!(restored.children, vec![child_id]);
+        }
+    }
+
+    #[test]
+    fn leading_digit_binding_is_rejected_not_salvaged() {
+        // "self.1abc" starts with a digit; salvage (prefix "_") is rejected
+        // because the resulting "_1abc" could collide with a real binding.
+        let code =
+            "            ui.add_sized([100.0, 30.0], egui::TextEdit::singleline(&mut self.1abc))";
+        let report = parse_egui_output(code);
+        if let Some(w) = report.widgets.first() {
+            let extracted = w.binding.as_ref().and_then(|b| b.as_deref());
+            assert_ne!(
+                extracted,
+                Some("_1abc"),
+                "leading-digit binding must not be salvaged"
+            );
+            // Binding must be absent (None) or not start with "_1"
+            assert!(
+                extracted.is_none_or(|b| !b.starts_with("_1")),
+                "salvaged _1... name must not appear"
+            );
         }
     }
 

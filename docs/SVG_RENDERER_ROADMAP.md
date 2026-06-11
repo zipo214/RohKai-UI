@@ -711,12 +711,13 @@ Acceptance:
 - [x] Roadmap claims match tests and diagnostics; report + provenance are visible
   in-app.
 
-**SVG renderer roadmap R0–R8 complete.** Remaining work is explicitly deferred:
-baseline-JPEG follow-ups (progressive JPEG) and filter tier 3 — the R6
-vector-outline snapshot landed in R11 and filter tier 2 landed in R10; the rest
-is tracked above and diagnosed at
-runtime. Animation, scripting, and external network/file loading stay out of
-scope per the secure-static profile.
+**SVG renderer roadmap R0–R12 complete** (R8.2 deep-fuzz hardening is optional
+and does not block the roadmap). All post-R8 lanes (R9 markers/patterns/
+vector-effect, R10 filter tier 2/linearRGB/blend/regions, R11 raster text/
+textPath, R12 namespace model/recovery/a11y) are now done — see the R9–R12
+completion sections below. Remaining work is explicitly deferred: progressive
+JPEG, filter tier 3, animation, scripting, and external network/file loading,
+all diagnosed at runtime per the secure-static profile.
 
 ## Derivative Task Backlog
 

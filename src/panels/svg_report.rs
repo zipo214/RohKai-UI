@@ -248,6 +248,7 @@ mod tests {
         // Absent by default.
         let base = report_summary(&r);
         assert!(!base.rows.iter().any(|(k, _)| k == "Title"));
+        assert!(!base.rows.iter().any(|(k, _)| k == "Description"));
         assert!(!base.rows.iter().any(|(k, _)| k == "Recovered"));
         // Present when set.
         r.title = Some("Chart".to_owned());
