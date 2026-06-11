@@ -2,6 +2,50 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-11 — v0.2.0 PR review fixes (CI gate + Qodo)
+
+### Context Reviewed
+- Qodo review on PR #6 (4 bugs + 1 arch violation flagged)
+- CLAUDE.md codegen-in-src/codegen invariant
+- `src/canvas/widget_maker.rs`, `src/codegen/export.rs`, `src/app.rs`
+
+### Changes
+
+**Architecture violation fix (codegen in canvas layer):**
+- New `src/codegen/widget_maker_emit.rs`: `pub gen_live_preview`, `pub gen_export_template`,
+  private `prim_to_egui_lines`
+- `canvas/widget_maker.rs` delegates to codegen; no Rust syntax strings in canvas layer
+- Text prim uses `string_literal()` instead of manual `replace('"', "\\\"")` — fixes Bug 4
+- 3 new tests: backslash escape, quote escape, label token double-braces
+
+**Bug 2 — WASM FilePicker build break:**
+- `gen_app_rs_wasm(tree)` clones tree, replaces FilePicker with Label, calls `gen_app_rs`
+- `project_files_wasm` now calls `gen_app_rs_wasm` — generated WASM app.rs has no `rfd::` 
+- Test: `wasm_app_rs_has_no_rfd`
+
+**Bug 3 — Widget Maker save fails on fresh install:**
+- `show_widget_maker_window` now calls `create_dir_all(&dir)` before `fs::write`
+- Error surfaced cleanly if dir creation fails
+
+**Bug 5 — Fixed temp preview directory collision:**
+- Preview WASM export dir is now `$TMP/rohkai_wasm_preview_<PID>` (process-stable, unique across runs)
+
+**CI gate:**
+- Committed + pushed `cargo fmt` output (16 files), workflow `permissions: contents: read`,
+  `--all-targets` clippy flag fix, version bump to 0.2.0
+
+### Verification
+- 416 tests, 0 failures, 0 clippy warnings, `cargo fmt --check` clean
+- PR #6 CI pending (Windows build ~10 min); Qodo re-review queued
+
+### Risks / Follow-ups
+- After CI passes and Qodo clears: merge PR #6 → main, tag v0.2.0
+- 3 CodeQL false positives still need manual dismissal on GitHub Security tab
+  (egui widget ID strings at `rust_wiring.rs` L89/172/228, not cryptographic values)
+- RustyBuzz integration (P2-A) deferred — architecture confirmed, awaiting next session
+
+---
+
 ## 2026-06-11 — v0.2.0 release: good-citizen pass + Phase 2 roadmap
 
 ### Context Reviewed Before Editing
