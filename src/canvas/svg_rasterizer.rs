@@ -326,9 +326,7 @@ pub fn rasterize_or_fallback(svg_text: &str, width: u32, height: u32) -> ColorIm
 /// Each entry is `(svg_text, width, height)`.  Results are returned in the
 /// same order as `items`, with `Err` on parse/security failure.
 #[allow(dead_code)]
-pub fn rasterize_batch(
-    items: &[(&str, u32, u32)],
-) -> Vec<Result<ColorImage, SvgRasterError>> {
+pub fn rasterize_batch(items: &[(&str, u32, u32)]) -> Vec<Result<ColorImage, SvgRasterError>> {
     items
         .par_iter()
         .map(|(svg, w, h)| rasterize(svg, *w, *h))

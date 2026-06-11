@@ -121,7 +121,11 @@ fn show_mini_canvas(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
 
     // Background
     painter.rect_filled(canvas_rect, 2.0, Color32::from_gray(30));
-    painter.rect_stroke(canvas_rect, 2.0, egui::Stroke::new(1.0, Color32::from_gray(80)));
+    painter.rect_stroke(
+        canvas_rect,
+        2.0,
+        egui::Stroke::new(1.0, Color32::from_gray(80)),
+    );
 
     // Draw primitives (bottom to top)
     for (idx, prim) in doc.primitives.iter().enumerate() {
@@ -130,7 +134,11 @@ fn show_mini_canvas(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
 
         // Selection outline
         if doc.selected == Some(idx) {
-            painter.rect_stroke(pr, 2.0, egui::Stroke::new(1.5, Color32::from_rgb(52, 211, 153)));
+            painter.rect_stroke(
+                pr,
+                2.0,
+                egui::Stroke::new(1.5, Color32::from_rgb(52, 211, 153)),
+            );
             draw_resize_handles(&painter, pr);
         }
     }
@@ -245,7 +253,10 @@ fn show_toolbar(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
             doc.selected = Some(doc.primitives.len() - 1);
         }
 
-        let can_remove = doc.selected.map(|i| i < doc.primitives.len()).unwrap_or(false);
+        let can_remove = doc
+            .selected
+            .map(|i| i < doc.primitives.len())
+            .unwrap_or(false);
         ui.add_enabled_ui(can_remove, |ui| {
             if ui.small_button("✕ Remove").clicked() {
                 if let Some(idx) = doc.selected.take() {
@@ -301,9 +312,19 @@ fn show_widget_meta(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
             ui.end_row();
             ui.label(egui::RichText::new("Size").small());
             ui.horizontal(|ui| {
-                ui.add(egui::DragValue::new(&mut doc.default_size[0]).range(20.0..=800.0_f32).suffix("w").speed(1.0));
+                ui.add(
+                    egui::DragValue::new(&mut doc.default_size[0])
+                        .range(20.0..=800.0_f32)
+                        .suffix("w")
+                        .speed(1.0),
+                );
                 ui.label("×");
-                ui.add(egui::DragValue::new(&mut doc.default_size[1]).range(10.0..=600.0_f32).suffix("h").speed(1.0));
+                ui.add(
+                    egui::DragValue::new(&mut doc.default_size[1])
+                        .range(10.0..=600.0_f32)
+                        .suffix("h")
+                        .speed(1.0),
+                );
             });
             ui.end_row();
         });
@@ -319,7 +340,10 @@ fn show_primitive_props(ui: &mut egui::Ui, prim: &mut MakerPrimitive) {
             ("Ellipse", MakerPrimKind::Ellipse),
             ("Text", MakerPrimKind::Text),
         ] {
-            if ui.selectable_label(prim.kind == kind, egui::RichText::new(label).small()).clicked() {
+            if ui
+                .selectable_label(prim.kind == kind, egui::RichText::new(label).small())
+                .clicked()
+            {
                 prim.kind = kind;
             }
         }
@@ -331,23 +355,55 @@ fn show_primitive_props(ui: &mut egui::Ui, prim: &mut MakerPrimitive) {
         .show(ui, |ui| {
             ui.label(egui::RichText::new("X%").small());
             let mut xp = prim.x * 100.0;
-            if ui.add(egui::DragValue::new(&mut xp).range(0.0..=95.0_f32).speed(0.5).suffix("%")).changed() {
+            if ui
+                .add(
+                    egui::DragValue::new(&mut xp)
+                        .range(0.0..=95.0_f32)
+                        .speed(0.5)
+                        .suffix("%"),
+                )
+                .changed()
+            {
                 prim.x = xp / 100.0;
             }
             ui.label(egui::RichText::new("Y%").small());
             let mut yp = prim.y * 100.0;
-            if ui.add(egui::DragValue::new(&mut yp).range(0.0..=95.0_f32).speed(0.5).suffix("%")).changed() {
+            if ui
+                .add(
+                    egui::DragValue::new(&mut yp)
+                        .range(0.0..=95.0_f32)
+                        .speed(0.5)
+                        .suffix("%"),
+                )
+                .changed()
+            {
                 prim.y = yp / 100.0;
             }
             ui.end_row();
             ui.label(egui::RichText::new("W%").small());
             let mut wp = prim.w * 100.0;
-            if ui.add(egui::DragValue::new(&mut wp).range(PRIM_MIN..=100.0_f32).speed(0.5).suffix("%")).changed() {
+            if ui
+                .add(
+                    egui::DragValue::new(&mut wp)
+                        .range(PRIM_MIN..=100.0_f32)
+                        .speed(0.5)
+                        .suffix("%"),
+                )
+                .changed()
+            {
                 prim.w = wp / 100.0;
             }
             ui.label(egui::RichText::new("H%").small());
             let mut hp = prim.h * 100.0;
-            if ui.add(egui::DragValue::new(&mut hp).range(PRIM_MIN..=100.0_f32).speed(0.5).suffix("%")).changed() {
+            if ui
+                .add(
+                    egui::DragValue::new(&mut hp)
+                        .range(PRIM_MIN..=100.0_f32)
+                        .speed(0.5)
+                        .suffix("%"),
+                )
+                .changed()
+            {
                 prim.h = hp / 100.0;
             }
             ui.end_row();
@@ -360,14 +416,21 @@ fn show_primitive_props(ui: &mut egui::Ui, prim: &mut MakerPrimitive) {
             ui.add(egui::DragValue::new(&mut prim.fill[2]).range(0..=255_u8));
             if matches!(prim.kind, MakerPrimKind::Rect | MakerPrimKind::Outline) {
                 ui.label(egui::RichText::new("Rad").small());
-                ui.add(egui::DragValue::new(&mut prim.corner_radius).range(0.0..=32.0_f32).speed(0.5));
+                ui.add(
+                    egui::DragValue::new(&mut prim.corner_radius)
+                        .range(0.0..=32.0_f32)
+                        .speed(0.5),
+                );
             }
             ui.end_row();
         });
 
     if matches!(prim.kind, MakerPrimKind::Text) {
-        ui.checkbox(&mut prim.use_label_token, egui::RichText::new("Use {{label}} token").small())
-            .on_hover_text("Replace text with the widget's runtime Label property");
+        ui.checkbox(
+            &mut prim.use_label_token,
+            egui::RichText::new("Use {{label}} token").small(),
+        )
+        .on_hover_text("Replace text with the widget's runtime Label property");
         if !prim.use_label_token {
             ui.add(
                 egui::TextEdit::singleline(&mut prim.text_content)
@@ -377,7 +440,11 @@ fn show_primitive_props(ui: &mut egui::Ui, prim: &mut MakerPrimitive) {
         }
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Font size").small().weak());
-            ui.add(egui::DragValue::new(&mut prim.font_size).range(6.0..=72.0_f32).speed(0.5));
+            ui.add(
+                egui::DragValue::new(&mut prim.font_size)
+                    .range(6.0..=72.0_f32)
+                    .speed(0.5),
+            );
         });
     }
 }
@@ -423,7 +490,11 @@ fn draw_primitive(painter: &egui::Painter, prim: &MakerPrimitive, rect: egui::Re
                         egui::pos2(cx.x + rx * t.cos(), cx.y + ry * t.sin())
                     })
                     .collect();
-                painter.add(egui::Shape::convex_polygon(points, color, egui::Stroke::NONE));
+                painter.add(egui::Shape::convex_polygon(
+                    points,
+                    color,
+                    egui::Stroke::NONE,
+                ));
             }
         }
         MakerPrimKind::Text => {
@@ -433,7 +504,13 @@ fn draw_primitive(painter: &egui::Painter, prim: &MakerPrimitive, rect: egui::Re
             } else {
                 prim.text_content.as_str()
             };
-            painter.text(rect.center(), egui::Align2::CENTER_CENTER, text, font_id, color);
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                text,
+                font_id,
+                color,
+            );
         }
     }
 }
@@ -458,7 +535,12 @@ fn corner_hit(pos: egui::Pos2, rect: egui::Rect) -> Option<u8> {
 
 /// Apply a normalised `(dx, dy)` resize delta for the given corner index to `p`.
 /// Corners: 0=TL, 1=TR, 2=BL, 3=BR.
-fn apply_corner_resize(p: &mut crate::canvas::widget_maker::MakerPrimitive, corner: u8, dx: f32, dy: f32) {
+fn apply_corner_resize(
+    p: &mut crate::canvas::widget_maker::MakerPrimitive,
+    corner: u8,
+    dx: f32,
+    dy: f32,
+) {
     const MIN: f32 = 0.05;
     match corner {
         0 => {

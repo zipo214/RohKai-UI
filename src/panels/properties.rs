@@ -1699,10 +1699,18 @@ fn show_math_label(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bo
                 } else {
                     format!("uses: {}", vars.join(", "))
                 };
-                ui.label(egui::RichText::new(vars_str).small().color(egui::Color32::from_rgb(52, 211, 153)));
+                ui.label(
+                    egui::RichText::new(vars_str)
+                        .small()
+                        .color(egui::Color32::from_rgb(52, 211, 153)),
+                );
             }
             Err(e) => {
-                ui.label(egui::RichText::new(format!("Error: {e}")).small().color(egui::Color32::RED));
+                ui.label(
+                    egui::RichText::new(format!("Error: {e}"))
+                        .small()
+                        .color(egui::Color32::RED),
+                );
             }
         }
     }
@@ -1784,7 +1792,11 @@ fn show_data_widget(
 
     // --- Data source binding ---
     ui.separator();
-    ui.label(egui::RichText::new("Data Source (model-bound)").small().weak());
+    ui.label(
+        egui::RichText::new("Data Source (model-bound)")
+            .small()
+            .weak(),
+    );
     let has_binding = w.props.data_source_binding.is_some();
     ui.horizontal(|ui| {
         if ui.selectable_label(!has_binding, "Static").clicked() {
@@ -1831,14 +1843,16 @@ fn show_data_widget(
                         })
                         .width(60.0)
                         .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut col.column_type, DataColumnType::Text, "Text");
                             ui.selectable_value(
-                                &mut col.column_type, DataColumnType::Text, "Text",
+                                &mut col.column_type,
+                                DataColumnType::Number,
+                                "Number",
                             );
                             ui.selectable_value(
-                                &mut col.column_type, DataColumnType::Number, "Number",
-                            );
-                            ui.selectable_value(
-                                &mut col.column_type, DataColumnType::Boolean, "Bool",
+                                &mut col.column_type,
+                                DataColumnType::Boolean,
+                                "Bool",
                             );
                         });
                     if ui.small_button("x").clicked() {

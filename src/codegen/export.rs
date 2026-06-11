@@ -1,3 +1,4 @@
+use crate::codegen::formula::{collect_variables, emit_formula_rust, parse_formula};
 use crate::codegen::{
     field_collector,
     rust::{field_binding, string_literal},
@@ -6,7 +7,6 @@ use crate::project::{
     schema::{SizePolicy, WidgetEvent, WidgetInstance, WidgetKind},
     ui_tree::UiTree,
 };
-use crate::codegen::formula::{collect_variables, emit_formula_rust, parse_formula};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -72,12 +72,7 @@ pub fn project_files(tree: &UiTree) -> Vec<(String, String)> {
 
     // Generate the three core output files in parallel.
     let ((cargo_toml, main_rs), app_rs) = rayon::join(
-        || {
-            rayon::join(
-                || gen_cargo_toml(&extra_deps),
-                || gen_main_rs(tree),
-            )
-        },
+        || rayon::join(|| gen_cargo_toml(&extra_deps), || gen_main_rs(tree)),
         || gen_app_rs(tree),
     );
     let mut files = vec![
@@ -101,11 +96,7 @@ pub fn project_files(tree: &UiTree) -> Vec<(String, String)> {
 ///
 /// FilePicker widgets are replaced with a static label stub since native
 /// file dialogs are unavailable in WASM.
-pub fn write_project_wasm(
-    tree: &UiTree,
-    dest: &Path,
-    gen_index_html: bool,
-) -> Result<(), String> {
+pub fn write_project_wasm(tree: &UiTree, dest: &Path, gen_index_html: bool) -> Result<(), String> {
     let src_dir = dest.join("src");
     fs::create_dir_all(&src_dir).map_err(|e| format!("create dirs: {e}"))?;
 
@@ -132,11 +123,11 @@ pub fn write_project_wasm(
 ///
 /// Returns `(relative_path, content)` pairs.  FilePicker widgets are replaced
 /// with a static stub since `rfd` requires native OS dialogs.
-pub fn project_files_wasm(
-    tree: &UiTree,
-    gen_index_html: bool,
-) -> Vec<(String, String)> {
-    let has_file_picker = tree.widgets.iter().any(|w| w.kind == WidgetKind::FilePicker);
+pub fn project_files_wasm(tree: &UiTree, gen_index_html: bool) -> Vec<(String, String)> {
+    let has_file_picker = tree
+        .widgets
+        .iter()
+        .any(|w| w.kind == WidgetKind::FilePicker);
 
     let ((cargo_toml, lib_rs), app_rs) = rayon::join(
         || rayon::join(gen_cargo_toml_wasm, || gen_lib_rs_wasm(tree)),
@@ -1612,7 +1603,8 @@ fn export_layout_child_line(
         WidgetKind::TextInput => match child_binding {
             Some(b) => {
                 let sz = export_child_size_str(child);
-                let resp = format!("ui.add_sized({sz}, egui::TextEdit::singleline(&mut self.state.{b}))");
+                let resp =
+                    format!("ui.add_sized({sz}, egui::TextEdit::singleline(&mut self.state.{b}))");
                 code.push_str(&export_child_event_dispatch(child, &resp, registry));
             }
             None => code.push_str(&format!(
@@ -1622,7 +1614,8 @@ fn export_layout_child_line(
         WidgetKind::TextArea => match child_binding {
             Some(b) => {
                 let sz = export_child_size_str(child);
-                let resp = format!("ui.add_sized({sz}, egui::TextEdit::multiline(&mut self.state.{b}))");
+                let resp =
+                    format!("ui.add_sized({sz}, egui::TextEdit::multiline(&mut self.state.{b}))");
                 code.push_str(&export_child_event_dispatch(child, &resp, registry));
             }
             None => code.push_str(&format!(
@@ -3613,7 +3606,12 @@ mod tests {
             widgets: vec![WidgetInstance {
                 id: uuid::Uuid::from_u128(0xBEEF),
                 kind: WidgetKind::Button,
-                rect: Rect { x: 10.0, y: 10.0, w: 80.0, h: 30.0 },
+                rect: Rect {
+                    x: 10.0,
+                    y: 10.0,
+                    w: 80.0,
+                    h: 30.0,
+                },
                 ..Default::default()
             }],
             ..Default::default()
@@ -3625,20 +3623,53 @@ mod tests {
         assert!(names.contains(&"src/app.rs"), "WASM app.rs missing");
         assert!(names.contains(&"index.html"), "WASM index.html missing");
         assert!(names.contains(&"Trunk.toml"), "WASM Trunk.toml missing");
-        assert!(!names.contains(&"src/main.rs"), "WASM must use lib.rs not main.rs");
+        assert!(
+            !names.contains(&"src/main.rs"),
+            "WASM must use lib.rs not main.rs"
+        );
 
-        let cargo = files.iter().find(|(n, _)| n == "Cargo.toml").map(|(_, c)| c.as_str()).unwrap();
-        assert!(cargo.contains("cdylib"), "WASM Cargo.toml must declare cdylib");
-        assert!(cargo.contains("wasm-bindgen"), "WASM Cargo.toml must include wasm-bindgen feature");
-        assert!(!cargo.contains("rfd"), "WASM Cargo.toml must not include rfd");
+        let cargo = files
+            .iter()
+            .find(|(n, _)| n == "Cargo.toml")
+            .map(|(_, c)| c.as_str())
+            .unwrap();
+        assert!(
+            cargo.contains("cdylib"),
+            "WASM Cargo.toml must declare cdylib"
+        );
+        assert!(
+            cargo.contains("wasm-bindgen"),
+            "WASM Cargo.toml must include wasm-bindgen feature"
+        );
+        assert!(
+            !cargo.contains("rfd"),
+            "WASM Cargo.toml must not include rfd"
+        );
 
-        let lib_rs = files.iter().find(|(n, _)| n == "src/lib.rs").map(|(_, c)| c.as_str()).unwrap();
-        assert!(lib_rs.contains("wasm_bindgen(start)"), "lib.rs must export wasm start fn");
+        let lib_rs = files
+            .iter()
+            .find(|(n, _)| n == "src/lib.rs")
+            .map(|(_, c)| c.as_str())
+            .unwrap();
+        assert!(
+            lib_rs.contains("wasm_bindgen(start)"),
+            "lib.rs must export wasm start fn"
+        );
         assert!(lib_rs.contains("WebRunner"), "lib.rs must use WebRunner");
-        assert!(lib_rs.contains("the_canvas_id"), "lib.rs must reference canvas element id");
+        assert!(
+            lib_rs.contains("the_canvas_id"),
+            "lib.rs must reference canvas element id"
+        );
 
-        let html = files.iter().find(|(n, _)| n == "index.html").map(|(_, c)| c.as_str()).unwrap();
-        assert!(html.contains("the_canvas_id"), "index.html must have canvas element");
+        let html = files
+            .iter()
+            .find(|(n, _)| n == "index.html")
+            .map(|(_, c)| c.as_str())
+            .unwrap();
+        assert!(
+            html.contains("the_canvas_id"),
+            "index.html must have canvas element"
+        );
         assert!(html.contains("<canvas"), "index.html must have canvas tag");
     }
 
@@ -3649,14 +3680,22 @@ mod tests {
             widgets: vec![WidgetInstance {
                 id: uuid::Uuid::from_u128(0xF11E),
                 kind: WidgetKind::FilePicker,
-                rect: Rect { x: 0.0, y: 0.0, w: 100.0, h: 30.0 },
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 30.0,
+                },
                 ..Default::default()
             }],
             ..Default::default()
         };
         let files = project_files_wasm(&tree, false);
         let names: Vec<&str> = files.iter().map(|(n, _)| n.as_str()).collect();
-        assert!(names.contains(&"WASM_NOTES.txt"), "must warn about FilePicker in WASM");
+        assert!(
+            names.contains(&"WASM_NOTES.txt"),
+            "must warn about FilePicker in WASM"
+        );
     }
 
     /// Always-run smoke: the fixture generates the required files and its source

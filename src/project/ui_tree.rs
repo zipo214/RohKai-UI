@@ -1257,12 +1257,22 @@ mod tests {
             widgets: vec![
                 WidgetInstance {
                     id: a,
-                    rect: Rect { x: 50.0, y: 50.0, w: 80.0, h: 40.0 },
+                    rect: Rect {
+                        x: 50.0,
+                        y: 50.0,
+                        w: 80.0,
+                        h: 40.0,
+                    },
                     ..Default::default()
                 },
                 WidgetInstance {
                     id: b,
-                    rect: Rect { x: 150.0, y: 50.0, w: 80.0, h: 40.0 },
+                    rect: Rect {
+                        x: 150.0,
+                        y: 50.0,
+                        w: 80.0,
+                        h: 40.0,
+                    },
                     ..Default::default()
                 },
             ],
@@ -1270,7 +1280,11 @@ mod tests {
         };
         let frame_id = tree.group(&[a, b]);
         assert!(frame_id.is_some(), "group should return a frame id");
-        let frame = tree.widgets.iter().find(|w| w.id == frame_id.unwrap()).unwrap();
+        let frame = tree
+            .widgets
+            .iter()
+            .find(|w| w.id == frame_id.unwrap())
+            .unwrap();
         assert_eq!(frame.kind, WidgetKind::Frame);
         assert!(frame.children.contains(&a));
         assert!(frame.children.contains(&b));
@@ -1348,8 +1362,14 @@ mod tests {
         let dup = Uuid::from_u128(50);
         let mut tree = UiTree {
             widgets: vec![
-                WidgetInstance { id: dup, ..Default::default() },
-                WidgetInstance { id: dup, ..Default::default() },
+                WidgetInstance {
+                    id: dup,
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: dup,
+                    ..Default::default()
+                },
             ],
             ..Default::default()
         };

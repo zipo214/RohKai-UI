@@ -175,7 +175,12 @@ pub fn show_config(ui: &mut egui::Ui, comp: &mut DesignComponent) {
                 .hint_text(default_handler)
                 .desired_width(120.0),
         );
-        ui.label(egui::RichText::new("(&mut self)").small().weak().monospace());
+        ui.label(
+            egui::RichText::new("(&mut self)")
+                .small()
+                .weak()
+                .monospace(),
+        );
     });
 
     let handler_name = if comp.handler.is_empty() {
@@ -189,7 +194,8 @@ pub fn show_config(ui: &mut egui::Ui, comp: &mut DesignComponent) {
     ui.label(egui::RichText::new("Generated").small().strong());
 
     // State field (if any)
-    let pairs = crate::codegen::component_state::component_state_field_pairs(std::slice::from_ref(comp));
+    let pairs =
+        crate::codegen::component_state::component_state_field_pairs(std::slice::from_ref(comp));
     if !pairs.is_empty() {
         for (decl, _) in &pairs {
             ui.label(

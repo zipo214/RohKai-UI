@@ -120,8 +120,15 @@ fn tokenize(src: &str) -> Vec<Tok> {
 pub enum FormulaNode {
     Num(f64),
     Var(String),
-    Call { name: String, args: Vec<FormulaNode> },
-    Binary { op: BinOp, lhs: Box<FormulaNode>, rhs: Box<FormulaNode> },
+    Call {
+        name: String,
+        args: Vec<FormulaNode>,
+    },
+    Binary {
+        op: BinOp,
+        lhs: Box<FormulaNode>,
+        rhs: Box<FormulaNode>,
+    },
     Neg(Box<FormulaNode>),
 }
 
@@ -193,7 +200,11 @@ impl Parser {
             };
             self.bump();
             let rhs = self.parse_product()?;
-            lhs = FormulaNode::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+            lhs = FormulaNode::Binary {
+                op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            };
         }
         Ok(lhs)
     }
@@ -209,7 +220,11 @@ impl Parser {
             };
             self.bump();
             let rhs = self.parse_unary()?;
-            lhs = FormulaNode::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+            lhs = FormulaNode::Binary {
+                op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            };
         }
         Ok(lhs)
     }
@@ -364,7 +379,11 @@ pub fn emit_formula_rust(node: &FormulaNode) -> String {
 }
 
 fn emit_call(name: &str, args: &[FormulaNode]) -> String {
-    let a = |i: usize| args.get(i).map(emit_formula_rust).unwrap_or_else(|| "0_f64".to_owned());
+    let a = |i: usize| {
+        args.get(i)
+            .map(emit_formula_rust)
+            .unwrap_or_else(|| "0_f64".to_owned())
+    };
     match name {
         "abs" => format!("{}.abs()", a(0)),
         "sqrt" => format!("{}.sqrt()", a(0)),
@@ -390,7 +409,11 @@ fn emit_call(name: &str, args: &[FormulaNode]) -> String {
         "hypot" => format!("{}.hypot({})", a(0), a(1)),
         "pow" => format!("{}.powf({})", a(0), a(1)),
         other => {
-            let arg_list = args.iter().map(emit_formula_rust).collect::<Vec<_>>().join(", ");
+            let arg_list = args
+                .iter()
+                .map(emit_formula_rust)
+                .collect::<Vec<_>>()
+                .join(", ");
             format!("{other}({arg_list})")
         }
     }
@@ -469,10 +492,7 @@ mod tests {
     fn emits_rust_sqrt_call() {
         let node = parse_formula("sqrt(width * height)").unwrap();
         let rust = emit_formula_rust(&node);
-        assert_eq!(
-            rust,
-            "((self.width as f64) * (self.height as f64)).sqrt()"
-        );
+        assert_eq!(rust, "((self.width as f64) * (self.height as f64)).sqrt()");
     }
 
     #[test]

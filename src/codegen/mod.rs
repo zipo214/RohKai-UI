@@ -1,9 +1,9 @@
 pub mod component_state;
-pub mod handlers;
 pub mod egui_emitter;
 pub mod export;
 pub mod field_collector;
 pub mod formula;
+pub mod handlers;
 pub mod kind_table;
 pub mod parser;
 pub mod rust;

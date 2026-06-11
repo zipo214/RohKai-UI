@@ -477,7 +477,9 @@ impl RohKaiApp {
 
         // Export WASM project to a temp directory.
         let dest = std::env::temp_dir().join("rohkai_wasm_preview");
-        if let Err(e) = crate::codegen::export::write_project_wasm(&self.project.ui_tree, &dest, true) {
+        if let Err(e) =
+            crate::codegen::export::write_project_wasm(&self.project.ui_tree, &dest, true)
+        {
             self.messages.export_message =
                 Some((false, format!("WASM preview export failed: {e}")));
             return;
@@ -490,8 +492,10 @@ impl RohKaiApp {
             .spawn()
         {
             Ok(_) => {
-                self.messages.export_message =
-                    Some((true, "trunk serve started — http://localhost:8080".to_owned()));
+                self.messages.export_message = Some((
+                    true,
+                    "trunk serve started — http://localhost:8080".to_owned(),
+                ));
             }
             Err(e) => {
                 self.messages.export_message =

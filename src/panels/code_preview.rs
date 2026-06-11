@@ -282,8 +282,10 @@ fn collect_handler_names(code: &str) -> Vec<String> {
         .filter_map(|line| {
             let trimmed = line.trim_start();
             if let Some(rest) = trimmed.strip_prefix("fn ") {
-                let name: String =
-                    rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
                 if !name.is_empty() && !skip.iter().any(|s| trimmed.starts_with(s)) {
                     return Some(name);
                 }

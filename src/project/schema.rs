@@ -505,7 +505,10 @@ pub struct DataColumn {
 
 impl Default for DataColumn {
     fn default() -> Self {
-        Self { name: "column".to_owned(), column_type: DataColumnType::Text }
+        Self {
+            name: "column".to_owned(),
+            column_type: DataColumnType::Text,
+        }
     }
 }
 

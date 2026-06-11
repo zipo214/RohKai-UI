@@ -306,8 +306,14 @@ mod tests {
 
     #[test]
     fn sanitize_dots_and_slashes_to_underscores() {
-        assert_eq!(sanitize_widget_id_to_filename("mylib.button"), "mylib_button");
-        assert_eq!(sanitize_widget_id_to_filename("custom/widget"), "custom_widget");
+        assert_eq!(
+            sanitize_widget_id_to_filename("mylib.button"),
+            "mylib_button"
+        );
+        assert_eq!(
+            sanitize_widget_id_to_filename("custom/widget"),
+            "custom_widget"
+        );
     }
 
     #[test]
@@ -316,7 +322,9 @@ mod tests {
         let id = r#"bad:<>:"\|?*"#;
         let result = sanitize_widget_id_to_filename(id);
         assert!(
-            result.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
+            result
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
             "reserved chars survived: {result}"
         );
     }
@@ -338,7 +346,10 @@ mod tests {
 
     #[test]
     fn sanitize_valid_id_preserved() {
-        assert_eq!(sanitize_widget_id_to_filename("my_widget-v2"), "my_widget-v2");
+        assert_eq!(
+            sanitize_widget_id_to_filename("my_widget-v2"),
+            "my_widget-v2"
+        );
     }
 
     #[test]
