@@ -146,6 +146,12 @@ pub struct CodePanelState {
     pub split_ratio: f32,
     pub wrap_code: bool,
     pub editor_has_focus: bool,
+    /// Active search query in the code panel (empty = no search).
+    pub search_query: String,
+    /// Whether the in-panel Ctrl+F search bar is open.
+    pub search_open: bool,
+    /// Current match index for search navigation (prev/next).
+    pub search_match_idx: usize,
 }
 
 impl Default for CodePanelState {
@@ -157,6 +163,9 @@ impl Default for CodePanelState {
             split_ratio: 0.6,
             wrap_code: false,
             editor_has_focus: false,
+            search_query: String::new(),
+            search_open: false,
+            search_match_idx: 0,
         }
     }
 }
@@ -2067,6 +2076,9 @@ impl eframe::App for RohKaiApp {
                     wrap_code: &mut self.code.wrap_code,
                     editor_has_focus: &mut self.code.editor_has_focus,
                     code_font_size: self.prefs.user_settings.code_font_size,
+                    search_query: &mut self.code.search_query,
+                    search_open: &mut self.code.search_open,
+                    search_match_idx: &mut self.code.search_match_idx,
                 },
             );
         } // end !preview_mode gate for code panel

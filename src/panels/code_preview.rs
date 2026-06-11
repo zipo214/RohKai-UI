@@ -28,6 +28,12 @@ pub struct CodePreviewArgs<'a> {
     pub wrap_code: &'a mut bool,
     pub editor_has_focus: &'a mut bool,
     pub code_font_size: f32,
+    /// Ctrl+F search query for in-panel find (empty = no active search).
+    pub search_query: &'a mut String,
+    /// Whether the search bar is currently shown.
+    pub search_open: &'a mut bool,
+    /// Current match index for Prev/Next navigation.
+    pub search_match_idx: &'a mut usize,
 }
 
 struct CodeEditorSurface<'a> {
@@ -248,6 +254,46 @@ fn handler_source_span(code: &str, handler_name: &str) -> Option<SourceSpan> {
     Some(SourceSpan::new(start..end, line_start..=line_end))
 }
 
+/// Collect all `fn name(` user-defined handler names from the code buffer.
+/// Skips `fn update(` and `fn new(` which are framework methods, not handlers.
+fn collect_handler_names(code: &str) -> Vec<String> {
+    let skip = ["fn update(", "fn new(", "fn default("];
+    code.lines()
+        .filter_map(|line| {
+            let trimmed = line.trim_start();
+            if let Some(rest) = trimmed.strip_prefix("fn ") {
+                let name: String =
+                    rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                if !name.is_empty() && !skip.iter().any(|s| trimmed.starts_with(s)) {
+                    return Some(name);
+                }
+            }
+            None
+        })
+        .collect()
+}
+
+/// Compute `SourceSpan`s for all occurrences of `query` (lowercase) in `code`.
+/// Returns an empty vec when query is empty.
+fn compute_search_spans(code: &str, query: &str) -> Vec<SourceSpan> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let code_lower = code.to_lowercase();
+    let mut spans = Vec::new();
+    let mut search_from = 0usize;
+    while let Some(byte_offset) = code_lower[search_from..].find(query) {
+        let abs_byte = search_from + byte_offset;
+        let line_num = code[..abs_byte].chars().filter(|&c| c == '\n').count() + 1;
+        spans.push(SourceSpan::new(
+            abs_byte..(abs_byte + query.len()),
+            line_num..=line_num,
+        ));
+        search_from = abs_byte + query.len().max(1);
+    }
+    spans
+}
+
 fn navigation_span(target: Option<Uuid>, spans: &[WidgetSourceSpan]) -> Option<SourceSpan> {
     target.and_then(|id| {
         spans
@@ -289,6 +335,9 @@ pub fn show(ctx: &egui::Context, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
         wrap_code,
         editor_has_focus,
         code_font_size,
+        search_query,
+        search_open,
+        search_match_idx,
     } = args;
 
     let generated = egui_emitter::emit_document(tree);
@@ -341,6 +390,16 @@ pub fn show(ctx: &egui::Context, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
                 ui.toggle_value(wrap_code, "Wrap")
                     .on_hover_text("Wrap long code lines instead of horizontal scrolling");
 
+                let search_btn = ui
+                    .selectable_label(*search_open, egui::RichText::new("⌕").small())
+                    .on_hover_text("Find in code (Ctrl+F)");
+                if search_btn.clicked() {
+                    *search_open = !*search_open;
+                    if !*search_open {
+                        search_query.clear();
+                    }
+                }
+
                 if ui
                     .small_button("↺")
                     .on_hover_text("Reset to generated code")
@@ -351,6 +410,58 @@ pub fn show(ctx: &egui::Context, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
                     *code_status = CodeStatus::Generated;
                 }
             });
+
+            // Ctrl+F shortcut to open/close search
+            if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::F)) {
+                *search_open = !*search_open;
+                if !*search_open {
+                    search_query.clear();
+                }
+            }
+
+            // Search bar
+            let search_spans = if *search_open {
+                ui.horizontal(|ui| {
+                    let response = ui.add(
+                        egui::TextEdit::singleline(search_query)
+                            .hint_text("Find…")
+                            .desired_width(ui.available_width() - 70.0),
+                    );
+                    // Focus the search field when it first opens
+                    if response.gained_focus() || search_query.is_empty() && response.hovered() {
+                        response.request_focus();
+                    }
+                    let query_lower = search_query.to_lowercase();
+                    let spans = compute_search_spans(code_buffer, &query_lower);
+                    let match_count = spans.len();
+                    if !spans.is_empty() {
+                        if ui.small_button("▲").on_hover_text("Previous match").clicked() {
+                            *search_match_idx = search_match_idx.saturating_sub(1);
+                        }
+                        if ui.small_button("▼").on_hover_text("Next match").clicked() {
+                            *search_match_idx = (*search_match_idx + 1).min(match_count.saturating_sub(1));
+                        }
+                        ui.label(
+                            egui::RichText::new(format!("{}/{}", *search_match_idx + 1, match_count))
+                                .small()
+                                .color(egui::Color32::from_rgb(156, 163, 175)),
+                        );
+                    } else if !search_query.is_empty() {
+                        ui.label(egui::RichText::new("No matches").small().color(egui::Color32::RED));
+                    }
+                    // Close on Escape
+                    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        *search_open = false;
+                        search_query.clear();
+                    }
+                    spans
+                })
+                .inner
+            } else {
+                search_query.clear();
+                *search_match_idx = 0;
+                Vec::new()
+            };
 
             if let CodeStatus::InvalidEdit(msg) = code_status {
                 ui.label(
@@ -413,13 +524,25 @@ pub fn show(ctx: &egui::Context, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
             let state_h = (total_h - code_h - divider_h).max(60.0);
 
             let widget_navigation = navigation_span(requested_navigation, &source_spans);
-            let navigation = handler_navigation.as_ref().or(widget_navigation.as_ref());
+            // Search match navigation takes priority when search is active
+            let search_nav = if !search_spans.is_empty() {
+                search_spans.get(*search_match_idx).cloned()
+            } else {
+                None
+            };
+            let navigation = search_nav
+                .as_ref()
+                .or(handler_navigation.as_ref())
+                .or(widget_navigation.as_ref());
+            // Merge widget selection highlights with search match highlights
+            let mut all_highlights = selected_spans.clone();
+            all_highlights.extend_from_slice(&search_spans);
             let editor_output = CodeEditorSurface {
                 text: code_buffer,
                 font_size: code_font_size,
                 height: code_h,
                 wrap: *wrap_code,
-                highlights: &selected_spans,
+                highlights: &all_highlights,
                 navigation,
             }
             .show(ui);
@@ -497,6 +620,56 @@ pub fn show(ctx: &egui::Context, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
                 .max_height(state_h)
                 .show(ui, |ui| {
                     ui.label(egui::RichText::new(&state).monospace().size(code_font_size));
+                });
+
+            // ---- Symbol list (collapsible) ----
+            ui.separator();
+            egui::CollapsingHeader::new(egui::RichText::new("Symbols").strong())
+                .id_salt("symbol_list")
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new("Widgets").small().weak(),
+                    );
+                    egui::ScrollArea::vertical()
+                        .id_salt("symbol_widget_scroll")
+                        .max_height(120.0)
+                        .show(ui, |ui| {
+                            for w in &tree.widgets {
+                                if w.children.iter().any(|&c| {
+                                    tree.widgets.iter().any(|tw| tw.id == c)
+                                }) || tree.widgets.iter().any(|tw| tw.children.contains(&w.id))
+                                    || !w.children.is_empty()
+                                {
+                                    // Layout parent
+                                }
+                                let display_name = if let Some(ref b) = w.state_binding {
+                                    format!("{} ({})", w.props.label, b)
+                                } else {
+                                    w.props.label.clone()
+                                };
+                                let resp = ui.small_button(
+                                    egui::RichText::new(&display_name).monospace(),
+                                );
+                                if resp.clicked() {
+                                    *navigation_target = Some(w.id);
+                                }
+                            }
+                        });
+
+                    // Handler functions in the code buffer
+                    let handlers = collect_handler_names(code_buffer);
+                    if !handlers.is_empty() {
+                        ui.label(egui::RichText::new("Handlers").small().weak());
+                        for handler_name in handlers {
+                            if ui
+                                .small_button(egui::RichText::new(&handler_name).monospace())
+                                .clicked()
+                            {
+                                *scroll_to_handler = Some(handler_name);
+                            }
+                        }
+                    }
                 });
         });
 }
