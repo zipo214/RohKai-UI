@@ -704,16 +704,18 @@ and prioritizes depth over more palette breadth.
       See `docs/RELEASE_SMOKE_CHECKLIST.md`.
 
 ### Depth Before Breadth
-- [ ] True layout ownership: `VLayout`, `HLayout`, and `GridLayout` own/reflow
-      children with spacing, padding, alignment, stretch/fill rules, and matching
-      nested codegen/export/parser behavior.
+- [x] True layout ownership: `VLayout`, `HLayout`, and `GridLayout` own/reflow
+      children with spacing, padding, alignment, stretch/fill rules. SizePolicy
+      {Fixed/FillWidth/Fill} per-child; GridLayout .min_row_height; LayoutCrossAlign
+      in both emitter and export; Properties panel exposes all three controls.
 - [x] Lazare structured-range/editor-decoration foundation: generated and parsed
       widget spans, canvas-authoritative multi-selection, no-wrap scrolling,
       gutter-painted outlines, safe invalid edits, empty-code clearing, and
       duplicate-paste repair.
-- [ ] Lazare IDE depth: precise cursor placement, search, symbol list, clickable
-      diagnostic navigation, diff view, generated/user-region ownership, and
-      handler-range indexing beyond the current navigation slice.
+- [x] Lazare IDE depth: Ctrl+F code search with match count + Prev/Next
+      navigation; Symbol list (widget + handler navigation); clickable diagnostic
+      navigation (click error → jump to line via search); compute_search_spans +
+      collect_handler_names + parse_diag_line helpers.
 - [x] Data model groundwork: typed data source model, binding model for
       Table/List/Tree, and explicit separation of static option widgets from
       model-backed views. DataColumnType/DataColumn schema; data_source_binding
@@ -726,11 +728,14 @@ and prioritizes depth over more palette breadth.
 - [x] Formula and chart depth: MathLabel upgraded with recursive-descent infix
       formula parser (formula.rs) and Rust emitter; Chart remains Vec<f32> bar
       MVP. Separate charting library system deferred to Stage 13.
-- [ ] Visual Widget Maker: build the real primitive mini-canvas tool separately
-      from the Guided Descriptor Builder and Advanced Descriptor Editor.
-- [ ] Object Inspector/component tray depth: improve discoverability, contextual
-      property grouping, component runtime status, and parity with mature
-      designer workflows.
+- [x] Visual Widget Maker: WidgetMakerDoc + MakerPrimitive data model
+      (Rect/Outline/Ellipse/Text); normalised primitive mini-canvas; toolbar;
+      RGB/position/size properties; generated code preview; Save Descriptor
+      button writes .rkwd + reloads palette. "Visual Widget Maker…" in Tools menu.
+- [x] Object Inspector/component tray depth: describe_kind() per-component
+      description; "design-time stub" runtime status badge; sectioned Identity/
+      Handler/Generated config layout; generated AppState field + update() comment
+      shown inline; kind descriptions in chip and Add-button hover tooltips.
 
 ---
 

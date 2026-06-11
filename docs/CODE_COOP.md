@@ -7,6 +7,24 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-11 — All deferred depth-gate items implemented (pre-release gate closed)
+
+On `dev`. Six depth-gate features shipped in sequence, all passing 394 tests /
+zero clippy warnings: (1) **Data model groundwork** — `DataColumnType`/`DataColumn`
+schema, `data_source_binding` on `WidgetProps`, bound Table/ListView/TreeView
+emit iteration code; (2) **True layout ownership** — `SizePolicy` {Fixed/FillWidth/Fill}
+per-child + `grid_row_height` on GridLayout + export `layout_cross_align` parity;
+(3) **Lazare IDE depth** — Ctrl+F code search (match count + Prev/Next), Symbol list
+(widget/handler navigation), clickable diagnostic navigation; (4) **Visual Widget
+Maker** — `WidgetMakerDoc`+`MakerPrimitive` model, mini-canvas, Rect/Outline/
+Ellipse/Text primitives, Save→.rkwd pipeline; (5) **Object Inspector depth** —
+`describe_kind()`, "design-time stub" badge, sectioned config, inline generated-code
+preview; (6) **ROADMAP** — Stage 12 WASM, formula depth, runtime stubs, data model,
+layout ownership, Lazare depth, Widget Maker, Inspector all checked off. Remaining:
+Stage 13 DB (blocked — needs crate approval), font shaping (blocked — needs
+`rustybuzz` approval), Stage 15 deferred. Also added rayon parallelism, formula
+parser, WASM export in the same session.
+
 ## 2026-06-10 — SVG R12 complete: namespace + recovery + a11y (post-R8 lanes ALL done)
 
 On `dev`. **R12 done** (commit a0b563f) — final post-R8 lane; **the SVG renderer

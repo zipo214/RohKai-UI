@@ -2,6 +2,57 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-11 — Pre-release depth gate closed: all deferred features implemented
+
+### Context Reviewed
+- docs/ROADMAP.md depth gate items; docs/ENGINEERING_INVARIANTS.md
+- src/codegen/egui_emitter.rs, export.rs, field_collector.rs, formula.rs (new)
+- src/project/schema.rs, src/panels/properties.rs, code_preview.rs, component_tray.rs
+- src/canvas/widget_maker.rs (new), src/panels/widget_maker_panel.rs (new)
+
+### Changes Made
+1. **Data model groundwork** (commit cd0fcea): DataColumnType/DataColumn schema;
+   data_source_binding on WidgetProps; bound Table/ListView/TreeView emit for-loop
+   iteration; Properties show_data_widget (Static/Bound mode, column editor for Table).
+
+2. **True layout ownership** (commit 388f112): SizePolicy enum {Fixed/FillWidth/Fill}
+   per-child; child_size_str() in emitter + export_child_size_str() in export; GridLayout
+   .min_row_height(); VLayout/HLayout respect layout_cross_align in export (parity fix);
+   Properties Size policy selector + Row H checkbox for GridLayout. 4 tests.
+
+3. **Lazare IDE depth — search** (commit 7d43550): Ctrl+F opens search bar; ⌕ button
+   toggle; case-insensitive find with Prev/Next match navigation; match count display;
+   compute_search_spans() generates SourceSpan highlights; search navigation priority.
+
+4. **Lazare IDE depth — symbol list + diagnostics** (commit c0867fb): Symbol list
+   collapsible section (widget navigate + handler navigate); parse_diag_line() extracts
+   line number; clickable error label jumps to error location via search activation.
+
+5. **Visual Widget Maker** (commit 4f60e72): WidgetMakerDoc + MakerPrimitive model;
+   mini-canvas with drag/select; Rect/Outline/Ellipse/Text primitives; toolbar with
+   add/remove/z-order; properties panel (kind, %, RGB, font); generated template
+   preview; Save Descriptor → .rkwd write + palette reload. "Visual Widget Maker…"
+   in Tools menu. 5 tests.
+
+6. **Object Inspector depth** (commit 83f20a0): describe_kind() for all ComponentKinds;
+   "design-time stub" italic badge; sectioned config (Identity/Handler/Generated);
+   inline generated AppState field + update() comment display; chip/button hover text.
+
+7. **ROADMAP** updated: Stage 12 WASM checked off; formula depth, runtime stubs, data
+   model, layout ownership, Lazare IDE, Widget Maker, Inspector all marked complete.
+
+### Verification
+- 394 tests pass; zero clippy warnings (--all-targets); cargo check clean.
+- Commits: cd0fcea, 388f112, 7d43550, c0867fb, 4f60e72, 83f20a0 + ROADMAP docs.
+
+### Remaining Open Items
+- Stage 13 (DB integration): BLOCKED — needs explicit user approval for crate name
+  (sqlx or rusqlite). No work started.
+- Font shaping: BLOCKED — needs user approval for `rustybuzz`. No work started.
+- Stage 15 (own renderer): DEFERRED by user.
+- Lazare diff view: deferred (mentioned in depth gate but not critical path).
+- Visual Widget Maker resize handles: draggable (visual only now, not interactive).
+
 ## 2026-06-10 — SVG R12 complete: namespace + recovery + a11y (post-R8 lane 5/5)
 
 ### Context Reviewed Before Editing
