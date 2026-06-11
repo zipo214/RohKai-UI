@@ -462,6 +462,33 @@ pub enum LayoutCrossAlign {
     End,
 }
 
+// ---------------------------------------------------------------------------
+// Data model types
+// ---------------------------------------------------------------------------
+
+/// Type of a data column in a Table widget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum DataColumnType {
+    #[default]
+    Text,
+    Number,
+    Boolean,
+}
+
+/// A named, typed column definition for Table data binding.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DataColumn {
+    pub name: String,
+    #[serde(default)]
+    pub column_type: DataColumnType,
+}
+
+impl Default for DataColumn {
+    fn default() -> Self {
+        Self { name: "column".to_owned(), column_type: DataColumnType::Text }
+    }
+}
+
 impl LayoutCrossAlign {
     pub fn is_start(&self) -> bool {
         *self == LayoutCrossAlign::Start
@@ -560,6 +587,16 @@ pub struct WidgetProps {
     )]
     pub formula_decimals: usize,
 
+    // Data model binding
+    /// AppState field name for model-backed Table / ListView / TreeView.
+    /// When set, codegen iterates over the bound Vec instead of static options.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_source_binding: Option<String>,
+    /// Column definitions for model-backed Table widgets.
+    /// Empty → single unnamed String column.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub data_columns: Vec<DataColumn>,
+
     // Stage 9 schema audit
     /// Wrap text at widget boundary (Label, TextArea). None = egui default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -652,6 +689,8 @@ impl Default for WidgetProps {
             layout_cross_align: LayoutCrossAlign::Start,
             formula_expr: String::new(),
             formula_decimals: 2,
+            data_source_binding: None,
+            data_columns: Vec::new(),
             text_wrap: None,
         }
     }

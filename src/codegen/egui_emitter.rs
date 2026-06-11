@@ -650,49 +650,97 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                 lines.push((Some(w.id), line));
             }
             WidgetKind::Table => {
-                let mut s = format!(
-                    "        egui::Grid::new(\"{}\").striped(true).show(ui, |ui| {{\n",
-                    w.id.as_simple()
-                );
-                for col in &w.props.options {
-                    s.push_str(&format!("            ui.label({});\n", string_literal(col)));
-                }
-                s.push_str("            ui.end_row();\n        });");
+                let id = w.id.as_simple();
+                let s = if let Some(ref src) = w.props.data_source_binding {
+                    let cols = if w.props.data_columns.is_empty() {
+                        vec![crate::project::schema::DataColumn::default()]
+                    } else {
+                        w.props.data_columns.clone()
+                    };
+                    let header: String = cols
+                        .iter()
+                        .map(|c| format!("            ui.label({});\n", string_literal(&c.name)))
+                        .collect();
+                    let row_access: String = (0..cols.len())
+                        .map(|i| format!("                ui.label(&row[{i}]);\n"))
+                        .collect();
+                    format!(
+                        "        egui::Grid::new(\"{id}\").striped(true).show(ui, |ui| {{\n\
+                         {header}\
+                             ui.end_row();\n\
+                             for row in &self.{src} {{\n\
+                         {row_access}\
+                                 ui.end_row();\n\
+                             }}\n\
+                         }});"
+                    )
+                } else {
+                    let mut s = format!(
+                        "        egui::Grid::new(\"{id}\").striped(true).show(ui, |ui| {{\n"
+                    );
+                    for col in &w.props.options {
+                        s.push_str(&format!("            ui.label({});\n", string_literal(col)));
+                    }
+                    s.push_str("            ui.end_row();\n        });");
+                    s
+                };
                 lines.push((Some(w.id), s));
             }
             WidgetKind::ListView => {
-                let mut s = format!(
-                    "        egui::ScrollArea::vertical().id_salt(\"{}\").show(ui, |ui| {{\n",
-                    w.id.as_simple()
-                );
-                for item in &w.props.options {
-                    s.push_str(&format!(
-                        "            ui.label({});\n",
-                        string_literal(item)
-                    ));
-                }
-                s.push_str("        });");
+                let id = w.id.as_simple();
+                let s = if let Some(ref src) = w.props.data_source_binding {
+                    format!(
+                        "        egui::ScrollArea::vertical().id_salt(\"{id}\").show(ui, |ui| {{\n\
+                             for item in &self.{src} {{\n\
+                                 ui.label(item.as_str());\n\
+                             }}\n\
+                         }});"
+                    )
+                } else {
+                    let mut s = format!(
+                        "        egui::ScrollArea::vertical().id_salt(\"{id}\").show(ui, |ui| {{\n"
+                    );
+                    for item in &w.props.options {
+                        s.push_str(&format!(
+                            "            ui.label({});\n",
+                            string_literal(item)
+                        ));
+                    }
+                    s.push_str("        });");
+                    s
+                };
                 lines.push((Some(w.id), s));
             }
             WidgetKind::TreeView => {
-                let mut s = String::new();
-                let root = w
-                    .props
-                    .options
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| "Root".into());
-                s.push_str(&format!(
-                    "        egui::CollapsingHeader::new({}).default_open(true).show(ui, |ui| {{\n",
-                    string_literal(&root)
-                ));
-                for child in w.props.options.iter().skip(1) {
-                    s.push_str(&format!(
-                        "            ui.label({});\n",
-                        string_literal(child)
-                    ));
-                }
-                s.push_str("        });");
+                let s = if let Some(ref src) = w.props.data_source_binding {
+                    let label_lit = string_literal(&w.props.label);
+                    format!(
+                        "        egui::CollapsingHeader::new({label_lit}).default_open(true).show(ui, |ui| {{\n\
+                             for node in &self.{src} {{\n\
+                                 ui.label(node.as_str());\n\
+                             }}\n\
+                         }});"
+                    )
+                } else {
+                    let root = w
+                        .props
+                        .options
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| "Root".into());
+                    let mut s = format!(
+                        "        egui::CollapsingHeader::new({}).default_open(true).show(ui, |ui| {{\n",
+                        string_literal(&root)
+                    );
+                    for child in w.props.options.iter().skip(1) {
+                        s.push_str(&format!(
+                            "            ui.label({});\n",
+                            string_literal(child)
+                        ));
+                    }
+                    s.push_str("        });");
+                    s
+                };
                 lines.push((Some(w.id), s));
             }
             WidgetKind::StackedWidget => {
@@ -1741,5 +1789,49 @@ mod tests {
                 "widget {uid} missing from widget_spans"
             );
         }
+    }
+
+    #[test]
+    fn listview_bound_emits_iteration_not_static_labels() {
+        let g = emit_joined(WidgetKind::ListView, |w| {
+            w.props.data_source_binding = Some("my_items".into());
+            w.props.options = vec!["Static A".into(), "Static B".into()];
+        });
+        assert!(g.contains("for item in &self.my_items"), "bound ListView must iterate");
+        assert!(!g.contains("\"Static A\""), "bound ListView must not emit static labels");
+    }
+
+    #[test]
+    fn listview_static_emits_static_labels_when_unbound() {
+        let g = emit_joined(WidgetKind::ListView, |w| {
+            w.props.options = vec!["Alpha".into(), "Beta".into()];
+        });
+        assert!(g.contains("\"Alpha\""), "unbound ListView must emit static labels");
+        assert!(!g.contains("for item in"), "unbound ListView must not emit iteration");
+    }
+
+    #[test]
+    fn table_bound_emits_header_and_row_iteration() {
+        use crate::project::schema::{DataColumn, DataColumnType};
+        let g = emit_joined(WidgetKind::Table, |w| {
+            w.props.data_source_binding = Some("rows".into());
+            w.props.data_columns = vec![
+                DataColumn { name: "Name".into(), column_type: DataColumnType::Text },
+                DataColumn { name: "Age".into(), column_type: DataColumnType::Number },
+            ];
+        });
+        assert!(g.contains("\"Name\""), "Table header must include column name");
+        assert!(g.contains("\"Age\""), "Table header must include column name");
+        assert!(g.contains("for row in &self.rows"), "Table must iterate bound source");
+        assert!(g.contains("row[0]"), "Table must access column 0");
+        assert!(g.contains("row[1]"), "Table must access column 1");
+    }
+
+    #[test]
+    fn treeview_bound_emits_iteration() {
+        let g = emit_joined(WidgetKind::TreeView, |w| {
+            w.props.data_source_binding = Some("nodes".into());
+        });
+        assert!(g.contains("for node in &self.nodes"), "bound TreeView must iterate");
     }
 }

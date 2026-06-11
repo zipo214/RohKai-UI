@@ -1,7 +1,7 @@
 use crate::codegen::widget_descriptor::{DescriptorPropType, WidgetDescriptor};
 use crate::project::schema::{
-    CustomProp, CustomPropType, HandlerResult, LayoutCrossAlign, Orientation, TextAlign,
-    WidgetEvent, WidgetInstance, WidgetKind,
+    CustomProp, CustomPropType, DataColumn, DataColumnType, HandlerResult, LayoutCrossAlign,
+    Orientation, TextAlign, WidgetEvent, WidgetInstance, WidgetKind,
 };
 use crate::project::ui_tree::UiTree;
 use uuid::Uuid;
@@ -112,9 +112,9 @@ fn show_content_inner(
             WidgetKind::MathLabel => show_math_label(ui, w, &mut do_delete),
             WidgetKind::FilePicker => show_file_picker(ui, w, &mut do_delete),
             WidgetKind::Chart => show_layout_container(ui, w, &mut do_delete, &mut child_move),
-            WidgetKind::Table => show_options_widget(ui, w, &mut do_delete, "Columns"),
-            WidgetKind::ListView => show_options_widget(ui, w, &mut do_delete, "Items"),
-            WidgetKind::TreeView => show_options_widget(ui, w, &mut do_delete, "Nodes"),
+            WidgetKind::Table => show_data_widget(ui, w, &mut do_delete, "Columns"),
+            WidgetKind::ListView => show_data_widget(ui, w, &mut do_delete, "Items"),
+            WidgetKind::TreeView => show_data_widget(ui, w, &mut do_delete, "Nodes"),
             WidgetKind::StackedWidget => show_options_widget(ui, w, &mut do_delete, "Pages"),
             WidgetKind::ToolBox => show_options_widget(ui, w, &mut do_delete, "Sections"),
             WidgetKind::Image => {
@@ -1717,6 +1717,123 @@ fn show_options_widget(
         let n = w.props.options.len() + 1;
         w.props.options.push(format!("{item_label} {n}"));
     }
+    show_geometry(ui, w);
+    ui.separator();
+    show_custom_props(ui, w);
+    show_delete_button(ui, do_delete);
+}
+
+/// Table / ListView / TreeView: static options + optional model binding.
+fn show_data_widget(
+    ui: &mut egui::Ui,
+    w: &mut WidgetInstance,
+    do_delete: &mut bool,
+    item_label: &str,
+) {
+    field_text(ui, "Label", &mut w.props.label);
+
+    // --- Data source binding ---
+    ui.separator();
+    ui.label(egui::RichText::new("Data Source (model-bound)").small().weak());
+    let has_binding = w.props.data_source_binding.is_some();
+    ui.horizontal(|ui| {
+        if ui.selectable_label(!has_binding, "Static").clicked() {
+            w.props.data_source_binding = None;
+        }
+        if ui.selectable_label(has_binding, "Bound").clicked()
+            && w.props.data_source_binding.is_none()
+        {
+            w.props.data_source_binding = Some("items".to_owned());
+        }
+    });
+    if let Some(ref mut src) = w.props.data_source_binding {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Field").small());
+            ui.add(
+                egui::TextEdit::singleline(src)
+                    .hint_text("items")
+                    .desired_width(120.0),
+            );
+        });
+        ui.label(
+            egui::RichText::new("AppState field will be Vec<String> (ListView/TreeView) or Vec<Vec<String>> (Table).")
+                .small()
+                .weak(),
+        );
+        // Column editor for Table
+        if matches!(w.kind, WidgetKind::Table) {
+            ui.separator();
+            ui.label(egui::RichText::new("Columns").small().weak());
+            let mut to_remove: Option<usize> = None;
+            for (i, col) in w.props.data_columns.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    let ow = (ui.available_width() - 80.0).clamp(60.0, 140.0);
+                    ui.add(
+                        egui::TextEdit::singleline(&mut col.name)
+                            .hint_text(format!("col_{}", i + 1))
+                            .desired_width(ow),
+                    );
+                    egui::ComboBox::from_id_salt(("col_type", i))
+                        .selected_text(match col.column_type {
+                            DataColumnType::Text => "Text",
+                            DataColumnType::Number => "Number",
+                            DataColumnType::Boolean => "Bool",
+                        })
+                        .width(60.0)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut col.column_type, DataColumnType::Text, "Text",
+                            );
+                            ui.selectable_value(
+                                &mut col.column_type, DataColumnType::Number, "Number",
+                            );
+                            ui.selectable_value(
+                                &mut col.column_type, DataColumnType::Boolean, "Bool",
+                            );
+                        });
+                    if ui.small_button("x").clicked() {
+                        to_remove = Some(i);
+                    }
+                });
+            }
+            if let Some(i) = to_remove {
+                w.props.data_columns.remove(i);
+            }
+            if ui.small_button("+ Column").clicked() {
+                let n = w.props.data_columns.len() + 1;
+                w.props.data_columns.push(DataColumn {
+                    name: format!("col_{n}"),
+                    column_type: DataColumnType::Text,
+                });
+            }
+        }
+    } else {
+        // Static options editor
+        ui.separator();
+        ui.label(egui::RichText::new(item_label).small().weak());
+        let mut to_remove: Option<usize> = None;
+        for (i, opt) in w.props.options.iter_mut().enumerate() {
+            ui.horizontal(|ui| {
+                let ow = (ui.available_width() - 28.0).clamp(60.0, 180.0);
+                ui.add(
+                    egui::TextEdit::singleline(opt)
+                        .hint_text(format!("{item_label} {}", i + 1))
+                        .desired_width(ow),
+                );
+                if ui.small_button("x").clicked() {
+                    to_remove = Some(i);
+                }
+            });
+        }
+        if let Some(i) = to_remove {
+            w.props.options.remove(i);
+        }
+        if ui.small_button(format!("+ Add {item_label}")).clicked() {
+            let n = w.props.options.len() + 1;
+            w.props.options.push(format!("{item_label} {n}"));
+        }
+    }
+
     show_geometry(ui, w);
     ui.separator();
     show_custom_props(ui, w);
