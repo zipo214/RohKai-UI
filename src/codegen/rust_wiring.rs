@@ -19,8 +19,9 @@ use crate::project::schema::{HandlerResult, IterOp, RustWiring};
 /// `("progress_tx: std::sync::mpsc::Sender<f32>", "let (progress_tx, progress_rx) = std::sync::mpsc::channel();")`.
 pub fn channel_field_pairs(wiring: &RustWiring) -> Vec<(String, String)> {
     let mut out = Vec::new();
+    let mut used = std::collections::HashSet::new();
     for ch in &wiring.channels {
-        let name = sanitize(&ch.name);
+        let name = dedup_name(sanitize(&ch.name), &mut used);
         let ty = ch.ty.trim();
         out.push((
             format!("    {name}_tx: std::sync::mpsc::Sender<{ty}>,"),
@@ -42,8 +43,9 @@ pub fn channel_field_pairs(wiring: &RustWiring) -> Vec<(String, String)> {
 /// `fn name(&self) -> impl IntoIterator + '_ { source.iter().map(...).collect::<Vec<_>>() }`.
 pub fn iterator_methods(wiring: &RustWiring, indent: &str) -> String {
     let mut s = String::new();
+    let mut used = std::collections::HashSet::new();
     for p in &wiring.iterators {
-        let name = sanitize(&p.name);
+        let name = dedup_name(sanitize(&p.name), &mut used);
         let mut chain = format!("{}.iter()", p.source.trim());
         for op in &p.ops {
             match op {
@@ -268,6 +270,24 @@ pub fn async_repaint_block(handlers: &[(String, HandlerResult)], indent: &str) -
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Append a numeric suffix to `base` until a name not already in `used` is found.
+/// Inserts the chosen name into `used` before returning.
+fn dedup_name(base: String, used: &mut std::collections::HashSet<String>) -> String {
+    if !used.contains(&base) {
+        used.insert(base.clone());
+        return base;
+    }
+    let mut n = 2usize;
+    loop {
+        let candidate = format!("{base}_{n}");
+        if !used.contains(&candidate) {
+            used.insert(candidate.clone());
+            return candidate;
+        }
+        n += 1;
+    }
+}
 
 fn sanitize(name: &str) -> String {
     let s: String = name
@@ -521,6 +541,44 @@ mod tests {
                 trimmed.chars().next().is_some_and(|c| c.is_ascii_digit())
             }),
             "digit-leading channel name must be prefixed"
+        );
+    }
+
+    #[test]
+    fn channel_collision_produces_distinct_names() {
+        // "type" sanitizes to "type_ch"; "type_ch" also sanitizes to "type_ch".
+        // The second must be disambiguated to "type_ch_2" so the generated
+        // struct does not have duplicate tx/rx fields.
+        let pairs = channel_field_pairs(&RustWiring {
+            channels: vec![
+                ChannelDef {
+                    id: Uuid::nil(),
+                    name: "type".to_owned(),
+                    ty: "u8".to_owned(),
+                },
+                ChannelDef {
+                    id: Uuid::new_v4(),
+                    name: "type_ch".to_owned(),
+                    ty: "u8".to_owned(),
+                },
+            ],
+            iterators: vec![],
+            trait_impls: vec![],
+        });
+        let tx_decls: Vec<&str> = pairs
+            .iter()
+            .map(|(d, _)| d.as_str())
+            .filter(|d| d.contains("_tx:"))
+            .collect();
+        assert_eq!(
+            tx_decls.len(),
+            2,
+            "two channels must produce two distinct tx fields"
+        );
+        assert_ne!(
+            tx_decls[0], tx_decls[1],
+            "colliding sanitized names must be disambiguated: {:?}",
+            tx_decls
         );
     }
 }

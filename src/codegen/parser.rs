@@ -255,6 +255,24 @@ fn flush_pending_child(pending: &mut Option<ParsedWidget>, report: &mut ParseRep
     }
 }
 
+/// Assign `widget.binding` from a parsed line, intercepting the malformed-binding
+/// sentinel returned by `extract_binding_name`.  When malformed, emits a diagnostic
+/// and leaves `widget.binding` unchanged so no prior valid binding is clobbered.
+fn apply_binding(widget: &mut ParsedWidget, line: &str, line_no: usize, report: &mut ParseReport) {
+    match extract_binding_name(line) {
+        Some(b) if b == "_malformed_binding_" => {
+            push_error(
+                report,
+                line_no,
+                "malformed binding: expected identifier after 'self.'",
+            );
+        }
+        b => {
+            widget.binding = Some(b);
+        }
+    }
+}
+
 fn parse_widget_line(
     widget: &mut ParsedWidget,
     line: &str,
@@ -282,17 +300,17 @@ fn parse_widget_line(
         parse_add_sized(widget, line, line_no, report);
     } else if line.starts_with("ui.label(") || line.contains("egui::Label::new(") {
         widget.kind = Some(WidgetKind::Label);
-        widget.binding = Some(extract_binding_name(line));
+        apply_binding(widget, line, line_no, report);
         if widget.binding.as_ref().and_then(|b| b.as_ref()).is_none() {
             widget.label = extract_string_literal(line);
         }
     } else if line.contains("egui::TextEdit::singleline(") {
         widget.kind = Some(WidgetKind::TextInput);
-        widget.binding = Some(extract_binding_name(line));
+        apply_binding(widget, line, line_no, report);
         parse_add_sized(widget, line, line_no, report);
     } else if line.contains("egui::Slider::new(") {
         widget.kind = Some(WidgetKind::Slider);
-        widget.binding = Some(extract_binding_name(line));
+        apply_binding(widget, line, line_no, report);
         widget.label = extract_string_literal(line);
         if let Some((min, max)) = extract_range(line) {
             widget.min = Some(min);
@@ -301,7 +319,7 @@ fn parse_widget_line(
         parse_add_sized(widget, line, line_no, report);
     } else if line.contains("egui::Checkbox::new(") {
         widget.kind = Some(WidgetKind::Checkbox);
-        widget.binding = Some(extract_binding_name(line));
+        apply_binding(widget, line, line_no, report);
         widget.label = extract_string_literal(line);
         parse_add_sized(widget, line, line_no, report);
     } else if line.contains("egui::ComboBox::from_label(") {
@@ -313,7 +331,7 @@ fn parse_widget_line(
         }
     } else if line.contains("ui.radio_value(") {
         widget.kind = Some(WidgetKind::RadioButton);
-        widget.binding = Some(extract_binding_name(line));
+        apply_binding(widget, line, line_no, report);
         widget.label = extract_string_literal(line);
     } else if line.contains("egui::ProgressBar::new(") {
         widget.kind = Some(WidgetKind::ProgressBar);
@@ -338,8 +356,18 @@ fn parse_widget_line(
             widget.label = extract_string_literal(line);
         }
         if widget.binding.is_none() {
-            if let Some(b) = extract_binding_name(line) {
-                widget.binding = Some(Some(b));
+            match extract_binding_name(line) {
+                Some(b) if b == "_malformed_binding_" => {
+                    push_error(
+                        report,
+                        line_no,
+                        "malformed binding: expected identifier after 'self.'",
+                    );
+                }
+                Some(b) => {
+                    widget.binding = Some(Some(b));
+                }
+                None => {}
             }
         }
     }
@@ -923,6 +951,27 @@ mod tests {
                 .find(|w| w.id == parent_id)
                 .unwrap();
             assert_eq!(restored.children, vec![child_id]);
+        }
+    }
+
+    #[test]
+    fn malformed_binding_emits_error_not_sentinel() {
+        // "self." with nothing after it (followed by ')') must produce a diagnostic
+        // and must NOT store the "_malformed_binding_" sentinel in widget.binding.
+        let code =
+            "            ui.add_sized([100.0, 30.0], egui::TextEdit::singleline(&mut self.))";
+        let report = parse_egui_output(code);
+        assert!(
+            report.has_errors(),
+            "malformed 'self.' must emit a parse error; diagnostics: {:?}",
+            report.diagnostics
+        );
+        if let Some(w) = report.widgets.first() {
+            assert_ne!(
+                w.binding.as_ref().and_then(|b| b.as_deref()),
+                Some("_malformed_binding_"),
+                "sentinel must not leak into widget.binding"
+            );
         }
     }
 }

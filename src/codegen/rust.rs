@@ -27,6 +27,18 @@ pub fn field_binding(value: Option<&str>) -> Option<&str> {
     value.filter(|binding| is_valid_identifier(binding))
 }
 
+/// Map a raw binding name to its effective Rust field name.
+///
+/// Rust keywords (e.g. `"type"`) are remapped to `"{raw}_value"` so every
+/// consumer (emitter, field collector, overlays) uses the same sanitized name.
+pub fn effective_binding(raw: &str) -> String {
+    if RUST_KEYWORDS.contains(&raw) {
+        format!("{raw}_value")
+    } else {
+        raw.to_owned()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

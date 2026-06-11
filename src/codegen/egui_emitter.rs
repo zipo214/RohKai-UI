@@ -55,7 +55,11 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
             lines.push((Some(w.id), "        ui.set_enabled(false);".to_owned()));
         }
 
-        let binding = field_binding(w.state_binding.as_deref());
+        let eff = w
+            .state_binding
+            .as_deref()
+            .map(crate::codegen::rust::effective_binding);
+        let binding = field_binding(eff.as_deref());
         // Bound label mode: label_binding overrides the static label literal
         let label = if let Some(ref lb) = w.label_binding {
             if let Some(b) = field_binding(Some(lb.as_str())) {
@@ -1475,5 +1479,22 @@ mod tests {
         });
         assert!(g.contains("rfd::FileDialog"));
         assert!(g.contains("self.path"));
+    }
+
+    #[test]
+    fn keyword_state_binding_emits_effective_field_name() {
+        // A state_binding of "type" is a Rust keyword; the emitter must reference
+        // self.type_value (not the bare keyword) so generated code compiles.
+        let g = emit_joined(WidgetKind::Checkbox, |w| {
+            w.state_binding = Some("type".into());
+        });
+        assert!(
+            g.contains("self.type_value"),
+            "keyword binding must be remapped: got\n{g}"
+        );
+        assert!(
+            !g.contains("self.type,") && !g.contains("&mut self.type)"),
+            "raw keyword must not appear as a field reference: got\n{g}"
+        );
     }
 }

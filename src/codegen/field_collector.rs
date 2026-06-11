@@ -54,12 +54,8 @@ fn collect_one(
 ) {
     // ---- Standard state binding ----
     if let Some(raw) = w.state_binding.as_deref() {
-        let effective = if crate::codegen::rust::RUST_KEYWORDS.contains(&raw) {
-            std::borrow::Cow::Owned(format!("{raw}_value"))
-        } else {
-            std::borrow::Cow::Borrowed(raw)
-        };
-        if let Some(name) = field_binding(Some(effective.as_ref())) {
+        let effective = crate::codegen::rust::effective_binding(raw);
+        if let Some(name) = field_binding(Some(effective.as_str())) {
             if let Some(info) = kind_table::state_info(&w.kind) {
                 push_field(
                     AppStateField {
