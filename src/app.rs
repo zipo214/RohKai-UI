@@ -201,6 +201,10 @@ pub struct RohKaiApp {
     /// Visual Widget Maker window state.
     pub widget_maker_doc: crate::canvas::widget_maker::WidgetMakerDoc,
     pub widget_maker_open: bool,
+    /// Per-kind widget drop counter for auto-generating meaningful labels.
+    /// Key = `format!("{:?}", kind)` (debug name), value = last counter used.
+    /// Resets to empty when the project is cleared (New command).
+    pub name_counter: std::collections::HashMap<String, u32>,
 }
 
 impl RohKaiApp {
@@ -252,7 +256,17 @@ impl RohKaiApp {
             undo_suppress_record: false,
             widget_maker_doc: crate::canvas::widget_maker::WidgetMakerDoc::new_with_defaults(),
             widget_maker_open: false,
+            name_counter: std::collections::HashMap::new(),
         }
+    }
+
+    /// Auto-generate a human-readable label for a newly dropped widget.
+    /// Returns `"button_1"`, `"button_2"`, etc. (snake_case kind + counter).
+    fn next_widget_label(&mut self, kind: &WidgetKind) -> String {
+        let key = format!("{kind:?}").to_lowercase();
+        let count = self.name_counter.entry(key.clone()).or_insert(0);
+        *count += 1;
+        format!("{key}_{}", *count)
     }
 
     fn compute_dirty_exact(&self) -> bool {
@@ -334,6 +348,7 @@ impl RohKaiApp {
         self.session.code_navigation_target = None;
         self.dirty_cache = false;
         self.dirty_cache_checked_at = 0.0;
+        self.name_counter.clear();
         self.reset_undo_baseline();
         self.refresh_preview_state();
     }
@@ -2587,6 +2602,7 @@ impl eframe::App for RohKaiApp {
             let cy = (-pan.y / zoom + win_h / 2.0).clamp(0.0, win_h);
             instance.rect.x = (cx - instance.rect.w / 2.0).max(0.0);
             instance.rect.y = (cy - instance.rect.h / 2.0).max(0.0);
+            instance.props.label = self.next_widget_label(&instance.kind.clone());
             let id = instance.id;
             let center = (
                 instance.rect.x + instance.rect.w * 0.5,
@@ -2605,7 +2621,8 @@ impl eframe::App for RohKaiApp {
         }
 
         // Palette drag — set interaction.template_drag for canvas drop next frame
-        if let Some(instance) = palette_drag {
+        if let Some(mut instance) = palette_drag {
+            instance.props.label = self.next_widget_label(&instance.kind.clone());
             self.session.interaction.template_drag = Some(vec![instance]);
         }
 
@@ -2835,5 +2852,53 @@ impl eframe::App for RohKaiApp {
                 self.undo.record(json);
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod name_counter_tests {
+    use crate::project::schema::WidgetKind;
+    use std::collections::HashMap;
+
+    /// Minimal stand-in for the counter logic to keep tests headless.
+    fn next_label(counter: &mut HashMap<String, u32>, kind: &WidgetKind) -> String {
+        let key = format!("{kind:?}").to_lowercase();
+        let count = counter.entry(key.clone()).or_insert(0);
+        *count += 1;
+        format!("{key}_{}", *count)
+    }
+
+    #[test]
+    fn two_buttons_get_sequential_labels() {
+        let mut counter: HashMap<String, u32> = HashMap::new();
+        let l1 = next_label(&mut counter, &WidgetKind::Button);
+        let l2 = next_label(&mut counter, &WidgetKind::Button);
+        assert_eq!(l1, "button_1");
+        assert_eq!(l2, "button_2");
+    }
+
+    #[test]
+    fn different_kinds_have_independent_counters() {
+        let mut counter: HashMap<String, u32> = HashMap::new();
+        let b1 = next_label(&mut counter, &WidgetKind::Button);
+        let l1 = next_label(&mut counter, &WidgetKind::Label);
+        let b2 = next_label(&mut counter, &WidgetKind::Button);
+        assert_eq!(b1, "button_1");
+        assert_eq!(l1, "label_1");
+        assert_eq!(b2, "button_2");
+    }
+
+    #[test]
+    fn counter_resets_on_clear() {
+        let mut counter: HashMap<String, u32> = HashMap::new();
+        let _ = next_label(&mut counter, &WidgetKind::Button);
+        let _ = next_label(&mut counter, &WidgetKind::Button);
+        counter.clear(); // simulates cmd_new
+        let l = next_label(&mut counter, &WidgetKind::Button);
+        assert_eq!(l, "button_1");
     }
 }

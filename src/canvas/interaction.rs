@@ -1,7 +1,118 @@
+use crate::codegen::rust::is_valid_identifier;
 use crate::project::schema::{Rect as SchemaRect, WidgetInstance, WidgetKind};
 use crate::project::ui_tree::UiTree;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
+
+// ---------------------------------------------------------------------------
+// Widget validation — error set computed once per frame during canvas draw.
+// ---------------------------------------------------------------------------
+
+/// Classes of validation error that trigger a red outline on the canvas.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WidgetError {
+    DuplicateId,
+    InvalidHandler,
+    MissingBinding,
+}
+
+/// Returns the set of widget IDs that have at least one validation error.
+/// Computed once per frame; does not mutate UiTree.
+pub fn compute_widget_errors(widgets: &[WidgetInstance]) -> HashMap<Uuid, Vec<WidgetError>> {
+    // Count IDs to detect duplicates.
+    let mut id_counts: HashMap<Uuid, usize> = HashMap::new();
+    for w in widgets {
+        *id_counts.entry(w.id).or_insert(0) += 1;
+    }
+
+    let mut result: HashMap<Uuid, Vec<WidgetError>> = HashMap::new();
+
+    for w in widgets {
+        let mut errors: Vec<WidgetError> = Vec::new();
+
+        // Duplicate ID
+        if id_counts.get(&w.id).copied().unwrap_or(0) > 1 {
+            errors.push(WidgetError::DuplicateId);
+        }
+
+        // Invalid handler name (non-empty but not a valid Rust identifier)
+        let handlers = [
+            &w.on_click,
+            &w.on_change,
+            &w.on_double_click,
+            &w.on_lost_focus,
+            &w.on_drag_stopped,
+        ];
+        let has_invalid_handler = handlers
+            .iter()
+            .any(|h| !h.is_empty() && !is_valid_identifier(h));
+        if has_invalid_handler {
+            errors.push(WidgetError::InvalidHandler);
+        }
+
+        // Missing binding: kinds that require a state_binding
+        let needs_binding = matches!(
+            w.kind,
+            WidgetKind::Slider
+                | WidgetKind::TextInput
+                | WidgetKind::Checkbox
+                | WidgetKind::ComboBox
+                | WidgetKind::ProgressBar
+        );
+        if needs_binding
+            && w.state_binding
+                .as_deref()
+                .map(str::is_empty)
+                .unwrap_or(true)
+        {
+            errors.push(WidgetError::MissingBinding);
+        }
+
+        if !errors.is_empty() {
+            result.insert(w.id, errors);
+        }
+    }
+
+    result
+}
+
+// ---------------------------------------------------------------------------
+// Zoom-to-fit helpers
+// ---------------------------------------------------------------------------
+
+/// Compute the (zoom, pan) values that fit `content_rect` (in canvas
+/// coordinates) inside `viewport_rect` (in screen coordinates) with
+/// `padding_fraction` of whitespace on each side.
+///
+/// Returns `None` when `content_rect` or `viewport_rect` has zero area.
+///
+/// The returned `pan` is the `CanvasSettings::pan` value that centres the
+/// content in the viewport.  The caller must supply `canvas_size` (the
+/// unzoomed canvas dimensions) to complete the calculation:
+///   `pan = zoom * (egui::vec2(canvas_w, canvas_h) / 2.0 - content_center)`
+///
+/// This function returns `(zoom, content_center)` so callers can complete
+/// the pan arithmetic themselves.
+pub fn compute_fit_rect(
+    content_rect: egui::Rect,
+    viewport_rect: egui::Rect,
+    padding_fraction: f32,
+) -> Option<(f32, egui::Pos2)> {
+    if content_rect.width() < 0.5
+        || content_rect.height() < 0.5
+        || viewport_rect.width() < 0.5
+        || viewport_rect.height() < 0.5
+    {
+        return None;
+    }
+    let pad = padding_fraction.clamp(0.0, 0.45);
+    let avail_w = viewport_rect.width() * (1.0 - 2.0 * pad);
+    let avail_h = viewport_rect.height() * (1.0 - 2.0 * pad);
+    let zoom = (avail_w / content_rect.width())
+        .min(avail_h / content_rect.height())
+        .clamp(0.25, 4.0);
+    Some((zoom, content_rect.center()))
+}
 
 // ---------------------------------------------------------------------------
 // SVG texture cache for Image widgets.
@@ -1675,6 +1786,7 @@ pub fn handle(
     };
     let key_g = keyboard_owned && ui.input(|i| i.key_pressed(egui::Key::G));
     let key_0 = keyboard_owned && ui.input(|i| ctrl_held && i.key_pressed(egui::Key::Num0));
+    let key_f = keyboard_owned && ui.input(|i| i.key_pressed(egui::Key::F));
     let double_clicked = pointer_owned && resp.double_clicked();
 
     // -------------------------------------------------------------------
@@ -1686,6 +1798,51 @@ pub fn handle(
     if key_0 {
         settings.zoom = 1.0;
         settings.pan = egui::Vec2::ZERO;
+    }
+
+    // F — zoom to selection (or fit all widgets if nothing selected)
+    if key_f {
+        let target_widgets: Vec<&crate::project::schema::WidgetInstance> = if selected.is_empty() {
+            tree.widgets.iter().collect()
+        } else {
+            tree.widgets
+                .iter()
+                .filter(|w| selected.contains(&w.id))
+                .collect()
+        };
+        if !target_widgets.is_empty() {
+            let min_x = target_widgets
+                .iter()
+                .map(|w| w.rect.x)
+                .fold(f32::MAX, f32::min);
+            let min_y = target_widgets
+                .iter()
+                .map(|w| w.rect.y)
+                .fold(f32::MAX, f32::min);
+            let max_x = target_widgets
+                .iter()
+                .map(|w| w.rect.x + w.rect.w)
+                .fold(f32::MIN, f32::max);
+            let max_y = target_widgets
+                .iter()
+                .map(|w| w.rect.y + w.rect.h)
+                .fold(f32::MIN, f32::max);
+            let content_rect =
+                egui::Rect::from_min_max(egui::pos2(min_x, min_y), egui::pos2(max_x, max_y));
+            let viewport_rect = resp.rect;
+            if let Some((new_zoom, content_center)) =
+                compute_fit_rect(content_rect, viewport_rect, 0.10)
+            {
+                let canvas_w = tree.app_props.win_w;
+                let canvas_h = tree.app_props.win_h;
+                settings.zoom = new_zoom;
+                settings.pan = new_zoom
+                    * egui::vec2(
+                        canvas_w / 2.0 - content_center.x,
+                        canvas_h / 2.0 - content_center.y,
+                    );
+            }
+        }
     }
 
     // -------------------------------------------------------------------
@@ -1844,6 +2001,22 @@ pub fn handle(
                     text_settings,
                     svg_texture_cache,
                 );
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Error highlighting — red outline on widgets with validation errors
+    // -------------------------------------------------------------------
+    {
+        let widget_errors = compute_widget_errors(&tree.widgets);
+        if !widget_errors.is_empty() {
+            let error_stroke = egui::Stroke::new(2.0, egui::Color32::RED);
+            for widget in &tree.widgets {
+                if widget_errors.contains_key(&widget.id) {
+                    let rect = crect(widget, origin, zoom);
+                    painter.rect_stroke(rect, 3.0, error_stroke);
+                }
             }
         }
     }
@@ -2734,5 +2907,107 @@ mod input_ownership_tests {
         assert!(!canvas_owns_keyboard(false, true, true));
         assert!(!canvas_owns_keyboard(false, false, false));
         assert!(!canvas_owns_keyboard(true, true, false));
+    }
+}
+
+#[cfg(test)]
+mod zoom_fit_tests {
+    use super::compute_fit_rect;
+
+    #[test]
+    fn compute_fit_rect_single_widget() {
+        // A 100×50 widget at canvas (10,10).
+        let content = egui::Rect::from_min_max(egui::pos2(10.0, 10.0), egui::pos2(110.0, 60.0));
+        // Viewport 800×600 screen pixels.
+        let viewport = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(800.0, 600.0));
+        let (zoom, center) = compute_fit_rect(content, viewport, 0.10).unwrap();
+        // zoom = min(800*0.8/100, 600*0.8/50) = min(6.4, 9.6) = 6.4, clamped to 4.0
+        assert!((zoom - 4.0).abs() < 0.01, "zoom={zoom}");
+        // center should be the content rect center
+        assert!((center.x - 60.0).abs() < 0.5, "cx={}", center.x);
+        assert!((center.y - 35.0).abs() < 0.5, "cy={}", center.y);
+    }
+
+    #[test]
+    fn compute_fit_rect_zero_area_returns_none() {
+        let zero = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(0.0, 0.0));
+        let viewport = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(800.0, 600.0));
+        assert!(compute_fit_rect(zero, viewport, 0.10).is_none());
+    }
+
+    #[test]
+    fn compute_fit_rect_zoom_clamp_lower_bound() {
+        // A very large widget (4000×3000) in a small viewport (200×150).
+        let content = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(4000.0, 3000.0));
+        let viewport = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(200.0, 150.0));
+        let (zoom, _) = compute_fit_rect(content, viewport, 0.10).unwrap();
+        assert!(zoom >= 0.25, "zoom must not go below 0.25, got {zoom}");
+    }
+}
+
+#[cfg(test)]
+mod widget_error_tests {
+    use super::{compute_widget_errors, WidgetError};
+    use crate::project::schema::{WidgetInstance, WidgetKind};
+    use uuid::Uuid;
+
+    fn make_widget(kind: WidgetKind) -> WidgetInstance {
+        WidgetInstance {
+            id: Uuid::new_v4(),
+            kind,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn no_errors_for_clean_widget() {
+        let button = make_widget(WidgetKind::Button);
+        let errors = compute_widget_errors(&[button]);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn duplicate_id_detected() {
+        let shared_id = Uuid::new_v4();
+        let mut a = make_widget(WidgetKind::Button);
+        let mut b = make_widget(WidgetKind::Label);
+        a.id = shared_id;
+        b.id = shared_id;
+        let errors = compute_widget_errors(&[a, b]);
+        assert!(errors.contains_key(&shared_id));
+        let errs = errors.get(&shared_id).unwrap();
+        assert!(errs.contains(&WidgetError::DuplicateId));
+    }
+
+    #[test]
+    fn invalid_handler_name_detected() {
+        let mut w = make_widget(WidgetKind::Button);
+        w.on_click = "123_bad_name".to_owned(); // starts with digit
+        let errors = compute_widget_errors(&[w.clone()]);
+        let errs = errors.get(&w.id).unwrap();
+        assert!(errs.contains(&WidgetError::InvalidHandler));
+    }
+
+    #[test]
+    fn missing_binding_detected_for_slider() {
+        let slider = make_widget(WidgetKind::Slider); // state_binding is None by default
+        let errors = compute_widget_errors(std::slice::from_ref(&slider));
+        let errs = errors.get(&slider.id).unwrap();
+        assert!(errs.contains(&WidgetError::MissingBinding));
+    }
+
+    #[test]
+    fn no_missing_binding_when_binding_set() {
+        let mut slider = make_widget(WidgetKind::Slider);
+        slider.state_binding = Some("volume".to_owned());
+        let errors = compute_widget_errors(&[slider]);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn binding_not_required_for_label() {
+        let label = make_widget(WidgetKind::Label);
+        let errors = compute_widget_errors(&[label]);
+        assert!(errors.is_empty());
     }
 }

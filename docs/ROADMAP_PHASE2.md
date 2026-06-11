@@ -90,21 +90,31 @@ Deferred (complex architecture required — not in scope for this release):
 
 From Stage 8.5 comparative analysis and feature evaluation gaps.
 
-- [ ] Widget naming convention: auto-generate meaningful IDs (`button_submit`,
-      `label_title`) from kind + context; rename on conflict
+- [x] Widget naming convention: auto-generate meaningful labels on drop
+      (`button_1`, `label_1`); per-kind counter in `RohKaiApp::name_counter`;
+      counter resets on New project. (feat(P2.2))
+- [x] Zoom to selection: `F` key fits the selected widget(s) in view with 10 %
+      padding; `F` with nothing selected fits all canvas widgets.
+      `compute_fit_rect` in `src/canvas/interaction.rs`. (feat(P2.2))
+- [x] Property reset: right-click the Label field or any geometry (x, y, w, h)
+      field in the Properties panel → "Reset to default". Label → kind name;
+      x/y → 0; w/h → widget-kind default. (feat(P2.2))
+- [x] Error highlighting: red 2 px outline on canvas widgets with duplicate ID,
+      invalid handler name, or missing binding. `compute_widget_errors` in
+      `src/canvas/interaction.rs`. (feat(P2.2))
+
+**Deferred from this batch (not implemented):**
 - [ ] Search in canvas: Ctrl+F to find widgets by name, kind, or property value
-      (separate from the code panel search)
-- [ ] Clipboard enhancements: copy/paste with full property preservation,
-      paste-at-cursor, paste-multiple, cross-session clipboard
-- [ ] Zoom to selection: `F` key to fit the selected widget(s) in view
-- [ ] Minimap: small overview of the entire canvas in a corner panel
-- [ ] Property reset: right-click any property field to reset to default value
+      (separate from the code panel search) — deferred: architecturally complex,
+      overlaps with Lazare search.
+- [ ] Clipboard enhancements: cross-session clipboard is risky; paste-multiple
+      and paste-at-cursor are scoped separately — deferred.
+- [ ] Minimap: small overview of the entire canvas in a corner panel — deferred:
+      requires retained off-screen render pass, too complex for this batch.
 - [ ] Multi-select property editing: edit the same property across all selected
-      widgets simultaneously (affects only widgets that have that property)
-- [ ] Error highlighting: visual indicator on the canvas widget when it has
-      validation errors (missing binding, duplicate ID, invalid handler name)
-- [ ] Context tooltips: hover any designer UI element to see its purpose and
-      the generated code it affects
+      widgets simultaneously — deferred: architecturally complex.
+- [ ] Context tooltips: hover any designer UI element to see its purpose —
+      deferred: broad scope, incremental addition.
 
 ---
 
