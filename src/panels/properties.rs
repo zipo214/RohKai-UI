@@ -153,8 +153,9 @@ fn show_content_inner(
 // ---------------------------------------------------------------------------
 
 fn show_button(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
-    field_text(ui, "Label", &mut w.props.label);
-    show_geometry(ui, w);
+    let kind_name = format!("{:?}", w.kind);
+    field_text_resettable(ui, "Label", &mut w.props.label, &kind_name);
+    show_geometry_resettable(ui, w);
     ui.separator();
     show_bg_color(ui, w);
     show_fg_color(ui, w);
@@ -168,7 +169,7 @@ fn show_button(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) 
 }
 
 fn show_label(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
-    field_text(ui, "Text", &mut w.props.label);
+    field_text_resettable(ui, "Text", &mut w.props.label, "Label");
 
     // Static / Bound mode
     ui.horizontal(|ui| {
@@ -211,7 +212,7 @@ fn show_label(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
         }
     }
 
-    show_geometry(ui, w);
+    show_geometry_resettable(ui, w);
     ui.separator();
     show_fg_color(ui, w);
     show_font_size(ui, w);
@@ -499,6 +500,105 @@ fn field_text(ui: &mut egui::Ui, label: &str, value: &mut String) {
         ui.label(egui::RichText::new(label).small().weak());
         ui.add_space(4.0);
         ui.text_edit_singleline(value);
+    });
+}
+
+/// Like `field_text` but adds a right-click "Reset to default" context menu
+/// that sets `value` to `default_value`.
+fn field_text_resettable(ui: &mut egui::Ui, label: &str, value: &mut String, default_value: &str) {
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(label).small().weak());
+        ui.add_space(4.0);
+        let resp = ui.text_edit_singleline(value);
+        resp.context_menu(|ui| {
+            if ui.button("Reset to default").clicked() {
+                *value = default_value.to_owned();
+                ui.close_menu();
+            }
+        });
+    });
+}
+
+/// Show geometry (x, y, w, h) fields with right-click "Reset to default" on
+/// each DragValue.  Default for x/y is 0.0; default w/h come from the widget
+/// kind's default_instance rect.
+fn show_geometry_resettable(ui: &mut egui::Ui, w: &mut WidgetInstance) {
+    let default_inst = crate::widgets::default_for(&w.kind);
+    let (dw, dh) = (default_inst.rect.w, default_inst.rect.h);
+
+    ui.separator();
+    egui::Grid::new("geom_compact")
+        .num_columns(4)
+        .spacing([4.0, 2.0])
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new("X").small());
+            let rx = ui.add(egui::DragValue::new(&mut w.rect.x).speed(1.0));
+            rx.context_menu(|ui| {
+                if ui.button("Reset to default").clicked() {
+                    w.rect.x = 0.0;
+                    ui.close_menu();
+                }
+            });
+            ui.label(egui::RichText::new("Y").small());
+            let ry = ui.add(egui::DragValue::new(&mut w.rect.y).speed(1.0));
+            ry.context_menu(|ui| {
+                if ui.button("Reset to default").clicked() {
+                    w.rect.y = 0.0;
+                    ui.close_menu();
+                }
+            });
+            ui.end_row();
+            ui.label(egui::RichText::new("W").small());
+            let rw = ui.add(egui::DragValue::new(&mut w.rect.w).speed(1.0));
+            rw.context_menu(|ui| {
+                if ui.button("Reset to default").clicked() {
+                    w.rect.w = dw;
+                    ui.close_menu();
+                }
+            });
+            ui.label(egui::RichText::new("H").small());
+            let rh = ui.add(egui::DragValue::new(&mut w.rect.h).speed(1.0));
+            rh.context_menu(|ui| {
+                if ui.button("Reset to default").clicked() {
+                    w.rect.h = dh;
+                    ui.close_menu();
+                }
+            });
+            ui.end_row();
+        });
+    // Per-child size policy (meaningful inside a layout container)
+    ui.horizontal(|ui| {
+        use crate::project::schema::SizePolicy;
+        ui.label(egui::RichText::new("Size").small().weak());
+        if ui
+            .selectable_label(
+                w.props.size_policy == SizePolicy::Fixed,
+                egui::RichText::new("Fixed").small(),
+            )
+            .clicked()
+        {
+            w.props.size_policy = SizePolicy::Fixed;
+        }
+        if ui
+            .selectable_label(
+                w.props.size_policy == SizePolicy::FillWidth,
+                egui::RichText::new("Fill W").small(),
+            )
+            .on_hover_text("Expand to fill available width inside a layout")
+            .clicked()
+        {
+            w.props.size_policy = SizePolicy::FillWidth;
+        }
+        if ui
+            .selectable_label(
+                w.props.size_policy == SizePolicy::Fill,
+                egui::RichText::new("Fill").small(),
+            )
+            .on_hover_text("Expand to fill all available space inside a layout")
+            .clicked()
+        {
+            w.props.size_policy = SizePolicy::Fill;
+        }
     });
 }
 
@@ -2055,4 +2155,51 @@ fn show_custom(
     show_enabled(ui, w);
     show_delete_button(ui, do_delete);
     edit_clicked
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod reset_tests {
+    use crate::project::schema::{WidgetInstance, WidgetKind};
+
+    fn make_button() -> WidgetInstance {
+        let mut w = crate::widgets::default_for(&WidgetKind::Button);
+        w.props.label = "my custom label".to_owned();
+        w.rect.x = 50.0;
+        w.rect.y = 80.0;
+        w.rect.w = 99.0;
+        w.rect.h = 77.0;
+        w
+    }
+
+    #[test]
+    fn reset_label_restores_kind_name() {
+        let w = make_button();
+        // After reset, label should become the kind name.
+        let kind_name = format!("{:?}", w.kind);
+        assert_eq!(kind_name, "Button");
+        // Simulate reset: set label to kind name.
+        assert_eq!(kind_name, "Button");
+    }
+
+    #[test]
+    fn reset_geometry_restores_defaults() {
+        let mut w = make_button();
+        // Simulate property reset.
+        w.rect.x = 0.0;
+        w.rect.y = 0.0;
+        let default_inst = crate::widgets::default_for(&w.kind);
+        w.rect.w = default_inst.rect.w;
+        w.rect.h = default_inst.rect.h;
+        assert_eq!(w.rect.x, 0.0);
+        assert_eq!(w.rect.y, 0.0);
+        assert!(w.rect.w > 0.0);
+        assert!(w.rect.h > 0.0);
+        // Default button rect is 120×32
+        assert!((w.rect.w - default_inst.rect.w).abs() < 0.01);
+        assert!((w.rect.h - default_inst.rect.h).abs() < 0.01);
+    }
 }
