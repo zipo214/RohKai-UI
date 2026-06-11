@@ -422,6 +422,26 @@ impl RohKaiApp {
         }
     }
 
+    fn cmd_export_wasm(&mut self) {
+        self.messages.export_message = None;
+        self.messages.export_message_until = None;
+        let Some(folder) = rfd::FileDialog::new()
+            .set_title("Export WASM project — choose destination folder")
+            .pick_folder()
+        else {
+            return;
+        };
+        match crate::codegen::export::write_project_wasm(&self.project.ui_tree, &folder, true) {
+            Ok(()) => {
+                self.messages.export_message =
+                    Some((true, format!("WASM project → {}", folder.display())));
+            }
+            Err(e) => {
+                self.messages.export_message = Some((false, format!("WASM export failed: {e}")));
+            }
+        }
+    }
+
     fn cmd_save_template(&mut self) {
         self.messages.template_message = None;
         if self.session.selected.is_empty() {
@@ -1573,6 +1593,16 @@ impl eframe::App for RohKaiApp {
                     ui.separator();
                     if ui.button("Export Project…").clicked() {
                         self.cmd_export();
+                        ui.close_menu();
+                    }
+                    if ui
+                        .button("Export WASM Project…")
+                        .on_hover_text(
+                            "Generate a wasm32-unknown-unknown compatible project with index.html + Trunk.toml",
+                        )
+                        .clicked()
+                    {
+                        self.cmd_export_wasm();
                         ui.close_menu();
                     }
                     if ui

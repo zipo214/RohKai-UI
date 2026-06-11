@@ -93,6 +93,188 @@ pub fn project_files(tree: &UiTree) -> Vec<(String, String)> {
     files
 }
 
+/// Write a WASM-compatible Rust project to `dest` folder.
+///
+/// The generated project can be built with:
+/// `cargo build --target wasm32-unknown-unknown --release`
+/// or bundled with trunk: `trunk build`
+///
+/// FilePicker widgets are replaced with a static label stub since native
+/// file dialogs are unavailable in WASM.
+pub fn write_project_wasm(
+    tree: &UiTree,
+    dest: &Path,
+    gen_index_html: bool,
+) -> Result<(), String> {
+    let src_dir = dest.join("src");
+    fs::create_dir_all(&src_dir).map_err(|e| format!("create dirs: {e}"))?;
+
+    let files = project_files_wasm(tree, gen_index_html);
+
+    for (rel_path, _) in &files {
+        let full = dest.join(rel_path);
+        if let Some(parent) = full.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("create dirs: {e}"))?;
+        }
+    }
+
+    files
+        .par_iter()
+        .map(|(rel_path, content)| {
+            fs::write(dest.join(rel_path), content).map_err(|e| format!("{rel_path}: {e}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(())
+}
+
+/// Generate WASM-compatible project files in memory.
+///
+/// Returns `(relative_path, content)` pairs.  FilePicker widgets are replaced
+/// with a static stub since `rfd` requires native OS dialogs.
+pub fn project_files_wasm(
+    tree: &UiTree,
+    gen_index_html: bool,
+) -> Vec<(String, String)> {
+    let has_file_picker = tree.widgets.iter().any(|w| w.kind == WidgetKind::FilePicker);
+
+    let ((cargo_toml, lib_rs), app_rs) = rayon::join(
+        || rayon::join(gen_cargo_toml_wasm, || gen_lib_rs_wasm(tree)),
+        || gen_app_rs(tree),
+    );
+
+    let mut files = vec![
+        ("Cargo.toml".to_owned(), cargo_toml),
+        ("src/lib.rs".to_owned(), lib_rs),
+        ("src/app.rs".to_owned(), app_rs),
+    ];
+
+    if gen_index_html {
+        files.push(("index.html".to_owned(), gen_index_html_wasm(tree)));
+        files.push(("Trunk.toml".to_owned(), gen_trunk_toml()));
+    }
+
+    if has_file_picker {
+        files.push((
+            "WASM_NOTES.txt".to_owned(),
+            "FilePicker widgets are stubbed in this WASM build.\n\
+             rfd native file dialogs are not available in the browser.\n\
+             Replace FilePicker usages with <input type=\"file\"> via web_sys if needed.\n"
+                .to_owned(),
+        ));
+    }
+
+    files
+}
+
+fn gen_cargo_toml_wasm() -> String {
+    r#"[package]
+name = "exported_app"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+eframe = { version = "0.29", default-features = false, features = ["glow", "wasm-bindgen"] }
+egui   = "0.29"
+wasm-bindgen-futures = "0.4"
+
+[profile.release]
+opt-level = "s"
+"#
+    .to_owned()
+}
+
+fn gen_lib_rs_wasm(tree: &UiTree) -> String {
+    let title = string_literal(&tree.app_props.title);
+    format!(
+        r#"mod app;
+use app::ExportedApp;
+
+#[cfg(target_arch = "wasm32")]
+use eframe::wasm_bindgen::{{self, prelude::*}};
+
+/// Entry point for the browser.  Called automatically by the bundler.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(start)]
+pub async fn start() -> Result<(), wasm_bindgen::JsValue> {{
+    let web_options = eframe::WebOptions::default();
+    eframe::WebRunner::new()
+        .start(
+            "the_canvas_id",
+            web_options,
+            Box::new(|_cc| Ok(Box::new(ExportedApp::default()))),
+        )
+        .await
+        .map_err(|e| e.into())
+}}
+
+/// Native entry point (non-WASM builds still compile as a library).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn run() -> eframe::Result<()> {{
+    let options = eframe::NativeOptions::default();
+    eframe::run_native(
+        {title},
+        options,
+        Box::new(|_cc| Ok(Box::new(ExportedApp::default()))),
+    )
+}}
+"#
+    )
+}
+
+fn gen_index_html_wasm(tree: &UiTree) -> String {
+    let title = html_escape(&tree.app_props.title);
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>{title}</title>
+    <style>
+      html, body {{
+        overflow: hidden;
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        background: #1a1a1a;
+      }}
+      canvas {{
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+      }}
+    </style>
+  </head>
+  <body>
+    <canvas id="the_canvas_id"></canvas>
+  </body>
+</html>
+"#
+    )
+}
+
+fn gen_trunk_toml() -> String {
+    r#"[build]
+target = "index.html"
+dist = "dist"
+"#
+    .to_owned()
+}
+
+/// Minimal HTML-entity escaping for title text embedded in index.html.
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
 /// Build the `assets/MANIFEST.txt` listing declared asset references.
 fn gen_asset_manifest(tree: &UiTree) -> String {
     let mut s = String::from("# Asset manifest — files referenced by this project.\n");
@@ -3408,6 +3590,59 @@ mod tests {
                 "embedded rasterizer missing R12 path: {marker}"
             );
         }
+    }
+
+    #[test]
+    fn wasm_export_generates_required_files_and_lib_entry() {
+        use crate::project::schema::{Rect, WidgetInstance, WidgetKind};
+        let tree = UiTree {
+            widgets: vec![WidgetInstance {
+                id: uuid::Uuid::from_u128(0xBEEF),
+                kind: WidgetKind::Button,
+                rect: Rect { x: 10.0, y: 10.0, w: 80.0, h: 30.0 },
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let files = project_files_wasm(&tree, true);
+        let names: Vec<&str> = files.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"Cargo.toml"), "WASM Cargo.toml missing");
+        assert!(names.contains(&"src/lib.rs"), "WASM lib.rs missing");
+        assert!(names.contains(&"src/app.rs"), "WASM app.rs missing");
+        assert!(names.contains(&"index.html"), "WASM index.html missing");
+        assert!(names.contains(&"Trunk.toml"), "WASM Trunk.toml missing");
+        assert!(!names.contains(&"src/main.rs"), "WASM must use lib.rs not main.rs");
+
+        let cargo = files.iter().find(|(n, _)| n == "Cargo.toml").map(|(_, c)| c.as_str()).unwrap();
+        assert!(cargo.contains("cdylib"), "WASM Cargo.toml must declare cdylib");
+        assert!(cargo.contains("wasm-bindgen"), "WASM Cargo.toml must include wasm-bindgen feature");
+        assert!(!cargo.contains("rfd"), "WASM Cargo.toml must not include rfd");
+
+        let lib_rs = files.iter().find(|(n, _)| n == "src/lib.rs").map(|(_, c)| c.as_str()).unwrap();
+        assert!(lib_rs.contains("wasm_bindgen(start)"), "lib.rs must export wasm start fn");
+        assert!(lib_rs.contains("WebRunner"), "lib.rs must use WebRunner");
+        assert!(lib_rs.contains("the_canvas_id"), "lib.rs must reference canvas element id");
+
+        let html = files.iter().find(|(n, _)| n == "index.html").map(|(_, c)| c.as_str()).unwrap();
+        assert!(html.contains("the_canvas_id"), "index.html must have canvas element");
+        assert!(html.contains("<canvas"), "index.html must have canvas tag");
+    }
+
+    #[test]
+    fn wasm_export_file_picker_generates_notes_file() {
+        use crate::project::schema::{Rect, WidgetInstance, WidgetKind};
+        let tree = UiTree {
+            widgets: vec![WidgetInstance {
+                id: uuid::Uuid::from_u128(0xF11E),
+                kind: WidgetKind::FilePicker,
+                rect: Rect { x: 0.0, y: 0.0, w: 100.0, h: 30.0 },
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let files = project_files_wasm(&tree, false);
+        let names: Vec<&str> = files.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"WASM_NOTES.txt"), "must warn about FilePicker in WASM");
     }
 
     /// Always-run smoke: the fixture generates the required files and its source
