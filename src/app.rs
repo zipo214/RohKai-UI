@@ -456,6 +456,50 @@ impl RohKaiApp {
         }
     }
 
+    fn cmd_preview_wasm(&mut self) {
+        self.messages.export_message = None;
+        self.messages.export_message_until = None;
+
+        // Verify trunk is on PATH before we do file I/O.
+        let trunk_ok = std::process::Command::new("trunk")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok();
+        if !trunk_ok {
+            self.messages.export_message = Some((
+                false,
+                "trunk not found in PATH — install with: cargo install trunk".to_owned(),
+            ));
+            return;
+        }
+
+        // Export WASM project to a temp directory.
+        let dest = std::env::temp_dir().join("rohkai_wasm_preview");
+        if let Err(e) = crate::codegen::export::write_project_wasm(&self.project.ui_tree, &dest, true) {
+            self.messages.export_message =
+                Some((false, format!("WASM preview export failed: {e}")));
+            return;
+        }
+
+        // Spawn `trunk serve` detached — opens browser automatically.
+        match std::process::Command::new("trunk")
+            .arg("serve")
+            .current_dir(&dest)
+            .spawn()
+        {
+            Ok(_) => {
+                self.messages.export_message =
+                    Some((true, "trunk serve started — http://localhost:8080".to_owned()));
+            }
+            Err(e) => {
+                self.messages.export_message =
+                    Some((false, format!("trunk serve failed to launch: {e}")));
+            }
+        }
+    }
+
     fn cmd_save_template(&mut self) {
         self.messages.template_message = None;
         if self.session.selected.is_empty() {
@@ -1179,12 +1223,9 @@ impl RohKaiApp {
             // Write the descriptor to the widgets directory.
             match Self::widgets_dir() {
                 Some(dir) => {
-                    let safe_id = self
-                        .widget_maker_doc
-                        .widget_id
-                        .chars()
-                        .map(|c| if c == '.' || c == '/' { '_' } else { c })
-                        .collect::<String>();
+                    let safe_id = crate::canvas::widget_maker::sanitize_widget_id_to_filename(
+                        &self.widget_maker_doc.widget_id,
+                    );
                     let path = dir.join(format!("{safe_id}.rkwd"));
                     if let Err(e) = std::fs::write(&path, &json) {
                         self.messages.last_error = Some(format!("Widget Maker save failed: {e}"));
@@ -1656,6 +1697,16 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.cmd_export_wasm();
+                        ui.close_menu();
+                    }
+                    if ui
+                        .button("Preview in Browser…")
+                        .on_hover_text(
+                            "Export WASM to a temp dir and launch trunk serve (requires trunk in PATH)",
+                        )
+                        .clicked()
+                    {
+                        self.cmd_preview_wasm();
                         ui.close_menu();
                     }
                     if ui

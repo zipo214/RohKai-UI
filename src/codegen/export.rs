@@ -1182,17 +1182,11 @@ fn combo_selected_text_expr(state_expr: &str, options: &[String]) -> String {
 }
 
 fn resolve_export_handler_click(w: &crate::project::schema::WidgetInstance) -> Option<&str> {
-    if !w.on_click.is_empty() {
-        return Some(w.on_click.as_str());
-    }
-    w.event_handler.as_deref().filter(|s| !s.is_empty())
+    crate::codegen::handlers::resolve_click_handler(w)
 }
 
 fn resolve_export_handler_change(w: &crate::project::schema::WidgetInstance) -> Option<&str> {
-    if !w.on_change.is_empty() {
-        return Some(w.on_change.as_str());
-    }
-    w.event_handler.as_deref().filter(|s| !s.is_empty())
+    crate::codegen::handlers::resolve_change_handler(w)
 }
 
 fn non_empty(s: &str) -> Option<&str> {

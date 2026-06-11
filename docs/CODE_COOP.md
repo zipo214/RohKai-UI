@@ -7,6 +7,10 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-11 — Good-citizen pass: Invariant 7, module docs, handler extraction, tests, resize, browser preview, doc staleness
+
+Branch `dev`. Implemented all 7 items from the `/goal` task list. (1) Fixed Invariant 7 filename sanitizer — `sanitize_widget_id_to_filename` now whitelists `[A-Za-z0-9_-]` with 6 tests. (2) Added `//!` module docs to canvas/panels/widgets mod.rs plus widget_maker.rs and widget_maker_panel.rs. (3) Extracted `resolve_click_handler`/`resolve_change_handler` from egui_emitter + export into shared `src/codegen/handlers.rs`. (4) Added 12 UiTree unit tests (bring_to_front, send_to_back, group, ungroup, remove cascade, validate_and_repair x2) and 4 canvas pure-logic tests (snap, resize handle hit/delta/min-size). (5) Wired Widget Maker corner handles interactively — `corner_hit()` + `apply_corner_resize()` using `resize_corner: Option<u8>` on WidgetMakerDoc. (6) Added "Preview in Browser…" File menu item — PATH-checks trunk, exports WASM to temp dir, spawns `trunk serve`. (7) Updated all stale feature-eval docs, ARCHITECTURE.md field tables, ROADMAP Stage 7.x checkboxes (first 6 items now [x]), Stage 12 browser preview item marked [x]. 412 tests pass, zero clippy warnings. Next: the user wants to understand the full VWM vision vs MVP gap — `docs/VISUAL_WIDGET_MAKER.md` is the canonical plan (created 2026-05-28); the "Later Capabilities" section (state variants, event zones, slots, layout groups, style tokens, round-trip) is entirely unimplemented.
+
 ## 2026-06-11 — All deferred depth-gate items implemented (pre-release gate closed)
 
 On `dev`. Six depth-gate features shipped in sequence, all passing 394 tests /

@@ -1,3 +1,10 @@
+//! Visual Widget Maker panel — floating window for the primitive mini-canvas.
+//!
+//! `show_widget_maker_window` is the entry point called from `app.rs`.
+//! The mini-canvas renders normalised `MakerPrimitive` shapes; corner handles
+//! allow interactive resize.  The inspector on the right edits the selected
+//! primitive.  "Save" serialises via `doc_to_descriptor` → JSON → `.rkwd` file.
+
 use crate::canvas::widget_maker::{
     doc_to_descriptor, gen_live_preview, MakerPrimKind, MakerPrimitive, WidgetMakerDoc,
 };
@@ -142,16 +149,44 @@ fn show_mini_canvas(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
         doc.selected = hit;
     }
 
-    // Drag selected primitive
-    if canvas_resp.dragged() {
+    // On drag start: check if pointer is on a corner handle → switch to resize mode
+    if canvas_resp.drag_started() {
+        doc.resize_corner = None;
         if let Some(idx) = doc.selected {
             if idx < doc.primitives.len() {
-                let delta = canvas_resp.drag_delta();
+                if let Some(pos) = canvas_resp.interact_pointer_pos() {
+                    let pr = prim_canvas_rect(&doc.primitives[idx], canvas_rect);
+                    doc.resize_corner = corner_hit(pos, pr);
+                }
+            }
+        }
+    }
+
+    // Drag: resize or move depending on whether a corner handle was grabbed
+    if canvas_resp.dragged() {
+        let delta = canvas_resp.drag_delta();
+        if let Some(corner) = doc.resize_corner {
+            if let Some(idx) = doc.selected {
+                if idx < doc.primitives.len() {
+                    apply_corner_resize(
+                        &mut doc.primitives[idx],
+                        corner,
+                        delta.x / CANVAS_W,
+                        delta.y / CANVAS_H,
+                    );
+                }
+            }
+        } else if let Some(idx) = doc.selected {
+            if idx < doc.primitives.len() {
                 let p = &mut doc.primitives[idx];
                 p.x = (p.x + delta.x / CANVAS_W).clamp(0.0, 1.0 - p.w);
                 p.y = (p.y + delta.y / CANVAS_H).clamp(0.0, 1.0 - p.h);
             }
         }
+    }
+
+    if canvas_resp.drag_stopped() {
+        doc.resize_corner = None;
     }
 }
 
@@ -400,6 +435,61 @@ fn draw_primitive(painter: &egui::Painter, prim: &MakerPrimitive, rect: egui::Re
             };
             painter.text(rect.center(), egui::Align2::CENTER_CENTER, text, font_id, color);
         }
+    }
+}
+
+/// Return the index (0=TL,1=TR,2=BL,3=BR) of the corner handle closest to `pos`
+/// if it is within the hit radius, otherwise `None`.
+fn corner_hit(pos: egui::Pos2, rect: egui::Rect) -> Option<u8> {
+    const HIT_RADIUS: f32 = 8.0;
+    let corners = [
+        (0u8, rect.left_top()),
+        (1u8, rect.right_top()),
+        (2u8, rect.left_bottom()),
+        (3u8, rect.right_bottom()),
+    ];
+    for (idx, corner) in corners {
+        if pos.distance(corner) <= HIT_RADIUS {
+            return Some(idx);
+        }
+    }
+    None
+}
+
+/// Apply a normalised `(dx, dy)` resize delta for the given corner index to `p`.
+/// Corners: 0=TL, 1=TR, 2=BL, 3=BR.
+fn apply_corner_resize(p: &mut crate::canvas::widget_maker::MakerPrimitive, corner: u8, dx: f32, dy: f32) {
+    const MIN: f32 = 0.05;
+    match corner {
+        0 => {
+            // Top-left: x and y move, w and h shrink/grow inversely
+            let new_x = (p.x + dx).clamp(0.0, p.x + p.w - MIN);
+            let new_y = (p.y + dy).clamp(0.0, p.y + p.h - MIN);
+            p.w += p.x - new_x;
+            p.h += p.y - new_y;
+            p.x = new_x;
+            p.y = new_y;
+        }
+        1 => {
+            // Top-right: y moves, w and h change
+            let new_y = (p.y + dy).clamp(0.0, p.y + p.h - MIN);
+            p.w = (p.w + dx).clamp(MIN, 1.0 - p.x);
+            p.h += p.y - new_y;
+            p.y = new_y;
+        }
+        2 => {
+            // Bottom-left: x moves, h grows/shrinks
+            let new_x = (p.x + dx).clamp(0.0, p.x + p.w - MIN);
+            p.w += p.x - new_x;
+            p.x = new_x;
+            p.h = (p.h + dy).clamp(MIN, 1.0 - p.y);
+        }
+        3 => {
+            // Bottom-right: pure w/h change
+            p.w = (p.w + dx).clamp(MIN, 1.0 - p.x);
+            p.h = (p.h + dy).clamp(MIN, 1.0 - p.y);
+        }
+        _ => {}
     }
 }
 

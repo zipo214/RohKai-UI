@@ -1,3 +1,10 @@
+//! Visual Widget Maker — data model and codegen for the primitive mini-canvas.
+//!
+//! `WidgetMakerDoc` is the document for one widget under construction.
+//! `MakerPrimitive` is a normalised [0, 1] shape or text element.
+//! `doc_to_descriptor` converts a finished document to a `WidgetDescriptor`.
+//! `sanitize_widget_id_to_filename` converts a widget ID to a safe filename stem.
+
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -61,6 +68,9 @@ pub struct WidgetMakerDoc {
     /// Index of the selected primitive (None = nothing selected).
     #[serde(skip)]
     pub selected: Option<usize>,
+    /// Corner being dragged for resize (0=TL,1=TR,2=BL,3=BR); not persisted.
+    #[serde(skip)]
+    pub resize_corner: Option<u8>,
     /// Name for the generated WidgetDescriptor.
     pub widget_name: String,
     /// ID prefix (e.g. "mylib.button").
@@ -76,6 +86,7 @@ pub struct WidgetMakerDoc {
 impl WidgetMakerDoc {
     pub fn new_with_defaults() -> Self {
         Self {
+            resize_corner: None,
             primitives: vec![
                 MakerPrimitive {
                     kind: MakerPrimKind::Rect,
@@ -209,6 +220,33 @@ pub fn doc_to_descriptor(
 }
 
 // ---------------------------------------------------------------------------
+// Filename sanitizer (Invariant 7)
+// ---------------------------------------------------------------------------
+
+/// Convert a widget ID (e.g. `"mylib.button"`) to a safe filename stem.
+///
+/// Whitelists `[A-Za-z0-9_-]`. Every other character (including Windows-reserved
+/// `<>:"\|?*\`, control bytes, and path separators) becomes `_`.
+/// Falls back to `"widget"` when the result is empty or all underscores.
+pub fn sanitize_widget_id_to_filename(id: &str) -> String {
+    let s: String = id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if s.is_empty() || s.chars().all(|c| c == '_') {
+        "widget".to_owned()
+    } else {
+        s
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -262,6 +300,45 @@ mod tests {
             "outline must use rect_stroke: {:?}",
             lines
         );
+    }
+
+    // --- sanitize_widget_id_to_filename (Invariant 7) ---
+
+    #[test]
+    fn sanitize_dots_and_slashes_to_underscores() {
+        assert_eq!(sanitize_widget_id_to_filename("mylib.button"), "mylib_button");
+        assert_eq!(sanitize_widget_id_to_filename("custom/widget"), "custom_widget");
+    }
+
+    #[test]
+    fn sanitize_strips_windows_reserved_chars() {
+        // <, >, :, ", \, |, ?, * must all become _
+        let id = r#"bad:<>:"\|?*"#;
+        let result = sanitize_widget_id_to_filename(id);
+        assert!(
+            result.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
+            "reserved chars survived: {result}"
+        );
+    }
+
+    #[test]
+    fn sanitize_control_bytes_to_fallback() {
+        assert_eq!(sanitize_widget_id_to_filename("\x01\x02"), "widget");
+    }
+
+    #[test]
+    fn sanitize_empty_gives_fallback() {
+        assert_eq!(sanitize_widget_id_to_filename(""), "widget");
+    }
+
+    #[test]
+    fn sanitize_all_underscores_gives_fallback() {
+        assert_eq!(sanitize_widget_id_to_filename("..."), "widget");
+    }
+
+    #[test]
+    fn sanitize_valid_id_preserved() {
+        assert_eq!(sanitize_widget_id_to_filename("my_widget-v2"), "my_widget-v2");
     }
 
     #[test]

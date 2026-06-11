@@ -54,6 +54,13 @@ All panels read from it; the canvas mutates it in-place through `tree.get_mut(id
 | `layout_spacing` | `f32` | VLayout, HLayout, GridLayout |
 | `layout_stretch` | `bool` | VLayout, HLayout, GridLayout |
 | `grid_columns` | `usize` | GridLayout |
+| `grid_row_height` | `Option<f32>` | GridLayout fixed row height |
+| `size_policy` | `SizePolicy` | {Fixed/FillWidth/Fill} per-child layout sizing |
+| `layout_cross_align` | `Option<Align>` | Cross-axis alignment in VLayout/HLayout |
+| `data_source_binding` | `Option<String>` | Data source component reference |
+| `data_columns` | `Vec<String>` | Column headings for Table/TreeView/ListView |
+| `formula_expr` | `String` | Infix formula expression (MathLabel / Formula widget) |
+| `formula_decimals` | `u8` | Decimal places for formula output |
 
 #### WidgetInstance fields (beyond id/kind/rect/props)
 
@@ -75,6 +82,9 @@ All panels read from it; the canvas mutates it in-place through `tree.get_mut(id
 | `on_change` | `String` | Change handler name (interactive widgets) |
 | `svg_source` | `Option<String>` | Raw SVG text for Image widgets |
 | `expand_svg_inline` | `bool` | Embed full SVG in live code panel |
+| `async_handler` | `Option<String>` | Async handler name (Stage 11 async task wiring) |
+| `handler_result` | `Option<String>` | Async handler result type for AppState field |
+| `event_handler` | `String` | Legacy generic handler fallback (superseded by on_click/on_change) |
 | `descriptor_*` | various | Snapshotted `.rkwd` metadata for Custom widgets |
 
 ### Persistence

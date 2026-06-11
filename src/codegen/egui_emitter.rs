@@ -845,21 +845,15 @@ fn document_from_indexed(lines: Vec<(Option<Uuid>, String)>) -> GeneratedCodeDoc
 }
 
 // ---------------------------------------------------------------------------
-// Handler resolution — new fields with legacy fallback
+// Handler resolution — delegate to shared handlers module
 // ---------------------------------------------------------------------------
 
 fn resolve_handler_click(w: &WidgetInstance) -> Option<&str> {
-    if !w.on_click.is_empty() {
-        return Some(w.on_click.as_str());
-    }
-    w.event_handler.as_deref().filter(|s| !s.is_empty())
+    crate::codegen::handlers::resolve_click_handler(w)
 }
 
 fn resolve_handler_change(w: &WidgetInstance) -> Option<&str> {
-    if !w.on_change.is_empty() {
-        return Some(w.on_change.as_str());
-    }
-    w.event_handler.as_deref().filter(|s| !s.is_empty())
+    crate::codegen::handlers::resolve_change_handler(w)
 }
 
 // ---------------------------------------------------------------------------

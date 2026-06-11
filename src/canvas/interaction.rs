@@ -2666,6 +2666,57 @@ pub fn handle(
 }
 
 #[cfg(test)]
+mod resize_snap_tests {
+    use super::*;
+
+    fn schema_rect(x: f32, y: f32, w: f32, h: f32) -> SchemaRect {
+        SchemaRect { x, y, w, h }
+    }
+
+    #[test]
+    fn snap_value_to_grid() {
+        // snap(val, step) rounds val to nearest multiple of step
+        assert_eq!(snap(7.0, 10.0), 10.0);
+        assert_eq!(snap(4.9, 10.0), 0.0);
+        assert_eq!(snap(0.0, 10.0), 0.0);
+        assert_eq!(snap(100.0, 10.0), 100.0);
+        // Step below MIN_SNAP_STEP (1.0) is clamped to 1.0
+        assert_eq!(snap(3.6, 0.01), 4.0);
+    }
+
+    #[test]
+    fn resize_handle_hit_detection() {
+        let rect = egui::Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(80.0, 50.0));
+        let handle = ResizeHandle::BottomRight;
+        let hr = handle.hit_rect(rect);
+        // The hit rect center should be at the expanded bottom-right corner
+        let outer = rect.expand(4.0);
+        assert!((hr.center() - outer.right_bottom()).length() < 0.5);
+    }
+
+    #[test]
+    fn resize_handle_apply_delta_top_left() {
+        let start = schema_rect(50.0, 50.0, 100.0, 80.0);
+        let delta = egui::vec2(10.0, 5.0); // moving TL corner inward
+        let result = ResizeHandle::TopLeft.apply_delta(&start, delta);
+        assert_eq!(result.x, 60.0);
+        assert_eq!(result.y, 55.0);
+        assert_eq!(result.w, 90.0);
+        assert_eq!(result.h, 75.0);
+    }
+
+    #[test]
+    fn resize_handle_respects_min_size() {
+        let start = schema_rect(50.0, 50.0, 22.0, 22.0);
+        // Drag BottomRight far to the left / up — should clamp to MIN_SIZE
+        let delta = egui::vec2(-200.0, -200.0);
+        let result = ResizeHandle::BottomRight.apply_delta(&start, delta);
+        assert!(result.w >= MIN_SIZE, "width must not fall below MIN_SIZE");
+        assert!(result.h >= MIN_SIZE, "height must not fall below MIN_SIZE");
+    }
+}
+
+#[cfg(test)]
 mod input_ownership_tests {
     use super::{canvas_owns_keyboard, canvas_owns_pointer};
 

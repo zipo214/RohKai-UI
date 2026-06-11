@@ -242,16 +242,21 @@
       Advanced Descriptor Editor, Guided Descriptor Builder, and future Visual
       Widget Maker are separate layers.
 - [x] Added `docs/VISUAL_WIDGET_MAKER.md` design note.
-- [ ] Add `WidgetMakerDocument` internal model for visual primitive composition.
-- [ ] Add separate Visual Widget Maker window with mini-canvas and inspector.
-- [ ] Primitive vertical slice: rect, text, button-like hit region, z-order,
-      resize/move, and selection.
-- [ ] Expose primitive values as descriptor properties, starting with `label`.
-- [ ] Generate deterministic `WidgetDescriptor` output from the visual document.
-- [ ] Save generated descriptor to `widgets/`, reload palette, and preserve
-      Advanced Descriptor escape hatch.
-- [ ] Later: slots, layout groups, constraints, state variants, event zones,
-      style tokens, and import simple descriptors into maker documents.
+- [x] Add `WidgetMakerDocument` internal model for visual primitive composition.
+      (`WidgetMakerDoc` + `MakerPrimitive` in `src/canvas/widget_maker.rs`; commit 4f60e72)
+- [x] Add separate Visual Widget Maker window with mini-canvas and inspector.
+      (floating window via `widget_maker_panel`; "Visual Widget Maker…" in Tools menu)
+- [x] Primitive vertical slice: rect, outline, ellipse, text; drag/select/resize
+      (interactive corner handles), normalised [0,1] coordinates.
+      (hit region / z-order reorder remain as future depth items)
+- [x] Expose primitive values as descriptor properties, starting with `label`.
+      (`use_label_token` flag; `{{label}}` substitution in generated template)
+- [x] Generate deterministic `WidgetDescriptor` output from the visual document.
+      (`doc_to_descriptor` → JSON with live_preview + export templates)
+- [x] Save generated descriptor to `widgets/`, reload palette, and preserve
+      Advanced Descriptor escape hatch. (Save button + `load_from_widgets_dir` refresh)
+- [ ] Later: z-order reorder, hit regions, slots, layout groups, constraints,
+      state variants, event zones, style tokens, round-trip from .rkwd to maker doc.
 
 ## Stage 7.x - SVG Source Viewing — Historical Snapshot
 
@@ -639,7 +644,8 @@ See `docs/STAGE11_PLAN.md` for the full design (function, depth, UX, impact).
       crate type, `#[wasm_bindgen(start)]` via `eframe::WebRunner`, Trunk.toml generated
 - [x] Web-specific widget considerations (no file dialogs, no native paths) — FilePicker
       stubbed in WASM build; WASM_NOTES.txt documents limitations
-- [ ] Preview in browser button — runs trunk serve
+- [x] Preview in browser button — exports WASM to temp dir, PATH-checks trunk, spawns
+      `trunk serve`; diagnostic error if trunk not found. ("Preview in Browser…" in File menu)
 
 ---
 

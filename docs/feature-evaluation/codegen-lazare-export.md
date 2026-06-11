@@ -22,7 +22,7 @@ safe to export, and honest about what cannot round-trip.
 | Lazare parser | 3-4 | Parses supported generated code back into `UiTree`, returns exact source ranges, and applies only complete successful parses. Empty code clears widgets; duplicate paste repairs identity. | Needs richer Rust syntax support, conflict UI, and explicit generated/user-region ownership. |
 | Handler wiring | 3 | Properties write event names; codegen/export stubs/calls. | Needs event catalog depth, refactor/rename support, duplicate detection. |
 | Rust wiring | 2-3 | mpsc channels, iterator pipelines, trait impls, async thread wrapper. | Needs data-flow validation, preview execution, and richer editing UX. |
-| Code navigation | 3 | Generated and edited widget blocks have structured ranges; canvas multi-selection paints independent gutter outlines; Tracé uses a one-frame scroll target. | Needs precise cursor placement, search, symbol list, clickable diagnostics, handler indexing, and diff view. |
+| Code navigation | 3-4 | Structured block ranges; gutter outlines; one-frame scroll; Ctrl+F in-panel search; symbol list; clickable diagnostic navigation (parse_diag_line). | Needs precise cursor placement, handler indexing, and diff view. |
 
 ## Utility
 
