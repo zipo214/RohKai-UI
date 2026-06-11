@@ -697,8 +697,9 @@ and prioritizes depth over more palette breadth.
       `asset_manifest_is_generated_with_correct_entries` and
       `custom_descriptor_export_renders_template_not_placeholder` added to
       `src/codegen/export.rs`.
-- [ ] Add release smoke checklist: save/load, export, preview mode, code paste,
+- [x] Add release smoke checklist: save/load, export, preview mode, code paste,
       multi-select, templates, preferences, theme, and SVG import.
+      See `docs/RELEASE_SMOKE_CHECKLIST.md`.
 
 ### Depth Before Breadth
 - [ ] True layout ownership: `VLayout`, `HLayout`, and `GridLayout` own/reflow
