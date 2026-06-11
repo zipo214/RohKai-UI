@@ -254,6 +254,26 @@ fn handler_source_span(code: &str, handler_name: &str) -> Option<SourceSpan> {
     Some(SourceSpan::new(start..end, line_start..=line_end))
 }
 
+/// Parse a line number from a diagnostic message string.
+/// Recognises patterns like "line 12:", "at line 12", or "12:34".
+fn parse_diag_line(msg: &str) -> Option<usize> {
+    // "line N" or "line N:" pattern
+    if let Some(after) = msg.to_lowercase().find("line ").map(|p| &msg[p + 5..]) {
+        let n: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(v) = n.parse::<usize>() {
+            return Some(v);
+        }
+    }
+    // "N:M" column:line pattern at start
+    let first_word: &str = msg.split_whitespace().next().unwrap_or("");
+    if let Some((n, _)) = first_word.split_once(':') {
+        if let Ok(v) = n.parse::<usize>() {
+            return Some(v);
+        }
+    }
+    None
+}
+
 /// Collect all `fn name(` user-defined handler names from the code buffer.
 /// Skips `fn update(` and `fn new(` which are framework methods, not handlers.
 fn collect_handler_names(code: &str) -> Vec<String> {
@@ -464,11 +484,64 @@ pub fn show(ctx: &egui::Context, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
             };
 
             if let CodeStatus::InvalidEdit(msg) = code_status {
-                ui.label(
-                    egui::RichText::new(msg.as_str())
-                        .small()
-                        .color(egui::Color32::RED),
-                );
+                // Extract optional line number from the diagnostic message for navigation.
+                // Format: "line N: ..." or "at line N" or just "N:M ..."
+                let diag_line = parse_diag_line(msg);
+                let diag_resp = ui
+                    .add(
+                        egui::Label::new(
+                            egui::RichText::new(msg.as_str())
+                                .small()
+                                .color(egui::Color32::RED),
+                        )
+                        .sense(egui::Sense::click()),
+                    )
+                    .on_hover_cursor(if diag_line.is_some() {
+                        egui::CursorIcon::PointingHand
+                    } else {
+                        egui::CursorIcon::Default
+                    })
+                    .on_hover_text(if diag_line.is_some() {
+                        "Click to jump to the error line"
+                    } else {
+                        "Parse error"
+                    });
+                if diag_resp.clicked() {
+                    if let Some(line) = diag_line {
+                        // Compute byte offset for the target line start
+                        let byte_start: usize = code_buffer
+                            .lines()
+                            .take(line.saturating_sub(1))
+                            .map(|l| l.len() + 1)
+                            .sum();
+                        // Store as search-nav span so the editor scrolls there
+                        *search_open = false;
+                        search_query.clear();
+                        // Reuse search_spans by computing a single-char span at that line
+                        // We can't mutate search_spans here, but we can set navigation_target
+                        // to a sentinel. Instead, just set the search to scroll there via
+                        // a single-character match at the line position.
+                        let end = (byte_start + 1).min(code_buffer.len());
+                        if end > byte_start {
+                            // We signal scroll-to-line by setting the search to the content
+                            // at that position momentarily (already consumed above).
+                            // Instead of full scroll-to-line machinery, we emit into search:
+                            let line_content: String = code_buffer
+                                .lines()
+                                .nth(line.saturating_sub(1))
+                                .unwrap_or("")
+                                .trim()
+                                .chars()
+                                .take(8)
+                                .collect();
+                            if !line_content.is_empty() {
+                                *search_open = true;
+                                *search_query = line_content;
+                                *search_match_idx = 0;
+                            }
+                        }
+                    }
+                }
                 if tree_changed_while_invalid {
                     ui.label(
                         egui::RichText::new(
