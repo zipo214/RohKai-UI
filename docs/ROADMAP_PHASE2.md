@@ -202,23 +202,7 @@ From `docs/SVG_RENDERER_ROADMAP.md` deferred items.
 
 ---
 
-## P2.8 — Stage 15 — Own Renderer
-
-Deferred from main roadmap; starts only when Stages 9–14 are complete and a
-separate architecture decision is made.
-
-- [ ] Replace egui rendering layer with RohKai-owned pure Rust renderer
-- [ ] Widget descriptor format drives renderer widget model directly
-- [ ] Zero transient C dependencies
-- [ ] Custom layout engine with constraint and flex support
-- [ ] GPU-accelerated rasterizer (wgpu-based or own path rasterizer)
-- [ ] All previously constrained visual properties become available:
-      arbitrary shapes, gradients, shadows, blend modes per widget
-- [ ] Text pipeline uses P2-A shaping engine
-
----
-
-## P2.9 — High-Risk / Long-Range Widgets
+## P2.8 — High-Risk / Long-Range Widgets
 
 Requires feasibility decision before implementation.
 
@@ -230,7 +214,7 @@ Requires feasibility decision before implementation.
 
 ---
 
-## P2.10 — Code Panel & Codegen Depth
+## P2.9 — Code Panel & Codegen Depth
 
 - [ ] Codegen memoization: `CodegenCache` keyed on `UiTree` hash; skip
       re-emit when tree did not change (Cline Rec 3)
@@ -248,7 +232,7 @@ Requires feasibility decision before implementation.
 
 ---
 
-## P2.11 — Platform Targets
+## P2.10 — Platform Targets
 
 From Stage 12 remaining gaps and WASM depth.
 
@@ -261,13 +245,30 @@ From Stage 12 remaining gaps and WASM depth.
 
 ---
 
-## P2.12 — Accessibility & Internationalisation
+## P2.11 — Accessibility & Internationalisation
 
 - [ ] ARIA role annotations on exported egui widgets (screen reader support)
 - [ ] RTL canvas mode: flip canvas origin for right-to-left UI authoring
 - [ ] Locale-aware string externalisation: export strings to a `strings.toml`
       and generate `t!("key")` calls
 - [ ] Keyboard-only authoring: every canvas action achievable without a mouse
+
+---
+
+## P2.12 — Stage 15 — Own Renderer
+
+Final ordered stage. Starts only when P2.1–P2.11 are complete and a separate
+architecture decision is ratified. "Final" means last in this list, not last
+in the project's lifetime — the list grows as new stages are added above it.
+
+- [ ] Replace egui rendering layer with RohKai-owned pure Rust renderer
+- [ ] Widget descriptor format drives renderer widget model directly
+- [ ] Zero transient C dependencies in the rendering stack
+- [ ] Custom layout engine with constraint and flex support
+- [ ] GPU-accelerated rasterizer (wgpu-based or own path rasterizer)
+- [ ] All previously constrained visual properties become available:
+      arbitrary shapes, gradients, shadows, blend modes per widget
+- [ ] Text pipeline uses P2-A shaping engine end-to-end
 
 ---
 

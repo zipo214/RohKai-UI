@@ -28,6 +28,10 @@ Never write code that mutates canvas state and code state separately.
 - `rayon = "1"` is an approved dependency for parallel processing. Planned
   future replacement with `src/platform/thread_pool.rs` when Stage 15 renderer
   needs its own scheduler.
+- `rustybuzz` is an approved dependency for font shaping (P2-A interim shaper).
+  Wire behind a `ShaperEngine` trait in `src/canvas/shaper/` so it can be
+  swapped out for a bespoke HarfBuzz port later. Do NOT embed it in the
+  export-embedded svg_rasterizer.rs (that source must remain std-only).
 - SVG import, SVG image preview, and SVG raster/vector work are zero-new-crate
   zones: no `resvg`, no `usvg`, no `tiny-skia`, and no substitute renderer
   dependency chain. Implement required SVG behavior in RohKai source.
