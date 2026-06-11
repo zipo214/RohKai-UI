@@ -11,14 +11,14 @@ MVPs does not close these gaps.
 | Roadmap Area | Current Depth | Current Implementation Contract | Desired Closure Contract |
 |---|---:|---|---|
 | `.rkwb` descriptor bundle | 0 | `.rkwd` descriptors load individually; no bundle format. | Bundle multiple descriptors, previews, assets, metadata, validation, and import/install flow. |
-| Visual Widget Maker | 0-1 | Guided Descriptor Builder exists, but it is a form over descriptors. | True mini-canvas for composing reusable widgets from primitives and emitting deterministic descriptors. |
+| Visual Widget Maker | 1-2 | Mini-canvas MVP exists (`WidgetMakerDoc` + panel); drag/select/resize primitives, Save→.rkwd. | State variants, event zones, slots, layout groups, style tokens, and round-trip from .rkwd. |
 | SVG inline expansion toggle | 1 | `expand_svg_inline` schema/code behavior exists; UI toggle still roadmap-open. | Per-Image properties toggle with clear code-panel size warning and tests. |
 | SVG text/import maturity | 1-3 | Hardened importer/rasterizer subset, source preservation, diagnostics. | Robust `tspan`, grouped editable text, import report UI, calibrated fidelity, optional outline snapshot. |
 | SVG scene/display-list and golden harness duplicate items | 3 | Stage 9 says these are done; Stage 7.x still has stale unchecked duplicates. | Reconcile roadmap duplication, or split "initial done" from "renderer v2 complete" with precise closure. |
 | Parallelism foundation | 1 | `rayon` dependency exists; no feature-specific parallel workloads. | Parallel SVG/codegen/export/template loading with measured speedups and safe invalidation. |
 | Form Layout | 0-1 | GridLayout is the current substitute; egui has no distinct form primitive. | Decide whether to implement a form abstraction or formally retire as "covered by GridLayout." |
-| Formula Widget | 0-1 | MathLabel MVP exists. | Expression parser, dependencies, validation, formatting, diagnostics, and multi-input support. |
-| WASM export | 0 | No WASM panel/profile/export. | Platform profile, build config, generated web project, browser preview, unsupported-widget diagnostics. |
+| Formula Widget | 1-2 | MathLabel MVP + infix expression parser; basic evaluation in properties panel. | Dependencies, validation, formatting, diagnostics, and multi-input support. |
+| WASM export | 1-2 | Stage 12 complete: generates wasm32 project with lib.rs + index.html + Trunk.toml; "Preview in Browser" menu item added. | Unsupported-widget diagnostics and in-app build status panel. |
 | Database/data integration | 0 | Static data views and design-time data source MVP exist. | DB connector config, schema viewer, query builder, data binding, generated crate-specific code. |
 | Own renderer | 0-1 | egui remains rendering stack; SVG rasterizer is internal but not app renderer. | RohKai-owned pure Rust UI renderer and widget model if project commits to replacing egui. |
 | High-risk widgets | 0 | Model views/Dock/MDI/multi-window/QAxWidget-style items are planned only. | Feasibility decisions, architecture constraints, and platform policy before implementation. |

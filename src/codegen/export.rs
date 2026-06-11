@@ -1,11 +1,13 @@
+use crate::codegen::formula::{collect_variables, emit_formula_rust, parse_formula};
 use crate::codegen::{
     field_collector,
     rust::{field_binding, string_literal},
 };
 use crate::project::{
-    schema::{WidgetEvent, WidgetKind},
+    schema::{SizePolicy, WidgetEvent, WidgetInstance, WidgetKind},
     ui_tree::UiTree,
 };
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
@@ -20,13 +22,23 @@ pub fn write_project(tree: &UiTree, dest: &Path) -> Result<(), String> {
     let src_dir = dest.join("src");
     fs::create_dir_all(&src_dir).map_err(|e| format!("create dirs: {e}"))?;
 
-    for (rel_path, content) in project_files(tree) {
-        let full = dest.join(&rel_path);
+    let files = project_files(tree);
+
+    // Ensure all parent directories exist before parallel writes.
+    for (rel_path, _) in &files {
+        let full = dest.join(rel_path);
         if let Some(parent) = full.parent() {
             fs::create_dir_all(parent).map_err(|e| format!("create dirs: {e}"))?;
         }
-        fs::write(&full, content).map_err(|e| format!("{rel_path}: {e}"))?;
     }
+
+    files
+        .par_iter()
+        .map(|(rel_path, content)| {
+            fs::write(dest.join(rel_path), content).map_err(|e| format!("{rel_path}: {e}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
     Ok(())
 }
 
@@ -58,10 +70,15 @@ pub fn project_files(tree: &UiTree) -> Vec<(String, String)> {
         }
     }
 
+    // Generate the three core output files in parallel.
+    let ((cargo_toml, main_rs), app_rs) = rayon::join(
+        || rayon::join(|| gen_cargo_toml(&extra_deps), || gen_main_rs(tree)),
+        || gen_app_rs(tree),
+    );
     let mut files = vec![
-        ("Cargo.toml".to_owned(), gen_cargo_toml(&extra_deps)),
-        ("src/main.rs".to_owned(), gen_main_rs(tree)),
-        ("src/app.rs".to_owned(), gen_app_rs(tree)),
+        ("Cargo.toml".to_owned(), cargo_toml),
+        ("src/main.rs".to_owned(), main_rs),
+        ("src/app.rs".to_owned(), app_rs),
     ];
 
     if !tree.app_props.assets.is_empty() {
@@ -69,6 +86,184 @@ pub fn project_files(tree: &UiTree) -> Vec<(String, String)> {
     }
 
     files
+}
+
+/// Write a WASM-compatible Rust project to `dest` folder.
+///
+/// The generated project can be built with:
+/// `cargo build --target wasm32-unknown-unknown --release`
+/// or bundled with trunk: `trunk build`
+///
+/// FilePicker widgets are replaced with a static label stub since native
+/// file dialogs are unavailable in WASM.
+pub fn write_project_wasm(tree: &UiTree, dest: &Path, gen_index_html: bool) -> Result<(), String> {
+    let src_dir = dest.join("src");
+    fs::create_dir_all(&src_dir).map_err(|e| format!("create dirs: {e}"))?;
+
+    let files = project_files_wasm(tree, gen_index_html);
+
+    for (rel_path, _) in &files {
+        let full = dest.join(rel_path);
+        if let Some(parent) = full.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("create dirs: {e}"))?;
+        }
+    }
+
+    files
+        .par_iter()
+        .map(|(rel_path, content)| {
+            fs::write(dest.join(rel_path), content).map_err(|e| format!("{rel_path}: {e}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(())
+}
+
+/// Generate WASM-compatible project files in memory.
+///
+/// Returns `(relative_path, content)` pairs.  FilePicker widgets are replaced
+/// with a static stub since `rfd` requires native OS dialogs.
+pub fn project_files_wasm(tree: &UiTree, gen_index_html: bool) -> Vec<(String, String)> {
+    let has_file_picker = tree
+        .widgets
+        .iter()
+        .any(|w| w.kind == WidgetKind::FilePicker);
+
+    let ((cargo_toml, lib_rs), app_rs) = rayon::join(
+        || rayon::join(gen_cargo_toml_wasm, || gen_lib_rs_wasm(tree)),
+        || gen_app_rs_wasm(tree),
+    );
+
+    let mut files = vec![
+        ("Cargo.toml".to_owned(), cargo_toml),
+        ("src/lib.rs".to_owned(), lib_rs),
+        ("src/app.rs".to_owned(), app_rs),
+    ];
+
+    if gen_index_html {
+        files.push(("index.html".to_owned(), gen_index_html_wasm(tree)));
+        files.push(("Trunk.toml".to_owned(), gen_trunk_toml()));
+    }
+
+    if has_file_picker {
+        files.push((
+            "WASM_NOTES.txt".to_owned(),
+            "FilePicker widgets are stubbed in this WASM build.\n\
+             rfd native file dialogs are not available in the browser.\n\
+             Replace FilePicker usages with <input type=\"file\"> via web_sys if needed.\n"
+                .to_owned(),
+        ));
+    }
+
+    files
+}
+
+fn gen_cargo_toml_wasm() -> String {
+    r#"[package]
+name = "exported_app"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+eframe = { version = "0.29", default-features = false, features = ["glow", "wasm-bindgen"] }
+egui   = "0.29"
+wasm-bindgen-futures = "0.4"
+
+[profile.release]
+opt-level = "s"
+"#
+    .to_owned()
+}
+
+fn gen_lib_rs_wasm(tree: &UiTree) -> String {
+    let title = string_literal(&tree.app_props.title);
+    format!(
+        r#"mod app;
+use app::ExportedApp;
+
+#[cfg(target_arch = "wasm32")]
+use eframe::wasm_bindgen::{{self, prelude::*}};
+
+/// Entry point for the browser.  Called automatically by the bundler.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(start)]
+pub async fn start() -> Result<(), wasm_bindgen::JsValue> {{
+    let web_options = eframe::WebOptions::default();
+    eframe::WebRunner::new()
+        .start(
+            "the_canvas_id",
+            web_options,
+            Box::new(|_cc| Ok(Box::new(ExportedApp::default()))),
+        )
+        .await
+        .map_err(|e| e.into())
+}}
+
+/// Native entry point (non-WASM builds still compile as a library).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn run() -> eframe::Result<()> {{
+    let options = eframe::NativeOptions::default();
+    eframe::run_native(
+        {title},
+        options,
+        Box::new(|_cc| Ok(Box::new(ExportedApp::default()))),
+    )
+}}
+"#
+    )
+}
+
+fn gen_index_html_wasm(tree: &UiTree) -> String {
+    let title = html_escape(&tree.app_props.title);
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>{title}</title>
+    <style>
+      html, body {{
+        overflow: hidden;
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        background: #1a1a1a;
+      }}
+      canvas {{
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+      }}
+    </style>
+  </head>
+  <body>
+    <canvas id="the_canvas_id"></canvas>
+  </body>
+</html>
+"#
+    )
+}
+
+fn gen_trunk_toml() -> String {
+    r#"[build]
+target = "index.html"
+dist = "dist"
+"#
+    .to_owned()
+}
+
+/// Minimal HTML-entity escaping for title text embedded in index.html.
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 /// Build the `assets/MANIFEST.txt` listing declared asset references.
@@ -136,6 +331,27 @@ fn main() -> eframe::Result<()> {{
 }}
 "#
     )
+}
+
+// ---------------------------------------------------------------------------
+
+/// WASM-safe app.rs generator.  Replaces `FilePicker` with a read-only
+/// `Label` stub because `rfd` requires native OS dialogs unavailable in WASM.
+fn gen_app_rs_wasm(tree: &UiTree) -> String {
+    let needs_stub = tree
+        .widgets
+        .iter()
+        .any(|w| w.kind == WidgetKind::FilePicker);
+    if !needs_stub {
+        return gen_app_rs(tree);
+    }
+    let mut wasm_tree = tree.clone();
+    for w in &mut wasm_tree.widgets {
+        if w.kind == WidgetKind::FilePicker {
+            w.kind = WidgetKind::Label;
+        }
+    }
+    gen_app_rs(&wasm_tree)
 }
 
 // ---------------------------------------------------------------------------
@@ -658,7 +874,13 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 )
             }
             WidgetKind::VLayout => {
-                let mut code = "                ui.vertical(|ui| {\n".to_owned();
+                use crate::project::schema::LayoutCrossAlign;
+                let open = match w.props.layout_cross_align {
+                    LayoutCrossAlign::Start => "                ui.vertical(|ui| {\n".to_owned(),
+                    LayoutCrossAlign::Center => "                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {\n".to_owned(),
+                    LayoutCrossAlign::End => "                ui.with_layout(egui::Layout::top_down(egui::Align::RIGHT), |ui| {\n".to_owned(),
+                };
+                let mut code = open;
                 for &child_id in &w.children {
                     if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
                         code.push_str(&export_layout_child_line(child, &handler_registry));
@@ -668,7 +890,13 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 code
             }
             WidgetKind::HLayout => {
-                let mut code = "                ui.horizontal(|ui| {\n".to_owned();
+                use crate::project::schema::LayoutCrossAlign;
+                let open = match w.props.layout_cross_align {
+                    LayoutCrossAlign::Start => "                ui.horizontal(|ui| {\n".to_owned(),
+                    LayoutCrossAlign::Center => "                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {\n".to_owned(),
+                    LayoutCrossAlign::End => "                ui.with_layout(egui::Layout::left_to_right(egui::Align::BOTTOM), |ui| {\n".to_owned(),
+                };
+                let mut code = open;
                 for &child_id in &w.children {
                     if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
                         code.push_str(&export_layout_child_line(child, &handler_registry));
@@ -682,8 +910,13 @@ fn gen_app_rs(tree: &UiTree) -> String {
             }
             WidgetKind::GridLayout => {
                 let columns = w.props.grid_columns.clamp(1, MAX_GRID_COLUMNS);
+                let row_height_chain = w
+                    .props
+                    .grid_row_height
+                    .map(|h| format!(".min_row_height({h:.1})"))
+                    .unwrap_or_default();
                 let mut code = format!(
-                    "                egui::Grid::new(\"{}\").show(ui, |ui| {{\n",
+                    "                egui::Grid::new(\"{}\"){row_height_chain}.show(ui, |ui| {{\n",
                     w.id.as_simple()
                 );
                 for (idx, &child_id) in w.children.iter().enumerate() {
@@ -694,7 +927,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                         }
                     }
                 }
-                if !w.children.is_empty() && w.children.len() % columns != 0 {
+                if !w.children.is_empty() && !w.children.len().is_multiple_of(columns) {
                     code.push_str("                    ui.end_row();\n");
                 }
                 code.push_str("                });\n");
@@ -740,15 +973,33 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 s.push_str("                });\n");
                 s
             }
-            WidgetKind::MathLabel => match binding {
-                Some(b) => {
-                    let label_lit = string_literal(&w.props.label);
-                    format!(
-                        "                ui.label(format!(\"{{}} = {{:.2}}\", {label_lit}, self.state.{b}));\n"
-                    )
+            WidgetKind::MathLabel => {
+                let label_lit = string_literal(&w.props.label);
+                let decimals = w.props.formula_decimals;
+                if !w.props.formula_expr.is_empty() {
+                    match parse_formula(&w.props.formula_expr) {
+                        Ok(node) => {
+                            let vars = collect_variables(&node);
+                            let rust_expr = emit_formula_rust(&node);
+                            let binds: String = vars
+                                .iter()
+                                .map(|v| format!("                    let {v} = self.state.{v} as f64;\n"))
+                                .collect();
+                            format!(
+                                "                ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, {{\n{binds}                    {rust_expr}\n                }}));\n"
+                            )
+                        }
+                        Err(e) => format!("                // Formula parse error: {e}\n"),
+                    }
+                } else {
+                    match binding {
+                        Some(b) => format!(
+                            "                ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, self.state.{b}));\n"
+                        ),
+                        None => format!("                // MathLabel {label}: set a valid Binding\n"),
+                    }
                 }
-                None => format!("                // MathLabel {label}: set a valid Binding\n"),
-            },
+            }
             WidgetKind::FilePicker => match binding {
                 Some(b) => format!(
                     "                if ui.button(\"Browse…\").clicked() {{\n                    \
@@ -943,17 +1194,11 @@ fn combo_selected_text_expr(state_expr: &str, options: &[String]) -> String {
 }
 
 fn resolve_export_handler_click(w: &crate::project::schema::WidgetInstance) -> Option<&str> {
-    if !w.on_click.is_empty() {
-        return Some(w.on_click.as_str());
-    }
-    w.event_handler.as_deref().filter(|s| !s.is_empty())
+    crate::codegen::handlers::resolve_click_handler(w)
 }
 
 fn resolve_export_handler_change(w: &crate::project::schema::WidgetInstance) -> Option<&str> {
-    if !w.on_change.is_empty() {
-        return Some(w.on_change.as_str());
-    }
-    w.event_handler.as_deref().filter(|s| !s.is_empty())
+    crate::codegen::handlers::resolve_change_handler(w)
 }
 
 fn non_empty(s: &str) -> Option<&str> {
@@ -1260,15 +1505,33 @@ fn export_child_line(
         WidgetKind::DialogButtonBox => format!(
             "                        ui.put({rect_expr}, egui::Label::new({child_label})); // DialogButtonBox\n"
         ),
-        WidgetKind::MathLabel => match child_binding {
-            Some(b) => {
-                let label_lit = string_literal(&child.props.label);
-                format!(
-                    "                        ui.put({rect_expr}, egui::Label::new(format!(\"{{}} = {{:.2}}\", {label_lit}, self.state.{b})));\n"
-                )
+        WidgetKind::MathLabel => {
+            let label_lit = string_literal(&child.props.label);
+            let decimals = child.props.formula_decimals;
+            if !child.props.formula_expr.is_empty() {
+                match parse_formula(&child.props.formula_expr) {
+                    Ok(node) => {
+                        let vars = collect_variables(&node);
+                        let rust_expr = emit_formula_rust(&node);
+                        let binds: String = vars
+                            .iter()
+                            .map(|v| format!("                                let {v} = self.state.{v} as f64;\n"))
+                            .collect();
+                        format!(
+                            "                        ui.put({rect_expr}, egui::Label::new(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, {{\n{binds}                                {rust_expr}\n                        }})));\n"
+                        )
+                    }
+                    Err(e) => format!("                        // Formula parse error: {e}\n"),
+                }
+            } else {
+                match child_binding {
+                    Some(b) => format!(
+                        "                        ui.put({rect_expr}, egui::Label::new(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, self.state.{b})));\n"
+                    ),
+                    None => format!("                        // MathLabel {child_label}: set a valid Binding\n"),
+                }
             }
-            None => format!("                        // MathLabel {child_label}: set a valid Binding\n"),
-        },
+        }
         WidgetKind::FilePicker => match child_binding {
             Some(b) => format!(
                 "                        ui.put({rect_expr}, egui::Label::new(&self.state.{b})); // FilePicker\n"
@@ -1329,12 +1592,20 @@ fn export_child_line(
     }
 }
 
+fn export_child_size_str(child: &WidgetInstance) -> String {
+    match child.props.size_policy {
+        SizePolicy::Fixed => format!("[{:.1}, {:.1}]", child.rect.w, child.rect.h),
+        SizePolicy::FillWidth => format!("[ui.available_width(), {:.1}]", child.rect.h),
+        SizePolicy::Fill => "ui.available_size()".to_owned(),
+    }
+}
+
 /// Emit a child owned by an egui layout container.
 ///
 /// Layout children are emitted sequentially inside the layout closure instead of
 /// absolute-positioned with `ui.put`.
 fn export_layout_child_line(
-    child: &crate::project::schema::WidgetInstance,
+    child: &WidgetInstance,
     registry: &HashMap<String, (crate::project::schema::HandlerResult, bool)>,
 ) -> String {
     let child_label = string_literal(&child.props.label);
@@ -1342,10 +1613,8 @@ fn export_layout_child_line(
     let mut code = format!("                    // widget_{}\n", child.id);
     match &child.kind {
         WidgetKind::Button => {
-            let resp = format!(
-                "ui.add_sized([{:.1}, {:.1}], egui::Button::new({child_label}))",
-                child.rect.w, child.rect.h
-            );
+            let sz = export_child_size_str(child);
+            let resp = format!("ui.add_sized({sz}, egui::Button::new({child_label}))");
             code.push_str(&export_child_event_dispatch(child, &resp, registry));
         }
         WidgetKind::Label => match child_binding {
@@ -1354,10 +1623,9 @@ fn export_layout_child_line(
         },
         WidgetKind::TextInput => match child_binding {
             Some(b) => {
-                let resp = format!(
-                    "ui.add_sized([{:.1}, {:.1}], egui::TextEdit::singleline(&mut self.state.{b}))",
-                    child.rect.w, child.rect.h
-                );
+                let sz = export_child_size_str(child);
+                let resp =
+                    format!("ui.add_sized({sz}, egui::TextEdit::singleline(&mut self.state.{b}))");
                 code.push_str(&export_child_event_dispatch(child, &resp, registry));
             }
             None => code.push_str(&format!(
@@ -1366,10 +1634,9 @@ fn export_layout_child_line(
         },
         WidgetKind::TextArea => match child_binding {
             Some(b) => {
-                let resp = format!(
-                    "ui.add_sized([{:.1}, {:.1}], egui::TextEdit::multiline(&mut self.state.{b}))",
-                    child.rect.w, child.rect.h
-                );
+                let sz = export_child_size_str(child);
+                let resp =
+                    format!("ui.add_sized({sz}, egui::TextEdit::multiline(&mut self.state.{b}))");
                 code.push_str(&export_child_event_dispatch(child, &resp, registry));
             }
             None => code.push_str(&format!(
@@ -1378,9 +1645,10 @@ fn export_layout_child_line(
         },
         WidgetKind::Slider => match child_binding {
             Some(b) => {
+                let sz = export_child_size_str(child);
                 let resp = format!(
-                    "ui.add_sized([{:.1}, {:.1}], egui::Slider::new(&mut self.state.{b}, {:.1}..={:.1}).text({child_label}))",
-                    child.rect.w, child.rect.h, child.props.min, child.props.max
+                    "ui.add_sized({sz}, egui::Slider::new(&mut self.state.{b}, {:.1}..={:.1}).text({child_label}))",
+                    child.props.min, child.props.max
                 );
                 code.push_str(&export_child_event_dispatch(child, &resp, registry));
             }
@@ -1441,9 +1709,9 @@ fn export_layout_child_line(
                 } else {
                     ""
                 };
+                let sz = export_child_size_str(child);
                 code.push_str(&format!(
-                    "                    ui.add_sized([{:.1}, {:.1}], egui::ProgressBar::new(self.state.{b}){percent});\n",
-                    child.rect.w, child.rect.h
+                    "                    ui.add_sized({sz}, egui::ProgressBar::new(self.state.{b}){percent});\n"
                 ));
             }
             None => code.push_str(&format!(
@@ -3352,6 +3620,105 @@ mod tests {
         }
     }
 
+    #[test]
+    fn wasm_export_generates_required_files_and_lib_entry() {
+        use crate::project::schema::{Rect, WidgetInstance, WidgetKind};
+        let tree = UiTree {
+            widgets: vec![WidgetInstance {
+                id: uuid::Uuid::from_u128(0xBEEF),
+                kind: WidgetKind::Button,
+                rect: Rect {
+                    x: 10.0,
+                    y: 10.0,
+                    w: 80.0,
+                    h: 30.0,
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let files = project_files_wasm(&tree, true);
+        let names: Vec<&str> = files.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"Cargo.toml"), "WASM Cargo.toml missing");
+        assert!(names.contains(&"src/lib.rs"), "WASM lib.rs missing");
+        assert!(names.contains(&"src/app.rs"), "WASM app.rs missing");
+        assert!(names.contains(&"index.html"), "WASM index.html missing");
+        assert!(names.contains(&"Trunk.toml"), "WASM Trunk.toml missing");
+        assert!(
+            !names.contains(&"src/main.rs"),
+            "WASM must use lib.rs not main.rs"
+        );
+
+        let cargo = files
+            .iter()
+            .find(|(n, _)| n == "Cargo.toml")
+            .map(|(_, c)| c.as_str())
+            .unwrap();
+        assert!(
+            cargo.contains("cdylib"),
+            "WASM Cargo.toml must declare cdylib"
+        );
+        assert!(
+            cargo.contains("wasm-bindgen"),
+            "WASM Cargo.toml must include wasm-bindgen feature"
+        );
+        assert!(
+            !cargo.contains("rfd"),
+            "WASM Cargo.toml must not include rfd"
+        );
+
+        let lib_rs = files
+            .iter()
+            .find(|(n, _)| n == "src/lib.rs")
+            .map(|(_, c)| c.as_str())
+            .unwrap();
+        assert!(
+            lib_rs.contains("wasm_bindgen(start)"),
+            "lib.rs must export wasm start fn"
+        );
+        assert!(lib_rs.contains("WebRunner"), "lib.rs must use WebRunner");
+        assert!(
+            lib_rs.contains("the_canvas_id"),
+            "lib.rs must reference canvas element id"
+        );
+
+        let html = files
+            .iter()
+            .find(|(n, _)| n == "index.html")
+            .map(|(_, c)| c.as_str())
+            .unwrap();
+        assert!(
+            html.contains("the_canvas_id"),
+            "index.html must have canvas element"
+        );
+        assert!(html.contains("<canvas"), "index.html must have canvas tag");
+    }
+
+    #[test]
+    fn wasm_export_file_picker_generates_notes_file() {
+        use crate::project::schema::{Rect, WidgetInstance, WidgetKind};
+        let tree = UiTree {
+            widgets: vec![WidgetInstance {
+                id: uuid::Uuid::from_u128(0xF11E),
+                kind: WidgetKind::FilePicker,
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 100.0,
+                    h: 30.0,
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let files = project_files_wasm(&tree, false);
+        let names: Vec<&str> = files.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(
+            names.contains(&"WASM_NOTES.txt"),
+            "must warn about FilePicker in WASM"
+        );
+    }
+
     /// Always-run smoke: the fixture generates the required files and its source
     /// contains every feature-matrix marker.  Fast (no compilation).
     #[test]
@@ -3579,5 +3946,113 @@ mod tests {
             );
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn asset_manifest_is_generated_with_correct_entries() {
+        use crate::project::schema::{AppProps, AssetEntry, AssetKind};
+        let tree = UiTree {
+            app_props: AppProps {
+                assets: vec![
+                    AssetEntry {
+                        id: Uuid::nil(),
+                        name: "logo.png".to_owned(),
+                        source_path: "/home/user/images/logo.png".to_owned(),
+                        kind: AssetKind::Image,
+                    },
+                    AssetEntry {
+                        id: Uuid::from_u128(1),
+                        name: "data.json".to_owned(),
+                        source_path: "/home/user/data/data.json".to_owned(),
+                        kind: AssetKind::Data,
+                    },
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let dir = unique_temp_dir("asset_manifest");
+        write_project(&tree, &dir).expect("write_project");
+
+        let manifest_path = dir.join("assets/MANIFEST.txt");
+        assert!(manifest_path.exists(), "assets/MANIFEST.txt not generated");
+        let manifest = std::fs::read_to_string(&manifest_path).expect("read manifest");
+        assert!(manifest.contains("logo.png"), "manifest missing logo.png");
+        assert!(
+            manifest.contains("/home/user/images/logo.png"),
+            "manifest missing source path for logo.png"
+        );
+        assert!(manifest.contains("data.json"), "manifest missing data.json");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn custom_descriptor_export_renders_template_not_placeholder() {
+        let tree = UiTree {
+            widgets: vec![WidgetInstance {
+                id: Uuid::nil(),
+                kind: WidgetKind::Custom("ply.button".to_owned()),
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 80.0,
+                    h: 30.0,
+                },
+                descriptor_name: Some("ply.button".to_owned()),
+                descriptor_export_tpl: Some(
+                    "ui.add(ply::Button::new({{label}}).size({{width}}, {{height}}));".to_owned(),
+                ),
+                descriptor_cargo_deps: vec!["ply = \"0.1\"".to_owned()],
+                props: crate::project::schema::WidgetProps {
+                    label: "Click me".to_owned(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let generated = gen_app_rs(&tree);
+
+        assert!(
+            generated.contains("ply::Button::new"),
+            "descriptor template not rendered: got\n{generated}"
+        );
+        assert!(
+            generated.contains("\"Click me\""),
+            "{{{{label}}}} token not substituted"
+        );
+        assert!(
+            generated.contains("80.0"),
+            "{{{{width}}}} token not substituted"
+        );
+        assert!(
+            !generated.contains("descriptor not loaded"),
+            "descriptor template must not fall through to placeholder"
+        );
+
+        let dir = unique_temp_dir("custom_descriptor");
+        write_project(&tree, &dir).expect("write_project");
+        let cargo = std::fs::read_to_string(dir.join("Cargo.toml")).expect("Cargo.toml");
+        assert!(
+            cargo.contains("ply = \"0.1\""),
+            "descriptor cargo dep not injected into exported Cargo.toml"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wasm_app_rs_has_no_rfd() {
+        let mut tree = UiTree::default();
+        tree.widgets.push(WidgetInstance {
+            kind: WidgetKind::FilePicker,
+            state_binding: Some("file_path".into()),
+            ..Default::default()
+        });
+        let app_rs = gen_app_rs_wasm(&tree);
+        assert!(
+            !app_rs.contains("rfd::"),
+            "WASM output must not reference rfd: found rfd:: in generated code"
+        );
     }
 }

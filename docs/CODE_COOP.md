@@ -7,6 +7,32 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-11 — v0.2.0 PR #6 review fixes + CI gate repair
+
+Branch `dev`. Fixed 4 Qodo review bugs + 1 arch violation from PR #6 review. (1) Arch: moved `prim_to_egui_lines` / `gen_export_template` / `gen_live_preview` from `canvas/widget_maker.rs` into new `src/codegen/widget_maker_emit.rs` — restores CLAUDE.md invariant (no Rust syntax strings outside `src/codegen/`); also fixes unescaped text bug by using `string_literal()`. (2) Bug: added `create_dir_all` before `.rkwd` write in Widget Maker save — fresh-install won't silently fail. (3) Bug: added `gen_app_rs_wasm` that clones tree + replaces FilePicker→Label so WASM export never contains `rfd::` references; added test. (4) Bug: unique per-process temp dir for WASM preview (appends PID). (5) Previously: fixed CI `cargo fmt --check` failure (16 files formatted), added `permissions: contents: read` to workflow, bumped `Cargo.toml` to v0.2.0. 416 tests, zero warnings. PR #6 CI + Qodo re-review pending. Next agent: wait for CI green + Qodo re-review, then merge PR #6 → main and tag v0.2.0. After merge: RustyBuzz integration (ShaperEngine trait in `src/canvas/shaper/`, `rustybuzz` approved dependency), dismiss 3 CodeQL false positives on GitHub Security tab (`rust_wiring.rs` L89/172/228 are egui widget IDs, not crypto values).
+
+## 2026-06-11 — Good-citizen pass: Invariant 7, module docs, handler extraction, tests, resize, browser preview, doc staleness
+
+Branch `dev`. Implemented all 7 items from the `/goal` task list. (1) Fixed Invariant 7 filename sanitizer — `sanitize_widget_id_to_filename` now whitelists `[A-Za-z0-9_-]` with 6 tests. (2) Added `//!` module docs to canvas/panels/widgets mod.rs plus widget_maker.rs and widget_maker_panel.rs. (3) Extracted `resolve_click_handler`/`resolve_change_handler` from egui_emitter + export into shared `src/codegen/handlers.rs`. (4) Added 12 UiTree unit tests (bring_to_front, send_to_back, group, ungroup, remove cascade, validate_and_repair x2) and 4 canvas pure-logic tests (snap, resize handle hit/delta/min-size). (5) Wired Widget Maker corner handles interactively — `corner_hit()` + `apply_corner_resize()` using `resize_corner: Option<u8>` on WidgetMakerDoc. (6) Added "Preview in Browser…" File menu item — PATH-checks trunk, exports WASM to temp dir, spawns `trunk serve`. (7) Updated all stale feature-eval docs, ARCHITECTURE.md field tables, ROADMAP Stage 7.x checkboxes (first 6 items now [x]), Stage 12 browser preview item marked [x]. 412 tests pass, zero clippy warnings. Next: the user wants to understand the full VWM vision vs MVP gap — `docs/VISUAL_WIDGET_MAKER.md` is the canonical plan (created 2026-05-28); the "Later Capabilities" section (state variants, event zones, slots, layout groups, style tokens, round-trip) is entirely unimplemented.
+
+## 2026-06-11 — All deferred depth-gate items implemented (pre-release gate closed)
+
+On `dev`. Six depth-gate features shipped in sequence, all passing 394 tests /
+zero clippy warnings: (1) **Data model groundwork** — `DataColumnType`/`DataColumn`
+schema, `data_source_binding` on `WidgetProps`, bound Table/ListView/TreeView
+emit iteration code; (2) **True layout ownership** — `SizePolicy` {Fixed/FillWidth/Fill}
+per-child + `grid_row_height` on GridLayout + export `layout_cross_align` parity;
+(3) **Lazare IDE depth** — Ctrl+F code search (match count + Prev/Next), Symbol list
+(widget/handler navigation), clickable diagnostic navigation; (4) **Visual Widget
+Maker** — `WidgetMakerDoc`+`MakerPrimitive` model, mini-canvas, Rect/Outline/
+Ellipse/Text primitives, Save→.rkwd pipeline; (5) **Object Inspector depth** —
+`describe_kind()`, "design-time stub" badge, sectioned config, inline generated-code
+preview; (6) **ROADMAP** — Stage 12 WASM, formula depth, runtime stubs, data model,
+layout ownership, Lazare depth, Widget Maker, Inspector all checked off. Remaining:
+Stage 13 DB (blocked — needs crate approval), font shaping (blocked — needs
+`rustybuzz` approval), Stage 15 deferred. Also added rayon parallelism, formula
+parser, WASM export in the same session.
+
 ## 2026-06-10 — SVG R12 complete: namespace + recovery + a11y (post-R8 lanes ALL done)
 
 On `dev`. **R12 done** (commit a0b563f) — final post-R8 lane; **the SVG renderer

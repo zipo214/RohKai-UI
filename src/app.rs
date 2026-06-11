@@ -146,6 +146,12 @@ pub struct CodePanelState {
     pub split_ratio: f32,
     pub wrap_code: bool,
     pub editor_has_focus: bool,
+    /// Active search query in the code panel (empty = no search).
+    pub search_query: String,
+    /// Whether the in-panel Ctrl+F search bar is open.
+    pub search_open: bool,
+    /// Current match index for search navigation (prev/next).
+    pub search_match_idx: usize,
 }
 
 impl Default for CodePanelState {
@@ -157,6 +163,9 @@ impl Default for CodePanelState {
             split_ratio: 0.6,
             wrap_code: false,
             editor_has_focus: false,
+            search_query: String::new(),
+            search_open: false,
+            search_match_idx: 0,
         }
     }
 }
@@ -189,6 +198,9 @@ pub struct RohKaiApp {
     undo: crate::project::undo::UndoStack,
     /// Suppresses undo recording for the frame after an undo/redo restore.
     undo_suppress_record: bool,
+    /// Visual Widget Maker window state.
+    pub widget_maker_doc: crate::canvas::widget_maker::WidgetMakerDoc,
+    pub widget_maker_open: bool,
 }
 
 impl RohKaiApp {
@@ -238,6 +250,8 @@ impl RohKaiApp {
             dirty_cache_checked_at: 0.0,
             undo: crate::project::undo::UndoStack::new(),
             undo_suppress_record: false,
+            widget_maker_doc: crate::canvas::widget_maker::WidgetMakerDoc::new_with_defaults(),
+            widget_maker_open: false,
         }
     }
 
@@ -418,6 +432,75 @@ impl RohKaiApp {
             }
             Err(e) => {
                 self.messages.export_message = Some((false, format!("Export failed: {e}")));
+            }
+        }
+    }
+
+    fn cmd_export_wasm(&mut self) {
+        self.messages.export_message = None;
+        self.messages.export_message_until = None;
+        let Some(folder) = rfd::FileDialog::new()
+            .set_title("Export WASM project — choose destination folder")
+            .pick_folder()
+        else {
+            return;
+        };
+        match crate::codegen::export::write_project_wasm(&self.project.ui_tree, &folder, true) {
+            Ok(()) => {
+                self.messages.export_message =
+                    Some((true, format!("WASM project → {}", folder.display())));
+            }
+            Err(e) => {
+                self.messages.export_message = Some((false, format!("WASM export failed: {e}")));
+            }
+        }
+    }
+
+    fn cmd_preview_wasm(&mut self) {
+        self.messages.export_message = None;
+        self.messages.export_message_until = None;
+
+        // Verify trunk is on PATH before we do file I/O.
+        let trunk_ok = std::process::Command::new("trunk")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok();
+        if !trunk_ok {
+            self.messages.export_message = Some((
+                false,
+                "trunk not found in PATH — install with: cargo install trunk".to_owned(),
+            ));
+            return;
+        }
+
+        // Export WASM project to a per-process temp directory to avoid
+        // collisions between concurrent or repeated preview runs.
+        let dest = std::env::temp_dir().join(format!("rohkai_wasm_preview_{}", std::process::id()));
+        if let Err(e) =
+            crate::codegen::export::write_project_wasm(&self.project.ui_tree, &dest, true)
+        {
+            self.messages.export_message =
+                Some((false, format!("WASM preview export failed: {e}")));
+            return;
+        }
+
+        // Spawn `trunk serve` detached — opens browser automatically.
+        match std::process::Command::new("trunk")
+            .arg("serve")
+            .current_dir(&dest)
+            .spawn()
+        {
+            Ok(_) => {
+                self.messages.export_message = Some((
+                    true,
+                    "trunk serve started — http://localhost:8080".to_owned(),
+                ));
+            }
+            Err(e) => {
+                self.messages.export_message =
+                    Some((false, format!("trunk serve failed to launch: {e}")));
             }
         }
     }
@@ -1132,6 +1215,47 @@ impl RohKaiApp {
         }
     }
 
+    fn show_widget_maker_window(&mut self, ctx: &egui::Context) {
+        if !self.widget_maker_open {
+            return;
+        }
+        let result = crate::panels::widget_maker_panel::show_widget_maker_window(
+            ctx,
+            &mut self.widget_maker_doc,
+            &mut self.widget_maker_open,
+        );
+        if let Some(json) = result.save_json {
+            // Write the descriptor to the widgets directory.
+            match Self::widgets_dir() {
+                Some(dir) => {
+                    let safe_id = crate::canvas::widget_maker::sanitize_widget_id_to_filename(
+                        &self.widget_maker_doc.widget_id,
+                    );
+                    let path = dir.join(format!("{safe_id}.rkwd"));
+                    if let Err(e) = std::fs::create_dir_all(&dir) {
+                        self.messages.last_error =
+                            Some(format!("Widget Maker: could not create widgets dir: {e}"));
+                        return;
+                    }
+                    if let Err(e) = std::fs::write(&path, &json) {
+                        self.messages.last_error = Some(format!("Widget Maker save failed: {e}"));
+                    } else {
+                        let (widgets, errors) =
+                            crate::codegen::widget_descriptor::load_from_widgets_dir();
+                        self.descriptors.widgets = widgets;
+                        self.descriptors.errors = errors;
+                        self.messages.export_message =
+                            Some((true, format!("Saved {}", path.display())));
+                    }
+                }
+                None => {
+                    self.messages.last_error =
+                        Some("Widget Maker: could not resolve widgets directory".to_owned());
+                }
+            }
+        }
+    }
+
     fn show_project_tree_window(&mut self, ctx: &egui::Context) {
         if !self.session.project_tree_open {
             return;
@@ -1576,6 +1700,26 @@ impl eframe::App for RohKaiApp {
                         ui.close_menu();
                     }
                     if ui
+                        .button("Export WASM Project…")
+                        .on_hover_text(
+                            "Generate a wasm32-unknown-unknown compatible project with index.html + Trunk.toml",
+                        )
+                        .clicked()
+                    {
+                        self.cmd_export_wasm();
+                        ui.close_menu();
+                    }
+                    if ui
+                        .button("Preview in Browser…")
+                        .on_hover_text(
+                            "Export WASM to a temp dir and launch trunk serve (requires trunk in PATH)",
+                        )
+                        .clicked()
+                    {
+                        self.cmd_preview_wasm();
+                        ui.close_menu();
+                    }
+                    if ui
                         .button("Project Files…")
                         .on_hover_text("Browse the generated project tree and manage assets")
                         .clicked()
@@ -1625,6 +1769,14 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.cmd_new_widget_builder();
+                        ui.close_menu();
+                    }
+                    if ui
+                        .button("Visual Widget Maker…")
+                        .on_hover_text("Draw primitives and export as a custom widget descriptor")
+                        .clicked()
+                    {
+                        self.widget_maker_open = true;
                         ui.close_menu();
                     }
                     if ui
@@ -2037,6 +2189,9 @@ impl eframe::App for RohKaiApp {
                     wrap_code: &mut self.code.wrap_code,
                     editor_has_focus: &mut self.code.editor_has_focus,
                     code_font_size: self.prefs.user_settings.code_font_size,
+                    search_query: &mut self.code.search_query,
+                    search_open: &mut self.code.search_open,
+                    search_match_idx: &mut self.code.search_match_idx,
                 },
             );
         } // end !preview_mode gate for code panel
@@ -2634,6 +2789,7 @@ impl eframe::App for RohKaiApp {
         self.show_svg_source_window(ctx);
         self.show_descriptor_editor_window(ctx);
         self.show_widget_builder_window(ctx);
+        self.show_widget_maker_window(ctx);
         self.show_theme_window(ctx);
         self.show_project_tree_window(ctx);
         crate::panels::shortcuts::show(ctx, &mut self.session.shortcuts_open);

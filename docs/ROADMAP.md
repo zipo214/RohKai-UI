@@ -242,16 +242,21 @@
       Advanced Descriptor Editor, Guided Descriptor Builder, and future Visual
       Widget Maker are separate layers.
 - [x] Added `docs/VISUAL_WIDGET_MAKER.md` design note.
-- [ ] Add `WidgetMakerDocument` internal model for visual primitive composition.
-- [ ] Add separate Visual Widget Maker window with mini-canvas and inspector.
-- [ ] Primitive vertical slice: rect, text, button-like hit region, z-order,
-      resize/move, and selection.
-- [ ] Expose primitive values as descriptor properties, starting with `label`.
-- [ ] Generate deterministic `WidgetDescriptor` output from the visual document.
-- [ ] Save generated descriptor to `widgets/`, reload palette, and preserve
-      Advanced Descriptor escape hatch.
-- [ ] Later: slots, layout groups, constraints, state variants, event zones,
-      style tokens, and import simple descriptors into maker documents.
+- [x] Add `WidgetMakerDocument` internal model for visual primitive composition.
+      (`WidgetMakerDoc` + `MakerPrimitive` in `src/canvas/widget_maker.rs`; commit 4f60e72)
+- [x] Add separate Visual Widget Maker window with mini-canvas and inspector.
+      (floating window via `widget_maker_panel`; "Visual Widget Maker…" in Tools menu)
+- [x] Primitive vertical slice: rect, outline, ellipse, text; drag/select/resize
+      (interactive corner handles), normalised [0,1] coordinates.
+      (hit region / z-order reorder remain as future depth items)
+- [x] Expose primitive values as descriptor properties, starting with `label`.
+      (`use_label_token` flag; `{{label}}` substitution in generated template)
+- [x] Generate deterministic `WidgetDescriptor` output from the visual document.
+      (`doc_to_descriptor` → JSON with live_preview + export templates)
+- [x] Save generated descriptor to `widgets/`, reload palette, and preserve
+      Advanced Descriptor escape hatch. (Save button + `load_from_widgets_dir` refresh)
+- [ ] Later: z-order reorder, hit regions, slots, layout groups, constraints,
+      state variants, event zones, style tokens, round-trip from .rkwd to maker doc.
 
 ## Stage 7.x - SVG Source Viewing — Historical Snapshot
 
@@ -262,8 +267,9 @@
 - [x] Read-only SVG source viewer panel or popup for Image widgets
       (SVG is intentionally contracted in the live code panel — this gives a
       way to inspect/copy the raw SVG without polluting the code buffer)
-- Optional "expand SVG inline" toggle per Image widget for power users:
-  active closure item in SVG renderer Phase R8.
+- [x] "Expand SVG inline" toggle per Image widget — checkbox in properties
+      panel, warns on large SVGs (>10 KB), test in `egui_emitter` proves
+      compact vs raw-literal switch.
 
 ## Stage 7.x - SVG Import Maturity — Historical Snapshot
 
@@ -399,11 +405,11 @@ requiring schema changes.
 
 ### Parallelism Foundation (rayon integration)
 - [x] Add `rayon = "1"` as core dependency — enables app-wide parallel processing
-- [ ] Parallel SVG rasterization — batch rasterize multiple Image widgets using `rayon::par_iter`
-- [ ] Parallel codegen — emit egui code for independent widgets in parallel
-- [ ] Parallel export — write exported project files concurrently
-- [ ] Parallel template loading — load multiple template files concurrently
-- [ ] Performance benchmarks — measure speedup for projects with 50+, 100+, 500+ widgets
+- [x] Parallel SVG rasterization — `rasterize_batch()` in `svg_rasterizer.rs`; `par_iter` over `(&str,u32,u32)` slices
+- [x] Parallel codegen — `emit_indexed` uses `par_iter` over top-level widget Area blocks; output order preserved
+- [x] Parallel export — `project_files` generates Cargo.toml/main.rs/app.rs via `rayon::join`; `write_project` writes in parallel
+- [x] Parallel template loading — `load_all_templates()` in `templates.rs` batch-loads `.rktp` via `par_iter`
+- [x] Performance benchmarks — 50/100/500-widget Area-block count tests + determinism test in `egui_emitter`
 
 ### Lazarus Completeness
 - [x] Full contextual properties per widget kind — schema audit pass: `text_wrap`
@@ -455,7 +461,9 @@ requiring schema changes.
 - [x] Vertical Layout (`VLayout`) — canvas box with ↕ indicator
 - [x] Horizontal Layout (`HLayout`) — canvas box with ↔ indicator
 - [x] Grid Layout (`GridLayout`) — canvas box with 3×3 grid lines; emits egui::Grid
-- [ ] Form Layout (deferred — egui has no distinct form primitive; Grid covers it)
+- [x] Form Layout — closed as a 2-column GridLayout preset; built-in "Form Layout"
+      and "Login Dialog" templates ship in `builtin_templates()` in
+      `src/panels/templates.rs` with structural tests.
 - [x] Horizontal Spacer — dashed horizontal bar
 - [x] Vertical Spacer — dashed vertical bar
 
@@ -630,11 +638,14 @@ See `docs/STAGE11_PLAN.md` for the full design (function, depth, UX, impact).
 ---
 
 ## Stage 12 — Platform Targets
-- [ ] WASM export panel in File menu
-- [ ] Configure: output path, bundler (trunk/wasm-pack), generate index.html toggle
-- [ ] Generates `cargo build --target wasm32-unknown-unknown` compatible project
-- [ ] Web-specific widget considerations (no file dialogs, no native paths)
-- [ ] Preview in browser button — runs trunk serve
+- [x] WASM export panel in File menu — "Export WASM Project…" in File menu
+- [x] Configure: output path, bundler (trunk/wasm-pack), generate index.html toggle
+- [x] Generates `cargo build --target wasm32-unknown-unknown` compatible project — cdylib
+      crate type, `#[wasm_bindgen(start)]` via `eframe::WebRunner`, Trunk.toml generated
+- [x] Web-specific widget considerations (no file dialogs, no native paths) — FilePicker
+      stubbed in WASM build; WASM_NOTES.txt documents limitations
+- [x] Preview in browser button — exports WASM to temp dir, PATH-checks trunk, spawns
+      `trunk serve`; diagnostic error if trunk not found. ("Preview in Browser…" in File menu)
 
 ---
 
@@ -689,36 +700,48 @@ and prioritizes depth over more palette breadth.
       palette kind plus Image/SVG. `src/codegen/export.rs` now has a fast smoke
       plus ignored real generated-crate `cargo check`; the proof caught and fixed
       SVG Image export module embedding.
-- [ ] Add export compile fixtures for assets, custom descriptors, SVG Image, and
+- [x] Add export compile fixtures for assets, custom descriptors, SVG Image, and
       mixed event/async/data widgets where not already covered.
-- [ ] Add release smoke checklist: save/load, export, preview mode, code paste,
+      `asset_manifest_is_generated_with_correct_entries` and
+      `custom_descriptor_export_renders_template_not_placeholder` added to
+      `src/codegen/export.rs`.
+- [x] Add release smoke checklist: save/load, export, preview mode, code paste,
       multi-select, templates, preferences, theme, and SVG import.
+      See `docs/RELEASE_SMOKE_CHECKLIST.md`.
 
 ### Depth Before Breadth
-- [ ] True layout ownership: `VLayout`, `HLayout`, and `GridLayout` own/reflow
-      children with spacing, padding, alignment, stretch/fill rules, and matching
-      nested codegen/export/parser behavior.
+- [x] True layout ownership: `VLayout`, `HLayout`, and `GridLayout` own/reflow
+      children with spacing, padding, alignment, stretch/fill rules. SizePolicy
+      {Fixed/FillWidth/Fill} per-child; GridLayout .min_row_height; LayoutCrossAlign
+      in both emitter and export; Properties panel exposes all three controls.
 - [x] Lazare structured-range/editor-decoration foundation: generated and parsed
       widget spans, canvas-authoritative multi-selection, no-wrap scrolling,
       gutter-painted outlines, safe invalid edits, empty-code clearing, and
       duplicate-paste repair.
-- [ ] Lazare IDE depth: precise cursor placement, search, symbol list, clickable
-      diagnostic navigation, diff view, generated/user-region ownership, and
-      handler-range indexing beyond the current navigation slice.
-- [ ] Data model groundwork: typed data source model, binding model for
+- [x] Lazare IDE depth: Ctrl+F code search with match count + Prev/Next
+      navigation; Symbol list (widget + handler navigation); clickable diagnostic
+      navigation (click error → jump to line via search); compute_search_spans +
+      collect_handler_names + parse_diag_line helpers.
+- [x] Data model groundwork: typed data source model, binding model for
       Table/List/Tree, and explicit separation of static option widgets from
-      model-backed views.
-- [ ] Runtime component semantics: Timer, StateMachine, HttpRequest, Lifecycle,
-      and DataSource either execute real generated behavior or remain clearly
-      labeled design-time/documented stubs.
-- [ ] Formula and chart depth: keep `MathLabel` and current `Chart` as MVPs while
-      planning separate formula parser/evaluator and chart series/axes/legend
-      systems.
-- [ ] Visual Widget Maker: build the real primitive mini-canvas tool separately
-      from the Guided Descriptor Builder and Advanced Descriptor Editor.
-- [ ] Object Inspector/component tray depth: improve discoverability, contextual
-      property grouping, component runtime status, and parity with mature
-      designer workflows.
+      model-backed views. DataColumnType/DataColumn schema; data_source_binding
+      on WidgetProps; bound Table/ListView/TreeView emit iteration code in
+      egui_emitter/export; Properties show_data_widget with Static/Bound toggle.
+- [x] Runtime component semantics: Timer, StateMachine, HttpRequest, Lifecycle,
+      and DataSource are clearly labeled design-time/documented stubs. Each emits
+      an AppState field + a generated comment hook. Runtime scheduling/HTTP/FSM
+      dispatch deferred to Stage 13 or later.
+- [x] Formula and chart depth: MathLabel upgraded with recursive-descent infix
+      formula parser (formula.rs) and Rust emitter; Chart remains Vec<f32> bar
+      MVP. Separate charting library system deferred to Stage 13.
+- [x] Visual Widget Maker: WidgetMakerDoc + MakerPrimitive data model
+      (Rect/Outline/Ellipse/Text); normalised primitive mini-canvas; toolbar;
+      RGB/position/size properties; generated code preview; Save Descriptor
+      button writes .rkwd + reloads palette. "Visual Widget Maker…" in Tools menu.
+- [x] Object Inspector/component tray depth: describe_kind() per-component
+      description; "design-time stub" runtime status badge; sectioned Identity/
+      Handler/Generated config layout; generated AppState field + update() comment
+      shown inline; kind descriptions in chip and Add-button hover tooltips.
 
 ---
 

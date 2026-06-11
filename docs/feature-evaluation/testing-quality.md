@@ -16,7 +16,7 @@ codegen, export, save/load, and user workflow.
 
 | Test/Quality Area | Current Depth | What It Does Now | Gap |
 |---|---:|---|---|
-| Unit tests | 3 | Broad Rust unit coverage; 116 tests currently pass. | Needs more cross-module integration fixtures. |
+| Unit tests | 3-4 | Broad Rust unit coverage; 412 tests currently pass. | Needs more cross-module integration fixtures. |
 | Codegen tests | 3 | String-level generated code assertions. | Needs generated project compile tests. |
 | SVG tests | 3-4 | Import/rasterizer/golden/security fixtures. | Needs larger fixture corpus and visual review artifacts. |
 | Clippy/fmt | 4 | `cargo fmt --check`, `cargo clippy -- -D warnings` clean. | `--all-targets` still has known historical lints unless fixed separately. |

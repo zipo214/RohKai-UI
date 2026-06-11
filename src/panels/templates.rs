@@ -1,4 +1,5 @@
-use crate::project::schema::WidgetInstance;
+use crate::project::schema::{Rect, WidgetInstance, WidgetKind, WidgetProps};
+use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
@@ -100,6 +101,20 @@ pub fn load_template(path: &Path) -> Result<Vec<WidgetInstance>, String> {
     serde_json::from_str(&json).map_err(|e| format!("parse: {e}"))
 }
 
+/// Load all user templates in parallel.
+/// Returns `(name, path, result)` tuples in sorted order.
+#[allow(dead_code)]
+pub fn load_all_templates() -> Vec<(String, PathBuf, Result<Vec<WidgetInstance>, String>)> {
+    let entries = list_templates();
+    entries
+        .into_par_iter()
+        .map(|(name, path)| {
+            let result = load_template(&path);
+            (name, path, result)
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Action returned to the caller each frame
 // ---------------------------------------------------------------------------
@@ -113,18 +128,219 @@ pub enum TemplateAction {
 }
 
 // ---------------------------------------------------------------------------
+// Built-in templates (embedded — no file I/O)
+// ---------------------------------------------------------------------------
+
+/// Returns `(name, widgets)` for every built-in preset.
+/// These appear above user-saved templates in the panel, separated by a header.
+pub fn builtin_templates() -> Vec<(&'static str, Vec<WidgetInstance>)> {
+    vec![
+        ("Form Layout", form_layout_preset()),
+        ("Login Dialog", login_dialog_preset()),
+    ]
+}
+
+/// A 2-column GridLayout with three label/TextInput pairs — covers the
+/// Form Layout roadmap item as a GridLayout preset.
+fn form_layout_preset() -> Vec<WidgetInstance> {
+    use uuid::Uuid;
+    // Deterministic UUIDs for the preset — chosen to avoid any real project collision.
+    const GRID: u128 = 0x0000_F040_0001_0000_0000_0000_0000_0001;
+    const CHILD_BASE: u128 = 0x0000_F040_0100_0000_0000_0000_0000_0000;
+    let field_w = 150.0_f32;
+    let field_h = 28.0_f32;
+    let label_w = 80.0_f32;
+    let pairs = [("Name", "name"), ("Email", "email"), ("Phone", "phone")];
+    let mut widgets: Vec<WidgetInstance> = Vec::new();
+    let mut child_ids: Vec<Uuid> = Vec::new();
+
+    for (i, (lbl, binding)) in pairs.iter().enumerate() {
+        let label_id = Uuid::from_u128(CHILD_BASE + i as u128 * 2);
+        let field_id = Uuid::from_u128(CHILD_BASE + i as u128 * 2 + 1);
+        let y = i as f32 * (field_h + 4.0);
+
+        widgets.push(WidgetInstance {
+            id: label_id,
+            kind: WidgetKind::Label,
+            rect: Rect {
+                x: 0.0,
+                y,
+                w: label_w,
+                h: field_h,
+            },
+            props: WidgetProps {
+                label: format!("{lbl}:"),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        widgets.push(WidgetInstance {
+            id: field_id,
+            kind: WidgetKind::TextInput,
+            rect: Rect {
+                x: label_w + 4.0,
+                y,
+                w: field_w,
+                h: field_h,
+            },
+            props: WidgetProps {
+                label: lbl.to_string(),
+                ..Default::default()
+            },
+            state_binding: Some(binding.to_string()),
+            ..Default::default()
+        });
+        child_ids.push(label_id);
+        child_ids.push(field_id);
+    }
+
+    let grid = WidgetInstance {
+        id: Uuid::from_u128(GRID),
+        kind: WidgetKind::GridLayout,
+        rect: Rect {
+            x: 20.0,
+            y: 20.0,
+            w: label_w + field_w + 8.0,
+            h: pairs.len() as f32 * (field_h + 4.0),
+        },
+        props: WidgetProps {
+            grid_columns: 2,
+            label: "Form".to_owned(),
+            ..Default::default()
+        },
+        children: child_ids,
+        ..Default::default()
+    };
+
+    let mut out = vec![grid];
+    out.extend(widgets);
+    out
+}
+
+/// A simple login dialog: VLayout with username/password fields + a login Button.
+fn login_dialog_preset() -> Vec<WidgetInstance> {
+    use uuid::Uuid;
+    const LAYOUT: u128 = 0x0000_B17C_0000_0000_0000_0000_0000_0001;
+    const USER: u128 = 0x0000_B17C_0000_0000_0000_0000_0000_0002;
+    const PASS: u128 = 0x0000_B17C_0000_0000_0000_0000_0000_0003;
+    const BTN: u128 = 0x0000_B17C_0000_0000_0000_0000_0000_0004;
+    let field_h = 28.0_f32;
+    let field_w = 200.0_f32;
+
+    vec![
+        WidgetInstance {
+            id: Uuid::from_u128(LAYOUT),
+            kind: WidgetKind::VLayout,
+            rect: Rect {
+                x: 20.0,
+                y: 20.0,
+                w: field_w,
+                h: field_h * 3.0 + 16.0,
+            },
+            props: WidgetProps {
+                label: "Login".to_owned(),
+                ..Default::default()
+            },
+            children: vec![
+                Uuid::from_u128(USER),
+                Uuid::from_u128(PASS),
+                Uuid::from_u128(BTN),
+            ],
+            ..Default::default()
+        },
+        WidgetInstance {
+            id: Uuid::from_u128(USER),
+            kind: WidgetKind::TextInput,
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                w: field_w,
+                h: field_h,
+            },
+            props: WidgetProps {
+                label: "Username".to_owned(),
+                placeholder: "Enter username…".to_owned(),
+                ..Default::default()
+            },
+            state_binding: Some("username".to_owned()),
+            ..Default::default()
+        },
+        WidgetInstance {
+            id: Uuid::from_u128(PASS),
+            kind: WidgetKind::TextInput,
+            rect: Rect {
+                x: 0.0,
+                y: field_h + 4.0,
+                w: field_w,
+                h: field_h,
+            },
+            props: WidgetProps {
+                label: "Password".to_owned(),
+                placeholder: "Enter password…".to_owned(),
+                ..Default::default()
+            },
+            state_binding: Some("password".to_owned()),
+            ..Default::default()
+        },
+        WidgetInstance {
+            id: Uuid::from_u128(BTN),
+            kind: WidgetKind::Button,
+            rect: Rect {
+                x: 0.0,
+                y: (field_h + 4.0) * 2.0,
+                w: field_w,
+                h: field_h,
+            },
+            props: WidgetProps {
+                label: "Log In".to_owned(),
+                ..Default::default()
+            },
+            on_click: "on_login".to_owned(),
+            ..Default::default()
+        },
+    ]
+}
+
+// ---------------------------------------------------------------------------
 // Panel UI
 // ---------------------------------------------------------------------------
 
 pub fn show(ui: &mut egui::Ui, template_message: &mut Option<(bool, String)>) -> TemplateAction {
     ui.label(egui::RichText::new("Templates").color(egui::Color32::from_gray(140)));
 
-    let templates = list_templates();
+    let user_templates = list_templates();
+    let builtins = builtin_templates();
     let mut action = TemplateAction::None;
 
-    if templates.is_empty() {
+    // --- Built-in presets ---
+    ui.label(egui::RichText::new("Built-in").small().weak());
+    for (name, widgets) in &builtins {
+        let desired = egui::vec2(ui.available_width(), 20.0);
+        let (rect, resp) = ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
+        let vis = ui.style().interact(&resp);
+        ui.painter()
+            .rect(rect, vis.rounding, vis.bg_fill, vis.bg_stroke);
+        ui.painter().text(
+            rect.left_center() + egui::vec2(4.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            *name,
+            egui::FontId::proportional(13.0),
+            vis.text_color(),
+        );
+        let resp = resp.on_hover_text("Click to add at canvas centre · Drag onto canvas");
+        if resp.clicked() {
+            action = TemplateAction::AddAtCenter(widgets.clone());
+        } else if resp.drag_started() {
+            action = TemplateAction::BeginDrag(widgets.clone());
+        }
+    }
+
+    // --- User-saved templates ---
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new("Saved").small().weak());
+    if user_templates.is_empty() {
         ui.label(
-            egui::RichText::new("No templates yet.\nSave a selection to create one.")
+            egui::RichText::new("No saved templates yet.\nSelect widgets and save to create one.")
                 .small()
                 .weak(),
         );
@@ -133,13 +349,11 @@ pub fn show(ui: &mut egui::Ui, template_message: &mut Option<(bool, String)>) ->
             .id_salt("tmpl_scroll")
             .max_height(180.0)
             .show(ui, |ui| {
-                for (name, path) in &templates {
-                    // Use click_and_drag sense so we can detect both
+                for (name, path) in &user_templates {
                     let desired = egui::vec2(ui.available_width(), 20.0);
                     let (rect, resp) =
                         ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
 
-                    // Draw button-like appearance
                     let vis = ui.style().interact(&resp);
                     ui.painter()
                         .rect(rect, vis.rounding, vis.bg_fill, vis.bg_stroke);
@@ -155,7 +369,6 @@ pub fn show(ui: &mut egui::Ui, template_message: &mut Option<(bool, String)>) ->
                     let resp = resp.on_hover_text(tooltip);
 
                     if resp.clicked() {
-                        // Immediate add — load and return AddAtCenter
                         match load_template(path) {
                             Ok(instances) => {
                                 action = TemplateAction::AddAtCenter(instances);
@@ -203,7 +416,57 @@ pub fn show(ui: &mut egui::Ui, template_message: &mut Option<(bool, String)>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::schema::{Rect, WidgetKind, WidgetProps};
+
+    #[test]
+    fn builtin_form_layout_has_grid_parent_with_label_textinput_children() {
+        let builtins = builtin_templates();
+        let (name, widgets) = builtins.iter().find(|(n, _)| *n == "Form Layout").unwrap();
+        assert_eq!(*name, "Form Layout");
+        assert!(
+            !widgets.is_empty(),
+            "form layout preset must contain widgets"
+        );
+        let grid = widgets.iter().find(|w| w.kind == WidgetKind::GridLayout);
+        assert!(grid.is_some(), "form layout must have a GridLayout parent");
+        let grid = grid.unwrap();
+        assert_eq!(
+            grid.props.grid_columns, 2,
+            "form layout grid must have 2 columns"
+        );
+        let labels = widgets
+            .iter()
+            .filter(|w| w.kind == WidgetKind::Label)
+            .count();
+        let inputs = widgets
+            .iter()
+            .filter(|w| w.kind == WidgetKind::TextInput)
+            .count();
+        assert!(labels >= 1, "form layout must have at least one Label");
+        assert_eq!(
+            labels, inputs,
+            "form layout must pair each Label with a TextInput"
+        );
+    }
+
+    #[test]
+    fn builtin_login_dialog_has_vlayout_with_fields_and_button() {
+        let builtins = builtin_templates();
+        let (_, widgets) = builtins.iter().find(|(n, _)| *n == "Login Dialog").unwrap();
+        let layout = widgets.iter().find(|w| w.kind == WidgetKind::VLayout);
+        assert!(layout.is_some(), "login dialog must have a VLayout root");
+        assert!(
+            widgets.iter().any(|w| w.kind == WidgetKind::Button),
+            "login dialog must have a Button"
+        );
+        assert!(
+            widgets
+                .iter()
+                .filter(|w| w.kind == WidgetKind::TextInput)
+                .count()
+                >= 2,
+            "login dialog must have at least 2 TextInput fields"
+        );
+    }
 
     #[test]
     fn imported_svg_preserves_original_source_next_to_template() {

@@ -451,6 +451,73 @@ pub enum Orientation {
     Vertical,
 }
 
+/// Cross-axis alignment for VLayout and HLayout containers.
+/// For VLayout the cross axis is horizontal (Start = left, End = right).
+/// For HLayout the cross axis is vertical (Start = top, End = bottom).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum LayoutCrossAlign {
+    #[default]
+    Start,
+    Center,
+    End,
+}
+
+/// Per-child size policy for widgets placed inside a layout container.
+/// Controls how a child consumes available space along the main axis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SizePolicy {
+    /// Use the widget's own fixed width / height (canvas rect).
+    #[default]
+    Fixed,
+    /// Expand to consume all available width; height stays fixed.
+    FillWidth,
+    /// Expand to fill all available space (width and height).
+    Fill,
+}
+
+impl SizePolicy {
+    pub fn is_fixed(&self) -> bool {
+        matches!(self, SizePolicy::Fixed)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Data model types
+// ---------------------------------------------------------------------------
+
+/// Type of a data column in a Table widget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum DataColumnType {
+    #[default]
+    Text,
+    Number,
+    Boolean,
+}
+
+/// A named, typed column definition for Table data binding.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DataColumn {
+    pub name: String,
+    #[serde(default)]
+    pub column_type: DataColumnType,
+}
+
+impl Default for DataColumn {
+    fn default() -> Self {
+        Self {
+            name: "column".to_owned(),
+            column_type: DataColumnType::Text,
+        }
+    }
+}
+
+impl LayoutCrossAlign {
+    pub fn is_start(&self) -> bool {
+        *self == LayoutCrossAlign::Start
+    }
+}
+
 // ---------------------------------------------------------------------------
 // WidgetProps — per-widget content & behaviour knobs
 // ---------------------------------------------------------------------------
@@ -528,6 +595,42 @@ pub struct WidgetProps {
         skip_serializing_if = "is_default_grid_columns"
     )]
     pub grid_columns: usize,
+    #[serde(default, skip_serializing_if = "LayoutCrossAlign::is_start")]
+    pub layout_cross_align: LayoutCrossAlign,
+
+    // Formula widget
+    /// Infix formula expression for MathLabel (e.g. "sqrt(a^2 + b^2)").
+    /// Empty string → fall back to simple `self.{binding}` display.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub formula_expr: String,
+    /// Decimal places for formula result display (default 2).
+    #[serde(
+        default = "default_formula_decimals",
+        skip_serializing_if = "is_default_formula_decimals"
+    )]
+    pub formula_decimals: usize,
+
+    // Data model binding
+    /// AppState field name for model-backed Table / ListView / TreeView.
+    /// When set, codegen iterates over the bound Vec instead of static options.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_source_binding: Option<String>,
+    /// Column definitions for model-backed Table widgets.
+    /// Empty → single unnamed String column.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub data_columns: Vec<DataColumn>,
+
+    // Per-child layout size policy
+    /// How this widget expands inside a parent layout container.
+    /// Fixed (default) uses the canvas rect dimensions.
+    #[serde(default, skip_serializing_if = "SizePolicy::is_fixed")]
+    pub size_policy: SizePolicy,
+
+    // GridLayout row policy
+    /// Minimum row height for GridLayout containers (in logical pixels).
+    /// None = egui default (content-driven).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid_row_height: Option<f32>,
 
     // Stage 9 schema audit
     /// Wrap text at widget boundary (Label, TextArea). None = egui default.
@@ -587,6 +690,12 @@ fn default_grid_columns() -> usize {
 fn is_default_grid_columns(v: &usize) -> bool {
     *v == 3
 }
+fn default_formula_decimals() -> usize {
+    2
+}
+fn is_default_formula_decimals(v: &usize) -> bool {
+    *v == 2
+}
 
 impl Default for WidgetProps {
     fn default() -> Self {
@@ -612,6 +721,13 @@ impl Default for WidgetProps {
             layout_spacing: 6.0,
             layout_stretch: true,
             grid_columns: 3,
+            layout_cross_align: LayoutCrossAlign::Start,
+            formula_expr: String::new(),
+            formula_decimals: 2,
+            data_source_binding: None,
+            data_columns: Vec::new(),
+            size_policy: SizePolicy::Fixed,
+            grid_row_height: None,
             text_wrap: None,
         }
     }

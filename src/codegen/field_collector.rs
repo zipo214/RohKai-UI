@@ -90,6 +90,26 @@ fn collect_one(
         }
     }
 
+    // ---- Data source binding (Table / ListView / TreeView model) ----
+    if let Some(ref src) = w.props.data_source_binding {
+        if let Some(b) = field_binding(Some(src.as_str())) {
+            let (ty, default_expr) = match &w.kind {
+                WidgetKind::Table => ("Vec<Vec<String>>".to_owned(), "Vec::new()".to_owned()),
+                _ => ("Vec<String>".to_owned(), "Vec::new()".to_owned()),
+            };
+            push_field(
+                AppStateField {
+                    name: b.to_owned(),
+                    ty,
+                    default_expr,
+                },
+                fields,
+                seen,
+                warnings,
+            );
+        }
+    }
+
     // ---- Custom props ----
     for prop in &w.custom_props {
         if let Some(b) = field_binding(Some(prop.name.as_str())) {

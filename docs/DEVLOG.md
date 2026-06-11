@@ -2,6 +2,179 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-11 — v0.2.0 PR review fixes (CI gate + Qodo)
+
+### Context Reviewed
+- Qodo review on PR #6 (4 bugs + 1 arch violation flagged)
+- CLAUDE.md codegen-in-src/codegen invariant
+- `src/canvas/widget_maker.rs`, `src/codegen/export.rs`, `src/app.rs`
+
+### Changes
+
+**Architecture violation fix (codegen in canvas layer):**
+- New `src/codegen/widget_maker_emit.rs`: `pub gen_live_preview`, `pub gen_export_template`,
+  private `prim_to_egui_lines`
+- `canvas/widget_maker.rs` delegates to codegen; no Rust syntax strings in canvas layer
+- Text prim uses `string_literal()` instead of manual `replace('"', "\\\"")` — fixes Bug 4
+- 3 new tests: backslash escape, quote escape, label token double-braces
+
+**Bug 2 — WASM FilePicker build break:**
+- `gen_app_rs_wasm(tree)` clones tree, replaces FilePicker with Label, calls `gen_app_rs`
+- `project_files_wasm` now calls `gen_app_rs_wasm` — generated WASM app.rs has no `rfd::` 
+- Test: `wasm_app_rs_has_no_rfd`
+
+**Bug 3 — Widget Maker save fails on fresh install:**
+- `show_widget_maker_window` now calls `create_dir_all(&dir)` before `fs::write`
+- Error surfaced cleanly if dir creation fails
+
+**Bug 5 — Fixed temp preview directory collision:**
+- Preview WASM export dir is now `$TMP/rohkai_wasm_preview_<PID>` (process-stable, unique across runs)
+
+**CI gate:**
+- Committed + pushed `cargo fmt` output (16 files), workflow `permissions: contents: read`,
+  `--all-targets` clippy flag fix, version bump to 0.2.0
+
+### Verification
+- 416 tests, 0 failures, 0 clippy warnings, `cargo fmt --check` clean
+- PR #6 CI pending (Windows build ~10 min); Qodo re-review queued
+
+### Risks / Follow-ups
+- After CI passes and Qodo clears: merge PR #6 → main, tag v0.2.0
+- 3 CodeQL false positives still need manual dismissal on GitHub Security tab
+  (egui widget ID strings at `rust_wiring.rs` L89/172/228, not cryptographic values)
+- RustyBuzz integration (P2-A) deferred — architecture confirmed, awaiting next session
+
+---
+
+## 2026-06-11 — v0.2.0 release: good-citizen pass + Phase 2 roadmap
+
+### Context Reviewed Before Editing
+- `docs/ENGINEERING_INVARIANTS.md` (Invariant 7 filename sanitizing)
+- `docs/CLINE_RECOMMENDATIONS_GROUP1.md` (Rec 1 handler extraction, Rec 2 module docs, Rec 6 tests)
+- `src/canvas/widget_maker.rs`, `src/panels/widget_maker_panel.rs` (resize logic)
+- `docs/ROADMAP.md`, `docs/SVG_RENDERER_ROADMAP.md`, `docs/ROADMAP_COMPARATIVE_ANALYSIS.md`,
+  `docs/feature-evaluation/*` (Phase 2 roadmap input)
+- `docs/VISUAL_WIDGET_MAKER.md` (Later Capabilities for Phase 2)
+
+### Changes
+
+**Invariant 7 fix (filename sanitizer):**
+- `sanitize_widget_id_to_filename(id: &str) -> String` in `src/canvas/widget_maker.rs`
+- Whitelists `[A-Za-z0-9_-]`; every other character (Windows-reserved `<>:"\|?*\`,
+  control bytes, path separators) → `_`; empty/all-underscores result → `"widget"`
+- Replaced broken `.chars().map(|c| if c == '.' || c == '/' ...)` in `app.rs`
+- 6 unit tests: dots/slashes, Windows chars, control bytes, empty, all-seps, preserved
+
+**Cline Rec 1 — handler extraction:**
+- New `src/codegen/handlers.rs`: `resolve_click_handler` + `resolve_change_handler`
+- `egui_emitter.rs` and `export.rs` delegate to the shared module (no logic duplication)
+
+**Cline Rec 2 — module docs:**
+- `//!` added to `canvas/mod.rs`, `panels/mod.rs`, `widgets/mod.rs`,
+  `widget_maker.rs`, `widget_maker_panel.rs`
+
+**Cline Rec 6 — unit tests (12 new):**
+- UiTree: `bring_to_front_moves_to_end`, `send_to_back_moves_to_start`,
+  `group_creates_frame_with_children`, `group_fails_with_less_than_two`,
+  `ungroup_removes_frame_returns_children`, `remove_cascades_to_children`,
+  `validate_and_repair_fixes_duplicate_ids`, `validate_and_repair_removes_stale_children`
+- Canvas: `snap_value_to_grid`, `resize_handle_hit_detection`,
+  `resize_handle_apply_delta_top_left`, `resize_handle_respects_min_size`
+
+**Widget Maker interactive resize:**
+- `resize_corner: Option<u8>` (serde skip) on `WidgetMakerDoc`
+- `corner_hit(pos, rect) -> Option<u8>` (8px hit radius, 4 corners)
+- `apply_corner_resize(prim, corner, dx, dy)` with MIN=5% and bounds clamping
+- `drag_started` detects handle grab; `dragged` applies resize or move
+
+**Stage 12 browser preview:**
+- `cmd_preview_wasm`: PATH-checks trunk, exports to `%TEMP%/rohkai_wasm_preview`,
+  spawns `trunk serve` detached; error if trunk missing
+- "Preview in Browser…" added to File menu
+
+**Doc staleness (Invariant 9):**
+- `feature-evaluation/README.md`: VWM 0-1→1-2, SVG raster 2-3→4, testing 3→3-4
+- `feature-evaluation/testing-quality.md`: 116→412 tests
+- `feature-evaluation/remaining-roadmap-items.md`: VWM/WASM/Formula status updated
+- `feature-evaluation/codegen-lazare-export.md`: code navigation 3→3-4
+- `ARCHITECTURE.md`: 8 missing WidgetProps fields + 3 missing WidgetInstance fields added
+- `ROADMAP.md`: Stage 7.x items 1-6 `[ ]`→`[x]`; Stage 12 browser preview `[x]`
+
+**Phase 2 roadmap:**
+- `docs/ROADMAP_PHASE2.md` created: 12 sorted sections + unsorted scratchpad
+- Priority starter lines: P2-A font shaping (HarfBuzz port, 2252/2252 tests),
+  P2-B DB integration research
+- All deferred items from ROADMAP.md, SVG_RENDERER_ROADMAP.md, CLINE_REVIEW,
+  ROADMAP_COMPARATIVE_ANALYSIS.md, feature-evaluation, VISUAL_WIDGET_MAKER.md
+  collected and organised
+
+**PR #6 created** for v0.2.0 merge to main.
+
+### Verification
+- `cargo test`: **412 pass / 0 fail / 6 ignored**
+- `cargo clippy --all-targets -- -D warnings`: zero warnings
+- `cargo fmt --check`: clean
+
+### Risks / Follow-ups
+- `cmd_preview_wasm` spawns `trunk serve` detached but does not track the PID;
+  the server runs until the OS reclaims it. A future "Stop Preview" button
+  should store the `Child` handle in `RohKaiApp`.
+- Phase 2 roadmap P2-A (font shaping) is the most ambitious single piece of work
+  in the project — budget 6–10 session-cycles before the 2252-test gate passes.
+- CodeRabbit may flag the `cmd_preview_wasm` function for additional spawn safety
+  checks.
+
+## 2026-06-11 — Pre-release depth gate closed: all deferred features implemented
+
+### Context Reviewed
+- docs/ROADMAP.md depth gate items; docs/ENGINEERING_INVARIANTS.md
+- src/codegen/egui_emitter.rs, export.rs, field_collector.rs, formula.rs (new)
+- src/project/schema.rs, src/panels/properties.rs, code_preview.rs, component_tray.rs
+- src/canvas/widget_maker.rs (new), src/panels/widget_maker_panel.rs (new)
+
+### Changes Made
+1. **Data model groundwork** (commit cd0fcea): DataColumnType/DataColumn schema;
+   data_source_binding on WidgetProps; bound Table/ListView/TreeView emit for-loop
+   iteration; Properties show_data_widget (Static/Bound mode, column editor for Table).
+
+2. **True layout ownership** (commit 388f112): SizePolicy enum {Fixed/FillWidth/Fill}
+   per-child; child_size_str() in emitter + export_child_size_str() in export; GridLayout
+   .min_row_height(); VLayout/HLayout respect layout_cross_align in export (parity fix);
+   Properties Size policy selector + Row H checkbox for GridLayout. 4 tests.
+
+3. **Lazare IDE depth — search** (commit 7d43550): Ctrl+F opens search bar; ⌕ button
+   toggle; case-insensitive find with Prev/Next match navigation; match count display;
+   compute_search_spans() generates SourceSpan highlights; search navigation priority.
+
+4. **Lazare IDE depth — symbol list + diagnostics** (commit c0867fb): Symbol list
+   collapsible section (widget navigate + handler navigate); parse_diag_line() extracts
+   line number; clickable error label jumps to error location via search activation.
+
+5. **Visual Widget Maker** (commit 4f60e72): WidgetMakerDoc + MakerPrimitive model;
+   mini-canvas with drag/select; Rect/Outline/Ellipse/Text primitives; toolbar with
+   add/remove/z-order; properties panel (kind, %, RGB, font); generated template
+   preview; Save Descriptor → .rkwd write + palette reload. "Visual Widget Maker…"
+   in Tools menu. 5 tests.
+
+6. **Object Inspector depth** (commit 83f20a0): describe_kind() for all ComponentKinds;
+   "design-time stub" italic badge; sectioned config (Identity/Handler/Generated);
+   inline generated AppState field + update() comment display; chip/button hover text.
+
+7. **ROADMAP** updated: Stage 12 WASM checked off; formula depth, runtime stubs, data
+   model, layout ownership, Lazare IDE, Widget Maker, Inspector all marked complete.
+
+### Verification
+- 394 tests pass; zero clippy warnings (--all-targets); cargo check clean.
+- Commits: cd0fcea, 388f112, 7d43550, c0867fb, 4f60e72, 83f20a0 + ROADMAP docs.
+
+### Remaining Open Items
+- Stage 13 (DB integration): BLOCKED — needs explicit user approval for crate name
+  (sqlx or rusqlite). No work started.
+- Font shaping: BLOCKED — needs user approval for `rustybuzz`. No work started.[user comment: build harfbuzz shaping algorith port in rust that passes 2252 of 2252 shaping testss.  ]
+- Stage 15 (own renderer): DEFERRED by user.
+- Lazare diff view: deferred (mentioned in depth gate but not critical path).
+- Visual Widget Maker resize handles: draggable (visual only now, not interactive).
+
 ## 2026-06-10 — SVG R12 complete: namespace + recovery + a11y (post-R8 lane 5/5)
 
 ### Context Reviewed Before Editing

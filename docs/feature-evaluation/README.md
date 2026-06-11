@@ -44,12 +44,12 @@ state, and how to measure whether it got there.
 | Advanced widgets/data views | 1-2 | 5 |
 | Non-visual components | 1-2 | 5 |
 | Custom descriptor system | 3 | 5 |
-| True visual widget maker | 0-1 | 5 |
+| True visual widget maker | 1-2 | 5 |
 | SVG importer | 3 | 5 |
-| SVG raster preview/export | 2-3 | 5 |
+| SVG raster preview/export | 4 | 5 |
 | Project infrastructure | 3 | 5 |
 | Preferences/theming | 3 | 5 |
-| Testing/verification | 3 | 5 |
+| Testing/verification | 3-4 | 5 |
 
 RohKai's strongest differentiator is the live loop: `UiTree` drives canvas,
 code preview, AppState, and export. Its largest depth gaps are model-bound data

@@ -1,7 +1,7 @@
 use crate::codegen::widget_descriptor::{DescriptorPropType, WidgetDescriptor};
 use crate::project::schema::{
-    CustomProp, CustomPropType, HandlerResult, Orientation, TextAlign, WidgetEvent, WidgetInstance,
-    WidgetKind,
+    CustomProp, CustomPropType, DataColumn, DataColumnType, HandlerResult, LayoutCrossAlign,
+    Orientation, SizePolicy, TextAlign, WidgetEvent, WidgetInstance, WidgetKind,
 };
 use crate::project::ui_tree::UiTree;
 use uuid::Uuid;
@@ -112,9 +112,9 @@ fn show_content_inner(
             WidgetKind::MathLabel => show_math_label(ui, w, &mut do_delete),
             WidgetKind::FilePicker => show_file_picker(ui, w, &mut do_delete),
             WidgetKind::Chart => show_layout_container(ui, w, &mut do_delete, &mut child_move),
-            WidgetKind::Table => show_options_widget(ui, w, &mut do_delete, "Columns"),
-            WidgetKind::ListView => show_options_widget(ui, w, &mut do_delete, "Items"),
-            WidgetKind::TreeView => show_options_widget(ui, w, &mut do_delete, "Nodes"),
+            WidgetKind::Table => show_data_widget(ui, w, &mut do_delete, "Columns"),
+            WidgetKind::ListView => show_data_widget(ui, w, &mut do_delete, "Items"),
+            WidgetKind::TreeView => show_data_widget(ui, w, &mut do_delete, "Nodes"),
             WidgetKind::StackedWidget => show_options_widget(ui, w, &mut do_delete, "Pages"),
             WidgetKind::ToolBox => show_options_widget(ui, w, &mut do_delete, "Sections"),
             WidgetKind::Image => {
@@ -547,6 +547,39 @@ fn show_geometry(ui: &mut egui::Ui, w: &mut WidgetInstance) {
             ui.add(egui::DragValue::new(&mut w.rect.h).speed(1.0));
             ui.end_row();
         });
+    // Per-child size policy (meaningful inside a layout container)
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Size").small().weak());
+        if ui
+            .selectable_label(
+                w.props.size_policy == SizePolicy::Fixed,
+                egui::RichText::new("Fixed").small(),
+            )
+            .clicked()
+        {
+            w.props.size_policy = SizePolicy::Fixed;
+        }
+        if ui
+            .selectable_label(
+                w.props.size_policy == SizePolicy::FillWidth,
+                egui::RichText::new("Fill W").small(),
+            )
+            .on_hover_text("Expand to fill available width inside a layout")
+            .clicked()
+        {
+            w.props.size_policy = SizePolicy::FillWidth;
+        }
+        if ui
+            .selectable_label(
+                w.props.size_policy == SizePolicy::Fill,
+                egui::RichText::new("Fill").small(),
+            )
+            .on_hover_text("Expand to fill all available space inside a layout")
+            .clicked()
+        {
+            w.props.size_policy = SizePolicy::Fill;
+        }
+    });
 }
 
 fn show_tooltip(ui: &mut egui::Ui, w: &mut WidgetInstance) {
@@ -848,7 +881,25 @@ fn show_image(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) -
             }
         });
         ui.checkbox(&mut w.expand_svg_inline, "Expand SVG inline in code panel")
-            .on_hover_text("Show full SVG source in the live code panel instead of [SVG: N bytes]");
+            .on_hover_text(
+                "Show full SVG source inline instead of [SVG: N bytes]. \
+                 Large SVGs (>10 KB) make the code panel very noisy — \
+                 use the source viewer below for inspection instead.",
+            );
+        if w.expand_svg_inline {
+            if let Some(src) = w.svg_source.as_deref() {
+                if src.len() > 10_000 {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Warning: SVG is {} KB — code panel will be verbose.",
+                            src.len() / 1024
+                        ))
+                        .small()
+                        .color(egui::Color32::from_rgb(251, 191, 36)),
+                    );
+                }
+            }
+        }
         ui.separator();
         if let Some(src) = w.svg_source.as_deref() {
             crate::panels::svg_report::show_report(ui, src);
@@ -1499,6 +1550,60 @@ fn show_layout_container(
                         .max(1);
                     ui.label(rows.to_string());
                     ui.end_row();
+                    // Row height policy
+                    ui.label(egui::RichText::new("Row H").small());
+                    let mut has_row_h = w.props.grid_row_height.is_some();
+                    if ui.checkbox(&mut has_row_h, "").changed() {
+                        w.props.grid_row_height = if has_row_h { Some(24.0) } else { None };
+                    }
+                    if let Some(ref mut rh) = w.props.grid_row_height {
+                        ui.add(
+                            egui::DragValue::new(rh)
+                                .range(4.0..=512.0_f32)
+                                .speed(0.5)
+                                .suffix(" px"),
+                        );
+                    } else {
+                        ui.label(egui::RichText::new("auto").small().weak());
+                    }
+                    ui.end_row();
+                }
+                if matches!(w.kind, WidgetKind::VLayout | WidgetKind::HLayout) {
+                    let (start_label, center_label, end_label) = match w.kind {
+                        WidgetKind::VLayout => ("Left", "Center", "Right"),
+                        _ => ("Top", "Center", "Bottom"),
+                    };
+                    ui.label(egui::RichText::new("Align").small());
+                    ui.horizontal(|ui| {
+                        if ui
+                            .selectable_label(
+                                w.props.layout_cross_align == LayoutCrossAlign::Start,
+                                start_label,
+                            )
+                            .clicked()
+                        {
+                            w.props.layout_cross_align = LayoutCrossAlign::Start;
+                        }
+                        if ui
+                            .selectable_label(
+                                w.props.layout_cross_align == LayoutCrossAlign::Center,
+                                center_label,
+                            )
+                            .clicked()
+                        {
+                            w.props.layout_cross_align = LayoutCrossAlign::Center;
+                        }
+                        if ui
+                            .selectable_label(
+                                w.props.layout_cross_align == LayoutCrossAlign::End,
+                                end_label,
+                            )
+                            .clicked()
+                        {
+                            w.props.layout_cross_align = LayoutCrossAlign::End;
+                        }
+                    });
+                    ui.end_row();
                 }
             });
         if matches!(w.kind, WidgetKind::GridLayout) && !w.children.is_empty() {
@@ -1569,11 +1674,51 @@ fn show_command_link(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut 
 fn show_math_label(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) {
     field_text(ui, "Label", &mut w.props.label);
     ui.label(
-        egui::RichText::new("Displays a computed f32 from the bound AppState field.")
+        egui::RichText::new("Displays a computed f32 from a bound field or formula.")
             .small()
             .weak(),
     );
     binding_field(ui, w);
+
+    ui.separator();
+    ui.label(egui::RichText::new("Formula (optional)").small().weak());
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("f(x) =").monospace().small());
+        ui.add(
+            egui::TextEdit::singleline(&mut w.props.formula_expr)
+                .hint_text("e.g. sqrt(a^2 + b^2)")
+                .desired_width(ui.available_width()),
+        );
+    });
+    if !w.props.formula_expr.is_empty() {
+        match crate::codegen::formula::parse_formula(&w.props.formula_expr) {
+            Ok(node) => {
+                let vars = crate::codegen::formula::collect_variables(&node);
+                let vars_str = if vars.is_empty() {
+                    "no variables".to_owned()
+                } else {
+                    format!("uses: {}", vars.join(", "))
+                };
+                ui.label(
+                    egui::RichText::new(vars_str)
+                        .small()
+                        .color(egui::Color32::from_rgb(52, 211, 153)),
+                );
+            }
+            Err(e) => {
+                ui.label(
+                    egui::RichText::new(format!("Error: {e}"))
+                        .small()
+                        .color(egui::Color32::RED),
+                );
+            }
+        }
+    }
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Decimals").small());
+        ui.add(egui::DragValue::new(&mut w.props.formula_decimals).range(0..=9_usize));
+    });
+
     show_geometry(ui, w);
     ui.separator();
     show_fg_color(ui, w);
@@ -1630,6 +1775,129 @@ fn show_options_widget(
         let n = w.props.options.len() + 1;
         w.props.options.push(format!("{item_label} {n}"));
     }
+    show_geometry(ui, w);
+    ui.separator();
+    show_custom_props(ui, w);
+    show_delete_button(ui, do_delete);
+}
+
+/// Table / ListView / TreeView: static options + optional model binding.
+fn show_data_widget(
+    ui: &mut egui::Ui,
+    w: &mut WidgetInstance,
+    do_delete: &mut bool,
+    item_label: &str,
+) {
+    field_text(ui, "Label", &mut w.props.label);
+
+    // --- Data source binding ---
+    ui.separator();
+    ui.label(
+        egui::RichText::new("Data Source (model-bound)")
+            .small()
+            .weak(),
+    );
+    let has_binding = w.props.data_source_binding.is_some();
+    ui.horizontal(|ui| {
+        if ui.selectable_label(!has_binding, "Static").clicked() {
+            w.props.data_source_binding = None;
+        }
+        if ui.selectable_label(has_binding, "Bound").clicked()
+            && w.props.data_source_binding.is_none()
+        {
+            w.props.data_source_binding = Some("items".to_owned());
+        }
+    });
+    if let Some(ref mut src) = w.props.data_source_binding {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Field").small());
+            ui.add(
+                egui::TextEdit::singleline(src)
+                    .hint_text("items")
+                    .desired_width(120.0),
+            );
+        });
+        ui.label(
+            egui::RichText::new("AppState field will be Vec<String> (ListView/TreeView) or Vec<Vec<String>> (Table).")
+                .small()
+                .weak(),
+        );
+        // Column editor for Table
+        if matches!(w.kind, WidgetKind::Table) {
+            ui.separator();
+            ui.label(egui::RichText::new("Columns").small().weak());
+            let mut to_remove: Option<usize> = None;
+            for (i, col) in w.props.data_columns.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    let ow = (ui.available_width() - 80.0).clamp(60.0, 140.0);
+                    ui.add(
+                        egui::TextEdit::singleline(&mut col.name)
+                            .hint_text(format!("col_{}", i + 1))
+                            .desired_width(ow),
+                    );
+                    egui::ComboBox::from_id_salt(("col_type", i))
+                        .selected_text(match col.column_type {
+                            DataColumnType::Text => "Text",
+                            DataColumnType::Number => "Number",
+                            DataColumnType::Boolean => "Bool",
+                        })
+                        .width(60.0)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut col.column_type, DataColumnType::Text, "Text");
+                            ui.selectable_value(
+                                &mut col.column_type,
+                                DataColumnType::Number,
+                                "Number",
+                            );
+                            ui.selectable_value(
+                                &mut col.column_type,
+                                DataColumnType::Boolean,
+                                "Bool",
+                            );
+                        });
+                    if ui.small_button("x").clicked() {
+                        to_remove = Some(i);
+                    }
+                });
+            }
+            if let Some(i) = to_remove {
+                w.props.data_columns.remove(i);
+            }
+            if ui.small_button("+ Column").clicked() {
+                let n = w.props.data_columns.len() + 1;
+                w.props.data_columns.push(DataColumn {
+                    name: format!("col_{n}"),
+                    column_type: DataColumnType::Text,
+                });
+            }
+        }
+    } else {
+        // Static options editor
+        ui.separator();
+        ui.label(egui::RichText::new(item_label).small().weak());
+        let mut to_remove: Option<usize> = None;
+        for (i, opt) in w.props.options.iter_mut().enumerate() {
+            ui.horizontal(|ui| {
+                let ow = (ui.available_width() - 28.0).clamp(60.0, 180.0);
+                ui.add(
+                    egui::TextEdit::singleline(opt)
+                        .hint_text(format!("{item_label} {}", i + 1))
+                        .desired_width(ow),
+                );
+                if ui.small_button("x").clicked() {
+                    to_remove = Some(i);
+                }
+            });
+        }
+        if let Some(i) = to_remove {
+            w.props.options.remove(i);
+        }
+        if ui.small_button(format!("+ Add {item_label}")).clicked() {
+            let n = w.props.options.len() + 1;
+            w.props.options.push(format!("{item_label} {n}"));
+        }
+    }
+
     show_geometry(ui, w);
     ui.separator();
     show_custom_props(ui, w);

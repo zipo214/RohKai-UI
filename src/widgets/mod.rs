@@ -1,3 +1,9 @@
+//! Widget kind registry — one submodule per widget type.
+//!
+//! Each submodule provides a `default_instance()` function returning a ready-to-drop
+//! `WidgetInstance`.  `default_for` dispatches by `WidgetKind`.  `ALL_KINDS` lists
+//! every supported built-in kind for the palette and export machinery.
+
 pub mod button;
 pub mod buttons_ext;
 pub mod checkbox;

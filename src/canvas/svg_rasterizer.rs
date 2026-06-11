@@ -10,6 +10,7 @@
 
 use crate::svg_core::{self, Rgba};
 use egui::ColorImage;
+use rayon::prelude::*;
 use std::collections::HashMap;
 
 const MAX_SVG_BYTES: usize = 5_000_000;
@@ -318,6 +319,18 @@ pub fn rasterize(svg_text: &str, width: u32, height: u32) -> Result<ColorImage, 
 pub fn rasterize_or_fallback(svg_text: &str, width: u32, height: u32) -> ColorImage {
     let (w, h) = raster_size(width, height);
     rasterize(svg_text, width, height).unwrap_or_else(|_| fallback_image(w, h))
+}
+
+/// Rasterize multiple SVGs in parallel.
+///
+/// Each entry is `(svg_text, width, height)`.  Results are returned in the
+/// same order as `items`, with `Err` on parse/security failure.
+#[allow(dead_code)]
+pub fn rasterize_batch(items: &[(&str, u32, u32)]) -> Vec<Result<ColorImage, SvgRasterError>> {
+    items
+        .par_iter()
+        .map(|(svg, w, h)| rasterize(svg, *w, *h))
+        .collect()
 }
 
 fn raster_size(width: u32, height: u32) -> (usize, usize) {
@@ -5907,8 +5920,83 @@ enum FilterKind {
         rx: usize,
         ry: usize,
     },
+    /// Tier-3: `feTile` — tile the input over the filter region.
+    Tile,
+    /// Tier-3: `feDisplacementMap` — displace pixels using a second input's channels.
+    DisplacementMap {
+        scale: f32,
+        x_channel: u8,
+        y_channel: u8,
+        input2: FilterInput,
+    },
+    /// Tier-3: `feConvolveMatrix` — general convolution kernel.
+    ConvolveMatrix {
+        order_x: usize,
+        order_y: usize,
+        kernel: Vec<f32>,
+        divisor: f32,
+        bias: f32,
+        target_x: usize,
+        target_y: usize,
+        edge_wrap: bool,
+        preserve_alpha: bool,
+    },
+    /// Tier-3: `feTurbulence` / `feFractalNoise` — Perlin noise / fractal noise.
+    Turbulence {
+        base_freq_x: f64,
+        base_freq_y: f64,
+        num_octaves: u32,
+        seed: i32,
+        fractal_noise: bool,
+        stitch: bool,
+    },
+    /// Tier-3: `feDiffuseLighting` — Lambertian diffuse shading from a bump map.
+    DiffuseLighting {
+        surface_scale: f32,
+        diffuse_constant: f32,
+        light: LightSource,
+        lighting_color: [u8; 4],
+    },
+    /// Tier-3: `feSpecularLighting` — specular (Phong) shading from a bump map.
+    SpecularLighting {
+        surface_scale: f32,
+        specular_constant: f32,
+        specular_exponent: f32,
+        light: LightSource,
+        lighting_color: [u8; 4],
+    },
+    /// Tier-3: `feImage` with decoded RGBA pixels (data URI only; external diagnosed).
+    Image {
+        pixels: Vec<u8>,
+        img_w: usize,
+        img_h: usize,
+    },
     /// Unsupported primitive passed through (partial output) with a diagnostic.
     Identity,
+}
+
+/// Light source for `feDiffuseLighting` / `feSpecularLighting`.
+#[allow(dead_code)]
+enum LightSource {
+    Distant {
+        azimuth: f32,
+        elevation: f32,
+    },
+    Point {
+        x: f32,
+        y: f32,
+        z: f32,
+    },
+    Spot {
+        x: f32,
+        y: f32,
+        z: f32,
+        px: f32,
+        py: f32,
+        pz: f32,
+        limiting_cone_angle: f32,
+        specular_exponent: f32,
+    },
 }
 
 /// `feComposite` operator (R10). Inputs are premultiplied.
@@ -6104,6 +6192,93 @@ impl FilterGraph {
                 FilterKind::Morphology { dilate, rx, ry } => {
                     morphology(&input, w, h, *dilate, *rx, *ry)
                 }
+                FilterKind::Tile => filter_tile(&input, w, h),
+                FilterKind::DisplacementMap {
+                    scale,
+                    x_channel,
+                    y_channel,
+                    input2,
+                } => {
+                    let map =
+                        resolve_filter_input(input2, source, &source_alpha, &named, &previous);
+                    displacement_map(&input, &map, w, h, *scale, *x_channel, *y_channel)
+                }
+                FilterKind::ConvolveMatrix {
+                    order_x,
+                    order_y,
+                    kernel,
+                    divisor,
+                    bias,
+                    target_x,
+                    target_y,
+                    edge_wrap,
+                    preserve_alpha,
+                } => convolve_matrix(
+                    &input,
+                    w,
+                    h,
+                    *order_x,
+                    *order_y,
+                    kernel,
+                    *divisor,
+                    *bias,
+                    *target_x,
+                    *target_y,
+                    *edge_wrap,
+                    *preserve_alpha,
+                ),
+                FilterKind::Turbulence {
+                    base_freq_x,
+                    base_freq_y,
+                    num_octaves,
+                    seed,
+                    fractal_noise,
+                    stitch,
+                } => turbulence_buffer(
+                    w,
+                    h,
+                    *base_freq_x,
+                    *base_freq_y,
+                    *num_octaves,
+                    *seed,
+                    *fractal_noise,
+                    *stitch,
+                ),
+                FilterKind::DiffuseLighting {
+                    surface_scale,
+                    diffuse_constant,
+                    light,
+                    lighting_color,
+                } => diffuse_lighting(
+                    &input,
+                    w,
+                    h,
+                    *surface_scale,
+                    *diffuse_constant,
+                    light,
+                    *lighting_color,
+                ),
+                FilterKind::SpecularLighting {
+                    surface_scale,
+                    specular_constant,
+                    specular_exponent,
+                    light,
+                    lighting_color,
+                } => specular_lighting(
+                    &input,
+                    w,
+                    h,
+                    *surface_scale,
+                    *specular_constant,
+                    *specular_exponent,
+                    light,
+                    *lighting_color,
+                ),
+                FilterKind::Image {
+                    pixels,
+                    img_w,
+                    img_h,
+                } => scale_image_to(pixels, *img_w, *img_h, w, h),
                 FilterKind::Identity => input.clone(),
             };
             if let Some(name) = &prim.result {
@@ -6574,6 +6749,630 @@ fn morphology(src: &[u8], w: usize, h: usize, dilate: bool, rx: usize, ry: usize
     out
 }
 
+// ---------------------------------------------------------------------------
+// Tier-3 filter primitive implementations
+// ---------------------------------------------------------------------------
+
+/// feTile: repeat the input buffer over the filter region by tiling.
+fn filter_tile(src: &[u8], w: usize, h: usize) -> Vec<u8> {
+    if w == 0 || h == 0 || src.len() < w * h * 4 {
+        return src.to_vec();
+    }
+    let tw = w.max(1);
+    let th = h.max(1);
+    let mut out = vec![0u8; w * h * 4];
+    for y in 0..h {
+        let sy = y % th;
+        for x in 0..w {
+            let sx = x % tw;
+            let dst = (y * w + x) * 4;
+            let s = (sy * tw + sx) * 4;
+            if s + 3 < src.len() {
+                out[dst..dst + 4].copy_from_slice(&src[s..s + 4]);
+            }
+        }
+    }
+    out
+}
+
+/// feDisplacementMap: move each pixel by amounts derived from a displacement map.
+/// Channels: 0=R, 1=G, 2=B, 3=A.
+fn displacement_map(
+    src: &[u8],
+    map: &[u8],
+    w: usize,
+    h: usize,
+    scale: f32,
+    x_ch: u8,
+    y_ch: u8,
+) -> Vec<u8> {
+    let mut out = vec![0u8; w * h * 4];
+    let half = scale / 2.0;
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) * 4;
+            if i + 3 >= map.len() {
+                continue;
+            }
+            let dx = (map[i + x_ch as usize] as f32 / 255.0) * scale - half;
+            let dy = (map[i + y_ch as usize] as f32 / 255.0) * scale - half;
+            let sx = x as f32 - dx;
+            let sy = y as f32 - dy;
+            let sx0 = (sx as isize).clamp(0, w as isize - 1) as usize;
+            let sy0 = (sy as isize).clamp(0, h as isize - 1) as usize;
+            let s = (sy0 * w + sx0) * 4;
+            if s + 3 < src.len() {
+                let d = (y * w + x) * 4;
+                out[d..d + 4].copy_from_slice(&src[s..s + 4]);
+            }
+        }
+    }
+    out
+}
+
+/// feConvolveMatrix: general NxM convolution kernel with edge clamping or wrap.
+#[allow(clippy::too_many_arguments)]
+fn convolve_matrix(
+    src: &[u8],
+    w: usize,
+    h: usize,
+    kw: usize,
+    kh: usize,
+    kernel: &[f32],
+    divisor: f32,
+    bias: f32,
+    target_x: usize,
+    target_y: usize,
+    edge_wrap: bool,
+    preserve_alpha: bool,
+) -> Vec<u8> {
+    if kw == 0 || kh == 0 || w == 0 || h == 0 || kernel.len() < kw * kh {
+        return src.to_vec();
+    }
+    let divisor = if divisor == 0.0 { 1.0 } else { divisor };
+    let mut out = vec![0u8; w * h * 4];
+    for y in 0..h {
+        for x in 0..w {
+            let mut acc = [0.0f32; 4];
+            for ky in 0..kh {
+                for kx in 0..kw {
+                    let ki = ky * kw + kx;
+                    let k = kernel[ki];
+                    let sx = x as isize + kx as isize - target_x as isize;
+                    let sy = y as isize + ky as isize - target_y as isize;
+                    let (sx, sy) = if edge_wrap {
+                        (
+                            sx.rem_euclid(w as isize) as usize,
+                            sy.rem_euclid(h as isize) as usize,
+                        )
+                    } else {
+                        (
+                            sx.clamp(0, w as isize - 1) as usize,
+                            sy.clamp(0, h as isize - 1) as usize,
+                        )
+                    };
+                    let si = (sy * w + sx) * 4;
+                    if si + 3 < src.len() {
+                        for c in 0..4 {
+                            acc[c] += src[si + c] as f32 * k;
+                        }
+                    }
+                }
+            }
+            let dst = (y * w + x) * 4;
+            let src_alpha = src[dst + 3];
+            for c in 0..4 {
+                if preserve_alpha && c == 3 {
+                    out[dst + 3] = src_alpha;
+                } else {
+                    let v = (acc[c] / divisor + bias * 255.0).round().clamp(0.0, 255.0) as u8;
+                    out[dst + c] = v;
+                }
+            }
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// feTurbulence — SVG spec §15.20 Perlin/fractal noise (no external deps)
+// ---------------------------------------------------------------------------
+
+const TURBULENCE_TABLE_SIZE: usize = 256;
+const TURBULENCE_B: usize = TURBULENCE_TABLE_SIZE;
+const TURBULENCE_N: i32 = 0x1000;
+
+struct TurbulenceState {
+    lattice: [i32; TURBULENCE_B + TURBULENCE_B + 2],
+    gradient: [[f64; 2]; TURBULENCE_B + TURBULENCE_B + 2],
+}
+
+fn turbulence_setup(seed: i32) -> TurbulenceState {
+    let mut b = [0i32; TURBULENCE_B + TURBULENCE_B + 2];
+    let mut g = [[0.0f64; 2]; TURBULENCE_B + TURBULENCE_B + 2];
+    let mut s = TurbulenceRng::new(seed);
+    for i in 0..TURBULENCE_B {
+        b[i] = i as i32;
+        for g_ch in &mut g[i] {
+            loop {
+                let v = (s.next() & (2 * TURBULENCE_N + 1) as u32) as f64 - TURBULENCE_N as f64;
+                if v != 0.0 {
+                    *g_ch = v;
+                    break;
+                }
+            }
+        }
+        let mag = (g[i][0] * g[i][0] + g[i][1] * g[i][1]).sqrt();
+        if mag > 0.0 {
+            g[i][0] /= mag;
+            g[i][1] /= mag;
+        }
+    }
+    for i in (1..TURBULENCE_B).rev() {
+        let j = (s.next() % TURBULENCE_B as u32) as usize;
+        b.swap(i, j);
+    }
+    for i in 0..TURBULENCE_B + 2 {
+        b[TURBULENCE_B + i] = b[i];
+        g[TURBULENCE_B + i] = g[i];
+    }
+    TurbulenceState {
+        lattice: b,
+        gradient: g,
+    }
+}
+
+struct TurbulenceRng(i32);
+impl TurbulenceRng {
+    fn new(seed: i32) -> Self {
+        const LOW_BITS: i32 = 0xffff;
+        let seed = if seed <= 0 {
+            -(seed % (i32::MAX - 1)) + 1
+        } else {
+            seed
+        };
+        let mut s = TurbulenceRng(seed & LOW_BITS);
+        let _ = s.next();
+        s
+    }
+    fn next(&mut self) -> u32 {
+        const RAND_M: i32 = 2147483647;
+        const RAND_A: i32 = 16807;
+        const RAND_Q: i32 = 127773;
+        const RAND_R: i32 = 2836;
+        let hi = self.0 / RAND_Q;
+        let lo = self.0 % RAND_Q;
+        let test = RAND_A * lo - RAND_R * hi;
+        self.0 = if test > 0 { test } else { test + RAND_M };
+        self.0 as u32
+    }
+}
+
+fn turbulence_noise2(state: &TurbulenceState, tx: f64, ty: f64) -> f64 {
+    #[inline(always)]
+    fn s_curve(t: f64) -> f64 {
+        t * t * (3.0 - 2.0 * t)
+    }
+    #[inline(always)]
+    fn lerp(t: f64, a: f64, b: f64) -> f64 {
+        a + t * (b - a)
+    }
+    let bx0 = (tx as i64).rem_euclid(TURBULENCE_B as i64) as usize;
+    let bx1 = (bx0 + 1) % TURBULENCE_B;
+    let by0 = (ty as i64).rem_euclid(TURBULENCE_B as i64) as usize;
+    let by1 = (by0 + 1) % TURBULENCE_B;
+    let rx0 = tx - tx.floor();
+    let rx1 = rx0 - 1.0;
+    let ry0 = ty - ty.floor();
+    let ry1 = ry0 - 1.0;
+    let sx = s_curve(rx0);
+    let sy = s_curve(ry0);
+    let i = state.lattice[bx0];
+    let j = state.lattice[bx1];
+    let b00 = state.lattice[(i + by0 as i32) as usize & (TURBULENCE_B - 1)];
+    let b10 = state.lattice[(j + by0 as i32) as usize & (TURBULENCE_B - 1)];
+    let b01 = state.lattice[(i + by1 as i32) as usize & (TURBULENCE_B - 1)];
+    let b11 = state.lattice[(j + by1 as i32) as usize & (TURBULENCE_B - 1)];
+    let g00 = state.gradient[b00 as usize];
+    let g10 = state.gradient[b10 as usize];
+    let g01 = state.gradient[b01 as usize];
+    let g11 = state.gradient[b11 as usize];
+    let u = rx0 * g00[0] + ry0 * g00[1];
+    let v = rx1 * g10[0] + ry0 * g10[1];
+    let a = lerp(sx, u, v);
+    let u = rx0 * g01[0] + ry1 * g01[1];
+    let v = rx1 * g11[0] + ry1 * g11[1];
+    let b = lerp(sx, u, v);
+    lerp(sy, a, b)
+}
+
+/// Compute one channel of feTurbulence/feFractalNoise per the SVG spec.
+fn turbulence_channel(
+    state: &TurbulenceState,
+    x: f64,
+    y: f64,
+    bfx: f64,
+    bfy: f64,
+    num_octaves: u32,
+    fractal_noise: bool,
+) -> f64 {
+    let mut sum = 0.0f64;
+    let mut freq_x = bfx;
+    let mut freq_y = bfy;
+    let mut amp = 1.0f64;
+    for _ in 0..num_octaves {
+        let n = turbulence_noise2(state, x * freq_x, y * freq_y);
+        sum += if fractal_noise { n } else { n.abs() };
+        freq_x *= 2.0;
+        freq_y *= 2.0;
+        amp *= 0.5;
+        let _ = amp;
+    }
+    sum
+}
+
+/// Build a feTurbulence/fractalNoise RGBA buffer (premultiplied sRGB).
+/// Each channel is an independent noise call. Alpha is always 255 (opaque).
+#[allow(clippy::too_many_arguments)]
+fn turbulence_buffer(
+    w: usize,
+    h: usize,
+    bfx: f64,
+    bfy: f64,
+    num_octaves: u32,
+    seed: i32,
+    fractal_noise: bool,
+    _stitch: bool,
+) -> Vec<u8> {
+    let num_octaves = num_octaves.clamp(1, 8);
+    let mut out = vec![255u8; w * h * 4];
+    // Four independent states per the spec: one per channel R/G/B/A.
+    let states: Vec<TurbulenceState> = (0..4).map(|ch| turbulence_setup(seed + ch)).collect();
+    for y in 0..h {
+        for x in 0..w {
+            let px = x as f64 + 0.5;
+            let py = y as f64 + 0.5;
+            for ch in 0..4 {
+                let raw =
+                    turbulence_channel(&states[ch], px, py, bfx, bfy, num_octaves, fractal_noise);
+                let val = if fractal_noise {
+                    // fractalNoise: [-1, 1] → [0, 1]
+                    ((raw + 1.0) * 0.5).clamp(0.0, 1.0)
+                } else {
+                    // turbulence: [0, n_octaves] → [0, 1]
+                    raw.clamp(0.0, 1.0)
+                };
+                out[(y * w + x) * 4 + ch] = (val * 255.0).round() as u8;
+            }
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Lighting filters (feDiffuseLighting / feSpecularLighting)
+// ---------------------------------------------------------------------------
+
+fn surface_normal(src: &[u8], w: usize, h: usize, x: usize, y: usize, scale: f32) -> [f32; 3] {
+    let a = |cx: isize, cy: isize| -> f32 {
+        let cx = cx.clamp(0, w as isize - 1) as usize;
+        let cy = cy.clamp(0, h as isize - 1) as usize;
+        src[(cy * w + cx) * 4] as f32 / 255.0
+    };
+    let xi = x as isize;
+    let yi = y as isize;
+    let nx = -(a(xi - 1, yi - 1) + 2.0 * a(xi - 1, yi) + a(xi - 1, yi + 1))
+        + (a(xi + 1, yi - 1) + 2.0 * a(xi + 1, yi) + a(xi + 1, yi + 1));
+    let ny = -(a(xi - 1, yi - 1) + 2.0 * a(xi, yi - 1) + a(xi + 1, yi - 1))
+        + (a(xi - 1, yi + 1) + 2.0 * a(xi, yi + 1) + a(xi + 1, yi + 1));
+    let nz = 1.0 / scale.max(0.001);
+    let mag = (nx * nx + ny * ny + nz * nz).sqrt().max(1e-6);
+    [nx / mag, ny / mag, nz / mag]
+}
+
+fn light_vector(light: &LightSource, x: f32, y: f32) -> [f32; 3] {
+    match light {
+        LightSource::Distant { azimuth, elevation } => {
+            let az = azimuth.to_radians();
+            let el = elevation.to_radians();
+            [el.cos() * az.cos(), el.cos() * az.sin(), el.sin()]
+        }
+        LightSource::Point {
+            x: lx,
+            y: ly,
+            z: lz,
+        }
+        | LightSource::Spot {
+            x: lx,
+            y: ly,
+            z: lz,
+            ..
+        } => {
+            let dx = lx - x;
+            let dy = ly - y;
+            let mag = (dx * dx + dy * dy + lz * lz).sqrt().max(1e-6);
+            [dx / mag, dy / mag, lz / mag]
+        }
+    }
+}
+
+fn diffuse_lighting(
+    src: &[u8],
+    w: usize,
+    h: usize,
+    surface_scale: f32,
+    diffuse_constant: f32,
+    light: &LightSource,
+    color: [u8; 4],
+) -> Vec<u8> {
+    let mut out = vec![0u8; w * h * 4];
+    for y in 0..h {
+        for x in 0..w {
+            let n = surface_normal(src, w, h, x, y, surface_scale);
+            let l = light_vector(light, x as f32, y as f32);
+            let dot = (n[0] * l[0] + n[1] * l[1] + n[2] * l[2]).max(0.0);
+            let factor = (diffuse_constant * dot).clamp(0.0, 1.0);
+            let d = (y * w + x) * 4;
+            out[d] = (color[0] as f32 * factor).round() as u8;
+            out[d + 1] = (color[1] as f32 * factor).round() as u8;
+            out[d + 2] = (color[2] as f32 * factor).round() as u8;
+            out[d + 3] = 255;
+        }
+    }
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn specular_lighting(
+    src: &[u8],
+    w: usize,
+    h: usize,
+    surface_scale: f32,
+    specular_constant: f32,
+    specular_exponent: f32,
+    light: &LightSource,
+    color: [u8; 4],
+) -> Vec<u8> {
+    let mut out = vec![0u8; w * h * 4];
+    // Eye direction is always +Z in SVG spec.
+    let eye = [0.0f32, 0.0, 1.0];
+    for y in 0..h {
+        for x in 0..w {
+            let n = surface_normal(src, w, h, x, y, surface_scale);
+            let l = light_vector(light, x as f32, y as f32);
+            let h_vec = {
+                let hx = l[0] + eye[0];
+                let hy = l[1] + eye[1];
+                let hz = l[2] + eye[2];
+                let mag = (hx * hx + hy * hy + hz * hz).sqrt().max(1e-6);
+                [hx / mag, hy / mag, hz / mag]
+            };
+            let n_dot_h = (n[0] * h_vec[0] + n[1] * h_vec[1] + n[2] * h_vec[2]).max(0.0);
+            let factor = (specular_constant * n_dot_h.powf(specular_exponent)).clamp(0.0, 1.0);
+            let d = (y * w + x) * 4;
+            out[d] = (color[0] as f32 * factor).round() as u8;
+            out[d + 1] = (color[1] as f32 * factor).round() as u8;
+            out[d + 2] = (color[2] as f32 * factor).round() as u8;
+            out[d + 3] = 255;
+        }
+    }
+    out
+}
+
+/// Bilinear scale an RGBA image to target dimensions.
+fn scale_image_to(pixels: &[u8], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<u8> {
+    let mut out = vec![0u8; dw * dh * 4];
+    for dy in 0..dh {
+        for dx in 0..dw {
+            let sx = (dx as f32 * (sw as f32 / dw as f32)).clamp(0.0, sw as f32 - 1.0) as usize;
+            let sy = (dy as f32 * (sh as f32 / dh as f32)).clamp(0.0, sh as f32 - 1.0) as usize;
+            let s = (sy * sw + sx) * 4;
+            if s + 3 < pixels.len() {
+                let d = (dy * dw + dx) * 4;
+                out[d..d + 4].copy_from_slice(&pixels[s..s + 4]);
+            }
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Tier-3 filter parsers
+// ---------------------------------------------------------------------------
+
+fn parse_channel_selector(value: Option<&str>) -> u8 {
+    match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+        Some("r") => 0,
+        Some("g") => 1,
+        Some("b") => 2,
+        Some("a") => 3,
+        _ => 0,
+    }
+}
+
+fn parse_convolve_matrix(attrs: &[(String, String)]) -> FilterKind {
+    let (kw, kh) = {
+        let order = attr_get(attrs, "order").unwrap_or("3");
+        let parts: Vec<f64> = order
+            .split_ascii_whitespace()
+            .filter_map(|v| v.parse().ok())
+            .collect();
+        let kw = parts.first().copied().unwrap_or(3.0).round() as usize;
+        let kh = parts.get(1).copied().unwrap_or(kw as f64).round() as usize;
+        (kw.min(25), kh.min(25))
+    };
+    let kernel: Vec<f32> = attr_get(attrs, "kernelmatrix")
+        .unwrap_or("")
+        .split_ascii_whitespace()
+        .filter_map(|v| v.parse().ok())
+        .take(kw * kh)
+        .collect();
+    let kernel_sum: f32 = kernel.iter().sum();
+    let divisor = attr_get(attrs, "divisor")
+        .and_then(parse_f64)
+        .unwrap_or(if kernel_sum == 0.0 {
+            1.0
+        } else {
+            kernel_sum as f64
+        }) as f32;
+    let bias = attr_get(attrs, "bias").and_then(parse_f64).unwrap_or(0.0) as f32;
+    let target_x = attr_get(attrs, "targetx")
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(kw / 2);
+    let target_y = attr_get(attrs, "targety")
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(kh / 2);
+    let edge_wrap = attr_get(attrs, "edgemode")
+        .map(|v| v.trim().eq_ignore_ascii_case("wrap"))
+        .unwrap_or(false);
+    let preserve_alpha = attr_get(attrs, "preservealpha")
+        .map(|v| v.trim().eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    FilterKind::ConvolveMatrix {
+        order_x: kw,
+        order_y: kh,
+        kernel,
+        divisor,
+        bias,
+        target_x,
+        target_y,
+        edge_wrap,
+        preserve_alpha,
+    }
+}
+
+fn parse_light_source(children: Option<&[SvgNode]>) -> LightSource {
+    let Some(children) = children else {
+        return LightSource::Distant {
+            azimuth: 0.0,
+            elevation: 0.0,
+        };
+    };
+    for child in children {
+        let (tag, attrs) = match child {
+            SvgNode::Unsupported { tag, attrs, .. } => (tag.as_str(), attrs.as_slice()),
+            _ => continue,
+        };
+        match tag {
+            "fedistantlight" => {
+                return LightSource::Distant {
+                    azimuth: attr_get(attrs, "azimuth")
+                        .and_then(parse_f64)
+                        .unwrap_or(0.0) as f32,
+                    elevation: attr_get(attrs, "elevation")
+                        .and_then(parse_f64)
+                        .unwrap_or(0.0) as f32,
+                };
+            }
+            "fepointlight" => {
+                return LightSource::Point {
+                    x: attr_get(attrs, "x").and_then(parse_f64).unwrap_or(0.0) as f32,
+                    y: attr_get(attrs, "y").and_then(parse_f64).unwrap_or(0.0) as f32,
+                    z: attr_get(attrs, "z").and_then(parse_f64).unwrap_or(0.0) as f32,
+                };
+            }
+            "fespotlight" => {
+                return LightSource::Spot {
+                    x: attr_get(attrs, "x").and_then(parse_f64).unwrap_or(0.0) as f32,
+                    y: attr_get(attrs, "y").and_then(parse_f64).unwrap_or(0.0) as f32,
+                    z: attr_get(attrs, "z").and_then(parse_f64).unwrap_or(0.0) as f32,
+                    px: attr_get(attrs, "pointsatx")
+                        .and_then(parse_f64)
+                        .unwrap_or(0.0) as f32,
+                    py: attr_get(attrs, "pointsaty")
+                        .and_then(parse_f64)
+                        .unwrap_or(0.0) as f32,
+                    pz: attr_get(attrs, "pointsatz")
+                        .and_then(parse_f64)
+                        .unwrap_or(0.0) as f32,
+                    limiting_cone_angle: attr_get(attrs, "limitingconeangle")
+                        .and_then(parse_f64)
+                        .unwrap_or(f64::INFINITY) as f32,
+                    specular_exponent: attr_get(attrs, "specularexponent")
+                        .and_then(parse_f64)
+                        .unwrap_or(1.0) as f32,
+                };
+            }
+            _ => {}
+        }
+    }
+    LightSource::Distant {
+        azimuth: 0.0,
+        elevation: 0.0,
+    }
+}
+
+fn parse_diffuse_lighting(child: &SvgNode, attrs: &[(String, String)]) -> FilterKind {
+    let light = parse_light_source(child.children());
+    FilterKind::DiffuseLighting {
+        surface_scale: attr_get(attrs, "surfacescale")
+            .and_then(parse_f64)
+            .unwrap_or(1.0) as f32,
+        diffuse_constant: attr_get(attrs, "diffuseconstant")
+            .and_then(parse_f64)
+            .unwrap_or(1.0) as f32,
+        light,
+        lighting_color: lighting_color(attrs),
+    }
+}
+
+fn parse_specular_lighting(child: &SvgNode, attrs: &[(String, String)]) -> FilterKind {
+    let light = parse_light_source(child.children());
+    FilterKind::SpecularLighting {
+        surface_scale: attr_get(attrs, "surfacescale")
+            .and_then(parse_f64)
+            .unwrap_or(1.0) as f32,
+        specular_constant: attr_get(attrs, "specularconstant")
+            .and_then(parse_f64)
+            .unwrap_or(1.0) as f32,
+        specular_exponent: (attr_get(attrs, "specularexponent")
+            .and_then(parse_f64)
+            .unwrap_or(1.0) as f32)
+            .clamp(1.0, 128.0),
+        light,
+        lighting_color: lighting_color(attrs),
+    }
+}
+
+fn lighting_color(attrs: &[(String, String)]) -> [u8; 4] {
+    attr_get(attrs, "lighting-color")
+        .and_then(|v| svg_core::parse_color(v.trim()))
+        .map(|c| [c.r, c.g, c.b, c.a])
+        .unwrap_or([255, 255, 255, 255])
+}
+
+fn parse_feimage(
+    attrs: &[(String, String)],
+    diagnostics: &mut Vec<PendingDiagnostic>,
+) -> FilterKind {
+    let href = attr_get(attrs, "xlink:href")
+        .or_else(|| attr_get(attrs, "href"))
+        .unwrap_or("");
+    if href.starts_with("data:") {
+        match decode_image_href(href) {
+            Ok(img) => {
+                return FilterKind::Image {
+                    pixels: img.rgba,
+                    img_w: img.width,
+                    img_h: img.height,
+                };
+            }
+            Err(_) => {
+                diagnostics.push(PendingDiagnostic::Warning {
+                    code: "filter.image_decode_failed",
+                    message: "feImage data URI could not be decoded; filter not applied",
+                });
+            }
+        }
+    } else if !href.is_empty() {
+        diagnostics.push(PendingDiagnostic::Warning {
+            code: "filter.image_external",
+            message: "feImage external URI not supported; filter not applied",
+        });
+    }
+    FilterKind::Identity
+}
+
 fn parse_filter(
     scene: &SvgScene,
     filter_id: &str,
@@ -6696,6 +7495,36 @@ fn parse_filter(
                     ry: ((ry * scale).round().max(0.0) as usize).min(MAX_MORPH_RADIUS),
                 }
             }
+            "fetile" => FilterKind::Tile,
+            "fedisplacementmap" => FilterKind::DisplacementMap {
+                scale: attr_get(attrs, "scale").and_then(parse_f64).unwrap_or(0.0) as f32,
+                x_channel: parse_channel_selector(attr_get(attrs, "xchannelselector")),
+                y_channel: parse_channel_selector(attr_get(attrs, "ychannelselector")),
+                input2: parse_filter_input(attr_get(attrs, "in2")),
+            },
+            "feconvolvematrix" => parse_convolve_matrix(attrs),
+            "feturbulence" | "fefractalnoise" => {
+                let (bfx, bfy) = parse_std_deviation(attr_get(attrs, "basefrequency"));
+                FilterKind::Turbulence {
+                    base_freq_x: bfx,
+                    base_freq_y: bfy,
+                    num_octaves: attr_get(attrs, "numoctaves")
+                        .and_then(|v| v.trim().parse().ok())
+                        .unwrap_or(1),
+                    seed: attr_get(attrs, "seed")
+                        .and_then(|v| v.trim().parse().ok())
+                        .unwrap_or(0),
+                    fractal_noise: attr_get(attrs, "type")
+                        .map(|v| v.trim().eq_ignore_ascii_case("fractalNoise"))
+                        .unwrap_or(ptag == "fefractalnoise"),
+                    stitch: attr_get(attrs, "stitchtiles")
+                        .map(|v| v.trim().eq_ignore_ascii_case("stitch"))
+                        .unwrap_or(false),
+                }
+            }
+            "fediffuselighting" => parse_diffuse_lighting(child, attrs),
+            "fespecularlighting" => parse_specular_lighting(child, attrs),
+            "feimage" => parse_feimage(attrs, diagnostics),
             other => {
                 diagnostics.push(PendingDiagnostic::Warning {
                     code: "filter.unsupported_primitive",
@@ -9755,7 +10584,7 @@ struct DecodedImage {
     rgba: Vec<u8>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum ImageDecodeError {
     Empty,
     NotDataUri,
@@ -9812,7 +10641,7 @@ impl ImageDecodeError {
             Self::InflateFailed => "embedded PNG compressed data was invalid; placeholder kept",
             Self::MalformedJpeg => "embedded JPEG was malformed or truncated; placeholder kept",
             Self::UnsupportedJpeg => {
-                "embedded JPEG uses an unsupported feature (progressive, arithmetic, CMYK, or 12-bit); placeholder kept"
+                "embedded JPEG uses an unsupported feature (arithmetic coding, lossless, or 12-bit precision); placeholder kept"
             }
             Self::TooLarge => "embedded image exceeds the renderer pixel budget; placeholder kept",
         }
@@ -10622,6 +11451,66 @@ struct JpegComponent {
     pred: i32,
 }
 
+struct SosCompEntry {
+    comp_idx: usize,
+    dc_table: usize,
+    ac_table: usize,
+}
+
+struct SosScanParams {
+    entries: Vec<SosCompEntry>,
+    ss: u8,
+    se: u8,
+    ah: u8,
+    al: u8,
+}
+
+struct ProgCoeff {
+    /// Quantized coefficients in zigzag order: [component][block][zigzag_pos].
+    coeff: Vec<Vec<[i32; 64]>>,
+    blocks_x: Vec<usize>,
+    blocks_y: Vec<usize>,
+    max_h: usize,
+    max_v: usize,
+    mcus_x: usize,
+    mcus_y: usize,
+    dc_pred: Vec<i32>,
+    eob_run: usize,
+}
+
+impl ProgCoeff {
+    fn new(
+        components: &[JpegComponent],
+        max_h: usize,
+        max_v: usize,
+        mcus_x: usize,
+        mcus_y: usize,
+    ) -> Self {
+        let nc = components.len();
+        let mut coeff = Vec::with_capacity(nc);
+        let mut blocks_x = Vec::with_capacity(nc);
+        let mut blocks_y = Vec::with_capacity(nc);
+        for c in components {
+            let bx = mcus_x * c.h;
+            let by = mcus_y * c.v;
+            coeff.push(vec![[0i32; 64]; bx * by]);
+            blocks_x.push(bx);
+            blocks_y.push(by);
+        }
+        Self {
+            coeff,
+            blocks_x,
+            blocks_y,
+            max_h,
+            max_v,
+            mcus_x,
+            mcus_y,
+            dc_pred: vec![0i32; nc],
+            eob_run: 0,
+        }
+    }
+}
+
 fn decode_jpeg(bytes: &[u8]) -> Result<DecodedImage, ImageDecodeError> {
     let mut pos = 2; // past SOI (FF D8)
     let mut qtables: [[u16; 64]; 4] = [[0; 64]; 4];
@@ -10631,16 +11520,28 @@ fn decode_jpeg(bytes: &[u8]) -> Result<DecodedImage, ImageDecodeError> {
     let mut height = 0usize;
     let mut components: Vec<JpegComponent> = Vec::new();
     let mut restart_interval = 0usize;
+    let mut is_progressive = false;
+    // Adobe APP14 ColorTransform=1 means YCCK for 4-component images.
+    let mut app14_ycck = false;
+    let mut prog_coeff: Option<ProgCoeff> = None;
 
     loop {
         if pos + 1 >= bytes.len() || bytes[pos] != 0xFF {
+            if is_progressive {
+                break; // truncated progressive JPEG — produce best-effort output
+            }
             return Err(ImageDecodeError::MalformedJpeg);
         }
         let marker = bytes[pos + 1];
         pos += 2;
         match marker {
-            0xD9 => return Err(ImageDecodeError::MalformedJpeg), // EOI before SOS
-            0x01 | 0xD0..=0xD7 => continue,                      // standalone markers
+            0xD9 => {
+                if is_progressive {
+                    break; // EOI — finalize
+                }
+                return Err(ImageDecodeError::MalformedJpeg); // EOI before SOS
+            }
+            0x01 | 0xD0..=0xD7 => continue, // standalone markers
             _ => {}
         }
         if pos + 2 > bytes.len() {
@@ -10666,28 +11567,73 @@ fn decode_jpeg(bytes: &[u8]) -> Result<DecodedImage, ImageDecodeError> {
                 width = w;
                 height = h;
                 components = comps;
+                is_progressive = false;
             }
-            0xC2 | 0xC3 | 0xC5..=0xCB | 0xCD..=0xCF => {
-                return Err(ImageDecodeError::UnsupportedJpeg)
+            0xC2 => {
+                // SOF2: progressive DCT
+                let (w, h, comps) = parse_sof(seg)?;
+                width = w;
+                height = h;
+                is_progressive = true;
+                let max_h = comps.iter().map(|c| c.h).max().unwrap_or(1);
+                let max_v = comps.iter().map(|c| c.v).max().unwrap_or(1);
+                let mcus_x = width.div_ceil(max_h * 8);
+                let mcus_y = height.div_ceil(max_v * 8);
+                prog_coeff = Some(ProgCoeff::new(&comps, max_h, max_v, mcus_x, mcus_y));
+                components = comps;
+            }
+            0xC3 | 0xC5..=0xCB | 0xCD..=0xCF => return Err(ImageDecodeError::UnsupportedJpeg),
+            // Adobe APP14: detect YCCK color transform for 4-component images.
+            0xEE if seg.len() >= 12 && &seg[..5] == b"Adobe" && seg[11] == 1 => {
+                app14_ycck = true;
             }
             0xDA => {
-                parse_sos(seg, &mut components, &dc_tables, &ac_tables)?;
-                return decode_jpeg_scan(
+                if !is_progressive {
+                    parse_sos(seg, &mut components, &dc_tables, &ac_tables)?;
+                    return decode_jpeg_scan(
+                        bytes,
+                        seg_end,
+                        width,
+                        height,
+                        &components,
+                        &qtables,
+                        &dc_tables,
+                        &ac_tables,
+                        restart_interval,
+                        app14_ycck,
+                    );
+                }
+                // Progressive scan: accumulate into coefficient arrays.
+                let params = parse_sos_params(seg, &components)?;
+                let prog = prog_coeff.as_mut().ok_or(ImageDecodeError::MalformedJpeg)?;
+                // Reset DC predictors at the start of each new DC first-pass scan.
+                if params.ah == 0 && params.ss == 0 {
+                    for dc in prog.dc_pred.iter_mut() {
+                        *dc = 0;
+                    }
+                }
+                prog.eob_run = 0;
+                let after = decode_progressive_scan(
                     bytes,
                     seg_end,
-                    width,
-                    height,
                     &components,
-                    &qtables,
+                    &params,
+                    prog,
                     &dc_tables,
                     &ac_tables,
                     restart_interval,
-                );
+                )?;
+                pos = after;
+                continue; // skip pos = seg_end at bottom
             }
             _ => {} // APPn / COM / other: skip
         }
         pos = seg_end;
     }
+
+    // Reached only in progressive mode (baseline always returns from within the loop).
+    let prog = prog_coeff.ok_or(ImageDecodeError::MalformedJpeg)?;
+    decode_progressive_finish(prog, width, height, &components, &qtables, app14_ycck)
 }
 
 fn parse_dqt(seg: &[u8], qtables: &mut [[u16; 64]; 4]) -> Result<(), ImageDecodeError> {
@@ -10774,8 +11720,8 @@ fn parse_sof(seg: &[u8]) -> Result<(usize, usize, Vec<JpegComponent>), ImageDeco
     if w.checked_mul(h).is_none_or(|px| px > MAX_IMAGE_PIXELS) {
         return Err(ImageDecodeError::TooLarge);
     }
-    if nc != 1 && nc != 3 {
-        return Err(ImageDecodeError::UnsupportedJpeg); // grayscale or YCbCr only
+    if nc == 0 || nc > 4 {
+        return Err(ImageDecodeError::UnsupportedJpeg);
     }
     if seg.len() < 6 + nc * 3 {
         return Err(ImageDecodeError::MalformedJpeg);
@@ -10841,6 +11787,400 @@ fn parse_sos(
         }
     }
     Ok(())
+}
+
+fn parse_sos_params(
+    seg: &[u8],
+    components: &[JpegComponent],
+) -> Result<SosScanParams, ImageDecodeError> {
+    if seg.is_empty() {
+        return Err(ImageDecodeError::MalformedJpeg);
+    }
+    let ns = seg[0] as usize;
+    if ns == 0 || seg.len() < 1 + ns * 2 + 3 {
+        return Err(ImageDecodeError::MalformedJpeg);
+    }
+    let mut entries = Vec::with_capacity(ns);
+    for i in 0..ns {
+        let cs = seg[1 + i * 2];
+        let td_ta = seg[1 + i * 2 + 1];
+        let dc_table = (td_ta >> 4) as usize;
+        let ac_table = (td_ta & 0x0f) as usize;
+        if dc_table > 3 || ac_table > 3 {
+            return Err(ImageDecodeError::MalformedJpeg);
+        }
+        let comp_idx = components
+            .iter()
+            .position(|c| c.id == cs)
+            .ok_or(ImageDecodeError::MalformedJpeg)?;
+        entries.push(SosCompEntry {
+            comp_idx,
+            dc_table,
+            ac_table,
+        });
+    }
+    let offset = 1 + ns * 2;
+    let ss = seg[offset];
+    let se = seg[offset + 1];
+    let ah_al = seg[offset + 2];
+    let ah = ah_al >> 4;
+    let al = ah_al & 0x0f;
+    if ss > se || se > 63 {
+        return Err(ImageDecodeError::MalformedJpeg);
+    }
+    // AC scans must be non-interleaved.
+    if ss > 0 && ns > 1 {
+        return Err(ImageDecodeError::MalformedJpeg);
+    }
+    Ok(SosScanParams {
+        entries,
+        ss,
+        se,
+        ah,
+        al,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decode_progressive_scan(
+    bytes: &[u8],
+    entropy_start: usize,
+    components: &[JpegComponent],
+    params: &SosScanParams,
+    prog: &mut ProgCoeff,
+    dc_tables: &[Option<JpegHuffTable>; 4],
+    ac_tables: &[Option<JpegHuffTable>; 4],
+    restart_interval: usize,
+) -> Result<usize, ImageDecodeError> {
+    let mut br = JpegBits::new(bytes, entropy_start);
+    let ss = params.ss as usize;
+    let se = params.se as usize;
+    let ah = params.ah;
+    let al = params.al;
+
+    if ss == 0 {
+        // DC scan (interleaved or non-interleaved).
+        let mut mcu_index = 0usize;
+        for my in 0..prog.mcus_y {
+            for mx in 0..prog.mcus_x {
+                if restart_interval > 0
+                    && mcu_index > 0
+                    && mcu_index.is_multiple_of(restart_interval)
+                {
+                    br.restart();
+                    for dc in prog.dc_pred.iter_mut() {
+                        *dc = 0;
+                    }
+                }
+                for entry in &params.entries {
+                    let ci = entry.comp_idx;
+                    let comp = &components[ci];
+                    let dc_table = dc_tables[entry.dc_table]
+                        .as_ref()
+                        .ok_or(ImageDecodeError::MalformedJpeg)?;
+                    for by in 0..comp.v {
+                        for bx in 0..comp.h {
+                            let block_x = mx * comp.h + bx;
+                            let block_y = my * comp.v + by;
+                            if block_x >= prog.blocks_x[ci] || block_y >= prog.blocks_y[ci] {
+                                continue;
+                            }
+                            let bidx = block_y * prog.blocks_x[ci] + block_x;
+                            if ah == 0 {
+                                // DC first pass: receive and accumulate.
+                                let t = dc_table.decode(&mut br) as u32;
+                                let diff = jpeg_extend(br.receive(t), t);
+                                prog.dc_pred[ci] += diff;
+                                prog.coeff[ci][bidx][0] = prog.dc_pred[ci] << al;
+                            } else {
+                                // DC refinement: add one correction bit.
+                                let bit = br.receive(1);
+                                prog.coeff[ci][bidx][0] |= bit << al;
+                            }
+                        }
+                    }
+                }
+                mcu_index += 1;
+            }
+        }
+    } else {
+        // AC scan: always non-interleaved.
+        if params.entries.len() != 1 {
+            return Err(ImageDecodeError::MalformedJpeg);
+        }
+        let entry = &params.entries[0];
+        let ci = entry.comp_idx;
+        let ac_table = ac_tables[entry.ac_table]
+            .as_ref()
+            .ok_or(ImageDecodeError::MalformedJpeg)?;
+        let total_bx = prog.blocks_x[ci];
+        let total_by = prog.blocks_y[ci];
+        let mut block_count = 0usize;
+        for by in 0..total_by {
+            for bx in 0..total_bx {
+                if restart_interval > 0
+                    && block_count > 0
+                    && block_count.is_multiple_of(restart_interval)
+                {
+                    br.restart();
+                    prog.eob_run = 0;
+                }
+                let bidx = by * total_bx + bx;
+                if ah == 0 {
+                    // AC first pass.
+                    if prog.eob_run > 0 {
+                        prog.eob_run -= 1;
+                    } else {
+                        let mut k = ss;
+                        while k <= se {
+                            let rs = ac_table.decode(&mut br);
+                            let r = (rs >> 4) as usize;
+                            let s = (rs & 0x0f) as u32;
+                            if s == 0 {
+                                if r == 15 {
+                                    k += 16; // ZRL: skip 16 zeros
+                                } else {
+                                    prog.eob_run = if r > 0 {
+                                        ((1usize << r) + br.receive(r as u32) as usize)
+                                            .saturating_sub(1)
+                                    } else {
+                                        0
+                                    };
+                                    break;
+                                }
+                            } else {
+                                k += r;
+                                if k > se {
+                                    break;
+                                }
+                                let coeff = jpeg_extend(br.receive(s), s);
+                                prog.coeff[ci][bidx][k] = coeff << al;
+                                k += 1;
+                            }
+                        }
+                    }
+                } else {
+                    // AC refinement.
+                    decode_ac_refinement(
+                        &mut br,
+                        &mut prog.coeff[ci][bidx],
+                        ac_table,
+                        ss,
+                        se,
+                        al,
+                        &mut prog.eob_run,
+                    );
+                }
+                block_count += 1;
+            }
+        }
+    }
+
+    Ok(br.pos)
+}
+
+fn decode_ac_refinement(
+    br: &mut JpegBits<'_>,
+    block: &mut [i32; 64],
+    ac_table: &JpegHuffTable,
+    ss: usize,
+    se: usize,
+    al: u8,
+    eob_run: &mut usize,
+) {
+    let delta = 1i32 << al;
+
+    if *eob_run > 0 {
+        // Refine non-zero coefficients in this block and decrement the run.
+        for coeff in &mut block[ss..=se] {
+            if *coeff != 0 {
+                let bit = br.receive(1);
+                if bit != 0 {
+                    if *coeff > 0 {
+                        *coeff += delta;
+                    } else {
+                        *coeff -= delta;
+                    }
+                }
+            }
+        }
+        *eob_run -= 1;
+        return;
+    }
+
+    let mut k = ss;
+    while k <= se {
+        let rs = ac_table.decode(br);
+        let r = (rs >> 4) as usize;
+        let s = rs & 0x0f;
+        if s == 0 {
+            if r == 15 {
+                // ZRL: advance 16 zero slots, refining non-zeros along the way.
+                let mut zeros = 16usize;
+                while zeros > 0 && k <= se {
+                    if block[k] != 0 {
+                        let bit = br.receive(1);
+                        if bit != 0 {
+                            if block[k] > 0 {
+                                block[k] += delta;
+                            } else {
+                                block[k] -= delta;
+                            }
+                        }
+                    } else {
+                        zeros -= 1;
+                    }
+                    k += 1;
+                }
+            } else {
+                // EOBrun: refine rest of band, set counter for subsequent blocks.
+                *eob_run = if r > 0 {
+                    ((1usize << r) + br.receive(r as u32) as usize).saturating_sub(1)
+                } else {
+                    0
+                };
+                while k <= se {
+                    if block[k] != 0 {
+                        let bit = br.receive(1);
+                        if bit != 0 {
+                            if block[k] > 0 {
+                                block[k] += delta;
+                            } else {
+                                block[k] -= delta;
+                            }
+                        }
+                    }
+                    k += 1;
+                }
+                return;
+            }
+        } else {
+            // s == 1: new significant coefficient; r zeros to skip first.
+            let sign_bit = br.receive(1);
+            let new_coeff = if sign_bit != 0 { delta } else { -delta };
+            let mut zeros = r;
+            while zeros > 0 && k <= se {
+                if block[k] != 0 {
+                    let bit = br.receive(1);
+                    if bit != 0 {
+                        if block[k] > 0 {
+                            block[k] += delta;
+                        } else {
+                            block[k] -= delta;
+                        }
+                    }
+                } else {
+                    zeros -= 1;
+                }
+                k += 1;
+            }
+            if k <= se {
+                block[k] = new_coeff;
+                k += 1;
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decode_progressive_finish(
+    prog: ProgCoeff,
+    width: usize,
+    height: usize,
+    components: &[JpegComponent],
+    qtables: &[[u16; 64]; 4],
+    app14_ycck: bool,
+) -> Result<DecodedImage, ImageDecodeError> {
+    if width == 0 || height == 0 || components.is_empty() {
+        return Err(ImageDecodeError::MalformedJpeg);
+    }
+    // Precompute the 8-point IDCT cosine basis (same as decode_jpeg_scan).
+    let mut cos_t = [[0f32; 8]; 8];
+    for (u, row) in cos_t.iter_mut().enumerate() {
+        let cu = if u == 0 { 1.0 / 2f32.sqrt() } else { 1.0 };
+        for (x, slot) in row.iter_mut().enumerate() {
+            *slot = cu * ((2 * x + 1) as f32 * u as f32 * std::f32::consts::PI / 16.0).cos();
+        }
+    }
+
+    let nc = components.len();
+    let mut planes: Vec<JpegPlane> = Vec::with_capacity(nc);
+    for (ci, comp) in components.iter().enumerate() {
+        let bx = prog.blocks_x[ci];
+        let by = prog.blocks_y[ci];
+        let pw = bx * 8;
+        let ph = by * 8;
+        let mut plane_data = vec![0u8; pw * ph];
+        for block_y in 0..by {
+            for block_x in 0..bx {
+                let bidx = block_y * bx + block_x;
+                let coeffs = &prog.coeff[ci][bidx];
+                let qt = &qtables[comp.quant];
+                // Dequantize: coefficients are stored in zigzag order.
+                let mut dequant = [0f32; 64];
+                for (k, &c) in coeffs.iter().enumerate() {
+                    dequant[JPEG_ZIGZAG[k]] = c as f32 * qt[k] as f32;
+                }
+                let mut spatial = [0f32; 64];
+                idct_8x8(&dequant, &cos_t, &mut spatial);
+                let px0 = block_x * 8;
+                let py0 = block_y * 8;
+                for yy in 0..8 {
+                    for xx in 0..8 {
+                        let val = (spatial[yy * 8 + xx] + 128.0).round().clamp(0.0, 255.0) as u8;
+                        plane_data[(py0 + yy) * pw + (px0 + xx)] = val;
+                    }
+                }
+            }
+        }
+        planes.push(JpegPlane {
+            width: pw,
+            data: plane_data,
+        });
+    }
+
+    let max_h = prog.max_h;
+    let max_v = prog.max_v;
+    let sample = |plane: &JpegPlane, comp: &JpegComponent, x: usize, y: usize| -> i32 {
+        let cx = (x * comp.h / max_h).min(plane.width.saturating_sub(1));
+        let ph = plane.data.len().checked_div(plane.width).unwrap_or(0);
+        let cy = (y * comp.v / max_v).min(ph.saturating_sub(1));
+        plane.data[cy * plane.width + cx] as i32
+    };
+
+    let mut rgba = vec![0u8; width * height * 4];
+    for y in 0..height {
+        for x in 0..width {
+            let out = &mut rgba[(y * width + x) * 4..(y * width + x) * 4 + 4];
+            match nc {
+                1 => {
+                    let g = sample(&planes[0], &components[0], x, y) as u8;
+                    out.copy_from_slice(&[g, g, g, 255]);
+                }
+                3 => {
+                    let yv = sample(&planes[0], &components[0], x, y);
+                    let cb = sample(&planes[1], &components[1], x, y);
+                    let cr = sample(&planes[2], &components[2], x, y);
+                    let rgb = jpeg_ycbcr_to_rgb(yv, cb, cr);
+                    out.copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+                }
+                4 => {
+                    let c0 = sample(&planes[0], &components[0], x, y);
+                    let c1 = sample(&planes[1], &components[1], x, y);
+                    let c2 = sample(&planes[2], &components[2], x, y);
+                    let c3 = sample(&planes[3], &components[3], x, y);
+                    let rgb = jpeg_cmyk_to_rgb(c0, c1, c2, c3, app14_ycck);
+                    out.copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+                }
+                _ => out.copy_from_slice(&[0, 0, 0, 255]),
+            }
+        }
+    }
+    Ok(DecodedImage {
+        width,
+        height,
+        rgba,
+    })
 }
 
 fn decode_block(
@@ -10911,6 +12251,27 @@ fn jpeg_ycbcr_to_rgb(y: i32, cb: i32, cr: i32) -> [u8; 3] {
     ]
 }
 
+fn jpeg_cmyk_to_rgb(c0: i32, c1: i32, c2: i32, c3: i32, ycck: bool) -> [u8; 3] {
+    if ycck {
+        // YCCK: first three are YCbCr, fourth is inverted K ink.
+        let [r, g, b] = jpeg_ycbcr_to_rgb(c0, c1, c2);
+        let k = 255 - c3;
+        [
+            (r as i32 * k / 255).clamp(0, 255) as u8,
+            (g as i32 * k / 255).clamp(0, 255) as u8,
+            (b as i32 * k / 255).clamp(0, 255) as u8,
+        ]
+    } else {
+        // Direct CMYK: each channel is ink density; K multiplies the others.
+        let k = 255 - c3;
+        [
+            ((255 - c0) * k / 255).clamp(0, 255) as u8,
+            ((255 - c1) * k / 255).clamp(0, 255) as u8,
+            ((255 - c2) * k / 255).clamp(0, 255) as u8,
+        ]
+    }
+}
+
 struct JpegPlane {
     width: usize,
     data: Vec<u8>,
@@ -10927,6 +12288,7 @@ fn decode_jpeg_scan(
     dc_tables: &[Option<JpegHuffTable>; 4],
     ac_tables: &[Option<JpegHuffTable>; 4],
     restart_interval: usize,
+    app14_ycck: bool,
 ) -> Result<DecodedImage, ImageDecodeError> {
     if width == 0 || height == 0 || components.is_empty() {
         return Err(ImageDecodeError::MalformedJpeg);
@@ -11006,15 +12368,27 @@ fn decode_jpeg_scan(
     for y in 0..height {
         for x in 0..width {
             let out = &mut rgba[(y * width + x) * 4..(y * width + x) * 4 + 4];
-            if comps.len() == 1 {
-                let g = sample(&planes[0], &comps[0], x, y) as u8;
-                out.copy_from_slice(&[g, g, g, 255]);
-            } else {
-                let yv = sample(&planes[0], &comps[0], x, y);
-                let cb = sample(&planes[1], &comps[1], x, y);
-                let cr = sample(&planes[2], &comps[2], x, y);
-                let rgb = jpeg_ycbcr_to_rgb(yv, cb, cr);
-                out.copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+            match comps.len() {
+                1 => {
+                    let g = sample(&planes[0], &comps[0], x, y) as u8;
+                    out.copy_from_slice(&[g, g, g, 255]);
+                }
+                3 => {
+                    let yv = sample(&planes[0], &comps[0], x, y);
+                    let cb = sample(&planes[1], &comps[1], x, y);
+                    let cr = sample(&planes[2], &comps[2], x, y);
+                    let rgb = jpeg_ycbcr_to_rgb(yv, cb, cr);
+                    out.copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+                }
+                4 => {
+                    let c0 = sample(&planes[0], &comps[0], x, y);
+                    let c1 = sample(&planes[1], &comps[1], x, y);
+                    let c2 = sample(&planes[2], &comps[2], x, y);
+                    let c3 = sample(&planes[3], &comps[3], x, y);
+                    let rgb = jpeg_cmyk_to_rgb(c0, c1, c2, c3, app14_ycck);
+                    out.copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+                }
+                _ => out.copy_from_slice(&[0, 0, 0, 255]),
             }
         }
     }
@@ -12573,12 +13947,97 @@ mod tests {
         assert_eq!(a.pixels, b.pixels);
     }
 
+    /// Build a minimal valid SOF2 progressive JPEG: 8×8 grayscale, DC-only scan,
+    /// all DC diffs = 0, so every pixel decodes to 128 (grey).
+    fn make_progressive_gray_jpeg() -> Vec<u8> {
+        let mut v: Vec<u8> = Vec::new();
+        v.extend_from_slice(&[0xFF, 0xD8]); // SOI
+                                            // DQT: 8-bit, table 0, all values = 1
+        v.extend_from_slice(&[0xFF, 0xDB, 0x00, 0x43, 0x00]);
+        v.extend(std::iter::repeat_n(1u8, 64));
+        // SOF2: precision=8, 8×8, 1 component (h1v1, qt=0)
+        v.extend_from_slice(&[
+            0xFF, 0xC2, 0x00, 0x0B, 0x08, 0x00, 0x08, 0x00, 0x08, 0x01, 0x01, 0x11, 0x00,
+        ]);
+        // DHT: DC table 0 — single code of length 1 (0b0) for category 0
+        v.extend_from_slice(&[0xFF, 0xC4, 0x00, 0x14, 0x00]);
+        v.extend_from_slice(&[0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        v.push(0x00); // huffval: category 0
+                      // SOS: DC-only scan, Ss=0 Se=0 Ah=0 Al=0
+        v.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00]);
+        // Entropy: 1-bit code 0b0 padded to byte → 0x7F
+        v.push(0x7F);
+        v.extend_from_slice(&[0xFF, 0xD9]); // EOI
+        v
+    }
+
+    /// Build a minimal valid SOF0 CMYK JPEG: 8×8, 4-component, all DC=0 (samples→128).
+    /// CMYK(128,128,128,128) → R≈G≈B≈63.
+    fn make_cmyk_baseline_jpeg() -> Vec<u8> {
+        let mut v: Vec<u8> = Vec::new();
+        v.extend_from_slice(&[0xFF, 0xD8]); // SOI
+        v.extend_from_slice(&[0xFF, 0xDB, 0x00, 0x43, 0x00]);
+        v.extend(std::iter::repeat_n(1u8, 64));
+        // SOF0: 8×8, 4 components (ids 1–4, h1v1, qt=0)
+        v.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x14, 0x08, 0x00, 0x08, 0x00, 0x08, 0x04]);
+        v.extend_from_slice(&[
+            0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00, 0x04, 0x11, 0x00,
+        ]);
+        // DHT: DC table 0 (same single-symbol table)
+        v.extend_from_slice(&[0xFF, 0xC4, 0x00, 0x14, 0x00]);
+        v.extend_from_slice(&[0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        v.push(0x00);
+        // DHT: AC table 0 — single code of length 1 (0b0) for EOB (0x00)
+        v.extend_from_slice(&[0xFF, 0xC4, 0x00, 0x14, 0x10]);
+        v.extend_from_slice(&[0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        v.push(0x00);
+        // SOS: 4 components, Ss=0 Se=63 Ah=0 Al=0
+        v.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x0E, 0x04]);
+        v.extend_from_slice(&[0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00]);
+        v.extend_from_slice(&[0x00, 0x3F, 0x00]);
+        // Entropy: 4 × (1 DC bit + 1 AC-EOB bit) = 8 bits = 0x00
+        v.push(0x00);
+        v.extend_from_slice(&[0xFF, 0xD9]); // EOI
+        v
+    }
+
     #[test]
-    fn progressive_jpeg_is_diagnosed_unsupported() {
-        // SOI + SOF2 (progressive) marker → unsupported, not mis-decoded.
+    fn progressive_jpeg_decodes_to_gray_pixels() {
+        let bytes = make_progressive_gray_jpeg();
+        let img = decode_jpeg(&bytes).unwrap();
+        assert_eq!(img.width, 8);
+        assert_eq!(img.height, 8);
+        // DC=0 after dequant → IDCT → all spatial = 0 → +128 = 128 gray
+        assert_eq!(
+            &img.rgba[0..4],
+            &[128, 128, 128, 255],
+            "center pixel should be gray-128"
+        );
+    }
+
+    #[test]
+    fn cmyk_baseline_jpeg_decodes_to_dark_gray() {
+        let bytes = make_cmyk_baseline_jpeg();
+        let img = decode_jpeg(&bytes).unwrap();
+        assert_eq!(img.width, 8);
+        assert_eq!(img.height, 8);
+        // CMYK(128,128,128,128) → (255-128)*(255-128)/255 = 127*127/255 = 63
+        let p = &img.rgba[0..4];
+        assert_eq!(p[0], 63, "CMYK R channel");
+        assert_eq!(p[1], 63, "CMYK G channel");
+        assert_eq!(p[2], 63, "CMYK B channel");
+        assert_eq!(p[3], 255);
+    }
+
+    #[test]
+    fn progressive_jpeg_truncated_sof2_is_malformed_not_unsupported() {
+        // SOF2 with a zero-length body → MalformedJpeg, not UnsupportedJpeg.
         assert!(matches!(
             decode_jpeg(&[0xFF, 0xD8, 0xFF, 0xC2, 0x00, 0x02]),
-            Err(ImageDecodeError::UnsupportedJpeg)
+            Err(ImageDecodeError::MalformedJpeg)
         ));
     }
 
@@ -12696,15 +14155,117 @@ mod tests {
 
     #[test]
     fn unsupported_filter_primitive_is_partial_with_diagnostic() {
-        let svg = r##"<svg viewBox="0 0 4 4"><filter id="f"><feTurbulence baseFrequency="0.1"/></filter><rect width="4" height="4" fill="#00ff00" filter="url(#f)"/></svg>"##;
+        // Use a truly unrecognised element name so the catch-all fires.
+        let svg = r##"<svg viewBox="0 0 4 4"><filter id="f"><feUnknownXYZ/></filter><rect width="4" height="4" fill="#00ff00" filter="url(#f)"/></svg>"##;
         let out = rasterize_with_report(svg, 4, 4).unwrap();
-        assert!(out
-            .report
-            .warnings
-            .iter()
-            .any(|w| w.code == "filter.unsupported_primitive"));
+        assert!(
+            out.report
+                .warnings
+                .iter()
+                .any(|w| w.code == "filter.unsupported_primitive"),
+            "unknown filter element must produce unsupported_primitive diagnostic"
+        );
         // Partial output: the source still renders (identity passthrough).
         assert!(out.image.pixels.iter().any(|c| c.a() > 0));
+    }
+
+    #[test]
+    fn feturbulence_generates_non_transparent_output() {
+        // feTurbulence is now a real implementation — verify it generates noise pixels.
+        let svg = r##"<svg viewBox="0 0 8 8"><filter id="f"><feTurbulence baseFrequency="0.05" numOctaves="2"/></filter><rect width="8" height="8" fill="#000000" filter="url(#f)"/></svg>"##;
+        let out = rasterize_with_report(svg, 8, 8).unwrap();
+        // Should NOT produce an unsupported_primitive diagnostic.
+        assert!(
+            !out.report
+                .warnings
+                .iter()
+                .any(|w| w.code == "filter.unsupported_primitive"),
+            "feTurbulence must not fall through to unsupported catch-all"
+        );
+        // Output should have some non-zero pixels from the noise.
+        assert!(
+            out.image.pixels.iter().any(|p| p.r() > 0 || p.g() > 0),
+            "feTurbulence output should contain non-zero noise pixels"
+        );
+    }
+
+    #[test]
+    fn fetile_repeats_input_pixels() {
+        // A simple feTile on a 2x2 flood should tile to fill the region.
+        let svg = r##"<svg viewBox="0 0 8 8"><filter id="f" x="0" y="0" width="100%" height="100%" filterUnits="userSpaceOnUse"><feFlood flood-color="#ff0000" result="r"/><feTile in="r"/></filter><rect width="8" height="8" fill="#0000ff" filter="url(#f)"/></svg>"##;
+        let out = rasterize_with_report(svg, 8, 8).unwrap();
+        assert!(
+            !out.report
+                .warnings
+                .iter()
+                .any(|w| w.code == "filter.unsupported_primitive"),
+            "feTile must not fall through to unsupported catch-all"
+        );
+        // feTile with feFlood input should produce red pixels.
+        assert!(
+            out.image.pixels.iter().any(|p| p.r() > 0),
+            "feTile of a red flood should produce red pixels"
+        );
+    }
+
+    #[test]
+    fn fedisplacementmap_accepts_without_unsupported_diagnostic() {
+        // feDisplacementMap with SourceGraphic as map: verify it parses and runs.
+        let svg = r##"<svg viewBox="0 0 8 8"><filter id="f"><feDisplacementMap scale="5" xChannelSelector="R" yChannelSelector="G" in2="SourceGraphic"/></filter><rect width="8" height="8" fill="#ff8800" filter="url(#f)"/></svg>"##;
+        let out = rasterize_with_report(svg, 8, 8).unwrap();
+        assert!(
+            !out.report
+                .warnings
+                .iter()
+                .any(|w| w.code == "filter.unsupported_primitive"),
+            "feDisplacementMap must not fall through to unsupported"
+        );
+    }
+
+    #[test]
+    fn feconvolvematrix_identity_kernel_preserves_source() {
+        // A 3x3 identity kernel (centre=1, rest=0) should preserve the source.
+        let svg = r##"<svg viewBox="0 0 4 4"><filter id="f"><feConvolveMatrix order="3" kernelMatrix="0 0 0 0 1 0 0 0 0"/></filter><rect width="4" height="4" fill="#ff0000" filter="url(#f)"/></svg>"##;
+        let out = rasterize_with_report(svg, 4, 4).unwrap();
+        assert!(
+            !out.report
+                .warnings
+                .iter()
+                .any(|w| w.code == "filter.unsupported_primitive"),
+            "feConvolveMatrix must not fall through to unsupported"
+        );
+        // Output should be red (identity kernel).
+        let c = &out.image.pixels[out.image.pixels.len() / 2];
+        assert!(
+            c.r() > 128,
+            "identity convolution should preserve red, got {c:?}"
+        );
+    }
+
+    #[test]
+    fn fediffuselighting_accepts_without_unsupported_diagnostic() {
+        let svg = r##"<svg viewBox="0 0 8 8"><filter id="f"><feDiffuseLighting lighting-color="white" diffuseConstant="1" surfaceScale="4"><feDistantLight azimuth="45" elevation="60"/></feDiffuseLighting></filter><rect width="8" height="8" fill="#888" filter="url(#f)"/></svg>"##;
+        let out = rasterize_with_report(svg, 8, 8).unwrap();
+        assert!(
+            !out.report
+                .warnings
+                .iter()
+                .any(|w| w.code == "filter.unsupported_primitive"),
+            "feDiffuseLighting must not fall through to unsupported"
+        );
+    }
+
+    #[test]
+    fn fespecularlighting_accepts_without_unsupported_diagnostic() {
+        let svg = r##"<svg viewBox="0 0 8 8"><filter id="f"><feSpecularLighting lighting-color="white" specularConstant="1" specularExponent="20" surfaceScale="4"><fePointLight x="4" y="4" z="20"/></feSpecularLighting></filter><rect width="8" height="8" fill="#888" filter="url(#f)"/></svg>"##;
+        let out = rasterize_with_report(svg, 8, 8).unwrap();
+        assert!(
+            !out.report
+                .warnings
+                .iter()
+                .any(|w| w.code == "filter.unsupported_primitive"),
+            "feSpecularLighting must not fall through to unsupported"
+        );
     }
 
     #[test]

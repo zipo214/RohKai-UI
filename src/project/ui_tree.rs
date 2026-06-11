@@ -1218,4 +1218,184 @@ mod tests {
             assert_eq!(child.rect.h, 102.0);
         }
     }
+
+    // --- Cline Rec 6: z-order ---
+
+    #[test]
+    fn bring_to_front_moves_to_end() {
+        let a = Uuid::from_u128(1);
+        let b = Uuid::from_u128(2);
+        let c = Uuid::from_u128(3);
+        let mut tree = UiTree {
+            widgets: vec![widget(a), widget(b), widget(c)],
+            ..Default::default()
+        };
+        tree.bring_to_front(a);
+        assert_eq!(tree.widgets.last().map(|w| w.id), Some(a));
+    }
+
+    #[test]
+    fn send_to_back_moves_to_start() {
+        let a = Uuid::from_u128(1);
+        let b = Uuid::from_u128(2);
+        let c = Uuid::from_u128(3);
+        let mut tree = UiTree {
+            widgets: vec![widget(a), widget(b), widget(c)],
+            ..Default::default()
+        };
+        tree.send_to_back(c);
+        assert_eq!(tree.widgets.first().map(|w| w.id), Some(c));
+    }
+
+    // --- Cline Rec 6: group / ungroup ---
+
+    #[test]
+    fn group_creates_frame_with_children() {
+        let a = Uuid::from_u128(10);
+        let b = Uuid::from_u128(11);
+        let mut tree = UiTree {
+            widgets: vec![
+                WidgetInstance {
+                    id: a,
+                    rect: Rect {
+                        x: 50.0,
+                        y: 50.0,
+                        w: 80.0,
+                        h: 40.0,
+                    },
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: b,
+                    rect: Rect {
+                        x: 150.0,
+                        y: 50.0,
+                        w: 80.0,
+                        h: 40.0,
+                    },
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let frame_id = tree.group(&[a, b]);
+        assert!(frame_id.is_some(), "group should return a frame id");
+        let frame = tree
+            .widgets
+            .iter()
+            .find(|w| w.id == frame_id.unwrap())
+            .unwrap();
+        assert_eq!(frame.kind, WidgetKind::Frame);
+        assert!(frame.children.contains(&a));
+        assert!(frame.children.contains(&b));
+    }
+
+    #[test]
+    fn group_fails_with_less_than_two() {
+        let a = Uuid::from_u128(20);
+        let mut tree = UiTree {
+            widgets: vec![widget(a)],
+            ..Default::default()
+        };
+        assert_eq!(tree.group(&[a]), None);
+        assert_eq!(tree.group(&[]), None);
+    }
+
+    #[test]
+    fn ungroup_removes_frame_returns_children() {
+        let a = Uuid::from_u128(30);
+        let b = Uuid::from_u128(31);
+        let frame_id = Uuid::from_u128(32);
+        let mut tree = UiTree {
+            widgets: vec![
+                WidgetInstance {
+                    id: frame_id,
+                    kind: WidgetKind::Frame,
+                    children: vec![a, b],
+                    ..Default::default()
+                },
+                widget(a),
+                widget(b),
+            ],
+            ..Default::default()
+        };
+        let returned = tree.ungroup(frame_id);
+        assert!(returned.contains(&a));
+        assert!(returned.contains(&b));
+        assert!(!tree.widgets.iter().any(|w| w.id == frame_id));
+    }
+
+    // --- Cline Rec 6: remove cascade ---
+
+    #[test]
+    fn remove_cascades_to_children() {
+        let parent = Uuid::from_u128(40);
+        let child = Uuid::from_u128(41);
+        let grandchild = Uuid::from_u128(42);
+        let mut tree = UiTree {
+            widgets: vec![
+                WidgetInstance {
+                    id: parent,
+                    children: vec![child],
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: child,
+                    children: vec![grandchild],
+                    ..Default::default()
+                },
+                widget(grandchild),
+            ],
+            ..Default::default()
+        };
+        tree.remove(parent);
+        let ids: Vec<Uuid> = tree.widgets.iter().map(|w| w.id).collect();
+        assert!(!ids.contains(&parent));
+        assert!(!ids.contains(&child));
+        assert!(!ids.contains(&grandchild));
+    }
+
+    // --- Cline Rec 6: validate_and_repair ---
+
+    #[test]
+    fn validate_and_repair_fixes_duplicate_ids() {
+        let dup = Uuid::from_u128(50);
+        let mut tree = UiTree {
+            widgets: vec![
+                WidgetInstance {
+                    id: dup,
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: dup,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        tree.validate_and_repair();
+        let ids: Vec<Uuid> = tree.widgets.iter().map(|w| w.id).collect();
+        assert_eq!(ids[0], dup, "first keeps original id");
+        assert_ne!(ids[1], dup, "second must be reassigned");
+    }
+
+    #[test]
+    fn validate_and_repair_removes_stale_children() {
+        let parent = Uuid::from_u128(60);
+        let ghost = Uuid::from_u128(61); // never in widgets vec
+        let mut tree = UiTree {
+            widgets: vec![WidgetInstance {
+                id: parent,
+                children: vec![ghost],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        tree.validate_and_repair();
+        let parent_w = tree.widgets.iter().find(|w| w.id == parent).unwrap();
+        assert!(
+            parent_w.children.is_empty(),
+            "stale child ref must be removed"
+        );
+    }
 }
