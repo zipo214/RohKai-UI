@@ -3,7 +3,7 @@ use crate::codegen::{
     rust::{field_binding, string_literal},
 };
 use crate::project::{
-    schema::{WidgetEvent, WidgetKind},
+    schema::{SizePolicy, WidgetEvent, WidgetInstance, WidgetKind},
     ui_tree::UiTree,
 };
 use crate::codegen::formula::{collect_variables, emit_formula_rust, parse_formula};
@@ -862,7 +862,13 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 )
             }
             WidgetKind::VLayout => {
-                let mut code = "                ui.vertical(|ui| {\n".to_owned();
+                use crate::project::schema::LayoutCrossAlign;
+                let open = match w.props.layout_cross_align {
+                    LayoutCrossAlign::Start => "                ui.vertical(|ui| {\n".to_owned(),
+                    LayoutCrossAlign::Center => "                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {\n".to_owned(),
+                    LayoutCrossAlign::End => "                ui.with_layout(egui::Layout::top_down(egui::Align::RIGHT), |ui| {\n".to_owned(),
+                };
+                let mut code = open;
                 for &child_id in &w.children {
                     if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
                         code.push_str(&export_layout_child_line(child, &handler_registry));
@@ -872,7 +878,13 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 code
             }
             WidgetKind::HLayout => {
-                let mut code = "                ui.horizontal(|ui| {\n".to_owned();
+                use crate::project::schema::LayoutCrossAlign;
+                let open = match w.props.layout_cross_align {
+                    LayoutCrossAlign::Start => "                ui.horizontal(|ui| {\n".to_owned(),
+                    LayoutCrossAlign::Center => "                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {\n".to_owned(),
+                    LayoutCrossAlign::End => "                ui.with_layout(egui::Layout::left_to_right(egui::Align::BOTTOM), |ui| {\n".to_owned(),
+                };
+                let mut code = open;
                 for &child_id in &w.children {
                     if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
                         code.push_str(&export_layout_child_line(child, &handler_registry));
@@ -886,8 +898,13 @@ fn gen_app_rs(tree: &UiTree) -> String {
             }
             WidgetKind::GridLayout => {
                 let columns = w.props.grid_columns.clamp(1, MAX_GRID_COLUMNS);
+                let row_height_chain = w
+                    .props
+                    .grid_row_height
+                    .map(|h| format!(".min_row_height({h:.1})"))
+                    .unwrap_or_default();
                 let mut code = format!(
-                    "                egui::Grid::new(\"{}\").show(ui, |ui| {{\n",
+                    "                egui::Grid::new(\"{}\"){row_height_chain}.show(ui, |ui| {{\n",
                     w.id.as_simple()
                 );
                 for (idx, &child_id) in w.children.iter().enumerate() {
@@ -898,7 +915,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                         }
                     }
                 }
-                if !w.children.is_empty() && w.children.len() % columns != 0 {
+                if !w.children.is_empty() && !w.children.len().is_multiple_of(columns) {
                     code.push_str("                    ui.end_row();\n");
                 }
                 code.push_str("                });\n");
@@ -1569,12 +1586,20 @@ fn export_child_line(
     }
 }
 
+fn export_child_size_str(child: &WidgetInstance) -> String {
+    match child.props.size_policy {
+        SizePolicy::Fixed => format!("[{:.1}, {:.1}]", child.rect.w, child.rect.h),
+        SizePolicy::FillWidth => format!("[ui.available_width(), {:.1}]", child.rect.h),
+        SizePolicy::Fill => "ui.available_size()".to_owned(),
+    }
+}
+
 /// Emit a child owned by an egui layout container.
 ///
 /// Layout children are emitted sequentially inside the layout closure instead of
 /// absolute-positioned with `ui.put`.
 fn export_layout_child_line(
-    child: &crate::project::schema::WidgetInstance,
+    child: &WidgetInstance,
     registry: &HashMap<String, (crate::project::schema::HandlerResult, bool)>,
 ) -> String {
     let child_label = string_literal(&child.props.label);
@@ -1582,10 +1607,8 @@ fn export_layout_child_line(
     let mut code = format!("                    // widget_{}\n", child.id);
     match &child.kind {
         WidgetKind::Button => {
-            let resp = format!(
-                "ui.add_sized([{:.1}, {:.1}], egui::Button::new({child_label}))",
-                child.rect.w, child.rect.h
-            );
+            let sz = export_child_size_str(child);
+            let resp = format!("ui.add_sized({sz}, egui::Button::new({child_label}))");
             code.push_str(&export_child_event_dispatch(child, &resp, registry));
         }
         WidgetKind::Label => match child_binding {
@@ -1594,10 +1617,8 @@ fn export_layout_child_line(
         },
         WidgetKind::TextInput => match child_binding {
             Some(b) => {
-                let resp = format!(
-                    "ui.add_sized([{:.1}, {:.1}], egui::TextEdit::singleline(&mut self.state.{b}))",
-                    child.rect.w, child.rect.h
-                );
+                let sz = export_child_size_str(child);
+                let resp = format!("ui.add_sized({sz}, egui::TextEdit::singleline(&mut self.state.{b}))");
                 code.push_str(&export_child_event_dispatch(child, &resp, registry));
             }
             None => code.push_str(&format!(
@@ -1606,10 +1627,8 @@ fn export_layout_child_line(
         },
         WidgetKind::TextArea => match child_binding {
             Some(b) => {
-                let resp = format!(
-                    "ui.add_sized([{:.1}, {:.1}], egui::TextEdit::multiline(&mut self.state.{b}))",
-                    child.rect.w, child.rect.h
-                );
+                let sz = export_child_size_str(child);
+                let resp = format!("ui.add_sized({sz}, egui::TextEdit::multiline(&mut self.state.{b}))");
                 code.push_str(&export_child_event_dispatch(child, &resp, registry));
             }
             None => code.push_str(&format!(
@@ -1618,9 +1637,10 @@ fn export_layout_child_line(
         },
         WidgetKind::Slider => match child_binding {
             Some(b) => {
+                let sz = export_child_size_str(child);
                 let resp = format!(
-                    "ui.add_sized([{:.1}, {:.1}], egui::Slider::new(&mut self.state.{b}, {:.1}..={:.1}).text({child_label}))",
-                    child.rect.w, child.rect.h, child.props.min, child.props.max
+                    "ui.add_sized({sz}, egui::Slider::new(&mut self.state.{b}, {:.1}..={:.1}).text({child_label}))",
+                    child.props.min, child.props.max
                 );
                 code.push_str(&export_child_event_dispatch(child, &resp, registry));
             }
@@ -1681,9 +1701,9 @@ fn export_layout_child_line(
                 } else {
                     ""
                 };
+                let sz = export_child_size_str(child);
                 code.push_str(&format!(
-                    "                    ui.add_sized([{:.1}, {:.1}], egui::ProgressBar::new(self.state.{b}){percent});\n",
-                    child.rect.w, child.rect.h
+                    "                    ui.add_sized({sz}, egui::ProgressBar::new(self.state.{b}){percent});\n"
                 ));
             }
             None => code.push_str(&format!(

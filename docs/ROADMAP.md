@@ -633,10 +633,12 @@ See `docs/STAGE11_PLAN.md` for the full design (function, depth, UX, impact).
 ---
 
 ## Stage 12 — Platform Targets
-- [ ] WASM export panel in File menu
-- [ ] Configure: output path, bundler (trunk/wasm-pack), generate index.html toggle
-- [ ] Generates `cargo build --target wasm32-unknown-unknown` compatible project
-- [ ] Web-specific widget considerations (no file dialogs, no native paths)
+- [x] WASM export panel in File menu — "Export WASM Project…" in File menu
+- [x] Configure: output path, bundler (trunk/wasm-pack), generate index.html toggle
+- [x] Generates `cargo build --target wasm32-unknown-unknown` compatible project — cdylib
+      crate type, `#[wasm_bindgen(start)]` via `eframe::WebRunner`, Trunk.toml generated
+- [x] Web-specific widget considerations (no file dialogs, no native paths) — FilePicker
+      stubbed in WASM build; WASM_NOTES.txt documents limitations
 - [ ] Preview in browser button — runs trunk serve
 
 ---
@@ -712,15 +714,18 @@ and prioritizes depth over more palette breadth.
 - [ ] Lazare IDE depth: precise cursor placement, search, symbol list, clickable
       diagnostic navigation, diff view, generated/user-region ownership, and
       handler-range indexing beyond the current navigation slice.
-- [ ] Data model groundwork: typed data source model, binding model for
+- [x] Data model groundwork: typed data source model, binding model for
       Table/List/Tree, and explicit separation of static option widgets from
-      model-backed views.
-- [ ] Runtime component semantics: Timer, StateMachine, HttpRequest, Lifecycle,
-      and DataSource either execute real generated behavior or remain clearly
-      labeled design-time/documented stubs.
-- [ ] Formula and chart depth: keep `MathLabel` and current `Chart` as MVPs while
-      planning separate formula parser/evaluator and chart series/axes/legend
-      systems.
+      model-backed views. DataColumnType/DataColumn schema; data_source_binding
+      on WidgetProps; bound Table/ListView/TreeView emit iteration code in
+      egui_emitter/export; Properties show_data_widget with Static/Bound toggle.
+- [x] Runtime component semantics: Timer, StateMachine, HttpRequest, Lifecycle,
+      and DataSource are clearly labeled design-time/documented stubs. Each emits
+      an AppState field + a generated comment hook. Runtime scheduling/HTTP/FSM
+      dispatch deferred to Stage 13 or later.
+- [x] Formula and chart depth: MathLabel upgraded with recursive-descent infix
+      formula parser (formula.rs) and Rust emitter; Chart remains Vec<f32> bar
+      MVP. Separate charting library system deferred to Stage 13.
 - [ ] Visual Widget Maker: build the real primitive mini-canvas tool separately
       from the Guided Descriptor Builder and Advanced Descriptor Editor.
 - [ ] Object Inspector/component tray depth: improve discoverability, contextual

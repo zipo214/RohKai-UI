@@ -462,6 +462,26 @@ pub enum LayoutCrossAlign {
     End,
 }
 
+/// Per-child size policy for widgets placed inside a layout container.
+/// Controls how a child consumes available space along the main axis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SizePolicy {
+    /// Use the widget's own fixed width / height (canvas rect).
+    #[default]
+    Fixed,
+    /// Expand to consume all available width; height stays fixed.
+    FillWidth,
+    /// Expand to fill all available space (width and height).
+    Fill,
+}
+
+impl SizePolicy {
+    pub fn is_fixed(&self) -> bool {
+        matches!(self, SizePolicy::Fixed)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Data model types
 // ---------------------------------------------------------------------------
@@ -597,6 +617,18 @@ pub struct WidgetProps {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub data_columns: Vec<DataColumn>,
 
+    // Per-child layout size policy
+    /// How this widget expands inside a parent layout container.
+    /// Fixed (default) uses the canvas rect dimensions.
+    #[serde(default, skip_serializing_if = "SizePolicy::is_fixed")]
+    pub size_policy: SizePolicy,
+
+    // GridLayout row policy
+    /// Minimum row height for GridLayout containers (in logical pixels).
+    /// None = egui default (content-driven).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid_row_height: Option<f32>,
+
     // Stage 9 schema audit
     /// Wrap text at widget boundary (Label, TextArea). None = egui default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -691,6 +723,8 @@ impl Default for WidgetProps {
             formula_decimals: 2,
             data_source_binding: None,
             data_columns: Vec::new(),
+            size_policy: SizePolicy::Fixed,
+            grid_row_height: None,
             text_wrap: None,
         }
     }

@@ -1,7 +1,7 @@
 use crate::codegen::widget_descriptor::{DescriptorPropType, WidgetDescriptor};
 use crate::project::schema::{
     CustomProp, CustomPropType, DataColumn, DataColumnType, HandlerResult, LayoutCrossAlign,
-    Orientation, TextAlign, WidgetEvent, WidgetInstance, WidgetKind,
+    Orientation, SizePolicy, TextAlign, WidgetEvent, WidgetInstance, WidgetKind,
 };
 use crate::project::ui_tree::UiTree;
 use uuid::Uuid;
@@ -547,6 +547,39 @@ fn show_geometry(ui: &mut egui::Ui, w: &mut WidgetInstance) {
             ui.add(egui::DragValue::new(&mut w.rect.h).speed(1.0));
             ui.end_row();
         });
+    // Per-child size policy (meaningful inside a layout container)
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Size").small().weak());
+        if ui
+            .selectable_label(
+                w.props.size_policy == SizePolicy::Fixed,
+                egui::RichText::new("Fixed").small(),
+            )
+            .clicked()
+        {
+            w.props.size_policy = SizePolicy::Fixed;
+        }
+        if ui
+            .selectable_label(
+                w.props.size_policy == SizePolicy::FillWidth,
+                egui::RichText::new("Fill W").small(),
+            )
+            .on_hover_text("Expand to fill available width inside a layout")
+            .clicked()
+        {
+            w.props.size_policy = SizePolicy::FillWidth;
+        }
+        if ui
+            .selectable_label(
+                w.props.size_policy == SizePolicy::Fill,
+                egui::RichText::new("Fill").small(),
+            )
+            .on_hover_text("Expand to fill all available space inside a layout")
+            .clicked()
+        {
+            w.props.size_policy = SizePolicy::Fill;
+        }
+    });
 }
 
 fn show_tooltip(ui: &mut egui::Ui, w: &mut WidgetInstance) {
@@ -1516,6 +1549,23 @@ fn show_layout_container(
                         .div_ceil(w.props.grid_columns.clamp(1, 12))
                         .max(1);
                     ui.label(rows.to_string());
+                    ui.end_row();
+                    // Row height policy
+                    ui.label(egui::RichText::new("Row H").small());
+                    let mut has_row_h = w.props.grid_row_height.is_some();
+                    if ui.checkbox(&mut has_row_h, "").changed() {
+                        w.props.grid_row_height = if has_row_h { Some(24.0) } else { None };
+                    }
+                    if let Some(ref mut rh) = w.props.grid_row_height {
+                        ui.add(
+                            egui::DragValue::new(rh)
+                                .range(4.0..=512.0_f32)
+                                .speed(0.5)
+                                .suffix(" px"),
+                        );
+                    } else {
+                        ui.label(egui::RichText::new("auto").small().weak());
+                    }
                     ui.end_row();
                 }
                 if matches!(w.kind, WidgetKind::VLayout | WidgetKind::HLayout) {

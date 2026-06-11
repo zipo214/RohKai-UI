@@ -1,7 +1,7 @@
 use crate::codegen::formula::{collect_variables, emit_formula_rust, parse_formula};
 use crate::codegen::rust::{field_binding, string_literal};
 use crate::codegen::source_map::{GeneratedCodeDocument, SourceSpan, WidgetSourceSpan};
-use crate::project::schema::{LayoutCrossAlign, Orientation, WidgetInstance, WidgetKind};
+use crate::project::schema::{LayoutCrossAlign, Orientation, SizePolicy, WidgetInstance, WidgetKind};
 use crate::project::ui_tree::UiTree;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -517,10 +517,15 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
             }
             WidgetKind::GridLayout => {
                 let columns = w.props.grid_columns.clamp(1, MAX_GRID_COLUMNS);
+                let row_height_chain = w
+                    .props
+                    .grid_row_height
+                    .map(|h| format!(".min_row_height({h:.1})"))
+                    .unwrap_or_default();
                 lines.push((
                     Some(w.id),
                     format!(
-                        "        egui::Grid::new(\"{}\").show(ui, |ui| {{",
+                        "        egui::Grid::new(\"{}\"){row_height_chain}.show(ui, |ui| {{",
                         w.id.as_simple()
                     ),
                 ));
@@ -1128,6 +1133,16 @@ fn image_child_preview_line(child: &WidgetInstance, rect_expr: &str) -> String {
 ///
 /// Unlike Frame children, layout children are not positioned with `ui.put`.
 /// The layout closure owns their placement order.
+/// Returns the `add_sized` size argument string for a layout child,
+/// respecting its `size_policy`.
+fn child_size_str(child: &WidgetInstance) -> String {
+    match child.props.size_policy {
+        SizePolicy::Fixed => format!("[{:.1}, {:.1}]", child.rect.w, child.rect.h),
+        SizePolicy::FillWidth => format!("[ui.available_width(), {:.1}]", child.rect.h),
+        SizePolicy::Fill => "ui.available_size()".to_owned(),
+    }
+}
+
 fn emit_layout_child_lines(child: &WidgetInstance, lines: &mut Vec<(Option<Uuid>, String)>) {
     let label = string_literal(&child.props.label);
     let eff = child
@@ -1142,9 +1157,9 @@ fn emit_layout_child_lines(child: &WidgetInstance, lines: &mut Vec<(Option<Uuid>
     let line = match &child.kind {
         WidgetKind::Button => {
             let id = child.id.as_simple();
+            let sz = child_size_str(child);
             let mut s = format!(
-                "            let _btn_{id} = ui.add_sized([{:.1}, {:.1}], egui::Button::new({label}));",
-                child.rect.w, child.rect.h
+                "            let _btn_{id} = ui.add_sized({sz}, egui::Button::new({label}));"
             );
             if let Some(h) = resolve_handler_click(child) {
                 s.push_str(&format!(
@@ -1164,24 +1179,25 @@ fn emit_layout_child_lines(child: &WidgetInstance, lines: &mut Vec<(Option<Uuid>
             None => format!("            ui.label({label});"),
         },
         WidgetKind::TextInput => match binding {
-            Some(b) => format!(
-                "            ui.add_sized([{:.1}, {:.1}], egui::TextEdit::singleline(&mut self.{b}));",
-                child.rect.w, child.rect.h
-            ),
+            Some(b) => {
+                let sz = child_size_str(child);
+                format!("            ui.add_sized({sz}, egui::TextEdit::singleline(&mut self.{b}));")
+            }
             None => format!("            // TextInput {label}: set a valid Binding"),
         },
         WidgetKind::TextArea => match binding {
-            Some(b) => format!(
-                "            ui.add_sized([{:.1}, {:.1}], egui::TextEdit::multiline(&mut self.{b}));",
-                child.rect.w, child.rect.h
-            ),
+            Some(b) => {
+                let sz = child_size_str(child);
+                format!("            ui.add_sized({sz}, egui::TextEdit::multiline(&mut self.{b}));")
+            }
             None => format!("            // TextArea {label}: set a valid Binding"),
         },
         WidgetKind::Slider => match binding {
-            Some(b) => format!(
-                "            ui.add_sized([{:.1}, {:.1}], egui::Slider::new(&mut self.{b}, {:.1}..={:.1}).text({label}));",
-                child.rect.w, child.rect.h, child.props.min, child.props.max
-            ),
+            Some(b) => {
+                let sz = child_size_str(child);
+                format!("            ui.add_sized({sz}, egui::Slider::new(&mut self.{b}, {:.1}..={:.1}).text({label}));",
+                    child.props.min, child.props.max)
+            }
             None => format!("            // Slider {label}: set a valid Binding"),
         },
         WidgetKind::SpinBox => match binding {
@@ -1221,10 +1237,10 @@ fn emit_layout_child_lines(child: &WidgetInstance, lines: &mut Vec<(Option<Uuid>
             None => format!("            // ComboBox {label}: set a valid Binding"),
         },
         WidgetKind::ProgressBar => match binding {
-            Some(b) => format!(
-                "            ui.add_sized([{:.1}, {:.1}], egui::ProgressBar::new(self.{b}));",
-                child.rect.w, child.rect.h
-            ),
+            Some(b) => {
+                let sz = child_size_str(child);
+                format!("            ui.add_sized({sz}, egui::ProgressBar::new(self.{b}));")
+            }
             None => format!("            // ProgressBar {label}: set a valid Binding"),
         },
         WidgetKind::MathLabel => {
@@ -1833,5 +1849,85 @@ mod tests {
             w.props.data_source_binding = Some("nodes".into());
         });
         assert!(g.contains("for node in &self.nodes"), "bound TreeView must iterate");
+    }
+
+    // --- Size policy tests ---
+
+    fn emit_vlayout_with_child(set_child: impl FnOnce(&mut WidgetInstance)) -> String {
+        use crate::project::schema::{Rect, WidgetProps};
+        use uuid::Uuid;
+        let parent_id = Uuid::from_u128(0xA1);
+        let child_id = Uuid::from_u128(0xA2);
+        let mut child = WidgetInstance {
+            id: child_id,
+            kind: WidgetKind::Button,
+            props: WidgetProps { label: "Btn".into(), ..Default::default() },
+            rect: Rect { x: 0.0, y: 0.0, w: 100.0, h: 30.0 },
+            ..Default::default()
+        };
+        set_child(&mut child);
+        let parent = WidgetInstance {
+            id: parent_id,
+            kind: WidgetKind::VLayout,
+            children: vec![child_id],
+            props: WidgetProps { label: "VL".into(), ..Default::default() },
+            rect: Rect { x: 0.0, y: 0.0, w: 300.0, h: 200.0 },
+            ..Default::default()
+        };
+        let tree = UiTree { widgets: vec![parent, child], ..Default::default() };
+        emit_indexed(&tree).into_iter().map(|(_, l)| l).collect::<Vec<_>>().join("\n")
+    }
+
+    #[test]
+    fn fixed_size_policy_uses_rect_dimensions() {
+        let code = emit_vlayout_with_child(|_| {});
+        assert!(code.contains("[100.0, 30.0]"), "Fixed should use rect w/h: {code}");
+    }
+
+    #[test]
+    fn fill_width_policy_uses_available_width() {
+        let code = emit_vlayout_with_child(|c| {
+            c.props.size_policy = SizePolicy::FillWidth;
+        });
+        assert!(
+            code.contains("[ui.available_width(), 30.0]"),
+            "FillWidth should use available_width: {code}"
+        );
+    }
+
+    #[test]
+    fn fill_policy_uses_available_size() {
+        let code = emit_vlayout_with_child(|c| {
+            c.props.size_policy = SizePolicy::Fill;
+        });
+        assert!(
+            code.contains("ui.available_size()"),
+            "Fill should use available_size: {code}"
+        );
+    }
+
+    #[test]
+    fn grid_layout_min_row_height_emitted() {
+        use crate::project::schema::{Rect, WidgetProps};
+        use uuid::Uuid;
+        let grid_id = Uuid::from_u128(0xB1);
+        let grid = WidgetInstance {
+            id: grid_id,
+            kind: WidgetKind::GridLayout,
+            props: WidgetProps {
+                label: "G".into(),
+                grid_columns: 2,
+                grid_row_height: Some(48.0),
+                ..Default::default()
+            },
+            rect: Rect { x: 0.0, y: 0.0, w: 400.0, h: 200.0 },
+            ..Default::default()
+        };
+        let tree = UiTree { widgets: vec![grid], ..Default::default() };
+        let code = emit_indexed(&tree).into_iter().map(|(_, l)| l).collect::<Vec<_>>().join("\n");
+        assert!(
+            code.contains(".min_row_height(48.0)"),
+            "GridLayout with grid_row_height must emit min_row_height: {code}"
+        );
     }
 }
