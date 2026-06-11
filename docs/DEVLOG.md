@@ -2,6 +2,42 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-11 — P2.1 (VWM capabilities) + P2.2 (Canvas UX) merged
+
+### Context Reviewed
+- `docs/ROADMAP_PHASE2.md` P2.1 and P2.2 sections
+- Both parallel worktree agents completed; output verified before merge
+
+### Changes
+
+**P2.1 — Visual Widget Maker later capabilities:**
+- `src/panels/widget_maker_panel.rs`: "Properties | Code Preview" tab bar; Code Preview tab shows live `gen_live_preview` + `gen_export_template` output in read-only monospace scroll areas; primitive layer list with ↑↓ buttons (disabled at boundaries, swaps applied post-loop)
+- `src/canvas/widget_maker.rs`: `PrimAnchor` enum (TopLeft/TopRight/BottomLeft/BottomRight/Center, serde snake_case, default TopLeft); `MakerPrimitive` gains `anchor`, `min_w`, `min_h` (all `#[serde(default)]` for backward compat); `apply_corner_resize` enforces min clamp; `pub fn doc_from_descriptor(desc) -> Option<WidgetMakerDoc>` parses VWM-originated descriptors (returns None for hand-written ones)
+- ROADMAP P2.1: 4 items checked, 6 deferred with explicit notes
+- +5 tests: swap_first_and_last, resize_below_min_w_is_clamped, prim_anchor_serde_default_roundtrip, doc_from_descriptor_round_trips_metadata, doc_from_descriptor_returns_none_for_non_vwm_descriptor
+
+**P2.2 — Canvas UX depth:**
+- `src/canvas/interaction.rs`: `compute_fit_rect(content_rect, viewport_rect, padding_fraction)` helper; `F` key zoom-to-selection (fits selected widgets or all if none, 10% padding, min zoom clamp); `WidgetError` enum + `compute_widget_errors(widgets) -> HashMap<Uuid, Vec<WidgetError>>`; red 2px outline on canvas for duplicate ID / invalid handler name / missing binding (Slider/TextInput/Checkbox/ComboBox/ProgressBar)
+- `src/panels/properties.rs`: `field_text_resettable` wraps text field with right-click "Reset to default"; `show_geometry_resettable` gives each DragValue a reset context menu; applied to Button and Label panels
+- `src/app.rs`: `name_counter: HashMap<String, u32>` on `RohKaiApp`; `next_widget_label(&mut self, kind) -> String` generates `"button_1"`, `"label_2"`, etc.; applied on palette click + drag; cleared in `cmd_new()`
+- ROADMAP P2.2: 4 items checked, 5 deferred with notes
+- +14 tests (zoom/fit, error detection variants, property reset, auto-naming counters)
+
+### Verification
+- `cargo fmt --check`: clean
+- `cargo clippy --all-targets -- -D warnings`: zero warnings
+- `cargo test`: **440 passed, 0 failed, 6 ignored**
+- `git push origin dev` → `de4f7e5`
+
+### Risks / Follow-ups
+- P2.1 deferred: hit regions, layout groups, state variants, slots, event zones, style tokens — all need non-trivial new architecture
+- P2.2 deferred: canvas Ctrl+F, clipboard enhancements, minimap, multi-select property edit, context tooltips
+- Invariant 10 (SQL injection) not yet in ENGINEERING_INVARIANTS.md — add before Stage 13 codegen work
+- `rusqlite` awaits explicit user approval before Cargo.toml addition
+- 3 CodeQL false positives on GitHub Security tab (rust_wiring.rs L89/172/228) need manual dismissal
+
+---
+
 ## 2026-06-11 — v0.2.0 PR review fixes (CI gate + Qodo)
 
 ### Context Reviewed
