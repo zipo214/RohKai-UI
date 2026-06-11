@@ -289,8 +289,15 @@ mod tests {
         let tree = make_tree(vec![simple_widget(WidgetKind::Checkbox, "type")]);
         let r = collect(&tree);
         // Should generate a field "type_value", not skip it entirely
-        assert_eq!(r.fields.len(), 1, "keyword binding must be sanitized, not dropped");
+        assert_eq!(
+            r.fields.len(),
+            1,
+            "keyword binding must be sanitized, not dropped"
+        );
         assert_eq!(r.fields[0].name, "type_value");
-        assert!(r.warnings.is_empty(), "sanitized keyword should not emit warning");
+        assert!(
+            r.warnings.is_empty(),
+            "sanitized keyword should not emit warning"
+        );
     }
 }

@@ -836,10 +836,7 @@ fn emit_child_lines(
     let label = string_literal(&child.props.label);
     let binding = field_binding(child.state_binding.as_deref());
 
-    lines.push((
-        Some(child.id),
-        format!("{indent}// widget_{}", child.id),
-    ));
+    lines.push((Some(child.id), format!("{indent}// widget_{}", child.id)));
 
     let line = match &child.kind {
         WidgetKind::Button => format!(

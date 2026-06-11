@@ -36,7 +36,10 @@ mod tests {
         assert_eq!(string_literal("hello"), r#""hello""#);
         let nl = string_literal("a\nb");
         assert!(nl.starts_with('"') && nl.ends_with('"'));
-        assert!(!nl.contains('\n'), "raw newline must not appear in generated literal");
+        assert!(
+            !nl.contains('\n'),
+            "raw newline must not appear in generated literal"
+        );
         let emoji = string_literal("🦀");
         assert!(emoji.starts_with('"') && emoji.ends_with('"') && emoji.contains("🦀"));
     }
