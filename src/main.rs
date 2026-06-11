@@ -163,6 +163,9 @@ fn draw_rounded_tile(rgba: &mut [u8], size: u32, background: [u8; 3], border: [u
     }
 }
 
+// TODO(P2-A): wire ShaperEngine — icon rasteriser uses ab_glyph directly; once
+// ShaperEngine is plumbed here, RustyBuzzShaper supplies shaped clusters and
+// ab_glyph is only needed for pixel-level rasterization (outline_glyph).
 fn draw_glyph_run(
     rgba: &mut [u8],
     size: u32,

@@ -4195,6 +4195,9 @@ fn hershey_glyph(c: char) -> Option<&'static [i8]> {
 const TOFU_STROKES: &[i8] = &[16, 3, 0, 13, 0, 13, 21, 3, 21, 3, 0];
 
 /// Advance width (glyph units) for a character, tofu included.
+// TODO(P2-A): wire ShaperEngine — when a real TTF face is available, replace
+// this Hershey lookup with HersheyShaper::shape() (std-only path) or, for the
+// in-app rasterizer, RustyBuzzShaper::shape() for accurate advance widths.
 fn glyph_advance_units(c: char) -> f64 {
     hershey_glyph(c).unwrap_or(TOFU_STROKES)[0] as f64
 }

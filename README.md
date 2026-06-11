@@ -2,7 +2,8 @@
   <img src="./assets/rohkai-mark.svg" height="34" alt="ρϗ">RohKai
 </h1>
 
-<img width="1795" height="1099" alt="image" src="https://github.com/user-attachments/assets/bf561102-aa4d-47e2-a830-e629848bea76" />
+<img width="2560" height="1392" alt="image" src="https://github.com/user-attachments/assets/dfed742e-f866-425a-b1a0-c40e0ff74a85" />
+
 
 A pure Rust, native WYSIWYG GUI designer for egui applications.  
 No gap between what you design and what gets generated.
