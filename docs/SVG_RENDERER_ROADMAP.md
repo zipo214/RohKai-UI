@@ -664,12 +664,17 @@ Tasks:
   executed in premultiplied space on the element's isolated offscreen; output is
   composited back as straight RGBA. Both masks and filters work on shapes and
   groups (shapes with mask/filter get a synthetic layer).
-- [ ] **Deferred — Filters tier 2/3:** `feComposite`, `feBlend`,
-  `feComponentTransfer`, `feMorphology`, `feTile`, `feImage`,
-  `feDisplacementMap`, `feTurbulence`, convolution, lighting. These are passed
-  through as identity with a `filter.unsupported_primitive` partial-output
-  diagnostic. Full filter-region clipping (currently the whole canvas, which is
-  already bounded) is also a refinement.
+- [x] **Filter tier 2/3 — all real implementations** (post-R10):
+  Tier-2 done in R10. Tier-3 done post-R12:
+  `feTile` (tiling repeat), `feDisplacementMap` (channel-based pixel warp),
+  `feConvolveMatrix` (general NxM kernel, edge-clamp/wrap, preserveAlpha),
+  `feTurbulence`/`feFractalNoise` (SVG-spec Perlin noise, 4 independent
+  per-channel RNG states, fractal/turbulence modes, up to 8 octaves),
+  `feDiffuseLighting` / `feSpecularLighting` (Sobel normal map + Lambertian /
+  Phong shading, `feDistantLight`/`fePointLight`/`feSpotLight` parsed),
+  `feImage` inline data-URI (decoded via existing PNG path; external URI
+  diagnosed as `filter.image_external`). Tests: 7 new acceptance tests
+  in `svg_rasterizer.rs`.
 
 Acceptance:
 
