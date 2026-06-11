@@ -451,6 +451,23 @@ pub enum Orientation {
     Vertical,
 }
 
+/// Cross-axis alignment for VLayout and HLayout containers.
+/// For VLayout the cross axis is horizontal (Start = left, End = right).
+/// For HLayout the cross axis is vertical (Start = top, End = bottom).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum LayoutCrossAlign {
+    #[default]
+    Start,
+    Center,
+    End,
+}
+
+impl LayoutCrossAlign {
+    pub fn is_start(&self) -> bool {
+        *self == LayoutCrossAlign::Start
+    }
+}
+
 // ---------------------------------------------------------------------------
 // WidgetProps — per-widget content & behaviour knobs
 // ---------------------------------------------------------------------------
@@ -528,6 +545,8 @@ pub struct WidgetProps {
         skip_serializing_if = "is_default_grid_columns"
     )]
     pub grid_columns: usize,
+    #[serde(default, skip_serializing_if = "LayoutCrossAlign::is_start")]
+    pub layout_cross_align: LayoutCrossAlign,
 
     // Stage 9 schema audit
     /// Wrap text at widget boundary (Label, TextArea). None = egui default.
@@ -612,6 +631,7 @@ impl Default for WidgetProps {
             layout_spacing: 6.0,
             layout_stretch: true,
             grid_columns: 3,
+            layout_cross_align: LayoutCrossAlign::Start,
             text_wrap: None,
         }
     }

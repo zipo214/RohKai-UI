@@ -1,7 +1,7 @@
 use crate::codegen::widget_descriptor::{DescriptorPropType, WidgetDescriptor};
 use crate::project::schema::{
-    CustomProp, CustomPropType, HandlerResult, Orientation, TextAlign, WidgetEvent, WidgetInstance,
-    WidgetKind,
+    CustomProp, CustomPropType, HandlerResult, LayoutCrossAlign, Orientation, TextAlign,
+    WidgetEvent, WidgetInstance, WidgetKind,
 };
 use crate::project::ui_tree::UiTree;
 use uuid::Uuid;
@@ -1516,6 +1516,43 @@ fn show_layout_container(
                         .div_ceil(w.props.grid_columns.clamp(1, 12))
                         .max(1);
                     ui.label(rows.to_string());
+                    ui.end_row();
+                }
+                if matches!(w.kind, WidgetKind::VLayout | WidgetKind::HLayout) {
+                    let (start_label, center_label, end_label) = match w.kind {
+                        WidgetKind::VLayout => ("Left", "Center", "Right"),
+                        _ => ("Top", "Center", "Bottom"),
+                    };
+                    ui.label(egui::RichText::new("Align").small());
+                    ui.horizontal(|ui| {
+                        if ui
+                            .selectable_label(
+                                w.props.layout_cross_align == LayoutCrossAlign::Start,
+                                start_label,
+                            )
+                            .clicked()
+                        {
+                            w.props.layout_cross_align = LayoutCrossAlign::Start;
+                        }
+                        if ui
+                            .selectable_label(
+                                w.props.layout_cross_align == LayoutCrossAlign::Center,
+                                center_label,
+                            )
+                            .clicked()
+                        {
+                            w.props.layout_cross_align = LayoutCrossAlign::Center;
+                        }
+                        if ui
+                            .selectable_label(
+                                w.props.layout_cross_align == LayoutCrossAlign::End,
+                                end_label,
+                            )
+                            .clicked()
+                        {
+                            w.props.layout_cross_align = LayoutCrossAlign::End;
+                        }
+                    });
                     ui.end_row();
                 }
             });

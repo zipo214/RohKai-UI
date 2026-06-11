@@ -1,6 +1,6 @@
 use crate::codegen::rust::{field_binding, string_literal};
 use crate::codegen::source_map::{GeneratedCodeDocument, SourceSpan, WidgetSourceSpan};
-use crate::project::schema::{Orientation, WidgetInstance, WidgetKind};
+use crate::project::schema::{LayoutCrossAlign, Orientation, WidgetInstance, WidgetKind};
 use crate::project::ui_tree::UiTree;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -473,7 +473,16 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                 ));
             }
             WidgetKind::VLayout => {
-                lines.push((Some(w.id), "        ui.vertical(|ui| {".to_owned()));
+                let open = match w.props.layout_cross_align {
+                    LayoutCrossAlign::Start => "        ui.vertical(|ui| {".to_owned(),
+                    LayoutCrossAlign::Center => {
+                        "        ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {".to_owned()
+                    }
+                    LayoutCrossAlign::End => {
+                        "        ui.with_layout(egui::Layout::top_down(egui::Align::RIGHT), |ui| {".to_owned()
+                    }
+                };
+                lines.push((Some(w.id), open));
                 for &child_id in &w.children {
                     if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
                         emit_layout_child_lines(child, &mut lines);
@@ -482,7 +491,16 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                 lines.push((Some(w.id), "        });".to_owned()));
             }
             WidgetKind::HLayout => {
-                lines.push((Some(w.id), "        ui.horizontal(|ui| {".to_owned()));
+                let open = match w.props.layout_cross_align {
+                    LayoutCrossAlign::Start => "        ui.horizontal(|ui| {".to_owned(),
+                    LayoutCrossAlign::Center => {
+                        "        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {".to_owned()
+                    }
+                    LayoutCrossAlign::End => {
+                        "        ui.with_layout(egui::Layout::left_to_right(egui::Align::BOTTOM), |ui| {".to_owned()
+                    }
+                };
+                lines.push((Some(w.id), open));
                 for &child_id in &w.children {
                     if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
                         emit_layout_child_lines(child, &mut lines);
@@ -1316,6 +1334,55 @@ mod tests {
         assert!(generated.contains(&format!("// widget_{child_id}")));
         assert!(generated.contains("egui::Button::new"));
         assert!(generated.contains("self.handle_horizontal();"));
+    }
+
+    #[test]
+    fn vlayout_center_align_emits_with_layout() {
+        use crate::project::schema::LayoutCrossAlign;
+        let g = emit_joined(WidgetKind::VLayout, |w| {
+            w.props.layout_cross_align = LayoutCrossAlign::Center;
+        });
+        assert!(
+            g.contains("ui.with_layout(egui::Layout::top_down(egui::Align::Center)"),
+            "center VLayout must use with_layout: {g}"
+        );
+        assert!(!g.contains("ui.vertical("), "must not emit bare vertical: {g}");
+    }
+
+    #[test]
+    fn vlayout_end_align_emits_right() {
+        use crate::project::schema::LayoutCrossAlign;
+        let g = emit_joined(WidgetKind::VLayout, |w| {
+            w.props.layout_cross_align = LayoutCrossAlign::End;
+        });
+        assert!(
+            g.contains("egui::Align::RIGHT"),
+            "end VLayout must align RIGHT: {g}"
+        );
+    }
+
+    #[test]
+    fn hlayout_center_align_emits_with_layout() {
+        use crate::project::schema::LayoutCrossAlign;
+        let g = emit_joined(WidgetKind::HLayout, |w| {
+            w.props.layout_cross_align = LayoutCrossAlign::Center;
+        });
+        assert!(
+            g.contains("ui.with_layout(egui::Layout::left_to_right(egui::Align::Center)"),
+            "center HLayout must use with_layout: {g}"
+        );
+    }
+
+    #[test]
+    fn vlayout_start_align_emits_plain_vertical() {
+        use crate::project::schema::LayoutCrossAlign;
+        let g = emit_joined(WidgetKind::VLayout, |w| {
+            w.props.layout_cross_align = LayoutCrossAlign::Start;
+        });
+        assert!(
+            g.contains("ui.vertical(|ui| {"),
+            "default start VLayout must use plain vertical: {g}"
+        );
     }
 
     #[test]

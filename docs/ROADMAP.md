@@ -400,11 +400,11 @@ requiring schema changes.
 
 ### Parallelism Foundation (rayon integration)
 - [x] Add `rayon = "1"` as core dependency — enables app-wide parallel processing
-- [ ] Parallel SVG rasterization — batch rasterize multiple Image widgets using `rayon::par_iter`
-- [ ] Parallel codegen — emit egui code for independent widgets in parallel
-- [ ] Parallel export — write exported project files concurrently
-- [ ] Parallel template loading — load multiple template files concurrently
-- [ ] Performance benchmarks — measure speedup for projects with 50+, 100+, 500+ widgets
+- [x] Parallel SVG rasterization — `rasterize_batch()` in `svg_rasterizer.rs`; `par_iter` over `(&str,u32,u32)` slices
+- [x] Parallel codegen — `emit_indexed` uses `par_iter` over top-level widget Area blocks; output order preserved
+- [x] Parallel export — `project_files` generates Cargo.toml/main.rs/app.rs via `rayon::join`; `write_project` writes in parallel
+- [x] Parallel template loading — `load_all_templates()` in `templates.rs` batch-loads `.rktp` via `par_iter`
+- [x] Performance benchmarks — 50/100/500-widget Area-block count tests + determinism test in `egui_emitter`
 
 ### Lazarus Completeness
 - [x] Full contextual properties per widget kind — schema audit pass: `text_wrap`
