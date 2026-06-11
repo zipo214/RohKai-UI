@@ -198,6 +198,9 @@ pub struct RohKaiApp {
     undo: crate::project::undo::UndoStack,
     /// Suppresses undo recording for the frame after an undo/redo restore.
     undo_suppress_record: bool,
+    /// Visual Widget Maker window state.
+    pub widget_maker_doc: crate::canvas::widget_maker::WidgetMakerDoc,
+    pub widget_maker_open: bool,
 }
 
 impl RohKaiApp {
@@ -247,6 +250,8 @@ impl RohKaiApp {
             dirty_cache_checked_at: 0.0,
             undo: crate::project::undo::UndoStack::new(),
             undo_suppress_record: false,
+            widget_maker_doc: crate::canvas::widget_maker::WidgetMakerDoc::new_with_defaults(),
+            widget_maker_open: false,
         }
     }
 
@@ -1161,6 +1166,45 @@ impl RohKaiApp {
         }
     }
 
+    fn show_widget_maker_window(&mut self, ctx: &egui::Context) {
+        if !self.widget_maker_open {
+            return;
+        }
+        let result = crate::panels::widget_maker_panel::show_widget_maker_window(
+            ctx,
+            &mut self.widget_maker_doc,
+            &mut self.widget_maker_open,
+        );
+        if let Some(json) = result.save_json {
+            // Write the descriptor to the widgets directory.
+            match Self::widgets_dir() {
+                Some(dir) => {
+                    let safe_id = self
+                        .widget_maker_doc
+                        .widget_id
+                        .chars()
+                        .map(|c| if c == '.' || c == '/' { '_' } else { c })
+                        .collect::<String>();
+                    let path = dir.join(format!("{safe_id}.rkwd"));
+                    if let Err(e) = std::fs::write(&path, &json) {
+                        self.messages.last_error = Some(format!("Widget Maker save failed: {e}"));
+                    } else {
+                        let (widgets, errors) =
+                            crate::codegen::widget_descriptor::load_from_widgets_dir();
+                        self.descriptors.widgets = widgets;
+                        self.descriptors.errors = errors;
+                        self.messages.export_message =
+                            Some((true, format!("Saved {}", path.display())));
+                    }
+                }
+                None => {
+                    self.messages.last_error =
+                        Some("Widget Maker: could not resolve widgets directory".to_owned());
+                }
+            }
+        }
+    }
+
     fn show_project_tree_window(&mut self, ctx: &egui::Context) {
         if !self.session.project_tree_open {
             return;
@@ -1664,6 +1708,14 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.cmd_new_widget_builder();
+                        ui.close_menu();
+                    }
+                    if ui
+                        .button("Visual Widget Maker…")
+                        .on_hover_text("Draw primitives and export as a custom widget descriptor")
+                        .clicked()
+                    {
+                        self.widget_maker_open = true;
                         ui.close_menu();
                     }
                     if ui
@@ -2676,6 +2728,7 @@ impl eframe::App for RohKaiApp {
         self.show_svg_source_window(ctx);
         self.show_descriptor_editor_window(ctx);
         self.show_widget_builder_window(ctx);
+        self.show_widget_maker_window(ctx);
         self.show_theme_window(ctx);
         self.show_project_tree_window(ctx);
         crate::panels::shortcuts::show(ctx, &mut self.session.shortcuts_open);
