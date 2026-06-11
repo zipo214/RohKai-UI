@@ -10571,7 +10571,7 @@ struct DecodedImage {
     rgba: Vec<u8>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum ImageDecodeError {
     Empty,
     NotDataUri,
@@ -10628,7 +10628,7 @@ impl ImageDecodeError {
             Self::InflateFailed => "embedded PNG compressed data was invalid; placeholder kept",
             Self::MalformedJpeg => "embedded JPEG was malformed or truncated; placeholder kept",
             Self::UnsupportedJpeg => {
-                "embedded JPEG uses an unsupported feature (progressive, arithmetic, CMYK, or 12-bit); placeholder kept"
+                "embedded JPEG uses an unsupported feature (arithmetic coding, lossless, or 12-bit precision); placeholder kept"
             }
             Self::TooLarge => "embedded image exceeds the renderer pixel budget; placeholder kept",
         }
@@ -11438,6 +11438,66 @@ struct JpegComponent {
     pred: i32,
 }
 
+struct SosCompEntry {
+    comp_idx: usize,
+    dc_table: usize,
+    ac_table: usize,
+}
+
+struct SosScanParams {
+    entries: Vec<SosCompEntry>,
+    ss: u8,
+    se: u8,
+    ah: u8,
+    al: u8,
+}
+
+struct ProgCoeff {
+    /// Quantized coefficients in zigzag order: [component][block][zigzag_pos].
+    coeff: Vec<Vec<[i32; 64]>>,
+    blocks_x: Vec<usize>,
+    blocks_y: Vec<usize>,
+    max_h: usize,
+    max_v: usize,
+    mcus_x: usize,
+    mcus_y: usize,
+    dc_pred: Vec<i32>,
+    eob_run: usize,
+}
+
+impl ProgCoeff {
+    fn new(
+        components: &[JpegComponent],
+        max_h: usize,
+        max_v: usize,
+        mcus_x: usize,
+        mcus_y: usize,
+    ) -> Self {
+        let nc = components.len();
+        let mut coeff = Vec::with_capacity(nc);
+        let mut blocks_x = Vec::with_capacity(nc);
+        let mut blocks_y = Vec::with_capacity(nc);
+        for c in components {
+            let bx = mcus_x * c.h;
+            let by = mcus_y * c.v;
+            coeff.push(vec![[0i32; 64]; bx * by]);
+            blocks_x.push(bx);
+            blocks_y.push(by);
+        }
+        Self {
+            coeff,
+            blocks_x,
+            blocks_y,
+            max_h,
+            max_v,
+            mcus_x,
+            mcus_y,
+            dc_pred: vec![0i32; nc],
+            eob_run: 0,
+        }
+    }
+}
+
 fn decode_jpeg(bytes: &[u8]) -> Result<DecodedImage, ImageDecodeError> {
     let mut pos = 2; // past SOI (FF D8)
     let mut qtables: [[u16; 64]; 4] = [[0; 64]; 4];
@@ -11447,16 +11507,28 @@ fn decode_jpeg(bytes: &[u8]) -> Result<DecodedImage, ImageDecodeError> {
     let mut height = 0usize;
     let mut components: Vec<JpegComponent> = Vec::new();
     let mut restart_interval = 0usize;
+    let mut is_progressive = false;
+    // Adobe APP14 ColorTransform=1 means YCCK for 4-component images.
+    let mut app14_ycck = false;
+    let mut prog_coeff: Option<ProgCoeff> = None;
 
     loop {
         if pos + 1 >= bytes.len() || bytes[pos] != 0xFF {
+            if is_progressive {
+                break; // truncated progressive JPEG — produce best-effort output
+            }
             return Err(ImageDecodeError::MalformedJpeg);
         }
         let marker = bytes[pos + 1];
         pos += 2;
         match marker {
-            0xD9 => return Err(ImageDecodeError::MalformedJpeg), // EOI before SOS
-            0x01 | 0xD0..=0xD7 => continue,                      // standalone markers
+            0xD9 => {
+                if is_progressive {
+                    break; // EOI — finalize
+                }
+                return Err(ImageDecodeError::MalformedJpeg); // EOI before SOS
+            }
+            0x01 | 0xD0..=0xD7 => continue, // standalone markers
             _ => {}
         }
         if pos + 2 > bytes.len() {
@@ -11482,28 +11554,73 @@ fn decode_jpeg(bytes: &[u8]) -> Result<DecodedImage, ImageDecodeError> {
                 width = w;
                 height = h;
                 components = comps;
+                is_progressive = false;
             }
-            0xC2 | 0xC3 | 0xC5..=0xCB | 0xCD..=0xCF => {
-                return Err(ImageDecodeError::UnsupportedJpeg)
+            0xC2 => {
+                // SOF2: progressive DCT
+                let (w, h, comps) = parse_sof(seg)?;
+                width = w;
+                height = h;
+                is_progressive = true;
+                let max_h = comps.iter().map(|c| c.h).max().unwrap_or(1);
+                let max_v = comps.iter().map(|c| c.v).max().unwrap_or(1);
+                let mcus_x = width.div_ceil(max_h * 8);
+                let mcus_y = height.div_ceil(max_v * 8);
+                prog_coeff = Some(ProgCoeff::new(&comps, max_h, max_v, mcus_x, mcus_y));
+                components = comps;
+            }
+            0xC3 | 0xC5..=0xCB | 0xCD..=0xCF => return Err(ImageDecodeError::UnsupportedJpeg),
+            // Adobe APP14: detect YCCK color transform for 4-component images.
+            0xEE if seg.len() >= 12 && &seg[..5] == b"Adobe" && seg[11] == 1 => {
+                app14_ycck = true;
             }
             0xDA => {
-                parse_sos(seg, &mut components, &dc_tables, &ac_tables)?;
-                return decode_jpeg_scan(
+                if !is_progressive {
+                    parse_sos(seg, &mut components, &dc_tables, &ac_tables)?;
+                    return decode_jpeg_scan(
+                        bytes,
+                        seg_end,
+                        width,
+                        height,
+                        &components,
+                        &qtables,
+                        &dc_tables,
+                        &ac_tables,
+                        restart_interval,
+                        app14_ycck,
+                    );
+                }
+                // Progressive scan: accumulate into coefficient arrays.
+                let params = parse_sos_params(seg, &components)?;
+                let prog = prog_coeff.as_mut().ok_or(ImageDecodeError::MalformedJpeg)?;
+                // Reset DC predictors at the start of each new DC first-pass scan.
+                if params.ah == 0 && params.ss == 0 {
+                    for dc in prog.dc_pred.iter_mut() {
+                        *dc = 0;
+                    }
+                }
+                prog.eob_run = 0;
+                let after = decode_progressive_scan(
                     bytes,
                     seg_end,
-                    width,
-                    height,
                     &components,
-                    &qtables,
+                    &params,
+                    prog,
                     &dc_tables,
                     &ac_tables,
                     restart_interval,
-                );
+                )?;
+                pos = after;
+                continue; // skip pos = seg_end at bottom
             }
             _ => {} // APPn / COM / other: skip
         }
         pos = seg_end;
     }
+
+    // Reached only in progressive mode (baseline always returns from within the loop).
+    let prog = prog_coeff.ok_or(ImageDecodeError::MalformedJpeg)?;
+    decode_progressive_finish(prog, width, height, &components, &qtables, app14_ycck)
 }
 
 fn parse_dqt(seg: &[u8], qtables: &mut [[u16; 64]; 4]) -> Result<(), ImageDecodeError> {
@@ -11590,8 +11707,8 @@ fn parse_sof(seg: &[u8]) -> Result<(usize, usize, Vec<JpegComponent>), ImageDeco
     if w.checked_mul(h).is_none_or(|px| px > MAX_IMAGE_PIXELS) {
         return Err(ImageDecodeError::TooLarge);
     }
-    if nc != 1 && nc != 3 {
-        return Err(ImageDecodeError::UnsupportedJpeg); // grayscale or YCbCr only
+    if nc == 0 || nc > 4 {
+        return Err(ImageDecodeError::UnsupportedJpeg);
     }
     if seg.len() < 6 + nc * 3 {
         return Err(ImageDecodeError::MalformedJpeg);
@@ -11657,6 +11774,400 @@ fn parse_sos(
         }
     }
     Ok(())
+}
+
+fn parse_sos_params(
+    seg: &[u8],
+    components: &[JpegComponent],
+) -> Result<SosScanParams, ImageDecodeError> {
+    if seg.is_empty() {
+        return Err(ImageDecodeError::MalformedJpeg);
+    }
+    let ns = seg[0] as usize;
+    if ns == 0 || seg.len() < 1 + ns * 2 + 3 {
+        return Err(ImageDecodeError::MalformedJpeg);
+    }
+    let mut entries = Vec::with_capacity(ns);
+    for i in 0..ns {
+        let cs = seg[1 + i * 2];
+        let td_ta = seg[1 + i * 2 + 1];
+        let dc_table = (td_ta >> 4) as usize;
+        let ac_table = (td_ta & 0x0f) as usize;
+        if dc_table > 3 || ac_table > 3 {
+            return Err(ImageDecodeError::MalformedJpeg);
+        }
+        let comp_idx = components
+            .iter()
+            .position(|c| c.id == cs)
+            .ok_or(ImageDecodeError::MalformedJpeg)?;
+        entries.push(SosCompEntry {
+            comp_idx,
+            dc_table,
+            ac_table,
+        });
+    }
+    let offset = 1 + ns * 2;
+    let ss = seg[offset];
+    let se = seg[offset + 1];
+    let ah_al = seg[offset + 2];
+    let ah = ah_al >> 4;
+    let al = ah_al & 0x0f;
+    if ss > se || se > 63 {
+        return Err(ImageDecodeError::MalformedJpeg);
+    }
+    // AC scans must be non-interleaved.
+    if ss > 0 && ns > 1 {
+        return Err(ImageDecodeError::MalformedJpeg);
+    }
+    Ok(SosScanParams {
+        entries,
+        ss,
+        se,
+        ah,
+        al,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decode_progressive_scan(
+    bytes: &[u8],
+    entropy_start: usize,
+    components: &[JpegComponent],
+    params: &SosScanParams,
+    prog: &mut ProgCoeff,
+    dc_tables: &[Option<JpegHuffTable>; 4],
+    ac_tables: &[Option<JpegHuffTable>; 4],
+    restart_interval: usize,
+) -> Result<usize, ImageDecodeError> {
+    let mut br = JpegBits::new(bytes, entropy_start);
+    let ss = params.ss as usize;
+    let se = params.se as usize;
+    let ah = params.ah;
+    let al = params.al;
+
+    if ss == 0 {
+        // DC scan (interleaved or non-interleaved).
+        let mut mcu_index = 0usize;
+        for my in 0..prog.mcus_y {
+            for mx in 0..prog.mcus_x {
+                if restart_interval > 0
+                    && mcu_index > 0
+                    && mcu_index.is_multiple_of(restart_interval)
+                {
+                    br.restart();
+                    for dc in prog.dc_pred.iter_mut() {
+                        *dc = 0;
+                    }
+                }
+                for entry in &params.entries {
+                    let ci = entry.comp_idx;
+                    let comp = &components[ci];
+                    let dc_table = dc_tables[entry.dc_table]
+                        .as_ref()
+                        .ok_or(ImageDecodeError::MalformedJpeg)?;
+                    for by in 0..comp.v {
+                        for bx in 0..comp.h {
+                            let block_x = mx * comp.h + bx;
+                            let block_y = my * comp.v + by;
+                            if block_x >= prog.blocks_x[ci] || block_y >= prog.blocks_y[ci] {
+                                continue;
+                            }
+                            let bidx = block_y * prog.blocks_x[ci] + block_x;
+                            if ah == 0 {
+                                // DC first pass: receive and accumulate.
+                                let t = dc_table.decode(&mut br) as u32;
+                                let diff = jpeg_extend(br.receive(t), t);
+                                prog.dc_pred[ci] += diff;
+                                prog.coeff[ci][bidx][0] = prog.dc_pred[ci] << al;
+                            } else {
+                                // DC refinement: add one correction bit.
+                                let bit = br.receive(1);
+                                prog.coeff[ci][bidx][0] |= bit << al;
+                            }
+                        }
+                    }
+                }
+                mcu_index += 1;
+            }
+        }
+    } else {
+        // AC scan: always non-interleaved.
+        if params.entries.len() != 1 {
+            return Err(ImageDecodeError::MalformedJpeg);
+        }
+        let entry = &params.entries[0];
+        let ci = entry.comp_idx;
+        let ac_table = ac_tables[entry.ac_table]
+            .as_ref()
+            .ok_or(ImageDecodeError::MalformedJpeg)?;
+        let total_bx = prog.blocks_x[ci];
+        let total_by = prog.blocks_y[ci];
+        let mut block_count = 0usize;
+        for by in 0..total_by {
+            for bx in 0..total_bx {
+                if restart_interval > 0
+                    && block_count > 0
+                    && block_count.is_multiple_of(restart_interval)
+                {
+                    br.restart();
+                    prog.eob_run = 0;
+                }
+                let bidx = by * total_bx + bx;
+                if ah == 0 {
+                    // AC first pass.
+                    if prog.eob_run > 0 {
+                        prog.eob_run -= 1;
+                    } else {
+                        let mut k = ss;
+                        while k <= se {
+                            let rs = ac_table.decode(&mut br);
+                            let r = (rs >> 4) as usize;
+                            let s = (rs & 0x0f) as u32;
+                            if s == 0 {
+                                if r == 15 {
+                                    k += 16; // ZRL: skip 16 zeros
+                                } else {
+                                    prog.eob_run = if r > 0 {
+                                        ((1usize << r) + br.receive(r as u32) as usize)
+                                            .saturating_sub(1)
+                                    } else {
+                                        0
+                                    };
+                                    break;
+                                }
+                            } else {
+                                k += r;
+                                if k > se {
+                                    break;
+                                }
+                                let coeff = jpeg_extend(br.receive(s), s);
+                                prog.coeff[ci][bidx][k] = coeff << al;
+                                k += 1;
+                            }
+                        }
+                    }
+                } else {
+                    // AC refinement.
+                    decode_ac_refinement(
+                        &mut br,
+                        &mut prog.coeff[ci][bidx],
+                        ac_table,
+                        ss,
+                        se,
+                        al,
+                        &mut prog.eob_run,
+                    );
+                }
+                block_count += 1;
+            }
+        }
+    }
+
+    Ok(br.pos)
+}
+
+fn decode_ac_refinement(
+    br: &mut JpegBits<'_>,
+    block: &mut [i32; 64],
+    ac_table: &JpegHuffTable,
+    ss: usize,
+    se: usize,
+    al: u8,
+    eob_run: &mut usize,
+) {
+    let delta = 1i32 << al;
+
+    if *eob_run > 0 {
+        // Refine non-zero coefficients in this block and decrement the run.
+        for coeff in &mut block[ss..=se] {
+            if *coeff != 0 {
+                let bit = br.receive(1);
+                if bit != 0 {
+                    if *coeff > 0 {
+                        *coeff += delta;
+                    } else {
+                        *coeff -= delta;
+                    }
+                }
+            }
+        }
+        *eob_run -= 1;
+        return;
+    }
+
+    let mut k = ss;
+    while k <= se {
+        let rs = ac_table.decode(br);
+        let r = (rs >> 4) as usize;
+        let s = rs & 0x0f;
+        if s == 0 {
+            if r == 15 {
+                // ZRL: advance 16 zero slots, refining non-zeros along the way.
+                let mut zeros = 16usize;
+                while zeros > 0 && k <= se {
+                    if block[k] != 0 {
+                        let bit = br.receive(1);
+                        if bit != 0 {
+                            if block[k] > 0 {
+                                block[k] += delta;
+                            } else {
+                                block[k] -= delta;
+                            }
+                        }
+                    } else {
+                        zeros -= 1;
+                    }
+                    k += 1;
+                }
+            } else {
+                // EOBrun: refine rest of band, set counter for subsequent blocks.
+                *eob_run = if r > 0 {
+                    ((1usize << r) + br.receive(r as u32) as usize).saturating_sub(1)
+                } else {
+                    0
+                };
+                while k <= se {
+                    if block[k] != 0 {
+                        let bit = br.receive(1);
+                        if bit != 0 {
+                            if block[k] > 0 {
+                                block[k] += delta;
+                            } else {
+                                block[k] -= delta;
+                            }
+                        }
+                    }
+                    k += 1;
+                }
+                return;
+            }
+        } else {
+            // s == 1: new significant coefficient; r zeros to skip first.
+            let sign_bit = br.receive(1);
+            let new_coeff = if sign_bit != 0 { delta } else { -delta };
+            let mut zeros = r;
+            while zeros > 0 && k <= se {
+                if block[k] != 0 {
+                    let bit = br.receive(1);
+                    if bit != 0 {
+                        if block[k] > 0 {
+                            block[k] += delta;
+                        } else {
+                            block[k] -= delta;
+                        }
+                    }
+                } else {
+                    zeros -= 1;
+                }
+                k += 1;
+            }
+            if k <= se {
+                block[k] = new_coeff;
+                k += 1;
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decode_progressive_finish(
+    prog: ProgCoeff,
+    width: usize,
+    height: usize,
+    components: &[JpegComponent],
+    qtables: &[[u16; 64]; 4],
+    app14_ycck: bool,
+) -> Result<DecodedImage, ImageDecodeError> {
+    if width == 0 || height == 0 || components.is_empty() {
+        return Err(ImageDecodeError::MalformedJpeg);
+    }
+    // Precompute the 8-point IDCT cosine basis (same as decode_jpeg_scan).
+    let mut cos_t = [[0f32; 8]; 8];
+    for (u, row) in cos_t.iter_mut().enumerate() {
+        let cu = if u == 0 { 1.0 / 2f32.sqrt() } else { 1.0 };
+        for (x, slot) in row.iter_mut().enumerate() {
+            *slot = cu * ((2 * x + 1) as f32 * u as f32 * std::f32::consts::PI / 16.0).cos();
+        }
+    }
+
+    let nc = components.len();
+    let mut planes: Vec<JpegPlane> = Vec::with_capacity(nc);
+    for (ci, comp) in components.iter().enumerate() {
+        let bx = prog.blocks_x[ci];
+        let by = prog.blocks_y[ci];
+        let pw = bx * 8;
+        let ph = by * 8;
+        let mut plane_data = vec![0u8; pw * ph];
+        for block_y in 0..by {
+            for block_x in 0..bx {
+                let bidx = block_y * bx + block_x;
+                let coeffs = &prog.coeff[ci][bidx];
+                let qt = &qtables[comp.quant];
+                // Dequantize: coefficients are stored in zigzag order.
+                let mut dequant = [0f32; 64];
+                for (k, &c) in coeffs.iter().enumerate() {
+                    dequant[JPEG_ZIGZAG[k]] = c as f32 * qt[k] as f32;
+                }
+                let mut spatial = [0f32; 64];
+                idct_8x8(&dequant, &cos_t, &mut spatial);
+                let px0 = block_x * 8;
+                let py0 = block_y * 8;
+                for yy in 0..8 {
+                    for xx in 0..8 {
+                        let val = (spatial[yy * 8 + xx] + 128.0).round().clamp(0.0, 255.0) as u8;
+                        plane_data[(py0 + yy) * pw + (px0 + xx)] = val;
+                    }
+                }
+            }
+        }
+        planes.push(JpegPlane {
+            width: pw,
+            data: plane_data,
+        });
+    }
+
+    let max_h = prog.max_h;
+    let max_v = prog.max_v;
+    let sample = |plane: &JpegPlane, comp: &JpegComponent, x: usize, y: usize| -> i32 {
+        let cx = (x * comp.h / max_h).min(plane.width.saturating_sub(1));
+        let ph = plane.data.len().checked_div(plane.width).unwrap_or(0);
+        let cy = (y * comp.v / max_v).min(ph.saturating_sub(1));
+        plane.data[cy * plane.width + cx] as i32
+    };
+
+    let mut rgba = vec![0u8; width * height * 4];
+    for y in 0..height {
+        for x in 0..width {
+            let out = &mut rgba[(y * width + x) * 4..(y * width + x) * 4 + 4];
+            match nc {
+                1 => {
+                    let g = sample(&planes[0], &components[0], x, y) as u8;
+                    out.copy_from_slice(&[g, g, g, 255]);
+                }
+                3 => {
+                    let yv = sample(&planes[0], &components[0], x, y);
+                    let cb = sample(&planes[1], &components[1], x, y);
+                    let cr = sample(&planes[2], &components[2], x, y);
+                    let rgb = jpeg_ycbcr_to_rgb(yv, cb, cr);
+                    out.copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+                }
+                4 => {
+                    let c0 = sample(&planes[0], &components[0], x, y);
+                    let c1 = sample(&planes[1], &components[1], x, y);
+                    let c2 = sample(&planes[2], &components[2], x, y);
+                    let c3 = sample(&planes[3], &components[3], x, y);
+                    let rgb = jpeg_cmyk_to_rgb(c0, c1, c2, c3, app14_ycck);
+                    out.copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+                }
+                _ => out.copy_from_slice(&[0, 0, 0, 255]),
+            }
+        }
+    }
+    Ok(DecodedImage {
+        width,
+        height,
+        rgba,
+    })
 }
 
 fn decode_block(
@@ -11727,6 +12238,27 @@ fn jpeg_ycbcr_to_rgb(y: i32, cb: i32, cr: i32) -> [u8; 3] {
     ]
 }
 
+fn jpeg_cmyk_to_rgb(c0: i32, c1: i32, c2: i32, c3: i32, ycck: bool) -> [u8; 3] {
+    if ycck {
+        // YCCK: first three are YCbCr, fourth is inverted K ink.
+        let [r, g, b] = jpeg_ycbcr_to_rgb(c0, c1, c2);
+        let k = 255 - c3;
+        [
+            (r as i32 * k / 255).clamp(0, 255) as u8,
+            (g as i32 * k / 255).clamp(0, 255) as u8,
+            (b as i32 * k / 255).clamp(0, 255) as u8,
+        ]
+    } else {
+        // Direct CMYK: each channel is ink density; K multiplies the others.
+        let k = 255 - c3;
+        [
+            ((255 - c0) * k / 255).clamp(0, 255) as u8,
+            ((255 - c1) * k / 255).clamp(0, 255) as u8,
+            ((255 - c2) * k / 255).clamp(0, 255) as u8,
+        ]
+    }
+}
+
 struct JpegPlane {
     width: usize,
     data: Vec<u8>,
@@ -11743,6 +12275,7 @@ fn decode_jpeg_scan(
     dc_tables: &[Option<JpegHuffTable>; 4],
     ac_tables: &[Option<JpegHuffTable>; 4],
     restart_interval: usize,
+    app14_ycck: bool,
 ) -> Result<DecodedImage, ImageDecodeError> {
     if width == 0 || height == 0 || components.is_empty() {
         return Err(ImageDecodeError::MalformedJpeg);
@@ -11822,15 +12355,27 @@ fn decode_jpeg_scan(
     for y in 0..height {
         for x in 0..width {
             let out = &mut rgba[(y * width + x) * 4..(y * width + x) * 4 + 4];
-            if comps.len() == 1 {
-                let g = sample(&planes[0], &comps[0], x, y) as u8;
-                out.copy_from_slice(&[g, g, g, 255]);
-            } else {
-                let yv = sample(&planes[0], &comps[0], x, y);
-                let cb = sample(&planes[1], &comps[1], x, y);
-                let cr = sample(&planes[2], &comps[2], x, y);
-                let rgb = jpeg_ycbcr_to_rgb(yv, cb, cr);
-                out.copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+            match comps.len() {
+                1 => {
+                    let g = sample(&planes[0], &comps[0], x, y) as u8;
+                    out.copy_from_slice(&[g, g, g, 255]);
+                }
+                3 => {
+                    let yv = sample(&planes[0], &comps[0], x, y);
+                    let cb = sample(&planes[1], &comps[1], x, y);
+                    let cr = sample(&planes[2], &comps[2], x, y);
+                    let rgb = jpeg_ycbcr_to_rgb(yv, cb, cr);
+                    out.copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+                }
+                4 => {
+                    let c0 = sample(&planes[0], &comps[0], x, y);
+                    let c1 = sample(&planes[1], &comps[1], x, y);
+                    let c2 = sample(&planes[2], &comps[2], x, y);
+                    let c3 = sample(&planes[3], &comps[3], x, y);
+                    let rgb = jpeg_cmyk_to_rgb(c0, c1, c2, c3, app14_ycck);
+                    out.copy_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+                }
+                _ => out.copy_from_slice(&[0, 0, 0, 255]),
             }
         }
     }
@@ -13389,12 +13934,97 @@ mod tests {
         assert_eq!(a.pixels, b.pixels);
     }
 
+    /// Build a minimal valid SOF2 progressive JPEG: 8×8 grayscale, DC-only scan,
+    /// all DC diffs = 0, so every pixel decodes to 128 (grey).
+    fn make_progressive_gray_jpeg() -> Vec<u8> {
+        let mut v: Vec<u8> = Vec::new();
+        v.extend_from_slice(&[0xFF, 0xD8]); // SOI
+                                            // DQT: 8-bit, table 0, all values = 1
+        v.extend_from_slice(&[0xFF, 0xDB, 0x00, 0x43, 0x00]);
+        v.extend(std::iter::repeat_n(1u8, 64));
+        // SOF2: precision=8, 8×8, 1 component (h1v1, qt=0)
+        v.extend_from_slice(&[
+            0xFF, 0xC2, 0x00, 0x0B, 0x08, 0x00, 0x08, 0x00, 0x08, 0x01, 0x01, 0x11, 0x00,
+        ]);
+        // DHT: DC table 0 — single code of length 1 (0b0) for category 0
+        v.extend_from_slice(&[0xFF, 0xC4, 0x00, 0x14, 0x00]);
+        v.extend_from_slice(&[0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        v.push(0x00); // huffval: category 0
+                      // SOS: DC-only scan, Ss=0 Se=0 Ah=0 Al=0
+        v.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00]);
+        // Entropy: 1-bit code 0b0 padded to byte → 0x7F
+        v.push(0x7F);
+        v.extend_from_slice(&[0xFF, 0xD9]); // EOI
+        v
+    }
+
+    /// Build a minimal valid SOF0 CMYK JPEG: 8×8, 4-component, all DC=0 (samples→128).
+    /// CMYK(128,128,128,128) → R≈G≈B≈63.
+    fn make_cmyk_baseline_jpeg() -> Vec<u8> {
+        let mut v: Vec<u8> = Vec::new();
+        v.extend_from_slice(&[0xFF, 0xD8]); // SOI
+        v.extend_from_slice(&[0xFF, 0xDB, 0x00, 0x43, 0x00]);
+        v.extend(std::iter::repeat_n(1u8, 64));
+        // SOF0: 8×8, 4 components (ids 1–4, h1v1, qt=0)
+        v.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x14, 0x08, 0x00, 0x08, 0x00, 0x08, 0x04]);
+        v.extend_from_slice(&[
+            0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00, 0x04, 0x11, 0x00,
+        ]);
+        // DHT: DC table 0 (same single-symbol table)
+        v.extend_from_slice(&[0xFF, 0xC4, 0x00, 0x14, 0x00]);
+        v.extend_from_slice(&[0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        v.push(0x00);
+        // DHT: AC table 0 — single code of length 1 (0b0) for EOB (0x00)
+        v.extend_from_slice(&[0xFF, 0xC4, 0x00, 0x14, 0x10]);
+        v.extend_from_slice(&[0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        v.push(0x00);
+        // SOS: 4 components, Ss=0 Se=63 Ah=0 Al=0
+        v.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x0E, 0x04]);
+        v.extend_from_slice(&[0x01, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00]);
+        v.extend_from_slice(&[0x00, 0x3F, 0x00]);
+        // Entropy: 4 × (1 DC bit + 1 AC-EOB bit) = 8 bits = 0x00
+        v.push(0x00);
+        v.extend_from_slice(&[0xFF, 0xD9]); // EOI
+        v
+    }
+
     #[test]
-    fn progressive_jpeg_is_diagnosed_unsupported() {
-        // SOI + SOF2 (progressive) marker → unsupported, not mis-decoded.
+    fn progressive_jpeg_decodes_to_gray_pixels() {
+        let bytes = make_progressive_gray_jpeg();
+        let img = decode_jpeg(&bytes).unwrap();
+        assert_eq!(img.width, 8);
+        assert_eq!(img.height, 8);
+        // DC=0 after dequant → IDCT → all spatial = 0 → +128 = 128 gray
+        assert_eq!(
+            &img.rgba[0..4],
+            &[128, 128, 128, 255],
+            "center pixel should be gray-128"
+        );
+    }
+
+    #[test]
+    fn cmyk_baseline_jpeg_decodes_to_dark_gray() {
+        let bytes = make_cmyk_baseline_jpeg();
+        let img = decode_jpeg(&bytes).unwrap();
+        assert_eq!(img.width, 8);
+        assert_eq!(img.height, 8);
+        // CMYK(128,128,128,128) → (255-128)*(255-128)/255 = 127*127/255 = 63
+        let p = &img.rgba[0..4];
+        assert_eq!(p[0], 63, "CMYK R channel");
+        assert_eq!(p[1], 63, "CMYK G channel");
+        assert_eq!(p[2], 63, "CMYK B channel");
+        assert_eq!(p[3], 255);
+    }
+
+    #[test]
+    fn progressive_jpeg_truncated_sof2_is_malformed_not_unsupported() {
+        // SOF2 with a zero-length body → MalformedJpeg, not UnsupportedJpeg.
         assert!(matches!(
             decode_jpeg(&[0xFF, 0xD8, 0xFF, 0xC2, 0x00, 0x02]),
-            Err(ImageDecodeError::UnsupportedJpeg)
+            Err(ImageDecodeError::MalformedJpeg)
         ));
     }
 
