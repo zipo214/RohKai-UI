@@ -2497,6 +2497,11 @@ impl eframe::App for RohKaiApp {
                                     .default_open(!self.session.selected.is_empty())
                                     .show(ui, |ui| {
                                         let shift_held = ui.input(|i| i.modifiers.shift);
+                                        crate::panels::behaviors::show_selected(
+                                            ui,
+                                            &mut self.project.ui_tree,
+                                            &mut self.session.interaction.selected_behavior,
+                                        );
                                         props_action = crate::panels::properties::show_content(
                                             ui,
                                             &mut self.project.ui_tree,
@@ -2504,6 +2509,14 @@ impl eframe::App for RohKaiApp {
                                             shift_held,
                                             &self.descriptors.widgets,
                                         );
+                                        if let Some(wid) = self.session.selected.last().copied() {
+                                            crate::panels::behaviors::show_for_widget(
+                                                ui,
+                                                &self.project.ui_tree,
+                                                wid,
+                                                &mut self.session.interaction.selected_behavior,
+                                            );
+                                        }
                                     });
                                 egui::CollapsingHeader::new("Layers / Outline")
                                     .default_open(true)
@@ -2584,6 +2597,11 @@ impl eframe::App for RohKaiApp {
                                             );
                                             ui.separator();
                                         }
+                                        crate::panels::behaviors::show_selected(
+                                            ui,
+                                            &mut self.project.ui_tree,
+                                            &mut self.session.interaction.selected_behavior,
+                                        );
                                         props_action = crate::panels::properties::show_content(
                                             ui,
                                             &mut self.project.ui_tree,
@@ -2591,6 +2609,14 @@ impl eframe::App for RohKaiApp {
                                             shift_held,
                                             &self.descriptors.widgets,
                                         );
+                                        if let Some(wid) = self.session.selected.last().copied() {
+                                            crate::panels::behaviors::show_for_widget(
+                                                ui,
+                                                &self.project.ui_tree,
+                                                wid,
+                                                &mut self.session.interaction.selected_behavior,
+                                            );
+                                        }
                                     }
                                     LeftPanelTab::Layers => {
                                         ui.label(egui::RichText::new("Layers / Outline").strong());

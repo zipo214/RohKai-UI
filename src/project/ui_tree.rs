@@ -65,6 +65,22 @@ impl UiTree {
         for child_id in children {
             self.remove(child_id);
         }
+        self.prune_stale_behaviors();
+    }
+
+    /// Drop behaviors whose source widget no longer exists, and clear dangling
+    /// `target_widget` presentation refs. The action's field stays valid even
+    /// when the target widget is gone, so only the wire endpoint is cleared.
+    fn prune_stale_behaviors(&mut self) {
+        let live: HashSet<Uuid> = self.widgets.iter().map(|w| w.id).collect();
+        self.app_props
+            .behaviors
+            .retain(|b| live.contains(&b.source_widget));
+        for b in &mut self.app_props.behaviors {
+            if b.target_widget.is_some_and(|t| !live.contains(&t)) {
+                b.target_widget = None;
+            }
+        }
     }
 
     pub fn parent_of(&self, id: Uuid) -> Option<Uuid> {
@@ -503,6 +519,7 @@ impl UiTree {
             widget.children.retain(|id| all_ids.contains(id));
         }
 
+        self.prune_stale_behaviors();
         self.reflow_layouts();
     }
 
@@ -1455,6 +1472,76 @@ mod tests {
         let ids: Vec<Uuid> = tree.widgets.iter().map(|w| w.id).collect();
         assert_eq!(ids[0], dup, "first keeps original id");
         assert_ne!(ids[1], dup, "second must be reassigned");
+    }
+
+    #[test]
+    fn behaviors_pruned_when_source_widget_removed() {
+        use crate::project::schema::{Behavior, ValueExpr, VisualAction, WidgetEvent};
+        let btn = Uuid::from_u128(0x200);
+        let bar = Uuid::from_u128(0x201);
+        let mut tree = UiTree {
+            widgets: vec![widget(btn), widget(bar)],
+            ..Default::default()
+        };
+        tree.app_props.behaviors = vec![
+            Behavior {
+                id: Uuid::from_u128(0x210),
+                source_widget: btn,
+                event: WidgetEvent::Click,
+                target_widget: Some(bar),
+                action: VisualAction::Add {
+                    field: "progress".to_owned(),
+                    amount: 0.1,
+                    min: Some(0.0),
+                    max: Some(1.0),
+                },
+            },
+            Behavior {
+                id: Uuid::from_u128(0x211),
+                source_widget: bar,
+                event: WidgetEvent::Click,
+                target_widget: None,
+                action: VisualAction::Set {
+                    field: "name".to_owned(),
+                    value: ValueExpr::Text(String::new()),
+                },
+            },
+        ];
+
+        // Removing the target widget keeps the behavior but clears the wire
+        // endpoint; removing the source widget drops the behavior entirely.
+        tree.remove(bar);
+        assert_eq!(tree.app_props.behaviors.len(), 1);
+        assert_eq!(tree.app_props.behaviors[0].source_widget, btn);
+        assert_eq!(tree.app_props.behaviors[0].target_widget, None);
+
+        tree.remove(btn);
+        assert!(tree.app_props.behaviors.is_empty());
+    }
+
+    #[test]
+    fn validate_and_repair_prunes_stale_behavior_sources() {
+        use crate::project::schema::{Behavior, VisualAction, WidgetEvent};
+        let live = Uuid::from_u128(0x220);
+        let ghost = Uuid::from_u128(0x221);
+        let mut tree = UiTree {
+            widgets: vec![widget(live)],
+            ..Default::default()
+        };
+        tree.app_props.behaviors = vec![Behavior {
+            id: Uuid::from_u128(0x222),
+            source_widget: ghost,
+            event: WidgetEvent::Click,
+            target_widget: Some(ghost),
+            action: VisualAction::Toggle {
+                field: "dark".to_owned(),
+            },
+        }];
+        tree.validate_and_repair();
+        assert!(
+            tree.app_props.behaviors.is_empty(),
+            "behavior with missing source widget must be pruned"
+        );
     }
 
     #[test]

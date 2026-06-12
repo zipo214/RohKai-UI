@@ -95,6 +95,9 @@ pub struct AppProps {
     /// Stage 11 — app-wide Rust wiring (channels, iterators, trait impls).
     #[serde(default, skip_serializing_if = "rust_wiring_is_empty")]
     pub rust_wiring: RustWiring,
+    /// Visual behavior graph — widget event → typed state mutation wires.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub behaviors: Vec<Behavior>,
 }
 
 fn rust_wiring_is_empty(w: &RustWiring) -> bool {
@@ -117,8 +120,100 @@ impl Default for AppProps {
             components: Vec::new(),
             assets: Vec::new(),
             rust_wiring: RustWiring::default(),
+            behaviors: Vec::new(),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Behavior graph — visual event → state-mutation wiring
+//
+// This is the beginner-facing counterpart to Stage 11 Rust Wiring: instead of
+// naming a handler function, the user drags a wire from a widget's event
+// socket to a state target and picks a typed `VisualAction`.  Persisted on
+// `AppProps` so the graph lives inside the UiTree single source of truth.
+// Codegen for these lives in `codegen::behavior`.
+// ---------------------------------------------------------------------------
+
+/// A typed literal value used by `VisualAction::Set`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ValueExpr {
+    /// An `f32` literal.
+    Number(f32),
+    /// A `String` literal.
+    Text(String),
+    /// A `bool` literal.
+    Flag(bool),
+}
+
+/// A typed state mutation fired when the source widget's event triggers.
+///
+/// Every variant must emit real Rust in `codegen::behavior::action_statement`
+/// (invariant-tested there) — no variant may exist UI-only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum VisualAction {
+    /// `state.field = value;`
+    Set { field: String, value: ValueExpr },
+    /// `state.field = (state.field + amount).clamp(min, max);`
+    Add {
+        field: String,
+        amount: f32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min: Option<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max: Option<f32>,
+    },
+    /// `state.field = (state.field - amount).clamp(min, max);`
+    Subtract {
+        field: String,
+        amount: f32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min: Option<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max: Option<f32>,
+    },
+    /// `state.field = !state.field;`
+    Toggle { field: String },
+    /// `self.handler();` — bridges into a named handler stub.
+    CallHandler { handler: String },
+}
+
+impl VisualAction {
+    /// The AppState field this action mutates (`None` for `CallHandler`).
+    pub fn field(&self) -> Option<&str> {
+        match self {
+            VisualAction::Set { field, .. }
+            | VisualAction::Add { field, .. }
+            | VisualAction::Subtract { field, .. }
+            | VisualAction::Toggle { field } => Some(field.as_str()),
+            VisualAction::CallHandler { .. } => None,
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            VisualAction::Set { .. } => "Set",
+            VisualAction::Add { .. } => "Add",
+            VisualAction::Subtract { .. } => "Subtract",
+            VisualAction::Toggle { .. } => "Toggle",
+            VisualAction::CallHandler { .. } => "Call handler",
+        }
+    }
+}
+
+/// One wire in the behavior graph: source widget event → typed action.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Behavior {
+    pub id: Uuid,
+    /// Widget whose event fires this behavior.
+    pub source_widget: Uuid,
+    /// Which of the source widget's `supported_events()` triggers the action.
+    pub event: WidgetEvent,
+    /// Widget the wire visually lands on (for canvas drawing). The action's
+    /// `field` is authoritative for codegen; this is presentation metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_widget: Option<Uuid>,
+    pub action: VisualAction,
 }
 
 // ---------------------------------------------------------------------------
@@ -406,7 +501,7 @@ pub enum WidgetKind {
 // ---------------------------------------------------------------------------
 
 /// A user-interaction event a widget can expose a handler for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WidgetEvent {
     Click,
     DoubleClick,
@@ -434,6 +529,20 @@ pub const EVENT_CAPABLE_KINDS: [WidgetKind; 9] = [
     WidgetKind::FontComboBox,
     WidgetKind::RadioButton,
 ];
+
+impl WidgetEvent {
+    /// Human-readable name shared by the Properties events UI and the
+    /// Behaviors panel.
+    pub fn label(&self) -> &'static str {
+        match self {
+            WidgetEvent::Click => "On Click",
+            WidgetEvent::DoubleClick => "On Double-Click",
+            WidgetEvent::Change => "On Change",
+            WidgetEvent::LostFocus => "On Lost Focus",
+            WidgetEvent::DragStopped => "On Drag Stopped",
+        }
+    }
+}
 
 impl WidgetKind {
     /// The authoritative list of events this kind exposes in Properties.
@@ -1393,6 +1502,85 @@ mod tests {
         assert_eq!(back.state_machine.states.len(), 2);
         assert_eq!(back.state_machine.transitions.len(), 1);
         assert_eq!(back.state_machine.initial_state, "idle");
+    }
+
+    // Behavior graph tests --------------------------------------------------
+
+    #[test]
+    fn behavior_button_click_add_round_trips() {
+        let b = Behavior {
+            id: Uuid::from_u128(0xBE1),
+            source_widget: Uuid::from_u128(0x01),
+            event: WidgetEvent::Click,
+            target_widget: Some(Uuid::from_u128(0x02)),
+            action: VisualAction::Add {
+                field: "progress".to_owned(),
+                amount: 0.1,
+                min: Some(0.0),
+                max: Some(1.0),
+            },
+        };
+        let json = serde_json::to_string(&b).expect("serialize");
+        let back: Behavior = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, b);
+        assert_eq!(back.event, WidgetEvent::Click);
+        assert_eq!(back.action.field(), Some("progress"));
+    }
+
+    #[test]
+    fn app_props_without_behaviors_field_defaults_empty() {
+        // Old .rohkai.json files predate the behavior graph; they must load
+        // with an empty graph, and a default graph must not serialize.
+        let json = r#"{"title":"Old","win_w":800.0,"win_h":600.0,"icon_path":null}"#;
+        let props: AppProps = serde_json::from_str(json).expect("legacy AppProps");
+        assert!(props.behaviors.is_empty());
+
+        let out = serde_json::to_string(&AppProps::default()).expect("serialize");
+        assert!(
+            !out.contains("behaviors"),
+            "empty behavior graph must be skip-serialized"
+        );
+    }
+
+    #[test]
+    fn every_visual_action_round_trips() {
+        let actions = vec![
+            VisualAction::Set {
+                field: "name".to_owned(),
+                value: ValueExpr::Text("hi".to_owned()),
+            },
+            VisualAction::Set {
+                field: "vol".to_owned(),
+                value: ValueExpr::Number(2.5),
+            },
+            VisualAction::Set {
+                field: "flag".to_owned(),
+                value: ValueExpr::Flag(true),
+            },
+            VisualAction::Add {
+                field: "p".to_owned(),
+                amount: 0.1,
+                min: None,
+                max: None,
+            },
+            VisualAction::Subtract {
+                field: "p".to_owned(),
+                amount: 0.2,
+                min: Some(0.0),
+                max: Some(1.0),
+            },
+            VisualAction::Toggle {
+                field: "dark".to_owned(),
+            },
+            VisualAction::CallHandler {
+                handler: "on_go".to_owned(),
+            },
+        ];
+        for a in actions {
+            let json = serde_json::to_string(&a).expect("serialize");
+            let back: VisualAction = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(back, a);
+        }
     }
 
     #[test]

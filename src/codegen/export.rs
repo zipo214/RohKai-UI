@@ -402,6 +402,20 @@ fn gen_app_rs(tree: &UiTree) -> String {
             }
         }
     }
+    // Behavior-graph `CallHandler` actions also invoke `self.{h}()`; register
+    // them (Plain, sync) so every behavior call site has a generated stub.
+    for h in crate::codegen::behavior::call_handler_names(tree) {
+        if crate::codegen::rust::is_valid_identifier(h) && !handler_index.contains_key(h) {
+            let idx = handler_names.len();
+            handler_index.insert(h.to_owned(), idx);
+            handler_names.push((
+                h.to_owned(),
+                crate::project::schema::HandlerResult::Plain,
+                false,
+                false,
+            ));
+        }
+    }
     // Call-site registry: maps each handler to its first-registered (result, async) mode.
     // All widgets sharing a handler name use this mode so call sites are consistent.
     let handler_registry: HashMap<String, (crate::project::schema::HandlerResult, bool)> =
@@ -608,7 +622,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                     w.rect.w, w.rect.h
                 );
                 let with_tip = export_tip(base, tip.as_deref());
-                event_dispatch_block(w, &with_tip, &handler_registry)
+                event_dispatch_block(w, &with_tip, &handler_registry, tree)
             }
             WidgetKind::Label => {
                 let expr = match binding {
@@ -655,7 +669,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                     }
                     let base = format!("ui.add_sized([{:.1}, {:.1}], {te})", w.rect.w, w.rect.h);
                     let with_tip = export_tip(base, tip.as_deref());
-                    event_dispatch_block(w, &with_tip, &handler_registry)
+                    event_dispatch_block(w, &with_tip, &handler_registry, tree)
                 }
                 None => format!("                // TextInput {label}: set a valid Binding\n"),
             },
@@ -677,7 +691,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                     let base =
                         format!("ui.add_sized([{:.1}, {:.1}], {slider})", w.rect.w, w.rect.h);
                     let with_tip = export_tip(base, tip.as_deref());
-                    event_dispatch_block(w, &with_tip, &handler_registry)
+                    event_dispatch_block(w, &with_tip, &handler_registry, tree)
                 }
                 None => format!("                // Slider {label}: set a valid Binding\n"),
             },
@@ -688,7 +702,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                         w.rect.w, w.rect.h
                     );
                     let with_tip = export_tip(base, tip.as_deref());
-                    event_dispatch_block(w, &with_tip, &handler_registry)
+                    event_dispatch_block(w, &with_tip, &handler_registry, tree)
                 }
                 None => format!("                // Checkbox {label}: set a valid Binding\n"),
             },
@@ -734,6 +748,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                             &child_label,
                             child_binding,
                             &handler_registry,
+                            tree,
                         ));
                     }
                 }
@@ -807,7 +822,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                     let with_tip = export_tip(base, tip.as_deref());
                     // radio_value marks the response changed on selection, so the
                     // shared dispatch's `.changed()` gate is correct here.
-                    event_dispatch_block(w, &with_tip, &handler_registry)
+                    event_dispatch_block(w, &with_tip, &handler_registry, tree)
                 }
                 None => format!("                // RadioButton {label}: set a valid Binding\n"),
             },
@@ -844,7 +859,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                     let sized =
                         format!("ui.add_sized([{:.1}, {:.1}], {te})", w.rect.w, w.rect.h);
                     let with_tip = export_tip(sized, tip.as_deref());
-                    event_dispatch_block(w, &with_tip, &handler_registry)
+                    event_dispatch_block(w, &with_tip, &handler_registry, tree)
                 }
                 None => format!("                // TextArea {label}: set a valid Binding\n"),
             },
@@ -855,7 +870,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                         w.props.min, w.props.max
                     );
                     let with_tip = export_tip(format!("ui.add({dv})"), tip.as_deref());
-                    event_dispatch_block(w, &with_tip, &handler_registry)
+                    event_dispatch_block(w, &with_tip, &handler_registry, tree)
                 }
                 None => format!("                // SpinBox {label}: set a valid Binding\n"),
             },
@@ -1331,27 +1346,45 @@ fn event_dispatch_block(
     w: &crate::project::schema::WidgetInstance,
     resp_expr: &str,
     registry: &HashMap<String, (crate::project::schema::HandlerResult, bool)>,
+    tree: &UiTree,
 ) -> String {
-    let mut arms: Vec<(&'static str, &str)> = Vec::new();
+    let mut arms: Vec<(&'static str, Option<&str>, String)> = Vec::new();
     for &ev in w.kind.supported_events() {
-        if let Some(h) = event_field_handler(w, ev) {
-            arms.push((event_egui_method(ev), h));
+        let handler = event_field_handler(w, ev);
+        // Behavior-graph mutations fire on the same event, before the handler.
+        let behavior_stmts = crate::codegen::behavior::statements_for_event(
+            tree,
+            w.id,
+            ev,
+            "state.",
+            "                    ",
+        );
+        if handler.is_some() || !behavior_stmts.is_empty() {
+            arms.push((event_egui_method(ev), handler, behavior_stmts));
         }
     }
     if arms.is_empty() {
         return format!("                {resp_expr};\n");
     }
     let mut code = format!("                let evt_response = {resp_expr};\n");
-    for (method, h) in arms {
-        let (result, is_async) = registry
-            .get(h)
-            .cloned()
-            .unwrap_or((w.handler_result.clone(), w.async_handler));
-        let call =
-            crate::codegen::rust_wiring::handler_call(h, is_async, &result, "                    ");
+    for (method, handler, behavior_stmts) in arms {
         code.push_str(&format!(
-            "                if evt_response.{method}() {{\n{call}\n                }}\n"
+            "                if evt_response.{method}() {{\n{behavior_stmts}"
         ));
+        if let Some(h) = handler {
+            let (result, is_async) = registry
+                .get(h)
+                .cloned()
+                .unwrap_or((w.handler_result.clone(), w.async_handler));
+            let call = crate::codegen::rust_wiring::handler_call(
+                h,
+                is_async,
+                &result,
+                "                    ",
+            );
+            code.push_str(&format!("{call}\n"));
+        }
+        code.push_str("                }\n");
     }
     code
 }
@@ -1408,31 +1441,44 @@ fn export_child_event_dispatch(
     child: &crate::project::schema::WidgetInstance,
     resp_expr: &str,
     registry: &HashMap<String, (crate::project::schema::HandlerResult, bool)>,
+    tree: &UiTree,
 ) -> String {
-    let mut arms: Vec<(&'static str, &str)> = Vec::new();
+    let mut arms: Vec<(&'static str, Option<&str>, String)> = Vec::new();
     for &ev in child.kind.supported_events() {
-        if let Some(h) = event_field_handler(child, ev) {
-            arms.push((event_egui_method(ev), h));
+        let handler = event_field_handler(child, ev);
+        let behavior_stmts = crate::codegen::behavior::statements_for_event(
+            tree,
+            child.id,
+            ev,
+            "state.",
+            "                            ",
+        );
+        if handler.is_some() || !behavior_stmts.is_empty() {
+            arms.push((event_egui_method(ev), handler, behavior_stmts));
         }
     }
     if arms.is_empty() {
         return format!("                        {resp_expr};\n");
     }
     let mut code = format!("                        let child_response = {resp_expr};\n");
-    for (method, h) in arms {
-        let (result, is_async) = registry
-            .get(h)
-            .cloned()
-            .unwrap_or((child.handler_result.clone(), child.async_handler));
-        let call = crate::codegen::rust_wiring::handler_call(
-            h,
-            is_async,
-            &result,
-            "                            ",
-        );
+    for (method, handler, behavior_stmts) in arms {
         code.push_str(&format!(
-            "                        if child_response.{method}() {{\n{call}\n                        }}\n"
+            "                        if child_response.{method}() {{\n{behavior_stmts}"
         ));
+        if let Some(h) = handler {
+            let (result, is_async) = registry
+                .get(h)
+                .cloned()
+                .unwrap_or((child.handler_result.clone(), child.async_handler));
+            let call = crate::codegen::rust_wiring::handler_call(
+                h,
+                is_async,
+                &result,
+                "                            ",
+            );
+            code.push_str(&format!("{call}\n"));
+        }
+        code.push_str("                        }\n");
     }
     code
 }
@@ -1447,16 +1493,21 @@ fn export_child_combo(
     binding: &str,
     options: &[String],
     registry: &HashMap<String, (crate::project::schema::HandlerResult, bool)>,
+    tree: &UiTree,
 ) -> String {
     use crate::project::schema::WidgetEvent;
     let id = child.id.as_simple();
     let selected_expr = combo_selected_text_expr(&format!("self.state.{binding}"), options);
     let handler = event_field_handler(child, WidgetEvent::Change);
-    let combo_assign = if handler.is_some() {
-        "let child_combo = "
-    } else {
-        ""
-    };
+    let behavior_stmts = crate::codegen::behavior::statements_for_event(
+        tree,
+        child.id,
+        WidgetEvent::Change,
+        "state.",
+        "                                ",
+    );
+    let dispatches = handler.is_some() || !behavior_stmts.is_empty();
+    let combo_assign = if dispatches { "let child_combo = " } else { "" };
     let mut code = format!(
         "                        ui.allocate_ui_at_rect({rect_expr}, |ui| {{\n\
          \x20                           {combo_assign}egui::ComboBox::from_id_salt(\"child_combo_{id}\")\n\
@@ -1472,20 +1523,24 @@ fn export_child_combo(
     }
     code.push_str("                                    changed\n");
     code.push_str("                                });\n");
-    if let Some(h) = handler {
-        let (result, is_async) = registry
-            .get(h)
-            .cloned()
-            .unwrap_or((child.handler_result.clone(), child.async_handler));
-        let call = crate::codegen::rust_wiring::handler_call(
-            h,
-            is_async,
-            &result,
-            "                                ",
-        );
+    if dispatches {
         code.push_str(&format!(
-            "                            if child_combo.inner == Some(true) {{\n{call}\n                            }}\n"
+            "                            if child_combo.inner == Some(true) {{\n{behavior_stmts}"
         ));
+        if let Some(h) = handler {
+            let (result, is_async) = registry
+                .get(h)
+                .cloned()
+                .unwrap_or((child.handler_result.clone(), child.async_handler));
+            let call = crate::codegen::rust_wiring::handler_call(
+                h,
+                is_async,
+                &result,
+                "                                ",
+            );
+            code.push_str(&format!("{call}\n"));
+        }
+        code.push_str("                            }\n");
     }
     code.push_str("                        });\n");
     code
@@ -1497,11 +1552,12 @@ fn export_child_line(
     child_label: &str,
     child_binding: Option<&str>,
     registry: &HashMap<String, (crate::project::schema::HandlerResult, bool)>,
+    tree: &UiTree,
 ) -> String {
     match &child.kind {
         WidgetKind::Button => {
             let resp = format!("ui.put({rect_expr}, egui::Button::new({child_label}))");
-            export_child_event_dispatch(child, &resp, registry)
+            export_child_event_dispatch(child, &resp, registry, tree)
         }
         WidgetKind::Label => match child_binding {
             Some(b) => format!("                        ui.put({rect_expr}, egui::Label::new(&self.state.{b}));\n"),
@@ -1512,7 +1568,7 @@ fn export_child_line(
                 let resp = format!(
                     "ui.put({rect_expr}, egui::TextEdit::singleline(&mut self.state.{b}))"
                 );
-                export_child_event_dispatch(child, &resp, registry)
+                export_child_event_dispatch(child, &resp, registry, tree)
             }
             None => format!("                        // TextInput {child_label}: set a valid Binding\n"),
         },
@@ -1522,7 +1578,7 @@ fn export_child_line(
                     "ui.put({rect_expr}, egui::Slider::new(&mut self.state.{b}, {:.1}..={:.1}).text({child_label}))",
                     child.props.min, child.props.max
                 );
-                export_child_event_dispatch(child, &resp, registry)
+                export_child_event_dispatch(child, &resp, registry, tree)
             }
             None => format!("                        // Slider {child_label}: set a valid Binding\n"),
         },
@@ -1531,12 +1587,12 @@ fn export_child_line(
                 let resp = format!(
                     "ui.put({rect_expr}, egui::Checkbox::new(&mut self.state.{b}, {child_label}))"
                 );
-                export_child_event_dispatch(child, &resp, registry)
+                export_child_event_dispatch(child, &resp, registry, tree)
             }
             None => format!("                        // Checkbox {child_label}: set a valid Binding\n"),
         },
         WidgetKind::ComboBox => match child_binding {
-            Some(b) => export_child_combo(child, rect_expr, b, &combo_option_values(child), registry),
+            Some(b) => export_child_combo(child, rect_expr, b, &combo_option_values(child), registry, tree),
             None => format!("                        // ComboBox {child_label}: set a valid Binding\n"),
         },
         WidgetKind::RadioButton => match child_binding {
@@ -1549,7 +1605,7 @@ fn export_child_line(
                 let resp = format!(
                     "ui.radio_value(&mut self.state.{b}, {value_lit}.to_owned(), {child_label})"
                 );
-                export_child_event_dispatch(child, &resp, registry)
+                export_child_event_dispatch(child, &resp, registry, tree)
             }
             None => format!("                        // RadioButton {child_label}: set a valid Binding\n"),
         },
@@ -1629,7 +1685,7 @@ fn export_child_line(
                 let resp = format!(
                     "ui.put({rect_expr}, egui::TextEdit::multiline(&mut self.state.{b}))"
                 );
-                export_child_event_dispatch(child, &resp, registry)
+                export_child_event_dispatch(child, &resp, registry, tree)
             }
             None => format!("                        // TextArea {child_label}: set a valid Binding\n"),
         },
@@ -1639,7 +1695,7 @@ fn export_child_line(
                     "ui.put({rect_expr}, egui::DragValue::new(&mut self.state.{b}).range({:.1}..={:.1}))",
                     child.props.min, child.props.max
                 );
-                export_child_event_dispatch(child, &resp, registry)
+                export_child_event_dispatch(child, &resp, registry, tree)
             }
             None => format!("                        // SpinBox {child_label}: set a valid Binding\n"),
         },
@@ -1650,6 +1706,7 @@ fn export_child_line(
                 b,
                 &["Proportional".to_owned(), "Monospace".to_owned()],
                 registry,
+                tree,
             ),
             None => format!("                        // FontComboBox {child_label}: set a valid Binding\n"),
         },
@@ -1710,7 +1767,7 @@ fn export_layout_child_line(
         WidgetKind::Button => {
             let sz = export_child_size_str(child);
             let resp = format!("ui.add_sized({sz}, egui::Button::new({child_label}))");
-            code.push_str(&export_child_event_dispatch(child, &resp, registry));
+            code.push_str(&export_child_event_dispatch(child, &resp, registry, tree));
         }
         WidgetKind::Label => match child_binding {
             Some(b) => code.push_str(&format!("                    ui.label(&self.state.{b});\n")),
@@ -1721,7 +1778,7 @@ fn export_layout_child_line(
                 let sz = export_child_size_str(child);
                 let resp =
                     format!("ui.add_sized({sz}, egui::TextEdit::singleline(&mut self.state.{b}))");
-                code.push_str(&export_child_event_dispatch(child, &resp, registry));
+                code.push_str(&export_child_event_dispatch(child, &resp, registry, tree));
             }
             None => code.push_str(&format!(
                 "                    // TextInput {child_label}: set a valid Binding\n"
@@ -1732,7 +1789,7 @@ fn export_layout_child_line(
                 let sz = export_child_size_str(child);
                 let resp =
                     format!("ui.add_sized({sz}, egui::TextEdit::multiline(&mut self.state.{b}))");
-                code.push_str(&export_child_event_dispatch(child, &resp, registry));
+                code.push_str(&export_child_event_dispatch(child, &resp, registry, tree));
             }
             None => code.push_str(&format!(
                 "                    // TextArea {child_label}: set a valid Binding\n"
@@ -1745,7 +1802,7 @@ fn export_layout_child_line(
                     "ui.add_sized({sz}, egui::Slider::new(&mut self.state.{b}, {:.1}..={:.1}).text({child_label}))",
                     child.props.min, child.props.max
                 );
-                code.push_str(&export_child_event_dispatch(child, &resp, registry));
+                code.push_str(&export_child_event_dispatch(child, &resp, registry, tree));
             }
             None => code.push_str(&format!(
                 "                    // Slider {child_label}: set a valid Binding\n"
@@ -1754,7 +1811,7 @@ fn export_layout_child_line(
         WidgetKind::SpinBox => match child_binding {
             Some(b) => {
                 let resp = format!("ui.add(egui::DragValue::new(&mut self.state.{b}))");
-                code.push_str(&export_child_event_dispatch(child, &resp, registry));
+                code.push_str(&export_child_event_dispatch(child, &resp, registry, tree));
             }
             None => code.push_str(&format!(
                 "                    // SpinBox {child_label}: set a valid Binding\n"
@@ -1763,7 +1820,7 @@ fn export_layout_child_line(
         WidgetKind::Checkbox => match child_binding {
             Some(b) => {
                 let resp = format!("ui.checkbox(&mut self.state.{b}, {child_label})");
-                code.push_str(&export_child_event_dispatch(child, &resp, registry));
+                code.push_str(&export_child_event_dispatch(child, &resp, registry, tree));
             }
             None => code.push_str(&format!(
                 "                    // Checkbox {child_label}: set a valid Binding\n"
@@ -1779,20 +1836,20 @@ fn export_layout_child_line(
                 let resp = format!(
                     "ui.radio_value(&mut self.state.{b}, {value_lit}.to_owned(), {child_label})"
                 );
-                code.push_str(&export_child_event_dispatch(child, &resp, registry));
+                code.push_str(&export_child_event_dispatch(child, &resp, registry, tree));
             }
             None => code.push_str(&format!(
                 "                    // RadioButton {child_label}: set a valid Binding\n"
             )),
         },
         WidgetKind::ComboBox => match child_binding {
-            Some(b) => code.push_str(&export_layout_combo(child, b, registry)),
+            Some(b) => code.push_str(&export_layout_combo(child, b, registry, tree)),
             None => code.push_str(&format!(
                 "                    // ComboBox {child_label}: set a valid Binding\n"
             )),
         },
         WidgetKind::FontComboBox => match child_binding {
-            Some(b) => code.push_str(&export_layout_combo(child, b, registry)),
+            Some(b) => code.push_str(&export_layout_combo(child, b, registry, tree)),
             None => code.push_str(&format!(
                 "                    // FontComboBox {child_label}: set a valid Binding\n"
             )),
@@ -1934,34 +1991,50 @@ fn export_layout_combo(
     child: &crate::project::schema::WidgetInstance,
     binding: &str,
     registry: &HashMap<String, (crate::project::schema::HandlerResult, bool)>,
+    tree: &UiTree,
 ) -> String {
     let options = combo_option_values(child);
     let selected_expr = combo_selected_text_expr(&format!("self.state.{binding}"), &options);
     let id = child.id.as_simple();
+    // `inner` carries whether any selectable changed this frame, mirroring
+    // export_child_combo — `Option<()>` would not type-check against Some(true).
     let mut code = format!(
-        "                    let child_combo = egui::ComboBox::from_id_salt(\"layout_combo_{id}\")\n                        .selected_text({selected_expr})\n                        .show_ui(ui, |ui| {{\n"
+        "                    let child_combo = egui::ComboBox::from_id_salt(\"layout_combo_{id}\")\n                        .selected_text({selected_expr})\n                        .show_ui(ui, |ui| {{\n                            let mut changed = false;\n"
     );
     for option in options {
         let option_lit = string_literal(&option);
         code.push_str(&format!(
-            "                            ui.selectable_value(&mut self.state.{binding}, {option_lit}.to_owned(), {option_lit});\n"
+            "                            if ui.selectable_value(&mut self.state.{binding}, {option_lit}.to_owned(), {option_lit}).changed() {{ changed = true; }}\n"
         ));
     }
+    code.push_str("                            changed\n");
     code.push_str("                        });\n");
-    if let Some(h) = event_field_handler(child, WidgetEvent::Change) {
-        let (result_mode, is_async) = registry
-            .get(h)
-            .cloned()
-            .unwrap_or((child.handler_result.clone(), child.async_handler));
-        let call = crate::codegen::rust_wiring::handler_call(
-            h,
-            is_async,
-            &result_mode,
-            "                        ",
-        );
+    let handler = event_field_handler(child, WidgetEvent::Change);
+    let behavior_stmts = crate::codegen::behavior::statements_for_event(
+        tree,
+        child.id,
+        WidgetEvent::Change,
+        "state.",
+        "                        ",
+    );
+    if handler.is_some() || !behavior_stmts.is_empty() {
         code.push_str(&format!(
-            "                    if child_combo.inner == Some(true) {{\n{call}\n                    }}\n"
+            "                    if child_combo.inner == Some(true) {{\n{behavior_stmts}"
         ));
+        if let Some(h) = handler {
+            let (result_mode, is_async) = registry
+                .get(h)
+                .cloned()
+                .unwrap_or((child.handler_result.clone(), child.async_handler));
+            let call = crate::codegen::rust_wiring::handler_call(
+                h,
+                is_async,
+                &result_mode,
+                "                        ",
+            );
+            code.push_str(&format!("{call}\n"));
+        }
+        code.push_str("                    }\n");
     }
     code
 }
@@ -3707,6 +3780,38 @@ mod tests {
             ..Default::default()
         };
 
+        // Behavior graph: a plain button that mutates AppState visually (no
+        // handler), wired to a bound ProgressBar — the canonical S-feature case.
+        let behavior_btn_id = Uuid::from_u128(0x05);
+        let behavior_btn = WidgetInstance {
+            id: behavior_btn_id,
+            kind: WidgetKind::Button,
+            rect: Rect {
+                x: 0.0,
+                y: 260.0,
+                w: 100.0,
+                h: 30.0,
+            },
+            props: crate::project::schema::WidgetProps {
+                label: "More".to_owned(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let behavior_bar_id = Uuid::from_u128(0x06);
+        let behavior_bar = WidgetInstance {
+            id: behavior_bar_id,
+            kind: WidgetKind::ProgressBar,
+            rect: Rect {
+                x: 0.0,
+                y: 300.0,
+                w: 160.0,
+                h: 20.0,
+            },
+            state_binding: Some("behavior_progress".to_owned()),
+            ..Default::default()
+        };
+
         let mut tree = UiTree {
             widgets: vec![
                 btn_events,
@@ -3722,9 +3827,34 @@ mod tests {
                 grid_layout,
                 grid_layout_child,
                 file_picker,
+                behavior_btn,
+                behavior_bar,
             ],
             ..Default::default()
         };
+        tree.app_props.behaviors = vec![
+            crate::project::schema::Behavior {
+                id: Uuid::from_u128(0xB0),
+                source_widget: behavior_btn_id,
+                event: crate::project::schema::WidgetEvent::Click,
+                target_widget: Some(behavior_bar_id),
+                action: crate::project::schema::VisualAction::Add {
+                    field: "behavior_progress".to_owned(),
+                    amount: 0.1,
+                    min: Some(0.0),
+                    max: Some(1.0),
+                },
+            },
+            crate::project::schema::Behavior {
+                id: Uuid::from_u128(0xB1),
+                source_widget: behavior_btn_id,
+                event: crate::project::schema::WidgetEvent::DoubleClick,
+                target_widget: None,
+                action: crate::project::schema::VisualAction::CallHandler {
+                    handler: "behavior_bridge".to_owned(),
+                },
+            },
+        ];
         tree.app_props.rust_wiring = RustWiring {
             channels: vec![ChannelDef {
                 id: Uuid::from_u128(0xA1),
@@ -4034,6 +4164,134 @@ mod tests {
         );
     }
 
+    fn behavior_tree(nest_button_in: Option<WidgetKind>) -> UiTree {
+        use crate::project::schema::{Behavior, VisualAction, WidgetEvent};
+        let btn_id = Uuid::from_u128(0xBB1);
+        let bar_id = Uuid::from_u128(0xBB2);
+        let btn = WidgetInstance {
+            id: btn_id,
+            kind: WidgetKind::Button,
+            rect: Rect {
+                x: 10.0,
+                y: 10.0,
+                w: 100.0,
+                h: 30.0,
+            },
+            props: crate::project::schema::WidgetProps {
+                label: "More".to_owned(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let bar = WidgetInstance {
+            id: bar_id,
+            kind: WidgetKind::ProgressBar,
+            rect: Rect {
+                x: 10.0,
+                y: 60.0,
+                w: 160.0,
+                h: 20.0,
+            },
+            state_binding: Some("progress".to_owned()),
+            ..Default::default()
+        };
+        let mut widgets = vec![btn, bar];
+        if let Some(container_kind) = nest_button_in {
+            widgets.push(WidgetInstance {
+                id: Uuid::from_u128(0xBB3),
+                kind: container_kind,
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 240.0,
+                    h: 120.0,
+                },
+                children: vec![btn_id],
+                ..Default::default()
+            });
+        }
+        let mut tree = UiTree {
+            widgets,
+            ..Default::default()
+        };
+        tree.app_props.behaviors = vec![Behavior {
+            id: Uuid::from_u128(0xBB4),
+            source_widget: btn_id,
+            event: WidgetEvent::Click,
+            target_widget: Some(bar_id),
+            action: VisualAction::Add {
+                field: "progress".to_owned(),
+                amount: 0.1,
+                min: Some(0.0),
+                max: Some(1.0),
+            },
+        }];
+        tree
+    }
+
+    const PROGRESS_MUTATION: &str =
+        "self.state.progress = (self.state.progress + 0.1).clamp(0.0, 1.0);";
+
+    #[test]
+    fn button_click_behavior_exports_progress_mutation() {
+        let g = gen_app_rs(&behavior_tree(None));
+        assert!(
+            g.contains("evt_response.clicked()"),
+            "behavior-only button must still dispatch click:\n{g}"
+        );
+        assert!(g.contains(PROGRESS_MUTATION), "missing mutation:\n{g}");
+        // ProgressBar reads its binding; the widget itself is never mutated.
+        assert!(g.contains("egui::ProgressBar::new(self.state.progress)"));
+    }
+
+    #[test]
+    fn nested_button_behavior_exports_in_frame_vlayout_hlayout_grid() {
+        for container in [
+            WidgetKind::Frame,
+            WidgetKind::VLayout,
+            WidgetKind::HLayout,
+            WidgetKind::GridLayout,
+        ] {
+            let g = gen_app_rs(&behavior_tree(Some(container.clone())));
+            assert!(
+                g.contains(PROGRESS_MUTATION),
+                "behavior mutation missing for button nested in {container:?}:\n{g}"
+            );
+        }
+    }
+
+    #[test]
+    fn behavior_and_handler_coexist_on_same_event() {
+        let mut tree = behavior_tree(None);
+        tree.widgets[0].on_click = "on_more".to_owned();
+        let g = gen_app_rs(&tree);
+        let mutation_pos = g.find(PROGRESS_MUTATION).expect("mutation present");
+        let call_pos = g.find("self.on_more();").expect("handler call present");
+        assert!(
+            mutation_pos < call_pos,
+            "behavior mutations run before the raw handler call"
+        );
+        assert!(g.contains("fn on_more(&mut self)"), "handler stub");
+    }
+
+    #[test]
+    fn call_handler_behavior_generates_stub_and_call() {
+        use crate::project::schema::{Behavior, VisualAction, WidgetEvent};
+        let mut tree = behavior_tree(None);
+        tree.app_props.behaviors.push(Behavior {
+            id: Uuid::from_u128(0xBB5),
+            source_widget: tree.widgets[0].id,
+            event: WidgetEvent::Click,
+            target_widget: None,
+            action: VisualAction::CallHandler {
+                handler: "bridge".to_owned(),
+            },
+        });
+        let g = gen_app_rs(&tree);
+        assert!(g.contains("self.bridge();"), "call site:\n{g}");
+        assert!(g.contains("fn bridge(&mut self)"), "stub:\n{g}");
+    }
+
     /// Always-run smoke: the fixture generates the required files and its source
     /// contains every feature-matrix marker.  Fast (no compilation).
     #[test]
@@ -4103,6 +4361,25 @@ mod tests {
         assert!(app.contains(".filter(|x| **x > 1).map(|x| *x)"));
         assert!(app.contains("trait CompileProofBehavior"));
         assert!(app.contains("impl CompileProofBehavior for ExportedApp"));
+        // Behavior graph matrix.
+        assert!(
+            app.contains(
+                "self.state.behavior_progress = (self.state.behavior_progress + 0.1).clamp(0.0, 1.0);"
+            ),
+            "behavior Add mutation"
+        );
+        assert!(
+            app.contains("behavior_progress: f32"),
+            "behavior field declared in AppState"
+        );
+        assert!(
+            app.contains("fn behavior_bridge(&mut self)"),
+            "CallHandler behavior must generate a handler stub"
+        );
+        assert!(
+            app.contains("self.behavior_bridge();"),
+            "CallHandler behavior call site"
+        );
 
         let cargo = std::fs::read_to_string(dir.join("Cargo.toml"))
             .expect("exported Cargo.toml must be readable");

@@ -1,3 +1,4 @@
+pub mod behavior;
 pub mod component_state;
 pub mod egui_emitter;
 pub mod export;

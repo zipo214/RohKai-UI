@@ -1,5 +1,8 @@
 use crate::codegen::rust::is_valid_identifier;
-use crate::project::schema::{HAlign, Rect as SchemaRect, VAlign, WidgetInstance, WidgetKind};
+use crate::project::schema::{
+    Behavior, HAlign, Rect as SchemaRect, VAlign, ValueExpr, VisualAction, WidgetEvent,
+    WidgetInstance, WidgetKind,
+};
 use crate::project::ui_tree::UiTree;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
@@ -380,6 +383,13 @@ pub struct ConstraintAnchorDrag {
     target: Option<ConstraintTarget>,
 }
 
+/// Active drag from a widget's event socket toward a state-target socket.
+/// Committed into `tree.app_props.behaviors` on release.
+pub struct BehaviorWireDrag {
+    pub source_widget: Uuid,
+    pub event: WidgetEvent,
+}
+
 #[derive(Default)]
 pub struct InteractionState {
     pub drag: Option<DragState>,
@@ -400,6 +410,11 @@ pub struct InteractionState {
     pub reorder_drag: Option<ReorderDrag>,
     /// Active drag from a visual constraint handle to a parent anchor target.
     pub constraint_anchor_drag: Option<ConstraintAnchorDrag>,
+    /// Active behavior-wire drag (event socket → state socket).
+    pub behavior_drag: Option<BehaviorWireDrag>,
+    /// Behavior wire selected on the canvas; edited in the Behaviors panel.
+    /// Session-only selection — the behavior itself lives in the UiTree.
+    pub selected_behavior: Option<Uuid>,
 }
 
 // ---------------------------------------------------------------------------
@@ -2216,6 +2231,147 @@ fn canvas_owns_keyboard(
     !modal_blocked && canvas_focused && !wants_keyboard_input
 }
 
+// ---------------------------------------------------------------------------
+// Behavior wires — sockets, Visio-style connectors, hit-testing
+// ---------------------------------------------------------------------------
+
+const BEHAVIOR_SOCKET_RADIUS: f32 = 4.5;
+const BEHAVIOR_SOCKET_HIT_RADIUS: f32 = 9.0;
+const BEHAVIOR_WIRE_HIT_DISTANCE: f32 = 7.0;
+const BEHAVIOR_WIRE_COLOR: egui::Color32 = egui::Color32::from_rgb(244, 196, 96);
+
+/// Screen position of a widget's event (source) socket — right edge center.
+fn event_socket_pos(rect: egui::Rect) -> egui::Pos2 {
+    rect.right_center()
+}
+
+/// Screen position of a widget's state (target) socket — left edge center.
+fn state_socket_pos(rect: egui::Rect) -> egui::Pos2 {
+    rect.left_center()
+}
+
+/// The default event a fresh wire from this widget fires on: the first entry
+/// of the canonical `supported_events()` list (Click for Button, Change for
+/// value widgets).  Editable afterwards in the Behaviors panel.
+fn behavior_source_event(w: &WidgetInstance) -> Option<WidgetEvent> {
+    w.kind.supported_events().first().copied()
+}
+
+/// The state field a wire dropped on this widget mutates: its `state_binding`,
+/// when the kind actually carries state (per `kind_table::state_info`).
+fn behavior_target_field(w: &WidgetInstance) -> Option<String> {
+    let binding = w.state_binding.as_deref().map(str::trim)?;
+    if binding.is_empty() || crate::codegen::kind_table::state_info(&w.kind).is_none() {
+        return None;
+    }
+    Some(binding.to_owned())
+}
+
+/// Default typed action for dropping a wire on `target`, derived from the
+/// canonical `kind_table::state_info` field type — never re-listed per kind.
+fn default_behavior_action(target: &WidgetInstance) -> Option<VisualAction> {
+    let field = behavior_target_field(target)?;
+    let info = crate::codegen::kind_table::state_info(&target.kind)?;
+    match info.rust_type {
+        "f32" => Some(VisualAction::Add {
+            field,
+            amount: 0.1,
+            min: Some(target.props.min.min(target.props.max)),
+            max: Some(target.props.max.max(target.props.min)),
+        }),
+        "bool" => Some(VisualAction::Toggle { field }),
+        "String" => Some(VisualAction::Set {
+            field,
+            value: ValueExpr::Text(String::new()),
+        }),
+        _ => None,
+    }
+}
+
+/// Resolve a behavior's wire endpoints in screen space.  Prefers the recorded
+/// target widget; falls back to any widget bound to the action's field so the
+/// wire survives target deletion when the field is still bound elsewhere.
+fn behavior_wire_endpoints(
+    behavior: &Behavior,
+    tree: &UiTree,
+    origin: egui::Pos2,
+    zoom: f32,
+) -> Option<(egui::Pos2, egui::Pos2)> {
+    let source = tree
+        .widgets
+        .iter()
+        .find(|w| w.id == behavior.source_widget)?;
+    let target = behavior
+        .target_widget
+        .and_then(|tid| tree.widgets.iter().find(|w| w.id == tid))
+        .or_else(|| {
+            behavior.action.field().and_then(|field| {
+                tree.widgets
+                    .iter()
+                    .find(|w| w.state_binding.as_deref() == Some(field))
+            })
+        })?;
+    Some((
+        event_socket_pos(crect(source, origin, zoom)),
+        state_socket_pos(crect(target, origin, zoom)),
+    ))
+}
+
+/// Sample the Visio-style connector cubic between `p0` and `p3`.
+fn behavior_wire_points(p0: egui::Pos2, p3: egui::Pos2) -> Vec<egui::Pos2> {
+    let dx = (p3.x - p0.x).abs();
+    let reach = (dx * 0.5).clamp(32.0, 140.0);
+    let c1 = p0 + egui::vec2(reach, 0.0);
+    let c2 = p3 - egui::vec2(reach, 0.0);
+    const STEPS: usize = 24;
+    (0..=STEPS)
+        .map(|i| {
+            let t = i as f32 / STEPS as f32;
+            let u = 1.0 - t;
+            let pt = p0.to_vec2() * (u * u * u)
+                + c1.to_vec2() * (3.0 * u * u * t)
+                + c2.to_vec2() * (3.0 * u * t * t)
+                + p3.to_vec2() * (t * t * t);
+            egui::pos2(pt.x, pt.y)
+        })
+        .collect()
+}
+
+fn behavior_wire_hit(p0: egui::Pos2, p3: egui::Pos2, pos: egui::Pos2) -> bool {
+    let pts = behavior_wire_points(p0, p3);
+    pts.windows(2).any(|seg| {
+        let (a, b) = (seg[0], seg[1]);
+        let ab = b - a;
+        let len_sq = ab.length_sq();
+        let t = if len_sq <= f32::EPSILON {
+            0.0
+        } else {
+            ((pos - a).dot(ab) / len_sq).clamp(0.0, 1.0)
+        };
+        (a + ab * t).distance(pos) <= BEHAVIOR_WIRE_HIT_DISTANCE
+    })
+}
+
+/// Draw one wire: smooth connector, open circle on the event side, closed
+/// circle on the state side.
+fn draw_behavior_wire(
+    painter: &egui::Painter,
+    p0: egui::Pos2,
+    p3: egui::Pos2,
+    color: egui::Color32,
+    selected: bool,
+) {
+    let stroke = egui::Stroke::new(if selected { 2.5 } else { 1.5 }, color);
+    let pts = behavior_wire_points(p0, p3);
+    for seg in pts.windows(2) {
+        painter.line_segment([seg[0], seg[1]], stroke);
+    }
+    // Open circle = source/event socket; closed circle = target/state socket.
+    painter.circle_filled(p0, BEHAVIOR_SOCKET_RADIUS, egui::Color32::from_gray(28));
+    painter.circle_stroke(p0, BEHAVIOR_SOCKET_RADIUS, egui::Stroke::new(1.8, color));
+    painter.circle_filled(p3, BEHAVIOR_SOCKET_RADIUS, color);
+}
+
 pub fn handle(
     ui: &mut egui::Ui,
     tree: &mut UiTree,
@@ -2477,6 +2633,76 @@ pub fn handle(
                     let rect = crect(widget, origin, zoom);
                     painter.rect_stroke(rect, 3.0, error_stroke);
                 }
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Behavior wires + sockets
+    // -------------------------------------------------------------------
+    {
+        // Drop the selection if its behavior no longer exists in the tree.
+        if state
+            .selected_behavior
+            .is_some_and(|bid| !tree.app_props.behaviors.iter().any(|b| b.id == bid))
+        {
+            state.selected_behavior = None;
+        }
+
+        // Committed wires.
+        for behavior in &tree.app_props.behaviors {
+            if let Some((p0, p3)) = behavior_wire_endpoints(behavior, tree, origin, zoom) {
+                let selected_wire = state.selected_behavior == Some(behavior.id);
+                let color = if selected_wire {
+                    egui::Color32::from_rgb(52, 211, 153)
+                } else {
+                    BEHAVIOR_WIRE_COLOR
+                };
+                draw_behavior_wire(&painter, p0, p3, color, selected_wire);
+            }
+        }
+
+        // Sockets: open circle on every event-capable widget (source side),
+        // closed circle on every state-bound widget (target side).  Capability
+        // derives from the canonical APIs, never re-listed per kind.
+        let drag_active = state.behavior_drag.is_some();
+        for widget in &tree.widgets {
+            let rect = crect(widget, origin, zoom);
+            if behavior_source_event(widget).is_some() {
+                let p = event_socket_pos(rect);
+                let hovered = pointer.is_some_and(|pos| {
+                    p.distance(pos) <= BEHAVIOR_SOCKET_HIT_RADIUS && !drag_active
+                });
+                let color = if hovered {
+                    egui::Color32::from_rgb(52, 211, 153)
+                } else {
+                    egui::Color32::from_gray(120)
+                };
+                painter.circle_filled(p, BEHAVIOR_SOCKET_RADIUS, egui::Color32::from_gray(28));
+                painter.circle_stroke(p, BEHAVIOR_SOCKET_RADIUS, egui::Stroke::new(1.5, color));
+            }
+            if behavior_target_field(widget).is_some() {
+                let p = state_socket_pos(rect);
+                let highlighted = drag_active
+                    && state
+                        .behavior_drag
+                        .as_ref()
+                        .is_some_and(|d| d.source_widget != widget.id);
+                let color = if highlighted {
+                    egui::Color32::from_rgb(52, 211, 153)
+                } else {
+                    egui::Color32::from_gray(120)
+                };
+                painter.circle_filled(p, BEHAVIOR_SOCKET_RADIUS, color);
+            }
+        }
+
+        // Live wire while dragging.
+        if let (Some(drag), Some(pos)) = (&state.behavior_drag, pointer) {
+            if let Some(source) = tree.widgets.iter().find(|w| w.id == drag.source_widget) {
+                let p0 = event_socket_pos(crect(source, origin, zoom));
+                draw_behavior_wire(&painter, p0, pos, BEHAVIOR_WIRE_COLOR, true);
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
             }
         }
     }
@@ -2786,6 +3012,7 @@ pub fn handle(
         state.drag = None;
         state.reorder_drag = None;
         state.constraint_anchor_drag = None;
+        state.behavior_drag = None;
     }
     if just_pressed && !settings.guide_drag_active && state.context_menu.is_none() {
         state.reorder_drag = None; // clear any stale reorder from previous gesture
@@ -2793,11 +3020,32 @@ pub fn handle(
             if resp.rect.contains(pos) {
                 let mut started_constraint_anchor = false;
                 let mut started_resize = false;
+                let mut started_behavior_wire = false;
+
+                // 0) Behavior event socket on any event-capable widget — wires
+                // are drawn topmost, so socket hits win over body hits.
+                for widget in tree.widgets.iter().rev() {
+                    let Some(event) = behavior_source_event(widget) else {
+                        continue;
+                    };
+                    let socket = event_socket_pos(crect(widget, origin, zoom));
+                    if socket.distance(pos) <= BEHAVIOR_SOCKET_HIT_RADIUS {
+                        state.behavior_drag = Some(BehaviorWireDrag {
+                            source_widget: widget.id,
+                            event,
+                        });
+                        state.resize = None;
+                        state.drag = None;
+                        state.rubber_band = None;
+                        started_behavior_wire = true;
+                        break;
+                    }
+                }
 
                 // 1) Constraint anchor handle on primary. These sit farther
                 // outside the widget than resize handles, so both remain
                 // independently targetable.
-                if let Some(prim_id) = primary {
+                if let Some(prim_id) = primary.filter(|_| !started_behavior_wire) {
                     if let Some(widget) = tree.widgets.iter().find(|w| w.id == prim_id) {
                         let rect = crect(widget, origin, zoom);
                         for handle in ConstraintHandle::ALL {
@@ -2823,7 +3071,7 @@ pub fn handle(
                 }
 
                 // 2) Resize handle on primary
-                if !started_constraint_anchor {
+                if !started_behavior_wire && !started_constraint_anchor {
                     if let Some(prim_id) = primary {
                         if let Some(widget) = tree.widgets.iter().find(|w| w.id == prim_id) {
                             let rect = crect(widget, origin, zoom);
@@ -2845,10 +3093,29 @@ pub fn handle(
                     }
                 }
 
-                if !started_constraint_anchor && !started_resize {
+                if !started_behavior_wire && !started_constraint_anchor && !started_resize {
                     let hit_widget = hit_widget_id(&tree.widgets, &child_ids, pos, origin, zoom);
 
-                    if shift_held {
+                    // Any non-socket press re-resolves wire selection: clicking
+                    // a wire selects it; clicking anything else clears it.
+                    state.selected_behavior = tree
+                        .app_props
+                        .behaviors
+                        .iter()
+                        .filter(|_| hit_widget.is_none())
+                        .find(|b| {
+                            behavior_wire_endpoints(b, tree, origin, zoom)
+                                .is_some_and(|(p0, p3)| behavior_wire_hit(p0, p3, pos))
+                        })
+                        .map(|b| b.id);
+                    let hit_wire = state.selected_behavior.is_some();
+
+                    if hit_wire {
+                        // Wire click: keep widget selection untouched, no
+                        // rubber band / drag this gesture.
+                        state.drag = None;
+                        state.rubber_band = None;
+                    } else if shift_held {
                         if let Some(id) = hit_widget {
                             if selected.contains(&id) {
                                 selected.retain(|&x| x != id);
@@ -3375,6 +3642,36 @@ pub fn handle(
     // Release — rubber-band finalise
     // -------------------------------------------------------------------
     if !is_down {
+        // Commit behavior-wire drag: dropping on a state socket (or anywhere on
+        // a state-bound widget) creates a typed behavior in the UiTree.
+        if let Some(wire) = state.behavior_drag.take() {
+            let drop = pointer.and_then(|pos| {
+                tree.widgets
+                    .iter()
+                    .rev()
+                    .filter(|w| w.id != wire.source_widget)
+                    .find(|w| {
+                        let rect = crect(w, origin, zoom);
+                        behavior_target_field(w).is_some()
+                            && (state_socket_pos(rect).distance(pos) <= BEHAVIOR_SOCKET_HIT_RADIUS
+                                || rect.contains(pos))
+                    })
+                    .and_then(|target| {
+                        default_behavior_action(target).map(|action| (target.id, action))
+                    })
+            });
+            if let Some((target_id, action)) = drop {
+                let behavior = Behavior {
+                    id: Uuid::new_v4(),
+                    source_widget: wire.source_widget,
+                    event: wire.event,
+                    target_widget: Some(target_id),
+                    action,
+                };
+                state.selected_behavior = Some(behavior.id);
+                tree.app_props.behaviors.push(behavior);
+            }
+        }
         if let Some(anchor_drag) = state.constraint_anchor_drag.take() {
             if let Some(target) = anchor_drag.target {
                 let frame = constraint_frame(tree, anchor_drag.id);

@@ -2,7 +2,8 @@ use crate::codegen::formula::{collect_variables, emit_formula_rust, parse_formul
 use crate::codegen::rust::{field_binding, string_literal};
 use crate::codegen::source_map::{GeneratedCodeDocument, SourceSpan, WidgetSourceSpan};
 use crate::project::schema::{
-    CrossAlign, LayoutCrossAlign, Orientation, SizePolicy, TextAlign, WidgetInstance, WidgetKind,
+    CrossAlign, LayoutCrossAlign, Orientation, SizePolicy, TextAlign, WidgetEvent, WidgetInstance,
+    WidgetKind,
 };
 use crate::project::ui_tree::UiTree;
 use rayon::prelude::*;
@@ -144,7 +145,7 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
             ));
             for &child_id in &w.children {
                 if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
-                    emit_child_lines(child, w, &mut lines, 0);
+                    emit_child_lines(child, w, tree, &mut lines, 0);
                 }
             }
             lines.push((Some(w.id), "        });".to_owned()));
@@ -170,20 +171,27 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                     w.rect.w, w.rect.h
                 );
             let with_tip = append_tip(base, tip.as_deref());
-            let mut line = if let Some(h) = resolve_handler_click(w) {
-                format!(
-                        "        let _btn_{id} = {with_tip};\n        if _btn_{id}.clicked() {{\n            self.{h}();\n        }}",
-                        id = w.id.as_simple()
-                    )
-            } else {
-                format!("        let _btn_{id} = {with_tip};", id = w.id.as_simple())
-            };
-            if !w.on_double_click.is_empty() {
-                let h = &w.on_double_click;
-                let id = w.id.as_simple();
+            let id = w.id.as_simple();
+            let mut line = format!("        let _btn_{id} = {with_tip};");
+            let click_beh = live_behavior_stmts(tree, w, WidgetEvent::Click, "            ");
+            let click_handler = resolve_handler_click(w);
+            if click_handler.is_some() || !click_beh.is_empty() {
+                line.push_str(&format!("\n        if _btn_{id}.clicked() {{\n{click_beh}"));
+                if let Some(h) = click_handler {
+                    line.push_str(&format!("            self.{h}();\n"));
+                }
+                line.push_str("        }");
+            }
+            let dclick_beh = live_behavior_stmts(tree, w, WidgetEvent::DoubleClick, "            ");
+            if !w.on_double_click.is_empty() || !dclick_beh.is_empty() {
                 line.push_str(&format!(
-                        "\n        if _btn_{id}.double_clicked() {{\n            self.{h}();\n        }}"
-                    ));
+                    "\n        if _btn_{id}.double_clicked() {{\n{dclick_beh}"
+                ));
+                if !w.on_double_click.is_empty() {
+                    let h = &w.on_double_click;
+                    line.push_str(&format!("            self.{h}();\n"));
+                }
+                line.push_str("        }");
             }
             lines.push((Some(w.id), line));
         }
@@ -231,16 +239,28 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                     let with_tip = append_tip(sized, tip.as_deref());
                     let id = w.id.as_simple();
                     let mut parts = format!("        let _ti_{id} = {with_tip};");
-                    if let Some(h) = resolve_handler_change(w) {
-                        parts.push_str(&format!(
-                                "\n        if _ti_{id}.changed() {{\n            self.{h}();\n        }}"
-                            ));
+                    let change_beh =
+                        live_behavior_stmts(tree, w, WidgetEvent::Change, "            ");
+                    let change_handler = resolve_handler_change(w);
+                    if change_handler.is_some() || !change_beh.is_empty() {
+                        parts
+                            .push_str(&format!("\n        if _ti_{id}.changed() {{\n{change_beh}"));
+                        if let Some(h) = change_handler {
+                            parts.push_str(&format!("            self.{h}();\n"));
+                        }
+                        parts.push_str("        }");
                     }
-                    if !w.on_lost_focus.is_empty() {
-                        let h = &w.on_lost_focus;
+                    let blur_beh =
+                        live_behavior_stmts(tree, w, WidgetEvent::LostFocus, "            ");
+                    if !w.on_lost_focus.is_empty() || !blur_beh.is_empty() {
                         parts.push_str(&format!(
-                                "\n        if _ti_{id}.lost_focus() {{\n            self.{h}();\n        }}"
-                            ));
+                            "\n        if _ti_{id}.lost_focus() {{\n{blur_beh}"
+                        ));
+                        if !w.on_lost_focus.is_empty() {
+                            let h = &w.on_lost_focus;
+                            parts.push_str(&format!("            self.{h}();\n"));
+                        }
+                        parts.push_str("        }");
                     }
                     parts
                 }
@@ -269,16 +289,28 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                     let with_tip = append_tip(sized, tip.as_deref());
                     let id = w.id.as_simple();
                     let mut parts = format!("        let _sl_{id} = {with_tip};");
-                    if let Some(h) = resolve_handler_change(w) {
-                        parts.push_str(&format!(
-                                "\n        if _sl_{id}.changed() {{\n            self.{h}();\n        }}"
-                            ));
+                    let change_beh =
+                        live_behavior_stmts(tree, w, WidgetEvent::Change, "            ");
+                    let change_handler = resolve_handler_change(w);
+                    if change_handler.is_some() || !change_beh.is_empty() {
+                        parts
+                            .push_str(&format!("\n        if _sl_{id}.changed() {{\n{change_beh}"));
+                        if let Some(h) = change_handler {
+                            parts.push_str(&format!("            self.{h}();\n"));
+                        }
+                        parts.push_str("        }");
                     }
-                    if !w.on_drag_stopped.is_empty() {
-                        let h = &w.on_drag_stopped;
+                    let drag_beh =
+                        live_behavior_stmts(tree, w, WidgetEvent::DragStopped, "            ");
+                    if !w.on_drag_stopped.is_empty() || !drag_beh.is_empty() {
                         parts.push_str(&format!(
-                                "\n        if _sl_{id}.drag_stopped() {{\n            self.{h}();\n        }}"
-                            ));
+                            "\n        if _sl_{id}.drag_stopped() {{\n{drag_beh}"
+                        ));
+                        if !w.on_drag_stopped.is_empty() {
+                            let h = &w.on_drag_stopped;
+                            parts.push_str(&format!("            self.{h}();\n"));
+                        }
+                        parts.push_str("        }");
                     }
                     parts
                 }
@@ -294,8 +326,16 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                             w.rect.w, w.rect.h
                         );
                     let with_tip = append_tip(base, tip.as_deref());
-                    let with_handler = if let Some(h) = resolve_handler_change(w) {
-                        format!("if {with_tip}.changed() {{\n            self.{h}();\n        }}")
+                    let change_beh =
+                        live_behavior_stmts(tree, w, WidgetEvent::Change, "            ");
+                    let change_handler = resolve_handler_change(w);
+                    let with_handler = if change_handler.is_some() || !change_beh.is_empty() {
+                        let mut s = format!("if {with_tip}.changed() {{\n{change_beh}");
+                        if let Some(h) = change_handler {
+                            s.push_str(&format!("            self.{h}();\n"));
+                        }
+                        s.push_str("        }");
+                        s
                     } else {
                         format!("{with_tip};")
                     };
@@ -322,20 +362,25 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                     }
                     base.push_str("            });\n");
                     let handler = resolve_handler_change(w);
-                    let uses_response = tip.is_some() || handler.is_some();
+                    let change_beh =
+                        live_behavior_stmts(tree, w, WidgetEvent::Change, "            ");
+                    let dispatches = handler.is_some() || !change_beh.is_empty();
+                    let uses_response = tip.is_some() || dispatches;
                     if uses_response {
                         base.push_str("        let combo_response = combo_resp.response;\n");
                     }
-                    if handler.is_some() {
+                    if dispatches {
                         base.push_str("        let combo_changed = combo_response.changed();\n");
                     }
                     if let Some(tip) = tip.as_deref() {
                         base.push_str(&format!("        combo_response.on_hover_text({tip});\n"));
                     }
-                    if let Some(h) = handler {
-                        base.push_str(&format!(
-                            "        if combo_changed {{\n            self.{h}();\n        }}"
-                        ));
+                    if dispatches {
+                        base.push_str(&format!("        if combo_changed {{\n{change_beh}"));
+                        if let Some(h) = handler {
+                            base.push_str(&format!("            self.{h}();\n"));
+                        }
+                        base.push_str("        }");
                     } else if !uses_response {
                         base.push_str("        let _ = combo_resp;");
                     }
@@ -358,8 +403,16 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                         "ui.radio_value(&mut self.{b}, {value_lit}.to_owned(), {label_lit})"
                     );
                     let with_tip = append_tip(base, tip.as_deref());
-                    let line = if let Some(h) = resolve_handler_change(w) {
-                        format!("if {with_tip}.clicked() {{\n            self.{h}();\n        }}")
+                    let change_beh =
+                        live_behavior_stmts(tree, w, WidgetEvent::Change, "            ");
+                    let change_handler = resolve_handler_change(w);
+                    let line = if change_handler.is_some() || !change_beh.is_empty() {
+                        let mut s = format!("if {with_tip}.clicked() {{\n{change_beh}");
+                        if let Some(h) = change_handler {
+                            s.push_str(&format!("            self.{h}();\n"));
+                        }
+                        s.push_str("        }");
+                        s
                     } else {
                         format!("{with_tip};")
                     };
@@ -422,8 +475,16 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                     );
                     let sized = format!("ui.add({dv})");
                     let with_tip = append_tip(sized, tip.as_deref());
-                    let with_handler = if let Some(h) = resolve_handler_change(w) {
-                        format!("if {with_tip}.changed() {{\n            self.{h}();\n        }}")
+                    let change_beh =
+                        live_behavior_stmts(tree, w, WidgetEvent::Change, "            ");
+                    let change_handler = resolve_handler_change(w);
+                    let with_handler = if change_handler.is_some() || !change_beh.is_empty() {
+                        let mut s = format!("if {with_tip}.changed() {{\n{change_beh}");
+                        if let Some(h) = change_handler {
+                            s.push_str(&format!("            self.{h}();\n"));
+                        }
+                        s.push_str("        }");
+                        s
                     } else {
                         format!("{with_tip};")
                     };
@@ -929,6 +990,13 @@ fn resolve_handler_click(w: &WidgetInstance) -> Option<&str> {
     crate::codegen::handlers::resolve_click_handler(w)
 }
 
+/// Behavior-graph statements for `(w, ev)` in live-preview field syntax
+/// (`self.{field}` — no `state.` prefix).  One line per behavior, each
+/// prefixed with `indent` and newline-terminated; empty when nothing is wired.
+fn live_behavior_stmts(tree: &UiTree, w: &WidgetInstance, ev: WidgetEvent, indent: &str) -> String {
+    crate::codegen::behavior::statements_for_event(tree, w.id, ev, "", indent)
+}
+
 fn resolve_handler_change(w: &WidgetInstance) -> Option<&str> {
     crate::codegen::handlers::resolve_change_handler(w)
 }
@@ -1015,6 +1083,7 @@ fn combo_selected_text_expr(state_expr: &str, options: &[String]) -> String {
 fn emit_child_lines(
     child: &WidgetInstance,
     parent: &WidgetInstance,
+    tree: &UiTree,
     lines: &mut Vec<(Option<Uuid>, String)>,
     depth: usize,
 ) {
@@ -1035,9 +1104,17 @@ fn emit_child_lines(
     lines.push((Some(child.id), format!("{indent}// widget_{}", child.id)));
 
     let line = match &child.kind {
-        WidgetKind::Button => format!(
-            "{indent}if ui.put({rect_expr}, egui::Button::new({label})).clicked() {{}}"
-        ),
+        WidgetKind::Button => {
+            let click_beh =
+                live_behavior_stmts(tree, child, WidgetEvent::Click, &format!("{indent}    "));
+            if click_beh.is_empty() {
+                format!("{indent}if ui.put({rect_expr}, egui::Button::new({label})).clicked() {{}}")
+            } else {
+                format!(
+                    "{indent}if ui.put({rect_expr}, egui::Button::new({label})).clicked() {{\n{click_beh}{indent}}}"
+                )
+            }
+        }
         WidgetKind::Label => match binding {
             Some(b) => format!("{indent}ui.put({rect_expr}, egui::Label::new(&self.{b}));"),
             None => format!("{indent}ui.put({rect_expr}, egui::Label::new({label}));"),
@@ -1275,16 +1352,29 @@ fn emit_layout_child_lines(
             let mut s = format!(
                 "            let _btn_{id} = ui.add_sized({sz}, egui::Button::new({label}));"
             );
-            if let Some(h) = resolve_handler_click(child) {
+            let click_beh =
+                live_behavior_stmts(tree, child, WidgetEvent::Click, "                ");
+            let click_handler = resolve_handler_click(child);
+            if click_handler.is_some() || !click_beh.is_empty() {
                 s.push_str(&format!(
-                    "\n            if _btn_{id}.clicked() {{\n                self.{h}();\n            }}"
+                    "\n            if _btn_{id}.clicked() {{\n{click_beh}"
                 ));
+                if let Some(h) = click_handler {
+                    s.push_str(&format!("                self.{h}();\n"));
+                }
+                s.push_str("            }");
             }
-            if !child.on_double_click.is_empty() {
-                let h = &child.on_double_click;
+            let dclick_beh =
+                live_behavior_stmts(tree, child, WidgetEvent::DoubleClick, "                ");
+            if !child.on_double_click.is_empty() || !dclick_beh.is_empty() {
                 s.push_str(&format!(
-                    "\n            if _btn_{id}.double_clicked() {{\n                self.{h}();\n            }}"
+                    "\n            if _btn_{id}.double_clicked() {{\n{dclick_beh}"
                 ));
+                if !child.on_double_click.is_empty() {
+                    let h = &child.on_double_click;
+                    s.push_str(&format!("                self.{h}();\n"));
+                }
+                s.push_str("            }");
             }
             s
         }
@@ -1476,6 +1566,56 @@ fn emit_nested_layout_child(
 mod tests {
     use super::*;
     use crate::project::schema::{Rect, WidgetInstance, WidgetProps};
+
+    #[test]
+    fn button_click_behavior_emits_progress_mutation_in_live_code() {
+        use crate::project::schema::{Behavior, VisualAction};
+        let btn_id = Uuid::from_u128(0xB1);
+        let bar_id = Uuid::from_u128(0xB2);
+        let btn = WidgetInstance {
+            id: btn_id,
+            kind: WidgetKind::Button,
+            props: WidgetProps {
+                label: "More".to_owned(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let bar = WidgetInstance {
+            id: bar_id,
+            kind: WidgetKind::ProgressBar,
+            state_binding: Some("progress".to_owned()),
+            ..Default::default()
+        };
+        let mut tree = UiTree {
+            widgets: vec![btn, bar],
+            ..Default::default()
+        };
+        tree.app_props.behaviors = vec![Behavior {
+            id: Uuid::from_u128(0xB3),
+            source_widget: btn_id,
+            event: WidgetEvent::Click,
+            target_widget: Some(bar_id),
+            action: VisualAction::Add {
+                field: "progress".to_owned(),
+                amount: 0.1,
+                min: Some(0.0),
+                max: Some(1.0),
+            },
+        }];
+
+        let text = emit_document(&tree).text;
+        assert!(
+            text.contains(".clicked() {"),
+            "button without handler but with behavior must still dispatch click"
+        );
+        assert!(
+            text.contains("self.progress = (self.progress + 0.1).clamp(0.0, 1.0);"),
+            "live code must mutate state via behavior, got:\n{text}"
+        );
+        // ProgressBar keeps reading its binding — never mutated directly.
+        assert!(text.contains("egui::ProgressBar::new(self.progress)"));
+    }
 
     #[test]
     fn generated_document_maps_every_widget_and_nested_child() {

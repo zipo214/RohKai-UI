@@ -7,6 +7,21 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-12 — Behavior graph: visual event→state wiring shipped
+
+Branch `dev`. Implemented the beginner-facing Behavior Graph: persisted
+`AppProps.behaviors` (typed `VisualAction`s), canvas socket drag with
+Visio-style wires (open circle = event source, closed = state target), a
+Behaviors editor in the Properties tab, and one shared emitter
+(`codegen::behavior`) used by live code and export — Button Click → Add 0.1
+emits `self.state.progress = (self.state.progress + 0.1).clamp(0.0, 1.0);` in
+nested Frame/V/H/Grid paths too. Also fixed a latent export bug: layout-child
+combos with a Change handler compared `Option<()>` to `Some(true)` (now tracks
+`changed` like frame-child combos). Suite: 544 unit + 17 fidelity + doctest,
+clippy `--all-targets -D warnings` green, launch smoke OK. Known boundary:
+live preview dispatches behaviors exactly where it dispatches handlers
+(TextArea/FontComboBox change stays export-only — pre-existing parity line).
+
 ## 2026-06-12 — S1 closed: visual anchors, named Grid slots, recursive layouts
 
 Branch `dev`, based on `1e7fd38`; Claude is out of usage. S1 is now complete:

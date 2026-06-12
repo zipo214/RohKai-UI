@@ -43,7 +43,50 @@ pub fn collect(tree: &UiTree) -> CollectedFields {
         collect_one(w, &mut fields, &mut seen, &mut warnings);
     }
 
+    // Behavior-graph actions mutate AppState fields; declare any the widgets
+    // themselves did not, so generated mutations always compile.
+    collect_behavior_fields(tree, &mut fields, &mut seen, &mut warnings);
+
     CollectedFields { fields, warnings }
+}
+
+fn collect_behavior_fields(
+    tree: &UiTree,
+    fields: &mut Vec<AppStateField>,
+    seen: &mut HashMap<String, usize>,
+    warnings: &mut Vec<String>,
+) {
+    use crate::project::schema::{ValueExpr, VisualAction};
+    for b in &tree.app_props.behaviors {
+        let Some(raw) = b.action.field() else {
+            continue; // CallHandler — no state field
+        };
+        let effective = crate::codegen::rust::effective_binding(raw.trim());
+        let Some(name) = field_binding(Some(effective.as_str())) else {
+            warnings.push(format!("Invalid behavior field {:?} skipped.", raw));
+            continue;
+        };
+        let (ty, default_expr) = match &b.action {
+            VisualAction::Add { .. } | VisualAction::Subtract { .. } => ("f32", "0.0"),
+            VisualAction::Toggle { .. } => ("bool", "false"),
+            VisualAction::Set { value, .. } => match value {
+                ValueExpr::Number(_) => ("f32", "0.0"),
+                ValueExpr::Text(_) => ("String", "String::new()"),
+                ValueExpr::Flag(_) => ("bool", "false"),
+            },
+            VisualAction::CallHandler { .. } => continue,
+        };
+        push_field(
+            AppStateField {
+                name: name.to_owned(),
+                ty: ty.to_owned(),
+                default_expr: default_expr.to_owned(),
+            },
+            fields,
+            seen,
+            warnings,
+        );
+    }
 }
 
 fn collect_one(
@@ -389,6 +432,61 @@ mod tests {
         assert_eq!(r.fields[0].name, "counter");
         assert_eq!(r.fields[0].ty, "u32");
         assert_eq!(r.fields[1].name, "label_text");
+    }
+
+    #[test]
+    fn behavior_field_declared_when_no_widget_binds_it() {
+        use crate::project::schema::{Behavior, VisualAction, WidgetEvent};
+        let btn = simple_widget(WidgetKind::Button, "ignored");
+        let source_id = btn.id;
+        let mut tree = make_tree(vec![btn]);
+        tree.app_props.behaviors = vec![Behavior {
+            id: uuid::Uuid::from_u128(0x30),
+            source_widget: source_id,
+            event: WidgetEvent::Click,
+            target_widget: None,
+            action: VisualAction::Add {
+                field: "progress".to_owned(),
+                amount: 0.1,
+                min: Some(0.0),
+                max: Some(1.0),
+            },
+        }];
+        let r = collect(&tree);
+        let f = r
+            .fields
+            .iter()
+            .find(|f| f.name == "progress")
+            .expect("behavior field must be declared");
+        assert_eq!(f.ty, "f32");
+        assert_eq!(f.default_expr, "0.0");
+    }
+
+    #[test]
+    fn behavior_field_dedupes_against_widget_binding() {
+        use crate::project::schema::{Behavior, VisualAction, WidgetEvent};
+        let bar = simple_widget(WidgetKind::ProgressBar, "progress");
+        let source_id = bar.id;
+        let mut tree = make_tree(vec![bar]);
+        tree.app_props.behaviors = vec![Behavior {
+            id: uuid::Uuid::from_u128(0x31),
+            source_widget: source_id,
+            event: WidgetEvent::Click,
+            target_widget: None,
+            action: VisualAction::Add {
+                field: "progress".to_owned(),
+                amount: 0.1,
+                min: None,
+                max: None,
+            },
+        }];
+        let r = collect(&tree);
+        assert_eq!(
+            r.fields.iter().filter(|f| f.name == "progress").count(),
+            1,
+            "behavior field must dedupe against the widget's own binding"
+        );
+        assert!(r.warnings.is_empty());
     }
 
     #[test]

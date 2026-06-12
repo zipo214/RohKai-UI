@@ -6,6 +6,7 @@
 //! `db_panel` is the Stage 13 Database floating window.
 //! All panels are pure immediate-mode egui; no retained widget state outside `RohKaiApp`.
 
+pub mod behaviors;
 pub mod code_preview;
 pub mod component_tray;
 pub mod db_panel;

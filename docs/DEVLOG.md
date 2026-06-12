@@ -2,6 +2,68 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-12 — Behavior Graph: first-class visual event→state wiring
+
+### Context Reviewed
+- AGENTS/CLAUDE policy, preflight, PROMPT_CONTRACT, ARCHITECTURE,
+  ENGINEERING_INVARIANTS; schema.rs, ui_tree.rs, canvas/interaction.rs,
+  panels/properties.rs, codegen/{field_collector,state_emitter,egui_emitter,
+  export,rust_wiring,handlers,parser,rust,kind_table}.
+
+### Derivation (before coding)
+- Source of truth: `UiTree`; events from `WidgetKind::supported_events()`;
+  state types from `kind_table::state_info`; fields from `field_collector`.
+- Output paths enumerated: live emitter (top-level + Frame children + layout
+  children), export (`event_dispatch_block`, child dispatch, frame/layout
+  combos, layout child lines), AppState (live + export), handler stubs.
+- Scope: nested paths in scope. Templates regenerate widget UUIDs, so wires do
+  not copy through templates (by design). Live preview dispatches behaviors
+  exactly where it already dispatches handlers; TextArea/FontComboBox change
+  remains export-only (pre-existing parity boundary, unchanged).
+
+### Changes
+- `schema.rs`: `Behavior`, `VisualAction` (Set/Add/Subtract/Toggle/CallHandler),
+  `ValueExpr`, serde on `WidgetEvent`, `WidgetEvent::label()`, and
+  `AppProps.behaviors` (serde-default, skip-empty → backward compatible).
+- `ui_tree.rs`: `prune_stale_behaviors` on remove + validate_and_repair.
+- `codegen/behavior.rs` (new): single emitter for both surfaces via field
+  prefix (`""` live, `"state."` export); exhaustive match so a new action
+  variant cannot compile without emission; invalid fields/handlers emit
+  diagnostic comments, never broken code.
+- `field_collector`: declares behavior-referenced fields no widget binds.
+- `export.rs`: dispatch blocks emit behavior statements before handler calls
+  on every supported event; `CallHandler` names get stubs; compile fixture
+  gained a behavior button + bound ProgressBar. Fixed latent bug: layout-child
+  combo change dispatch compared `Option<()>` with `Some(true)` (non-compiling
+  exported code); now tracks `changed` like the frame-child combo.
+- `egui_emitter.rs`: behavior emission in Button (click/double-click),
+  TextInput (change/lost-focus), Slider (change/drag-stopped), Checkbox,
+  ComboBox, RadioButton, SpinBox, Frame-child Button, layout-child Button.
+- `canvas/interaction.rs`: event/state sockets (open/closed circles on edge
+  centers, derived from `is_event_capable()` / `state_info` + binding),
+  left-drag wire creation with live cubic preview, committed wires drawn as
+  smooth connectors, wire click selection, guide-drag suppression, default
+  action inferred from target state type (f32→Add 0.1 clamped to props
+  min/max, bool→Toggle, String→Set).
+- `panels/behaviors.rs` (new): selected-wire editor (event combo from
+  supported_events, action type, field, amount/clamp, value, delete) + per-
+  widget behavior list; wired into both Properties call sites in `app.rs`.
+- Docs: ARCHITECTURE behavior-graph section + codegen module map row.
+
+### Verification
+- `cargo fmt --check` / `cargo check` / `cargo test` (544 unit + 17 fidelity +
+  doctest, zero ignored — includes real `cargo check` compile fixture with a
+  behavior wired) / `cargo clippy --all-targets -- -D warnings` /
+  `check-text-encoding.ps1` all green; `cargo run` launch smoke OK (8s alive).
+
+### Risks / Follow-ups
+- Wire endpoints draw only when source and a field-bound target widget exist;
+  field-only behaviors (target deleted) stay editable via the Behaviors list.
+- Lazare: behavior mutation lines inside Button blocks parse like handler-call
+  lines (same fallback class); no new round-trip surface added.
+- Canvas socket hit-test takes priority over body clicks within 9px of edge
+  centers; watch for conflicts with very small widgets.
+
 ## 2026-06-12 — S1 layout and constraint depth closed
 
 ### Context Reviewed
