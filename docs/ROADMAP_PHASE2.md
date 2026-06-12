@@ -63,7 +63,7 @@ No code until the crate is explicitly user-approved.
 Continues from the MVP (commit 4f60e72). See `docs/VISUAL_WIDGET_MAKER.md`.
 
 - [ ] Z-order reorder of primitives (drag in layer list, like canvas)
-- [ ] Hit regions: interactive zones that receive click/hover/drag events,
+- [x] Hit regions: interactive zones that receive click/hover/drag events,
       distinct from visual shapes (a rect can be a hit region without being visible)
 - [ ] Layout groups: horizontal, vertical, grid, stack inside the maker canvas
 - [ ] Primitive constraints: anchor (TL/TR/BL/BR/Center), padding, min/max
@@ -71,8 +71,9 @@ Continues from the MVP (commit 4f60e72). See `docs/VISUAL_WIDGET_MAKER.md`.
 - [ ] State variants: normal, hover, pressed, disabled, checked — each variant
       carries independent primitive style overrides
 - [ ] Slots: named child content areas that accept widget instances at canvas time
-- [ ] Event zones: named interactive areas that emit click/change/custom signals
-- [ ] Style tokens: accent color, border color, corner radius, text color,
+- [x] Event zones: named interactive areas that emit click/change/custom signals
+      (implemented via HitRegion primitives; see Hit regions above)
+- [x] Style tokens: accent color, border color, corner radius, text color,
       spacing — expose as a property group in the properties panel
 - [ ] Codegen preview: show the exact live_preview/export template that the
       current visual document will emit, live-updated as primitives change

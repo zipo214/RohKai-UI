@@ -6,13 +6,14 @@
 //! primitive.  "Save" serialises via `doc_to_descriptor` → JSON → `.rkwd` file.
 
 use crate::canvas::widget_maker::{
-    doc_to_descriptor, gen_live_preview, MakerPrimKind, MakerPrimitive, WidgetMakerDoc,
+    doc_to_descriptor, gen_export_template, gen_live_preview, MakerPrimKind, MakerPrimitive,
+    PrimAnchor, StyleTokens, WidgetMakerDoc,
 };
 use egui::Color32;
 
 const CANVAS_W: f32 = 280.0;
 const CANVAS_H: f32 = 140.0;
-const PRIM_MIN: f32 = 8.0;
+const PRIM_MIN: f32 = 0.05; // minimum normalised size enforced by drag-value UI
 
 /// Render the Visual Widget Maker window.
 ///
@@ -38,68 +39,67 @@ pub fn show_widget_maker_window(
         .id(egui::Id::new("widget_maker_window"))
         .open(&mut keep_open)
         .resizable(true)
-        .min_width(620.0)
-        .min_height(420.0)
+        .min_width(700.0)
+        .min_height(460.0)
         .show(ctx, |ui| {
             ui.horizontal_top(|ui| {
-                // ---- Left: mini-canvas ----
+                // ---- Left: mini-canvas + primitive list + toolbar ----
                 ui.vertical(|ui| {
                     ui.label(egui::RichText::new("Canvas").strong());
                     show_mini_canvas(ui, doc);
                     ui.separator();
                     show_toolbar(ui, doc);
+                    ui.separator();
+                    // Item 2: Primitive list with z-order ↑/↓ buttons
+                    show_primitive_list(ui, doc);
                 });
 
                 ui.separator();
 
-                // ---- Right: properties + export ----
+                // ---- Right: tabs (Properties | Code Preview) ----
                 ui.vertical(|ui| {
-                    ui.set_min_width(280.0);
-                    ui.label(egui::RichText::new("Widget Properties").strong());
-                    show_widget_meta(ui, doc);
-                    ui.separator();
-                    if let Some(idx) = doc.selected {
-                        if idx < doc.primitives.len() {
-                            ui.label(egui::RichText::new("Primitive").strong());
-                            show_primitive_props(ui, &mut doc.primitives[idx]);
-                        }
-                    } else {
-                        ui.label(
-                            egui::RichText::new("Select a primitive to edit its properties")
-                                .small()
-                                .weak(),
-                        );
-                    }
-                    ui.separator();
-                    // Generated code preview
-                    ui.label(egui::RichText::new("Generated Template").strong());
-                    let preview = gen_live_preview(doc);
-                    egui::ScrollArea::vertical()
-                        .id_salt("wm_code_scroll")
-                        .max_height(120.0)
-                        .show(ui, |ui| {
-                            ui.add(
-                                egui::TextEdit::multiline(&mut preview.as_str())
-                                    .desired_width(f32::INFINITY)
-                                    .font(egui::TextStyle::Monospace),
-                            );
-                        });
-                    ui.separator();
+                    ui.set_min_width(300.0);
+
+                    // Tab bar
+                    let active_tab = ui.data_mut(|d| {
+                        *d.get_temp_mut_or_default::<WmTab>(egui::Id::new("wm_active_tab"))
+                    });
                     ui.horizontal(|ui| {
                         if ui
-                            .button("💾 Save Descriptor")
-                            .on_hover_text("Export as .rkwd and reload palette")
+                            .selectable_label(active_tab == WmTab::Properties, "Properties")
                             .clicked()
                         {
-                            let descriptor = doc_to_descriptor(doc);
-                            if let Ok(json) = serde_json::to_string_pretty(&descriptor) {
-                                result.save_json = Some(json);
-                            }
+                            ui.data_mut(|d| {
+                                *d.get_temp_mut_or_default::<WmTab>(egui::Id::new(
+                                    "wm_active_tab",
+                                )) = WmTab::Properties;
+                            });
                         }
-                        if ui.button("Reset").clicked() {
-                            *doc = WidgetMakerDoc::new_with_defaults();
+                        if ui
+                            .selectable_label(active_tab == WmTab::CodePreview, "Code Preview")
+                            .clicked()
+                        {
+                            ui.data_mut(|d| {
+                                *d.get_temp_mut_or_default::<WmTab>(egui::Id::new(
+                                    "wm_active_tab",
+                                )) = WmTab::CodePreview;
+                            });
                         }
                     });
+                    ui.separator();
+
+                    // Re-read after possible mutation above
+                    let active_tab = ui.data_mut(|d| {
+                        *d.get_temp_mut_or_default::<WmTab>(egui::Id::new("wm_active_tab"))
+                    });
+                    match active_tab {
+                        WmTab::Properties => {
+                            show_properties_tab(ui, doc, &mut result);
+                        }
+                        WmTab::CodePreview => {
+                            show_code_preview_tab(ui, doc);
+                        }
+                    }
                 });
             });
         });
@@ -111,6 +111,185 @@ pub fn show_widget_maker_window(
 
     result
 }
+
+// ---------------------------------------------------------------------------
+// Tab enum (stored in egui temp storage per-frame)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum WmTab {
+    #[default]
+    Properties,
+    CodePreview,
+}
+
+// ---------------------------------------------------------------------------
+// Properties tab (original right panel content)
+// ---------------------------------------------------------------------------
+
+fn show_properties_tab(
+    ui: &mut egui::Ui,
+    doc: &mut WidgetMakerDoc,
+    result: &mut WidgetMakerResult,
+) {
+    ui.label(egui::RichText::new("Widget Properties").strong());
+    show_widget_meta(ui, doc);
+    ui.separator();
+    if let Some(idx) = doc.selected {
+        if idx < doc.primitives.len() {
+            ui.label(egui::RichText::new("Primitive").strong());
+            show_primitive_props(ui, &mut doc.primitives[idx]);
+        }
+    } else {
+        ui.label(
+            egui::RichText::new("Select a primitive to edit its properties")
+                .small()
+                .weak(),
+        );
+    }
+    ui.separator();
+    ui.horizontal(|ui| {
+        if ui
+            .button("💾 Save Descriptor")
+            .on_hover_text("Export as .rkwd and reload palette")
+            .clicked()
+        {
+            let descriptor = doc_to_descriptor(doc);
+            if let Ok(json) = serde_json::to_string_pretty(&descriptor) {
+                result.save_json = Some(json);
+            }
+        }
+        if ui.button("Reset").clicked() {
+            *doc = WidgetMakerDoc::new_with_defaults();
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Item 1: Code Preview tab
+// ---------------------------------------------------------------------------
+
+fn show_code_preview_tab(ui: &mut egui::Ui, doc: &WidgetMakerDoc) {
+    ui.label(egui::RichText::new("Code Preview").strong());
+    ui.label(
+        egui::RichText::new("Live-updated from current primitives. Read-only.")
+            .small()
+            .weak(),
+    );
+    ui.separator();
+
+    let live = gen_live_preview(doc);
+    let export = gen_export_template(doc);
+
+    ui.label(egui::RichText::new("live_preview").small().strong());
+    egui::ScrollArea::vertical()
+        .id_salt("wm_code_live_scroll")
+        .max_height(140.0)
+        .show(ui, |ui| {
+            ui.add(
+                egui::TextEdit::multiline(&mut live.as_str())
+                    .desired_width(f32::INFINITY)
+                    .font(egui::TextStyle::Monospace),
+            );
+        });
+
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new("export template").small().strong());
+    egui::ScrollArea::vertical()
+        .id_salt("wm_code_export_scroll")
+        .max_height(140.0)
+        .show(ui, |ui| {
+            ui.add(
+                egui::TextEdit::multiline(&mut export.as_str())
+                    .desired_width(f32::INFINITY)
+                    .font(egui::TextStyle::Monospace),
+            );
+        });
+}
+
+// ---------------------------------------------------------------------------
+// Item 2: Primitive list with ↑/↓ reorder buttons
+// ---------------------------------------------------------------------------
+
+fn show_primitive_list(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
+    ui.label(egui::RichText::new("Primitives").small().strong());
+    let n = doc.primitives.len();
+    if n == 0 {
+        ui.label(
+            egui::RichText::new("No primitives — add one above")
+                .small()
+                .weak(),
+        );
+        return;
+    }
+
+    // Collect reorder actions to apply after the loop (avoids borrow conflict).
+    let mut move_up: Option<usize> = None;
+    let mut move_down: Option<usize> = None;
+
+    for i in 0..n {
+        ui.horizontal(|ui| {
+            let label = format!(
+                "{i}: {}",
+                match doc.primitives[i].kind {
+                    MakerPrimKind::Rect => "Rect",
+                    MakerPrimKind::Outline => "Outline",
+                    MakerPrimKind::Ellipse => "Ellipse",
+                    MakerPrimKind::Text => "Text",
+                    MakerPrimKind::HitRegion => "HitRgn",
+                }
+            );
+            let selected = doc.selected == Some(i);
+            if ui
+                .selectable_label(selected, egui::RichText::new(&label).small())
+                .clicked()
+            {
+                doc.selected = Some(i);
+            }
+            // ↑ moves earlier in the list (lower index = rendered first = behind)
+            ui.add_enabled_ui(i > 0, |ui| {
+                if ui
+                    .small_button("↑")
+                    .on_hover_text("Move up (render earlier / further back)")
+                    .clicked()
+                {
+                    move_up = Some(i);
+                }
+            });
+            // ↓ moves later in the list (higher index = rendered last = in front)
+            ui.add_enabled_ui(i + 1 < n, |ui| {
+                if ui
+                    .small_button("↓")
+                    .on_hover_text("Move down (render later / further forward)")
+                    .clicked()
+                {
+                    move_down = Some(i);
+                }
+            });
+        });
+    }
+
+    if let Some(i) = move_up {
+        doc.primitives.swap(i, i - 1);
+        if doc.selected == Some(i) {
+            doc.selected = Some(i - 1);
+        } else if doc.selected == Some(i - 1) {
+            doc.selected = Some(i);
+        }
+    }
+    if let Some(i) = move_down {
+        doc.primitives.swap(i, i + 1);
+        if doc.selected == Some(i) {
+            doc.selected = Some(i + 1);
+        } else if doc.selected == Some(i + 1) {
+            doc.selected = Some(i);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Mini-canvas
+// ---------------------------------------------------------------------------
 
 fn show_mini_canvas(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
     let (canvas_rect, canvas_resp) = ui.allocate_exact_size(
@@ -130,7 +309,7 @@ fn show_mini_canvas(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
     // Draw primitives (bottom to top)
     for (idx, prim) in doc.primitives.iter().enumerate() {
         let pr = prim_canvas_rect(prim, canvas_rect);
-        draw_primitive(&painter, prim, pr);
+        draw_primitive(&painter, prim, pr, &doc.style_tokens);
 
         // Selection outline
         if doc.selected == Some(idx) {
@@ -252,6 +431,18 @@ fn show_toolbar(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
             });
             doc.selected = Some(doc.primitives.len() - 1);
         }
+        if ui.small_button("⊡ HitRgn").clicked() {
+            doc.primitives.push(MakerPrimitive {
+                kind: MakerPrimKind::HitRegion,
+                sense_click: true,
+                x: 0.1,
+                y: 0.1,
+                w: 0.8,
+                h: 0.8,
+                ..Default::default()
+            });
+            doc.selected = Some(doc.primitives.len() - 1);
+        }
 
         let can_remove = doc
             .selected
@@ -265,7 +456,7 @@ fn show_toolbar(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
             }
         });
 
-        // Z-order
+        // Z-order (existing toolbar buttons kept for discoverability)
         if let Some(idx) = doc.selected {
             let n = doc.primitives.len();
             ui.add_enabled_ui(idx > 0, |ui| {
@@ -328,6 +519,53 @@ fn show_widget_meta(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
             });
             ui.end_row();
         });
+
+    // Style Tokens collapsible group
+    show_style_tokens(ui, &mut doc.style_tokens);
+}
+
+fn show_style_tokens(ui: &mut egui::Ui, tokens: &mut StyleTokens) {
+    ui.collapsing(egui::RichText::new("Style Tokens").small().strong(), |ui| {
+        egui::Grid::new("wm_tokens")
+            .num_columns(4)
+            .spacing([4.0, 2.0])
+            .show(ui, |ui| {
+                // Accent
+                ui.label(egui::RichText::new("Accent").small());
+                ui.add(egui::DragValue::new(&mut tokens.accent[0]).range(0..=255_u8));
+                ui.add(egui::DragValue::new(&mut tokens.accent[1]).range(0..=255_u8));
+                ui.add(egui::DragValue::new(&mut tokens.accent[2]).range(0..=255_u8));
+                ui.end_row();
+                // Border
+                ui.label(egui::RichText::new("Border").small());
+                ui.add(egui::DragValue::new(&mut tokens.border[0]).range(0..=255_u8));
+                ui.add(egui::DragValue::new(&mut tokens.border[1]).range(0..=255_u8));
+                ui.add(egui::DragValue::new(&mut tokens.border[2]).range(0..=255_u8));
+                ui.end_row();
+                // Text color
+                ui.label(egui::RichText::new("Text").small());
+                ui.add(egui::DragValue::new(&mut tokens.text_color[0]).range(0..=255_u8));
+                ui.add(egui::DragValue::new(&mut tokens.text_color[1]).range(0..=255_u8));
+                ui.add(egui::DragValue::new(&mut tokens.text_color[2]).range(0..=255_u8));
+                ui.end_row();
+                // Corner radius
+                ui.label(egui::RichText::new("Radius").small());
+                ui.add(
+                    egui::DragValue::new(&mut tokens.corner_radius)
+                        .range(0.0..=32.0_f32)
+                        .speed(0.5),
+                );
+                ui.end_row();
+                // Spacing
+                ui.label(egui::RichText::new("Spacing").small());
+                ui.add(
+                    egui::DragValue::new(&mut tokens.spacing)
+                        .range(0.0..=32.0_f32)
+                        .speed(0.5),
+                );
+                ui.end_row();
+            });
+    });
 }
 
 fn show_primitive_props(ui: &mut egui::Ui, prim: &mut MakerPrimitive) {
@@ -339,6 +577,7 @@ fn show_primitive_props(ui: &mut egui::Ui, prim: &mut MakerPrimitive) {
             ("Outline", MakerPrimKind::Outline),
             ("Ellipse", MakerPrimKind::Ellipse),
             ("Text", MakerPrimKind::Text),
+            ("⊡ HitRgn", MakerPrimKind::HitRegion),
         ] {
             if ui
                 .selectable_label(prim.kind == kind, egui::RichText::new(label).small())
@@ -385,47 +624,62 @@ fn show_primitive_props(ui: &mut egui::Ui, prim: &mut MakerPrimitive) {
             if ui
                 .add(
                     egui::DragValue::new(&mut wp)
-                        .range(PRIM_MIN..=100.0_f32)
+                        .range((PRIM_MIN * 100.0)..=100.0_f32)
                         .speed(0.5)
                         .suffix("%"),
                 )
                 .changed()
             {
-                prim.w = wp / 100.0;
+                prim.w = (wp / 100.0).max(prim.min_w);
             }
             ui.label(egui::RichText::new("H%").small());
             let mut hp = prim.h * 100.0;
             if ui
                 .add(
                     egui::DragValue::new(&mut hp)
-                        .range(PRIM_MIN..=100.0_f32)
+                        .range((PRIM_MIN * 100.0)..=100.0_f32)
                         .speed(0.5)
                         .suffix("%"),
                 )
                 .changed()
             {
-                prim.h = hp / 100.0;
+                prim.h = (hp / 100.0).max(prim.min_h);
             }
             ui.end_row();
-            ui.label(egui::RichText::new("R").small());
-            ui.add(egui::DragValue::new(&mut prim.fill[0]).range(0..=255_u8));
-            ui.label(egui::RichText::new("G").small());
-            ui.add(egui::DragValue::new(&mut prim.fill[1]).range(0..=255_u8));
-            ui.end_row();
-            ui.label(egui::RichText::new("B").small());
-            ui.add(egui::DragValue::new(&mut prim.fill[2]).range(0..=255_u8));
-            if matches!(prim.kind, MakerPrimKind::Rect | MakerPrimKind::Outline) {
-                ui.label(egui::RichText::new("Rad").small());
-                ui.add(
-                    egui::DragValue::new(&mut prim.corner_radius)
-                        .range(0.0..=32.0_f32)
-                        .speed(0.5),
-                );
+            // Fill RGB only for non-HitRegion kinds
+            if !matches!(prim.kind, MakerPrimKind::HitRegion) {
+                ui.label(egui::RichText::new("R").small());
+                ui.add(egui::DragValue::new(&mut prim.fill[0]).range(0..=255_u8));
+                ui.label(egui::RichText::new("G").small());
+                ui.add(egui::DragValue::new(&mut prim.fill[1]).range(0..=255_u8));
+                ui.end_row();
+                ui.label(egui::RichText::new("B").small());
+                ui.add(egui::DragValue::new(&mut prim.fill[2]).range(0..=255_u8));
+                if matches!(prim.kind, MakerPrimKind::Rect | MakerPrimKind::Outline) {
+                    ui.label(egui::RichText::new("Rad").small());
+                    ui.add(
+                        egui::DragValue::new(&mut prim.corner_radius)
+                            .range(0.0..=32.0_f32)
+                            .speed(0.5),
+                    );
+                }
+                ui.end_row();
             }
-            ui.end_row();
         });
 
+    // Token fill checkbox (all non-HitRegion kinds)
+    if !matches!(prim.kind, MakerPrimKind::HitRegion) {
+        ui.checkbox(
+            &mut prim.use_token_fill,
+            egui::RichText::new("Use accent token fill").small(),
+        );
+    }
+
     if matches!(prim.kind, MakerPrimKind::Text) {
+        ui.checkbox(
+            &mut prim.use_token_text_color,
+            egui::RichText::new("Use text-color token").small(),
+        );
         ui.checkbox(
             &mut prim.use_label_token,
             egui::RichText::new("Use {{label}} token").small(),
@@ -447,6 +701,68 @@ fn show_primitive_props(ui: &mut egui::Ui, prim: &mut MakerPrimitive) {
             );
         });
     }
+
+    // HitRegion sense flags
+    if matches!(prim.kind, MakerPrimKind::HitRegion) {
+        ui.separator();
+        ui.label(egui::RichText::new("Hit Region").small().strong());
+        ui.add(
+            egui::TextEdit::singleline(&mut prim.prim_name)
+                .hint_text("zone name (optional)")
+                .desired_width(f32::INFINITY),
+        );
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut prim.sense_click, egui::RichText::new("Click").small());
+            ui.checkbox(&mut prim.sense_hover, egui::RichText::new("Hover").small());
+            ui.checkbox(&mut prim.sense_drag, egui::RichText::new("Drag").small());
+        });
+    }
+
+    // --- Item 3: Constraints ---
+    ui.separator();
+    ui.label(egui::RichText::new("Constraints").small().strong());
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Anchor").small().weak());
+        egui::ComboBox::from_id_salt("prim_anchor")
+            .selected_text(prim.anchor.label())
+            .show_ui(ui, |ui| {
+                for &anchor in PrimAnchor::ALL {
+                    ui.selectable_value(&mut prim.anchor, anchor, anchor.label());
+                }
+            });
+    });
+    egui::Grid::new("prim_constraints")
+        .num_columns(4)
+        .spacing([4.0, 2.0])
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new("Min W%").small());
+            let mut min_wp = prim.min_w * 100.0;
+            if ui
+                .add(
+                    egui::DragValue::new(&mut min_wp)
+                        .range(0.0..=100.0_f32)
+                        .speed(0.5)
+                        .suffix("%"),
+                )
+                .changed()
+            {
+                prim.min_w = min_wp / 100.0;
+            }
+            ui.label(egui::RichText::new("Min H%").small());
+            let mut min_hp = prim.min_h * 100.0;
+            if ui
+                .add(
+                    egui::DragValue::new(&mut min_hp)
+                        .range(0.0..=100.0_f32)
+                        .speed(0.5)
+                        .suffix("%"),
+                )
+                .changed()
+            {
+                prim.min_h = min_hp / 100.0;
+            }
+            ui.end_row();
+        });
 }
 
 // ---------------------------------------------------------------------------
@@ -465,52 +781,80 @@ fn prim_canvas_rect(prim: &MakerPrimitive, canvas: egui::Rect) -> egui::Rect {
     egui::Rect::from_min_max(min, max)
 }
 
-fn draw_primitive(painter: &egui::Painter, prim: &MakerPrimitive, rect: egui::Rect) {
-    let [r, g, b] = prim.fill;
-    let color = Color32::from_rgb(r, g, b);
+fn draw_primitive(
+    painter: &egui::Painter,
+    prim: &MakerPrimitive,
+    rect: egui::Rect,
+    tokens: &StyleTokens,
+) {
     match prim.kind {
-        MakerPrimKind::Rect => {
-            painter.rect_filled(rect, prim.corner_radius, color);
-        }
-        MakerPrimKind::Outline => {
-            painter.rect_stroke(rect, prim.corner_radius, egui::Stroke::new(1.5, color));
-        }
-        MakerPrimKind::Ellipse => {
-            let cx = rect.center();
-            let rx = rect.width() * 0.5;
-            let ry = rect.height() * 0.5;
-            if (rx - ry).abs() < 2.0 {
-                painter.circle_filled(cx, rx, color);
-            } else {
-                // Approximate ellipse with 32 segments
-                let n = 32usize;
-                let points: Vec<egui::Pos2> = (0..=n)
-                    .map(|i| {
-                        let t = i as f32 * std::f32::consts::TAU / n as f32;
-                        egui::pos2(cx.x + rx * t.cos(), cx.y + ry * t.sin())
-                    })
-                    .collect();
-                painter.add(egui::Shape::convex_polygon(
-                    points,
-                    color,
-                    egui::Stroke::NONE,
-                ));
-            }
-        }
-        MakerPrimKind::Text => {
-            let font_id = egui::FontId::proportional(prim.font_size);
-            let text = if prim.use_label_token {
-                "Label"
-            } else {
-                prim.text_content.as_str()
-            };
-            painter.text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                text,
-                font_id,
-                color,
+        MakerPrimKind::HitRegion => {
+            // Dashed orange outline — no fill
+            painter.rect_stroke(
+                rect,
+                2.0,
+                egui::Stroke::new(1.5, Color32::from_rgb(255, 165, 0)),
             );
+        }
+        _ => {
+            let [r, g, b] = if prim.use_token_fill {
+                tokens.accent
+            } else {
+                prim.fill
+            };
+            let color = Color32::from_rgb(r, g, b);
+            match prim.kind {
+                MakerPrimKind::Rect => {
+                    painter.rect_filled(rect, prim.corner_radius, color);
+                }
+                MakerPrimKind::Outline => {
+                    painter.rect_stroke(rect, prim.corner_radius, egui::Stroke::new(1.5, color));
+                }
+                MakerPrimKind::Ellipse => {
+                    let cx = rect.center();
+                    let rx = rect.width() * 0.5;
+                    let ry = rect.height() * 0.5;
+                    if (rx - ry).abs() < 2.0 {
+                        painter.circle_filled(cx, rx, color);
+                    } else {
+                        // Approximate ellipse with 32 segments
+                        let n = 32usize;
+                        let points: Vec<egui::Pos2> = (0..=n)
+                            .map(|i| {
+                                let t = i as f32 * std::f32::consts::TAU / n as f32;
+                                egui::pos2(cx.x + rx * t.cos(), cx.y + ry * t.sin())
+                            })
+                            .collect();
+                        painter.add(egui::Shape::convex_polygon(
+                            points,
+                            color,
+                            egui::Stroke::NONE,
+                        ));
+                    }
+                }
+                MakerPrimKind::Text => {
+                    let [tr, tg, tb] = if prim.use_token_text_color {
+                        tokens.text_color
+                    } else {
+                        prim.fill
+                    };
+                    let text_color = Color32::from_rgb(tr, tg, tb);
+                    let font_id = egui::FontId::proportional(prim.font_size);
+                    let text = if prim.use_label_token {
+                        "Label"
+                    } else {
+                        prim.text_content.as_str()
+                    };
+                    painter.text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        text,
+                        font_id,
+                        text_color,
+                    );
+                }
+                MakerPrimKind::HitRegion => unreachable!(),
+            }
         }
     }
 }
@@ -535,18 +879,27 @@ fn corner_hit(pos: egui::Pos2, rect: egui::Rect) -> Option<u8> {
 
 /// Apply a normalised `(dx, dy)` resize delta for the given corner index to `p`.
 /// Corners: 0=TL, 1=TR, 2=BL, 3=BR.
-fn apply_corner_resize(
+///
+/// Respects `p.min_w` and `p.min_h` — the resulting width/height will never
+/// drop below those thresholds (Item 3).
+///
+/// Exported `pub(crate)` so unit tests in `widget_maker.rs` can call it directly.
+pub(crate) fn apply_corner_resize(
     p: &mut crate::canvas::widget_maker::MakerPrimitive,
     corner: u8,
     dx: f32,
     dy: f32,
 ) {
-    const MIN: f32 = 0.05;
+    // The hard absolute floor for a drag (independent of the user min_w/min_h).
+    const ABS_MIN: f32 = 0.05;
+    let floor_w = p.min_w.max(ABS_MIN);
+    let floor_h = p.min_h.max(ABS_MIN);
+
     match corner {
         0 => {
             // Top-left: x and y move, w and h shrink/grow inversely
-            let new_x = (p.x + dx).clamp(0.0, p.x + p.w - MIN);
-            let new_y = (p.y + dy).clamp(0.0, p.y + p.h - MIN);
+            let new_x = (p.x + dx).clamp(0.0, p.x + p.w - floor_w);
+            let new_y = (p.y + dy).clamp(0.0, p.y + p.h - floor_h);
             p.w += p.x - new_x;
             p.h += p.y - new_y;
             p.x = new_x;
@@ -554,22 +907,22 @@ fn apply_corner_resize(
         }
         1 => {
             // Top-right: y moves, w and h change
-            let new_y = (p.y + dy).clamp(0.0, p.y + p.h - MIN);
-            p.w = (p.w + dx).clamp(MIN, 1.0 - p.x);
+            let new_y = (p.y + dy).clamp(0.0, p.y + p.h - floor_h);
+            p.w = (p.w + dx).clamp(floor_w, 1.0 - p.x);
             p.h += p.y - new_y;
             p.y = new_y;
         }
         2 => {
             // Bottom-left: x moves, h grows/shrinks
-            let new_x = (p.x + dx).clamp(0.0, p.x + p.w - MIN);
+            let new_x = (p.x + dx).clamp(0.0, p.x + p.w - floor_w);
             p.w += p.x - new_x;
             p.x = new_x;
-            p.h = (p.h + dy).clamp(MIN, 1.0 - p.y);
+            p.h = (p.h + dy).clamp(floor_h, 1.0 - p.y);
         }
         3 => {
             // Bottom-right: pure w/h change
-            p.w = (p.w + dx).clamp(MIN, 1.0 - p.x);
-            p.h = (p.h + dy).clamp(MIN, 1.0 - p.y);
+            p.w = (p.w + dx).clamp(floor_w, 1.0 - p.x);
+            p.h = (p.h + dy).clamp(floor_h, 1.0 - p.y);
         }
         _ => {}
     }

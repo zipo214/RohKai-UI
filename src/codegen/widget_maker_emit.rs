@@ -4,7 +4,7 @@
 //! Lives in `codegen/` to satisfy the invariant that Rust syntax strings
 //! are produced only within this module tree.
 
-use crate::canvas::widget_maker::{MakerPrimKind, MakerPrimitive, WidgetMakerDoc};
+use crate::canvas::widget_maker::{MakerPrimKind, MakerPrimitive, StyleTokens, WidgetMakerDoc};
 use crate::codegen::rust::string_literal;
 
 /// Generate the `live_preview` template string from the maker doc.
@@ -12,8 +12,22 @@ pub fn gen_live_preview(doc: &WidgetMakerDoc) -> String {
     let mut lines = vec!["    {".to_owned()];
     lines.push("        let _painter = ui.painter();".to_owned());
     lines.push("        let _outer = ui.max_rect();".to_owned());
-    for prim in &doc.primitives {
-        lines.extend(prim_to_egui_lines(prim));
+    // Emit style token const declarations
+    let t = &doc.style_tokens;
+    let [ar, ag, ab] = t.accent;
+    let [br, bg, bb] = t.border;
+    let [tr, tg, tb] = t.text_color;
+    lines.push(format!(
+        "        let _tok_accent = egui::Color32::from_rgb({ar}, {ag}, {ab});"
+    ));
+    lines.push(format!(
+        "        let _tok_border = egui::Color32::from_rgb({br}, {bg}, {bb});"
+    ));
+    lines.push(format!(
+        "        let _tok_text   = egui::Color32::from_rgb({tr}, {tg}, {tb});"
+    ));
+    for (idx, prim) in doc.primitives.iter().enumerate() {
+        lines.extend(prim_to_egui_lines(prim, &doc.style_tokens, idx));
     }
     lines.push("    }".to_owned());
     lines.join("\n")
@@ -24,16 +38,35 @@ pub fn gen_export_template(doc: &WidgetMakerDoc) -> String {
     let mut lines = vec!["                {".to_owned()];
     lines.push("                    let _painter = ui.painter();".to_owned());
     lines.push("                    let _outer = ui.max_rect();".to_owned());
-    for prim in &doc.primitives {
-        lines.extend(prim_to_egui_lines(prim));
+    // Emit style token const declarations
+    let t = &doc.style_tokens;
+    let [ar, ag, ab] = t.accent;
+    let [br, bg, bb] = t.border;
+    let [tr, tg, tb] = t.text_color;
+    lines.push(format!(
+        "        let _tok_accent = egui::Color32::from_rgb({ar}, {ag}, {ab});"
+    ));
+    lines.push(format!(
+        "        let _tok_border = egui::Color32::from_rgb({br}, {bg}, {bb});"
+    ));
+    lines.push(format!(
+        "        let _tok_text   = egui::Color32::from_rgb({tr}, {tg}, {tb});"
+    ));
+    for (idx, prim) in doc.primitives.iter().enumerate() {
+        lines.extend(prim_to_egui_lines(prim, &doc.style_tokens, idx));
     }
     lines.push("                }".to_owned());
     lines.join("\n")
 }
 
-fn prim_to_egui_lines(prim: &MakerPrimitive) -> Vec<String> {
+fn prim_to_egui_lines(prim: &MakerPrimitive, _tokens: &StyleTokens, idx: usize) -> Vec<String> {
     let [r, g, b] = prim.fill;
-    let color = format!("egui::Color32::from_rgb({r}, {g}, {b})");
+    // Fill color: either token reference or literal RGB
+    let color = if prim.use_token_fill {
+        "_tok_accent".to_owned()
+    } else {
+        format!("egui::Color32::from_rgb({r}, {g}, {b})")
+    };
     let sub_rect = format!(
         "egui::Rect::from_min_size(\
             _outer.min + egui::vec2(_outer.width() * {:.3}, _outer.height() * {:.3}), \
@@ -61,11 +94,45 @@ fn prim_to_egui_lines(prim: &MakerPrimitive) -> Vec<String> {
                 // string_literal() uses Debug formatting: handles \, \n, \t, " correctly
                 string_literal(&prim.text_content)
             };
-            let tc = format!("egui::Color32::from_rgb({r}, {g}, {b})");
+            // Text color: either token reference or literal RGB from fill
+            let tc = if prim.use_token_text_color {
+                "_tok_text".to_owned()
+            } else {
+                format!("egui::Color32::from_rgb({r}, {g}, {b})")
+            };
             vec![format!(
                 "        ui.put({sub_rect}, egui::Label::new(egui::RichText::new({text_lit}).size({:.1}).color({tc})).wrap(false));",
                 prim.font_size
             )]
+        }
+        MakerPrimKind::HitRegion => {
+            let varname = if prim.prim_name.is_empty() {
+                format!("_hr_{idx}")
+            } else {
+                format!("_hr_{}", prim.prim_name)
+            };
+            let click = prim.sense_click;
+            let drag = prim.sense_drag;
+            let focus = false;
+            let mut hr_lines = vec![format!(
+                "        let {varname} = ui.allocate_rect({sub_rect}, egui::Sense {{ click: {click}, drag: {drag}, focusable: {focus} }}); // hit region",
+            )];
+            if prim.sense_click {
+                hr_lines.push(format!(
+                    "        if {varname}.clicked() {{ /* on_{} */ }}",
+                    if prim.prim_name.is_empty() {
+                        idx.to_string()
+                    } else {
+                        prim.prim_name.clone()
+                    }
+                ));
+            }
+            if prim.sense_hover {
+                hr_lines.push(format!(
+                    "        let _{varname}_hovered = {varname}.hovered();"
+                ));
+            }
+            hr_lines
         }
     }
 }
@@ -126,6 +193,90 @@ mod tests {
         assert!(
             out.contains("{{label}}"),
             "label token must use double braces: {out}"
+        );
+    }
+
+    // --- Style Token tests ---
+
+    #[test]
+    fn token_declarations_appear_in_live_preview() {
+        let doc = WidgetMakerDoc::new_with_defaults();
+        let out = gen_live_preview(&doc);
+        assert!(
+            out.contains("_tok_accent"),
+            "must declare _tok_accent: {out}"
+        );
+        assert!(
+            out.contains("_tok_border"),
+            "must declare _tok_border: {out}"
+        );
+        assert!(out.contains("_tok_text"), "must declare _tok_text: {out}");
+    }
+
+    #[test]
+    fn token_fill_uses_tok_accent_variable() {
+        let prim = MakerPrimitive {
+            kind: MakerPrimKind::Rect,
+            use_token_fill: true,
+            x: 0.0,
+            y: 0.0,
+            w: 1.0,
+            h: 1.0,
+            fill: [100, 100, 100],
+            ..Default::default()
+        };
+        let out = gen_live_preview(&doc_with(prim));
+        assert!(
+            out.contains("_tok_accent"),
+            "token fill must reference _tok_accent: {out}"
+        );
+        // Must not use a literal RGB for the fill when token is active
+        assert!(
+            !out.contains("from_rgb(100, 100, 100)"),
+            "literal fill RGB must not appear when use_token_fill is true: {out}"
+        );
+    }
+
+    // --- Hit Region tests ---
+
+    #[test]
+    fn hit_region_emits_allocate_rect() {
+        let prim = MakerPrimitive {
+            kind: MakerPrimKind::HitRegion,
+            sense_click: true,
+            x: 0.1,
+            y: 0.1,
+            w: 0.8,
+            h: 0.8,
+            ..Default::default()
+        };
+        let out = gen_live_preview(&doc_with(prim));
+        assert!(
+            out.contains("allocate_rect"),
+            "hit region must emit allocate_rect: {out}"
+        );
+        assert!(
+            out.contains("clicked()"),
+            "sense_click=true must emit clicked(): {out}"
+        );
+    }
+
+    #[test]
+    fn named_hit_region_uses_prim_name() {
+        let prim = MakerPrimitive {
+            kind: MakerPrimKind::HitRegion,
+            prim_name: "close".to_owned(),
+            sense_click: false,
+            x: 0.0,
+            y: 0.0,
+            w: 0.2,
+            h: 0.2,
+            ..Default::default()
+        };
+        let out = gen_live_preview(&doc_with(prim));
+        assert!(
+            out.contains("_hr_close"),
+            "named hit region must use prim_name: {out}"
         );
     }
 }
