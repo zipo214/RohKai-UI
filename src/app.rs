@@ -201,6 +201,11 @@ pub struct RohKaiApp {
     /// Visual Widget Maker window state.
     pub widget_maker_doc: crate::canvas::widget_maker::WidgetMakerDoc,
     pub widget_maker_open: bool,
+    // Stage 13 — Database integration
+    /// Live database engine (None until a connection is established via the DB panel).
+    pub db_engine: Option<Box<dyn crate::project::db_engine::DatabaseEngine>>,
+    /// DB panel floating window state.
+    pub db_panel: crate::panels::db_panel::DbPanelState,
 }
 
 impl RohKaiApp {
@@ -252,6 +257,8 @@ impl RohKaiApp {
             undo_suppress_record: false,
             widget_maker_doc: crate::canvas::widget_maker::WidgetMakerDoc::new_with_defaults(),
             widget_maker_open: false,
+            db_engine: None,
+            db_panel: crate::panels::db_panel::DbPanelState::default(),
         }
     }
 
@@ -1960,6 +1967,14 @@ impl eframe::App for RohKaiApp {
                         self.session.macro_palette_open = true;
                         ui.close_menu();
                     }
+                    if ui
+                        .button("Database…")
+                        .on_hover_text("Connect to SQLite, browse schema, preview rows (Stage 13)")
+                        .clicked()
+                    {
+                        self.db_panel.open = true;
+                        ui.close_menu();
+                    }
                     ui.separator();
                     if ui.button("Theme…").clicked() {
                         self.session.theme_open = true;
@@ -2793,6 +2808,9 @@ impl eframe::App for RohKaiApp {
         self.show_theme_window(ctx);
         self.show_project_tree_window(ctx);
         crate::panels::shortcuts::show(ctx, &mut self.session.shortcuts_open);
+
+        // Stage 13 — Database panel.
+        crate::panels::db_panel::show_window(ctx, &mut self.db_panel, &mut self.db_engine);
 
         // Stage 11 — Rust wiring editor + macro palette.
         crate::panels::rust_wiring::show(
