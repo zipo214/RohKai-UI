@@ -2,6 +2,29 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-11 — P2.3/P2.4/P2.5/P2.6 merged; 489 tests, zero warnings
+
+### Context Reviewed
+- Session continuation after context compaction; prior state recovered from summary
+- P2.3, P2.5, P2.6 background agent worktrees; P2.4 merged in prior session
+
+### Changes
+- **P2.3 merged** (`worktree-agent-acb0c559ef0c7fa34`): constraint-based layout — `LayoutConstraints` + `HAlign`/`VAlign` on `WidgetInstance`, `constraint_solver.rs` (5-pass solver, cycle detection, 14 tests), `show_constraints()` panel in properties
+- **P2.5 merged** (`worktree-agent-aca16573f8781b29b`): formula `deps()`/`validate()` aliases, timer wiring via `mpsc` channel + `spawn_timers()`, `StateDef`/`TransitionDef`/`StateMachineProps` schema + state machine editor in component tray, shortcut customization with Reference/Customize tabs, `.rkwb` ZIP bundle with hand-coded CRC-32
+- **P2.6 merged** (`worktree-agent-adb3b11803f47b733`): Stage 13 DB integration — `DatabaseEngine` trait + `SqliteEngine` impl (params![] only), `DbPanelState` floating window, `DbBinding` on `WidgetInstance`, `rusqlite = { version = "0.40", features = ["bundled"] }` added to Cargo.toml, Invariant 10 (no format!() SQL) in ENGINEERING_INVARIANTS.md
+- **P2.7 skipped** — R9 (markers + pattern tiling + vector-effect) already fully implemented in v0.2.0; no new commit to merge
+- All serial merge conflicts resolved by keeping both sets of struct fields/inits; no functionality dropped
+
+### Verification
+- `cargo check` — clean
+- `cargo clippy --all-targets -- -D warnings` — zero warnings
+- `cargo test` — **489 passed, 0 failed, 6 ignored**
+
+### Risks / Follow-ups
+- `rusqlite` bundled feature adds ~1 MB to binary; acceptable for Stage 13 but worth noting
+- `DatabaseEngine` is `dyn` (object-safe); `SqliteEngine` is the only impl; no other engines planned yet
+- Timer threads are daemon threads (detach on drop); if project is replaced rapidly, old timers finish their sleep before exiting; safe but adds a brief latency tail on project reload
+
 ## 2026-06-11 — P2.1 (VWM capabilities) + P2.2 (Canvas UX) merged
 
 ### Context Reviewed
