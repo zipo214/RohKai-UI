@@ -70,6 +70,84 @@ impl Default for StyleTokens {
     }
 }
 
+/// A visual state for which style overrides can be defined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrimState {
+    #[default]
+    Normal,
+    Hover,
+    Pressed,
+    Disabled,
+    Checked,
+}
+
+impl PrimState {
+    pub const ALL: &'static [PrimState] = &[
+        PrimState::Normal, PrimState::Hover, PrimState::Pressed,
+        PrimState::Disabled, PrimState::Checked,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            PrimState::Normal => "Normal",
+            PrimState::Hover => "Hover",
+            PrimState::Pressed => "Pressed",
+            PrimState::Disabled => "Disabled",
+            PrimState::Checked => "Checked",
+        }
+    }
+}
+
+/// Style overrides for a non-Normal state. `None` = inherit from Normal.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PrimStyleOverride {
+    #[serde(default)] pub fill: Option<[u8; 3]>,
+    #[serde(default)] pub text_color: Option<[u8; 3]>,
+    #[serde(default)] pub opacity: Option<u8>,
+}
+
+/// Per-state style override table for a primitive. All fields `#[serde(default)]`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PrimVariants {
+    #[serde(default)] pub hover: Option<PrimStyleOverride>,
+    #[serde(default)] pub pressed: Option<PrimStyleOverride>,
+    #[serde(default)] pub disabled: Option<PrimStyleOverride>,
+    #[serde(default)] pub checked: Option<PrimStyleOverride>,
+}
+
+impl PrimVariants {
+    pub fn get(&self, state: PrimState) -> Option<&PrimStyleOverride> {
+        match state {
+            PrimState::Normal => None,
+            PrimState::Hover => self.hover.as_ref(),
+            PrimState::Pressed => self.pressed.as_ref(),
+            PrimState::Disabled => self.disabled.as_ref(),
+            PrimState::Checked => self.checked.as_ref(),
+        }
+    }
+    pub fn get_mut(&mut self, state: PrimState) -> Option<&mut PrimStyleOverride> {
+        match state {
+            PrimState::Normal => None,
+            PrimState::Hover => self.hover.as_mut(),
+            PrimState::Pressed => self.pressed.as_mut(),
+            PrimState::Disabled => self.disabled.as_mut(),
+            PrimState::Checked => self.checked.as_mut(),
+        }
+    }
+    pub fn set_enabled(&mut self, state: PrimState, enabled: bool) {
+        match state {
+            PrimState::Normal => {}
+            PrimState::Hover => { if enabled { self.hover.get_or_insert_with(Default::default); } else { self.hover = None; } }
+            PrimState::Pressed => { if enabled { self.pressed.get_or_insert_with(Default::default); } else { self.pressed = None; } }
+            PrimState::Disabled => { if enabled { self.disabled.get_or_insert_with(Default::default); } else { self.disabled = None; } }
+            PrimState::Checked => { if enabled { self.checked.get_or_insert_with(Default::default); } else { self.checked = None; } }
+        }
+    }
+    pub fn has_any(&self) -> bool {
+        self.hover.is_some() || self.pressed.is_some() || self.disabled.is_some() || self.checked.is_some()
+    }
+}
+
 /// A visual primitive in the Widget Maker mini-canvas.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MakerPrimitive {
@@ -114,6 +192,9 @@ pub struct MakerPrimitive {
     pub sense_hover: bool,
     #[serde(default)]
     pub sense_drag: bool,
+    /// Per-state style overrides (hover, pressed, disabled, checked).
+    #[serde(default)]
+    pub variants: PrimVariants,
 }
 
 impl Default for MakerPrimitive {
@@ -138,6 +219,7 @@ impl Default for MakerPrimitive {
             sense_click: false,
             sense_hover: false,
             sense_drag: false,
+            variants: PrimVariants::default(),
         }
     }
 }
@@ -572,5 +654,27 @@ mod tests {
         );
         assert_eq!(prim.min_w, 0.0);
         assert_eq!(prim.min_h, 0.0);
+    }
+
+    #[test]
+    fn prim_variants_default_is_empty() {
+        assert!(!PrimVariants::default().has_any());
+    }
+
+    #[test]
+    fn prim_variants_set_enabled_hover() {
+        let mut v = PrimVariants::default();
+        v.set_enabled(PrimState::Hover, true);
+        assert!(v.has_any());
+        assert!(v.hover.is_some());
+        v.set_enabled(PrimState::Hover, false);
+        assert!(!v.has_any());
+    }
+
+    #[test]
+    fn prim_serde_roundtrip_without_variants_field() {
+        let json = r#"{"kind":"Rect","x":0.1,"y":0.1,"w":0.8,"h":0.8,"fill":[100,120,200],"corner_radius":4.0,"text_content":"Label","font_size":14.0,"use_label_token":false}"#;
+        let prim: MakerPrimitive = serde_json::from_str(json).expect("must deserialise");
+        assert!(!prim.variants.has_any(), "missing variants field => empty");
     }
 }

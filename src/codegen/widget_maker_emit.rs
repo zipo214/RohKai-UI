@@ -4,7 +4,9 @@
 //! Lives in `codegen/` to satisfy the invariant that Rust syntax strings
 //! are produced only within this module tree.
 
-use crate::canvas::widget_maker::{MakerPrimKind, MakerPrimitive, StyleTokens, WidgetMakerDoc};
+use crate::canvas::widget_maker::{
+    MakerPrimKind, MakerPrimitive, PrimState, StyleTokens, WidgetMakerDoc,
+};
 use crate::codegen::rust::string_literal;
 
 /// Generate the `live_preview` template string from the maker doc.
@@ -73,37 +75,67 @@ fn prim_to_egui_lines(prim: &MakerPrimitive, _tokens: &StyleTokens, idx: usize) 
             egui::vec2(_outer.width() * {:.3}, _outer.height() * {:.3}))",
         prim.x, prim.y, prim.w, prim.h
     );
+    // If this prim has state variants, prepend an interactive response allocation.
+    let needs_response = prim.variants.has_any();
+    let resp_var = format!("_sr_{idx}");
+    let mut lines: Vec<String> = Vec::new();
+    if needs_response {
+        lines.push(format!(
+            "        let {resp_var} = ui.allocate_rect({sub_rect}, egui::Sense::click_and_drag());"
+        ));
+    }
+
     match prim.kind {
-        MakerPrimKind::Rect => vec![format!(
-            "        _painter.rect_filled({sub_rect}, {:.1}, {color});",
-            prim.corner_radius
-        )],
-        MakerPrimKind::Outline => vec![format!(
-            "        _painter.rect_stroke({sub_rect}, {:.1}, egui::Stroke::new(1.0, {color}));",
-            prim.corner_radius
-        )],
-        MakerPrimKind::Ellipse => vec![format!(
-            "        _painter.circle_filled({sub_rect}.center(), \
+        MakerPrimKind::Rect => {
+            lines.push(format!(
+                "        _painter.rect_filled({sub_rect}, {:.1}, {color});",
+                prim.corner_radius
+            ));
+            if needs_response {
+                let cr = prim.corner_radius;
+                if let Some(ov) = prim.variants.get(PrimState::Hover) {
+                    if let Some([hr, hg, hb]) = ov.fill {
+                        lines.push(format!("        if {resp_var}.hovered() {{ _painter.rect_filled({sub_rect}, {cr:.1}, egui::Color32::from_rgb({hr}, {hg}, {hb})); }}"));
+                    }
+                }
+                if let Some(ov) = prim.variants.get(PrimState::Pressed) {
+                    if let Some([pr, pg, pb]) = ov.fill {
+                        lines.push(format!("        if {resp_var}.is_pointer_button_down_on() {{ _painter.rect_filled({sub_rect}, {cr:.1}, egui::Color32::from_rgb({pr}, {pg}, {pb})); }}"));
+                    }
+                }
+            }
+            return lines;
+        }
+        MakerPrimKind::Outline => {
+            lines.push(format!(
+                "        _painter.rect_stroke({sub_rect}, {:.1}, egui::Stroke::new(1.0, {color}));",
+                prim.corner_radius
+            ));
+            return lines;
+        }
+        MakerPrimKind::Ellipse => {
+            lines.push(format!(
+                "        _painter.circle_filled({sub_rect}.center(), \
                 {sub_rect}.width().min({sub_rect}.height()) * 0.5, {color});"
-        )],
+            ));
+            return lines;
+        }
         MakerPrimKind::Text => {
             let text_lit = if prim.use_label_token {
-                // Template token — double-braces are intentional in the output
                 "\"{{label}}\"".to_owned()
             } else {
-                // string_literal() uses Debug formatting: handles \, \n, \t, " correctly
                 string_literal(&prim.text_content)
             };
-            // Text color: either token reference or literal RGB from fill
             let tc = if prim.use_token_text_color {
                 "_tok_text".to_owned()
             } else {
                 format!("egui::Color32::from_rgb({r}, {g}, {b})")
             };
-            vec![format!(
+            lines.push(format!(
                 "        ui.put({sub_rect}, egui::Label::new(egui::RichText::new({text_lit}).size({:.1}).color({tc})).wrap(false));",
                 prim.font_size
-            )]
+            ));
+            return lines;
         }
         MakerPrimKind::HitRegion => {
             let varname = if prim.prim_name.is_empty() {
@@ -114,25 +146,19 @@ fn prim_to_egui_lines(prim: &MakerPrimitive, _tokens: &StyleTokens, idx: usize) 
             let click = prim.sense_click;
             let drag = prim.sense_drag;
             let focus = false;
-            let mut hr_lines = vec![format!(
+            lines.push(format!(
                 "        let {varname} = ui.allocate_rect({sub_rect}, egui::Sense {{ click: {click}, drag: {drag}, focusable: {focus} }}); // hit region",
-            )];
+            ));
             if prim.sense_click {
-                hr_lines.push(format!(
+                lines.push(format!(
                     "        if {varname}.clicked() {{ /* on_{} */ }}",
-                    if prim.prim_name.is_empty() {
-                        idx.to_string()
-                    } else {
-                        prim.prim_name.clone()
-                    }
+                    if prim.prim_name.is_empty() { idx.to_string() } else { prim.prim_name.clone() }
                 ));
             }
             if prim.sense_hover {
-                hr_lines.push(format!(
-                    "        let _{varname}_hovered = {varname}.hovered();"
-                ));
+                lines.push(format!("        let _{varname}_hovered = {varname}.hovered();"));
             }
-            hr_lines
+            lines
         }
     }
 }
@@ -278,5 +304,45 @@ mod tests {
             out.contains("_hr_close"),
             "named hit region must use prim_name: {out}"
         );
+    }
+
+    #[test]
+    fn prim_without_variants_has_no_allocate_rect() {
+        let prim = MakerPrimitive {
+            kind: MakerPrimKind::Rect,
+            ..Default::default()
+        };
+        let out = gen_live_preview(&doc_with(prim));
+        assert!(!out.contains("allocate_rect"), "no variants → no allocate_rect: {out}");
+    }
+
+    #[test]
+    fn state_variant_hover_emits_hovered_check() {
+        use crate::canvas::widget_maker::{PrimStyleOverride, PrimVariants};
+        let mut prim = MakerPrimitive {
+            kind: MakerPrimKind::Rect,
+            ..Default::default()
+        };
+        prim.variants = PrimVariants {
+            hover: Some(PrimStyleOverride { fill: Some([255, 0, 0]), ..Default::default() }),
+            ..Default::default()
+        };
+        let out = gen_live_preview(&doc_with(prim));
+        assert!(out.contains("hovered()"), "hover variant must emit hovered(): {out}");
+    }
+
+    #[test]
+    fn state_variant_pressed_emits_pointer_down() {
+        use crate::canvas::widget_maker::{PrimStyleOverride, PrimVariants};
+        let mut prim = MakerPrimitive {
+            kind: MakerPrimKind::Rect,
+            ..Default::default()
+        };
+        prim.variants = PrimVariants {
+            pressed: Some(PrimStyleOverride { fill: Some([0, 0, 255]), ..Default::default() }),
+            ..Default::default()
+        };
+        let out = gen_live_preview(&doc_with(prim));
+        assert!(out.contains("is_pointer_button_down_on()"), "pressed variant must emit pointer_down: {out}");
     }
 }
