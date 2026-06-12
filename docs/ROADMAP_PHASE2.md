@@ -86,6 +86,27 @@ starting. `★★ FINAL` = the renderer, last by definition.
 The remainder of this file is the per-stage detail. Cross items into stage
 milestone notes in `docs/DEVLOG.md` as they are scheduled.
 
+### Bespoke Foundation Milestones
+
+RohKai-owned, security-sensitive foundations stay above S22 in the execution
+order so the final renderer consumes proven subsystems instead of inventing
+them inside a renderer rewrite. These are review checkpoints, not permission to
+skip unfinished stages:
+
+- **M1 after S3:** review the owned font shaping/BIDI API and whether its
+  renderer-facing contracts are stable.
+- **M2 after S7/S9/S10:** review image decoding, real-font SVG text, CSS, and
+  bounded document parsing as one secure rendering-input stack.
+- **M3 after S14/S16/S18:** review animation, external-resource sandboxing,
+  foreignObject, and scripting threat models before any general renderer accepts
+  active content.
+- **M4 after S19:** review layout, model/view, docking, and multi-window
+  requirements against the proposed renderer architecture.
+
+At each milestone the user may direct a new architecture study or reorder later
+work. S22 implementation still requires an explicit user go-ahead and a
+ratified architecture decision.
+
 ---
 
 ## Priority Starter Threads (context)
@@ -106,30 +127,27 @@ Invariant 10. Remaining DB *implementation* depth is S12.
 
 ---
 
-## S1 — Layout & Constraint Completion
+## S1 — Layout & Constraint Completion ✅
 
-The constraint and layout slice shipped but several surfaces are shallow. Finish
-them before adding new layout ideas.
+Closed 2026-06-12. The constraint and layout slice now has parent-relative,
+idempotent solving, visual authoring, recursive canvas/code/export behavior, and
+Lazare hierarchy round-trip.
 
-- [~] SHALLOW — Constraint solver recurses into layout-container children.
-      `constraint_solver::apply_constraints` currently iterates flat
-      `tree.widgets` only; constraints on widgets nested inside
-      VLayout/HLayout/GridLayout/Frame are silently ignored. Walk
-      `WidgetInstance.children` recursively and resolve per-parent.
-- [~] SHALLOW — Surface `validate_constraints` in the properties panel.
-      The validator (unknown-target / self-ref / cycle / invalid-ratio) exists
-      but is `#[allow(dead_code)]`; conflicts never reach the user. Render the
-      error list under `show_constraints()`.
-- [~] SHALLOW — Alignment relative to the parent container, not the canvas root.
-      `apply_alignment` anchors to `app_props.win_w/win_h`; a constrained child
-      of a layout should center/anchor within its parent rect.
-- [ ] TODO — Anchor system with visual handle drag (canvas overlay pass).
-- [~] SHALLOW — Per-child alignment, grid row-height policies, per-child
-      stretch/fixed behaviour. `CrossAlign`/`child_flex`/`grid_col_span`/
-      `grid_row_span` exist and now emit codegen (proven by `fidelity_audit`);
-      verify the properties UI exposes every one and reflows canvas live.
-- [ ] TODO — Richer cell/slot editor for Grid: named slots, drag-to-slot.
-- [ ] TODO — Multi-level (nested) layout hierarchy round-trip in Lazare.
+- [x] DONE — Constraint solving is idempotent and ordered parents-before-
+      descendants; nested widgets resolve against their actual parent frame.
+- [x] DONE — `validate_constraints` errors render in Properties.
+- [x] DONE — Four draggable canvas anchor handles target parent
+      leading/center/trailing and top/center/bottom anchors, preserve current
+      geometry by deriving margins, and render persistent connector lines.
+- [x] DONE — Per-child alignment/flex/size policy and grid row/span controls are
+      exposed and drive live reflow/codegen.
+- [x] DONE — Grid slots have persistent row-major names, Properties editing,
+      canvas labels, generated-code/export comments, arrow reorder, and direct
+      canvas drag-to-slot with cell feedback.
+- [x] DONE — Nested V/H/Grid layouts reflow in ownership-depth order, render
+      recursively on canvas, emit recursively in live/export code, and round-
+      trip through Lazare using explicit parent markers. Empty layout closures
+      intentionally clear prior child ownership.
 
 ## S2 — Canvas UX Depth
 
@@ -399,10 +417,12 @@ last non-renderer work.
 
 ## S22 — ★★ FINAL — In-House Renderer (Stage 15)
 
-Last by definition. Starts only when S1–S21 are complete and a separate
-architecture decision is ratified. This is where the two architecture invariants
-pay off: RohKai stops depending on egui's render layer and gains full visual
-control **without** any external renderer dependency or C FFI.
+Final implementation stage by default. It starts only when the user explicitly
+directs execution, the applicable bespoke-foundation milestones above have been
+reviewed, and a separate architecture decision is ratified. This is where the
+two architecture invariants pay off: RohKai stops depending on egui's render
+layer and gains full visual control **without** any external renderer dependency
+or C FFI.
 
 - [ ] TODO — Replace the egui rendering layer with a RohKai-owned pure-Rust
       renderer.

@@ -501,10 +501,10 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                         lines.push((Some(child.id), format!(
                             "        ui.allocate_ui(egui::vec2(ui.available_width(), (ui.available_height() * {ratio:.4}).max(0.0)), |ui| {{"
                         )));
-                        emit_layout_child_lines(child, &mut lines);
+                        emit_layout_child_lines(child, w.id, tree, &mut lines, 0);
                         lines.push((Some(child.id), "        });".to_owned()));
                     } else {
-                        emit_layout_child_lines(child, &mut lines);
+                        emit_layout_child_lines(child, w.id, tree, &mut lines, 0);
                     }
                     if cross.is_some() {
                         lines.push((Some(child.id), "        });".to_owned()));
@@ -541,10 +541,10 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                         lines.push((Some(child.id), format!(
                             "        ui.allocate_ui(egui::vec2((ui.available_width() * {ratio:.4}).max(0.0), ui.available_height()), |ui| {{"
                         )));
-                        emit_layout_child_lines(child, &mut lines);
+                        emit_layout_child_lines(child, w.id, tree, &mut lines, 0);
                         lines.push((Some(child.id), "        });".to_owned()));
                     } else {
-                        emit_layout_child_lines(child, &mut lines);
+                        emit_layout_child_lines(child, w.id, tree, &mut lines, 0);
                     }
                     if cross.is_some() {
                         lines.push((Some(child.id), "        });".to_owned()));
@@ -574,8 +574,19 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                 ),
             ));
             let mut col_pos = 0usize;
-            for &child_id in &w.children {
+            for (slot_idx, &child_id) in w.children.iter().enumerate() {
                 if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
+                    if let Some(slot_name) = w
+                        .props
+                        .grid_slot_names
+                        .get(slot_idx)
+                        .filter(|name| !name.trim().is_empty())
+                    {
+                        lines.push((
+                            Some(w.id),
+                            format!("            // grid slot: {}", slot_name.trim()),
+                        ));
+                    }
                     let span = (child.grid_col_span as usize).clamp(1, columns);
                     // Force row-break if this child + span would overflow.
                     if col_pos > 0 && col_pos + span > columns {
@@ -594,7 +605,7 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                             child.grid_row_span
                         )));
                     }
-                    emit_layout_child_lines(child, &mut lines);
+                    emit_layout_child_lines(child, w.id, tree, &mut lines, 0);
                     for _ in 1..span {
                         lines.push((
                             Some(child.id),
@@ -1227,7 +1238,23 @@ fn cross_align_open(child: &WidgetInstance, vertical: bool) -> Option<String> {
     }
 }
 
-fn emit_layout_child_lines(child: &WidgetInstance, lines: &mut Vec<(Option<Uuid>, String)>) {
+fn emit_layout_child_lines(
+    child: &WidgetInstance,
+    parent_id: Uuid,
+    tree: &UiTree,
+    lines: &mut Vec<(Option<Uuid>, String)>,
+    depth: usize,
+) {
+    if depth > 64 {
+        lines.push((
+            Some(child.id),
+            format!(
+                "            // widget_{} parent_{}: nesting limit reached",
+                child.id, parent_id
+            ),
+        ));
+        return;
+    }
     let label = string_literal(&child.props.label);
     let eff = child
         .state_binding
@@ -1236,8 +1263,11 @@ fn emit_layout_child_lines(child: &WidgetInstance, lines: &mut Vec<(Option<Uuid>
     let binding = field_binding(eff.as_deref());
     lines.push((
         Some(child.id),
-        format!("            // widget_{}", child.id),
+        format!("            // widget_{} parent_{}", child.id, parent_id),
     ));
+    if emit_nested_layout_child(child, tree, lines, depth) {
+        return;
+    }
     let line = match &child.kind {
         WidgetKind::Button => {
             let id = child.id.as_simple();
@@ -1377,6 +1407,69 @@ fn emit_layout_child_lines(child: &WidgetInstance, lines: &mut Vec<(Option<Uuid>
         ),
     };
     lines.push((Some(child.id), line));
+}
+
+fn emit_nested_layout_child(
+    child: &WidgetInstance,
+    tree: &UiTree,
+    lines: &mut Vec<(Option<Uuid>, String)>,
+    depth: usize,
+) -> bool {
+    let open = match child.kind {
+        WidgetKind::VLayout => "            ui.vertical(|ui| {".to_owned(),
+        WidgetKind::HLayout => "            ui.horizontal(|ui| {".to_owned(),
+        WidgetKind::GridLayout => format!(
+            "            egui::Grid::new(\"{}\").show(ui, |ui| {{",
+            child.id.as_simple()
+        ),
+        _ => return false,
+    };
+    lines.push((Some(child.id), open));
+
+    let columns = child.props.grid_columns.clamp(1, MAX_GRID_COLUMNS);
+    let mut col_pos = 0usize;
+    for (slot_idx, &grandchild_id) in child.children.iter().enumerate() {
+        let Some(grandchild) = tree
+            .widgets
+            .iter()
+            .find(|widget| widget.id == grandchild_id)
+        else {
+            continue;
+        };
+        if child.kind == WidgetKind::GridLayout {
+            if let Some(slot_name) = child
+                .props
+                .grid_slot_names
+                .get(slot_idx)
+                .filter(|name| !name.trim().is_empty())
+            {
+                lines.push((
+                    Some(child.id),
+                    format!("            // grid slot: {}", slot_name.trim()),
+                ));
+            }
+        }
+        emit_layout_child_lines(grandchild, child.id, tree, lines, depth + 1);
+        if child.kind == WidgetKind::GridLayout {
+            let span = (grandchild.grid_col_span as usize).clamp(1, columns);
+            for _ in 1..span {
+                lines.push((
+                    Some(grandchild.id),
+                    "            ui.label(\"\"); // span filler".to_owned(),
+                ));
+            }
+            col_pos += span;
+            if col_pos >= columns {
+                lines.push((Some(child.id), "            ui.end_row();".to_owned()));
+                col_pos = 0;
+            }
+        }
+    }
+    if child.kind == WidgetKind::GridLayout && col_pos > 0 {
+        lines.push((Some(child.id), "            ui.end_row();".to_owned()));
+    }
+    lines.push((Some(child.id), "            });".to_owned()));
+    true
 }
 
 #[cfg(test)]
@@ -1630,6 +1723,39 @@ mod tests {
         for child_id in child_ids {
             assert!(generated.contains(&format!("// widget_{child_id}")));
         }
+    }
+
+    #[test]
+    fn gridlayout_emits_stable_named_slot_comments() {
+        let parent_id = Uuid::from_u128(0x501);
+        let child_id = Uuid::from_u128(0x502);
+        let tree = UiTree {
+            widgets: vec![
+                WidgetInstance {
+                    id: parent_id,
+                    kind: WidgetKind::GridLayout,
+                    children: vec![child_id],
+                    props: WidgetProps {
+                        grid_slot_names: vec!["Primary action".to_owned()],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: child_id,
+                    kind: WidgetKind::Button,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let generated = emit_indexed(&tree)
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(generated.contains("// grid slot: Primary action"));
+        assert!(generated.contains(&format!("parent_{parent_id}")));
     }
 
     #[test]

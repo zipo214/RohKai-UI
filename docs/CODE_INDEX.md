@@ -13,9 +13,9 @@ being comfortable.
 - `src/project/io.rs` - save/load and versioned `.rohkai.json` envelope.
 - `src/project/constraint_solver.rs` - P2.3 layout constraints: `apply_constraints`
   (equal-size/aspect/min-max + margin folded into absolute alignment) — idempotent
-  (safe every frame) and parent-relative (frame = parent's solved rect). Plus
-  `validate_constraints` (cycle/self-ref/unknown-target/bad-ratio), surfaced in
-  the Properties Constraints section.
+  (safe every frame) and parent-relative (frame = parent's solved rect). Canvas
+  constraint handles write the same model. Plus `validate_constraints`
+  (cycle/self-ref/unknown-target/bad-ratio), surfaced in Properties.
 - `src/project/db_engine.rs` - P2.6 `DatabaseEngine` trait + `SqliteEngine`
   (rusqlite, `params![]` only — never `format!()` SQL).
 - `src/project/undo.rs` - Stage 14 snapshot undo/redo (50-step cap).
@@ -37,7 +37,8 @@ being comfortable.
 
 ## Canvas And Widgets
 
-- `src/canvas/interaction.rs` - canvas input, drawing, selection, drag, resize,
+- `src/canvas/interaction.rs` - canvas input, recursive widget drawing,
+  selection, drag, resize, parent-anchor constraint handles, Grid drag-to-slot,
   pan/zoom, guides, image preview cache.
 - `src/canvas/svg_rasterizer.rs` - current zero-new-dependency SVG rasterizer;
   stable source-spanned node IDs, bounded local reference metadata,
@@ -95,11 +96,10 @@ being comfortable.
 - **Functional MVP:** MathLabel is a safe computed `f32` label; Chart is a
   minimal `Vec<f32>` bar painter; Table/ListView/TreeView are static
   option-backed widgets.
-- **Direct-child layout slice:** VLayout/HLayout/GridLayout own and reflow direct
-  children with first-slice margins/gaps/grid columns, layout-aware spacers,
-  container stretch, grid child reorder controls, and one-level Lazare parser
-  hierarchy round-trip. Rich alignment, per-child policies, slot editor, and
-  multi-level layout semantics are still planned.
+- **Recursive layout slice:** VLayout/HLayout/GridLayout own and reflow nested
+  children in parent-depth order, expose alignment/flex/size/grid policies,
+  support visual parent anchors and named Grid slots with drag-to-slot, and
+  preserve hierarchy across canvas, live code, export, and Lazare.
 - **Component runtime status:** Timer has a designer-side repaint/scheduling
   slice but generated handler dispatch remains a documented hook. StateMachine
   has schema/table/current-state codegen but no generated transition runtime.

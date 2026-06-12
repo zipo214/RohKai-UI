@@ -2,6 +2,58 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-12 — S1 layout and constraint depth closed
+
+### Context Reviewed
+- Preflight/session guidance, Claude's stopped S1 handoff, the exact S1 backlog,
+  layout/constraint schema and solver, canvas interaction, UiTree reflow,
+  live/export emitters, Lazare parser, RCA, feature evaluations, and the
+  preserved local `ROADMAP_PHASE2.md` edit.
+
+### Findings
+- Claude's handoff named visual anchors and nested Lazare as unfinished, but S1
+  also still contained an unchecked Grid slot-editor item.
+- One-level code emission was not the only nesting gap: layout reflow captured
+  stale parent rectangles, canvas drawing stopped after direct children, export
+  emitted nested containers as comments, and Lazare had no explicit parent
+  identity for deeper marker nesting.
+- The existing Grid slot list supported arrow reorder but had no stable names
+  and canvas drag-reorder handled V/H layouts only.
+
+### Changes
+- Added four draggable constraint handles around the primary selection. They
+  target the real parent frame's leading/center/trailing or top/center/bottom
+  anchors, derive margins that preserve current geometry, and draw persistent
+  connector lines from the widget to its active targets.
+- Added `WidgetProps::grid_slot_names`: stable row-major names editable in
+  Properties, visible on canvas, and represented in live/export code. Grid
+  children now drag directly between cells with a full-cell insertion preview.
+- UiTree reflows layout parents before descendants using current solved rects,
+  independent of storage order. Canvas drawing, live code, and export recurse
+  through nested V/H/Grid ownership with bounded cycle/depth guards.
+- Generated child markers now include explicit parent UUIDs. Lazare restores
+  arbitrary nesting and distinguishes an intentionally empty container so
+  deleting its child code clears stale ownership.
+- Marked S1 complete across the strategic roadmap, RCA, code index, and feature
+  evaluation. Added bespoke secure-foundation milestone reviews before the
+  explicit user/architecture gate for Stage 15.
+
+### Verification
+- `cargo test`: 523 unit tests + 17 fidelity tests + 1 doctest; zero failed,
+  zero ignored.
+- `cargo fmt --check`, `cargo check`, and
+  `cargo clippy --all-targets -- -D warnings`: pass.
+- Encoding guard and diff whitespace checks: pass; no `#[ignore]` remains.
+- Focused tests cover geometry-preserving anchors, Grid pointer-to-slot mapping,
+  parent-before-child nested reflow, named-slot emission, nested export, Lazare
+  multi-level round-trip, and intentional empty-container clearing.
+
+### Risks / Follow-ups
+- Visual authoring still needs ordinary human smoke use for handle discoverability
+  and very small/overlapping widgets; the interaction geometry and persistence
+  are covered by deterministic tests.
+- Do not merge or push while another agent's state is uncertain.
+
 ## 2026-06-12 — Export gates, SVG fuzz hardening, and widget-authoring UX
 
 ### Context Reviewed

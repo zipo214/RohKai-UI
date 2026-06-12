@@ -7,6 +7,17 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-12 — S1 closed: visual anchors, named Grid slots, recursive layouts
+
+Branch `dev`, based on `1e7fd38`; Claude is out of usage. S1 is now complete:
+canvas constraint handles write parent-relative anchors without moving the
+widget, Grid slots have stable names and drag-to-slot, and nested layouts reflow,
+draw, emit, export, and Lazare-round-trip recursively. The prior one-line Stage
+15 roadmap edit was preserved in intent and rewritten into explicit bespoke-
+foundation review milestones. Full suite: 523 unit + 17 fidelity + doctest,
+zero ignored, warning-denied clippy green. Do not merge or push while external
+agent state remains uncertain.
+
 ## 2026-06-12 — v0.2.0 audit remediation: export gates + widget-authoring UX
 
 Branch `dev`. Remediation is complete and ready for a scoped local commit.

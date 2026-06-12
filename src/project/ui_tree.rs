@@ -6,8 +6,6 @@ use std::collections::HashSet;
 use uuid::Uuid;
 
 pub const MIN_WIDGET_SIZE: f32 = 20.0;
-type LayoutParentSnapshot = (WidgetKind, Rect, f32, f32, bool, usize, Vec<Uuid>);
-
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct UiTree {
     pub widgets: Vec<WidgetInstance>,
@@ -271,24 +269,44 @@ impl UiTree {
     /// This intentionally keeps child `Rect`s absolute so existing hit testing,
     /// selection, save/load, and child codegen can share one coordinate model.
     pub fn reflow_layouts(&mut self) {
-        let parents: Vec<LayoutParentSnapshot> = self
+        let mut parent_ids: Vec<(usize, Uuid)> = self
             .widgets
             .iter()
             .filter(|w| is_layout_container(&w.kind))
-            .map(|w| {
-                (
-                    w.kind.clone(),
-                    w.rect.clone(),
-                    w.props.inner_margin.max(0.0),
-                    w.props.layout_spacing.max(0.0),
-                    w.props.layout_stretch,
-                    w.props.grid_columns.clamp(1, GRID_LAYOUT_MAX_COLUMNS),
-                    w.children.clone(),
-                )
+            .map(|widget| {
+                let mut depth = 0usize;
+                let mut current = widget.id;
+                while let Some(parent) = self.parent_of(current) {
+                    depth += 1;
+                    current = parent;
+                    if depth > 64 {
+                        break;
+                    }
+                }
+                (depth, widget.id)
             })
             .collect();
+        parent_ids.sort_by_key(|(depth, _)| *depth);
 
-        for (kind, parent_rect, padding, spacing, stretch, grid_columns, child_ids) in parents {
+        for (_, parent_id) in parent_ids {
+            let Some((kind, parent_rect, padding, spacing, stretch, grid_columns, child_ids)) =
+                self.widgets
+                    .iter()
+                    .find(|widget| widget.id == parent_id)
+                    .map(|widget| {
+                        (
+                            widget.kind.clone(),
+                            widget.rect.clone(),
+                            widget.props.inner_margin.max(0.0),
+                            widget.props.layout_spacing.max(0.0),
+                            widget.props.layout_stretch,
+                            widget.props.grid_columns.clamp(1, GRID_LAYOUT_MAX_COLUMNS),
+                            widget.children.clone(),
+                        )
+                    })
+            else {
+                continue;
+            };
             match kind {
                 WidgetKind::VLayout => self.reflow_vlayout_children(
                     &parent_rect,
@@ -734,6 +752,66 @@ mod tests {
         assert_eq!(child.rect.x, 108.0);
         assert_eq!(child.rect.y, 58.0);
         assert_eq!(child.rect.w, 204.0);
+    }
+
+    #[test]
+    fn nested_layouts_reflow_parent_before_child_regardless_of_storage_order() {
+        let outer_id = Uuid::from_u128(0x701);
+        let inner_id = Uuid::from_u128(0x702);
+        let leaf_id = Uuid::from_u128(0x703);
+        let mut tree = UiTree {
+            // Deliberately store the nested layout before its parent. Reflow
+            // must use ownership depth, not Vec order or stale snapshots.
+            widgets: vec![
+                WidgetInstance {
+                    id: inner_id,
+                    kind: WidgetKind::HLayout,
+                    rect: Rect {
+                        x: 500.0,
+                        y: 500.0,
+                        w: 100.0,
+                        h: 80.0,
+                    },
+                    children: vec![leaf_id],
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: leaf_id,
+                    kind: WidgetKind::Button,
+                    rect: Rect {
+                        x: 600.0,
+                        y: 600.0,
+                        w: 40.0,
+                        h: 24.0,
+                    },
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: outer_id,
+                    kind: WidgetKind::VLayout,
+                    rect: Rect {
+                        x: 100.0,
+                        y: 50.0,
+                        w: 300.0,
+                        h: 220.0,
+                    },
+                    children: vec![inner_id],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        tree.reflow_layouts();
+
+        let inner = tree.widgets.iter().find(|w| w.id == inner_id).unwrap();
+        assert_eq!(inner.rect.x, 108.0);
+        assert_eq!(inner.rect.y, 58.0);
+        assert_eq!(inner.rect.w, 284.0);
+        let leaf = tree.widgets.iter().find(|w| w.id == leaf_id).unwrap();
+        assert_eq!(leaf.rect.x, inner.rect.x + 8.0);
+        assert_eq!(leaf.rect.y, inner.rect.y + 8.0);
+        assert!(leaf.rect.x < 400.0, "leaf used stale inner-layout rect");
     }
 
     #[test]

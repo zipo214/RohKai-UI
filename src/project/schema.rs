@@ -686,6 +686,11 @@ pub struct WidgetProps {
         skip_serializing_if = "is_default_grid_columns"
     )]
     pub grid_columns: usize,
+    /// Optional human-readable names for GridLayout cells, indexed row-major.
+    /// Names describe slots rather than children, so reordering a child moves
+    /// it between stable named destinations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grid_slot_names: Vec<String>,
     #[serde(default, skip_serializing_if = "LayoutCrossAlign::is_start")]
     pub layout_cross_align: LayoutCrossAlign,
 
@@ -821,6 +826,7 @@ impl Default for WidgetProps {
             layout_spacing: 6.0,
             layout_stretch: true,
             grid_columns: 3,
+            grid_slot_names: Vec::new(),
             layout_cross_align: LayoutCrossAlign::Start,
             formula_expr: String::new(),
             formula_decimals: 2,

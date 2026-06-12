@@ -131,6 +131,15 @@ session** (2026-06-12 follow-up commit); the rest stay ordered, not parked:
   HLayout codegen (Stretch dropped from the UI — no proven egui path). Parity
   tests added to `fidelity_audit.rs`. `constraints` / `descriptor_accent` confirmed
   geometry/canvas-only (correctly no codegen reference).
+- ✅ **DONE** — Canvas constraint authoring is no longer Properties-only. Four
+  drag handles attach the selected widget to parent-relative horizontal/
+  vertical targets and derive margins without moving it on commit.
+- ✅ **DONE** — Grid slot depth: persistent slot names, canvas/Properties/code
+  visibility, arrow reorder, and direct drag-to-slot feedback.
+- ✅ **DONE** — Multi-level layouts reflow and draw recursively, emit in both
+  live and export code, and Lazare reconstructs explicit parent relationships.
+  The parser distinguishes an intentionally empty container so deleting nested
+  child code clears ownership instead of silently retaining stale children.
 - `nit:` ~15 remaining `#[allow(dead_code)]` `pub` items (several redundant after
   the lib split). Sweep them: wire, delete, or drop the attribute. → **S4**.
 

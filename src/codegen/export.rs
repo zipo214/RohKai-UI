@@ -932,7 +932,13 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 let mut code = open;
                 for &child_id in &w.children {
                     if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
-                        code.push_str(&export_layout_child_line(child, &handler_registry, true));
+                        code.push_str(&export_layout_child_line(
+                            child,
+                            tree,
+                            &handler_registry,
+                            true,
+                            0,
+                        ));
                     }
                 }
                 code.push_str("                });\n");
@@ -955,7 +961,13 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 let mut code = open;
                 for &child_id in &w.children {
                     if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
-                        code.push_str(&export_layout_child_line(child, &handler_registry, false));
+                        code.push_str(&export_layout_child_line(
+                            child,
+                            tree,
+                            &handler_registry,
+                            false,
+                            0,
+                        ));
                     }
                 }
                 code.push_str("                });\n");
@@ -978,7 +990,24 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 );
                 for (idx, &child_id) in w.children.iter().enumerate() {
                     if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
-                        code.push_str(&export_layout_child_line(child, &handler_registry, false));
+                        if let Some(slot_name) = w
+                            .props
+                            .grid_slot_names
+                            .get(idx)
+                            .filter(|name| !name.trim().is_empty())
+                        {
+                            code.push_str(&format!(
+                                "                    // grid slot: {}\n",
+                                slot_name.trim()
+                            ));
+                        }
+                        code.push_str(&export_layout_child_line(
+                            child,
+                            tree,
+                            &handler_registry,
+                            false,
+                            0,
+                        ));
                         if (idx + 1) % columns == 0 {
                             code.push_str("                    ui.end_row();\n");
                         }
@@ -1663,9 +1692,17 @@ fn export_child_size_str(child: &WidgetInstance) -> String {
 /// absolute-positioned with `ui.put`.
 fn export_layout_child_line(
     child: &WidgetInstance,
+    tree: &UiTree,
     registry: &HashMap<String, (crate::project::schema::HandlerResult, bool)>,
     vertical: bool,
+    depth: usize,
 ) -> String {
+    if depth > 64 {
+        return format!(
+            "                    // widget_{}: nested layout depth limit reached\n",
+            child.id
+        );
+    }
     let child_label = string_literal(&child.props.label);
     let child_binding = field_binding(child.state_binding.as_deref());
     let mut code = format!("                    // widget_{}\n", child.id);
@@ -1791,6 +1828,66 @@ fn export_layout_child_line(
                 "                    self.show_svg_image(ui, ctx, {key}, {svg_source}, egui::vec2({:.1}, {:.1}));\n",
                 child.rect.w, child.rect.h
             ));
+        }
+        WidgetKind::VLayout | WidgetKind::HLayout | WidgetKind::GridLayout => {
+            let (open, child_vertical) = match child.kind {
+                WidgetKind::VLayout => {
+                    ("                    ui.vertical(|ui| {\n".to_owned(), true)
+                }
+                WidgetKind::HLayout => (
+                    "                    ui.horizontal(|ui| {\n".to_owned(),
+                    false,
+                ),
+                WidgetKind::GridLayout => (
+                    format!(
+                        "                    egui::Grid::new(\"{}\").show(ui, |ui| {{\n",
+                        child.id.as_simple()
+                    ),
+                    false,
+                ),
+                _ => unreachable!(),
+            };
+            code.push_str(&open);
+            let columns = child.props.grid_columns.clamp(1, MAX_GRID_COLUMNS);
+            for (idx, grandchild_id) in child.children.iter().enumerate() {
+                let Some(grandchild) = tree
+                    .widgets
+                    .iter()
+                    .find(|widget| widget.id == *grandchild_id)
+                else {
+                    continue;
+                };
+                if child.kind == WidgetKind::GridLayout {
+                    if let Some(slot_name) = child
+                        .props
+                        .grid_slot_names
+                        .get(idx)
+                        .filter(|name| !name.trim().is_empty())
+                    {
+                        code.push_str(&format!(
+                            "                    // grid slot: {}\n",
+                            slot_name.trim()
+                        ));
+                    }
+                }
+                code.push_str(&export_layout_child_line(
+                    grandchild,
+                    tree,
+                    registry,
+                    child_vertical,
+                    depth + 1,
+                ));
+                if child.kind == WidgetKind::GridLayout && (idx + 1) % columns == 0 {
+                    code.push_str("                    ui.end_row();\n");
+                }
+            }
+            if child.kind == WidgetKind::GridLayout
+                && !child.children.is_empty()
+                && !child.children.len().is_multiple_of(columns)
+            {
+                code.push_str("                    ui.end_row();\n");
+            }
+            code.push_str("                    });\n");
         }
         WidgetKind::Custom(_) => {
             if let Some(ref tpl) = child.descriptor_export_tpl {
@@ -2127,6 +2224,48 @@ mod tests {
         for child_id in child_ids {
             assert!(generated.contains(&format!("// widget_{child_id}")));
         }
+    }
+
+    #[test]
+    fn nested_layout_export_emits_complete_hierarchy() {
+        let outer_id = Uuid::from_u128(0x951);
+        let inner_id = Uuid::from_u128(0x952);
+        let leaf_id = Uuid::from_u128(0x953);
+        let tree = UiTree {
+            widgets: vec![
+                WidgetInstance {
+                    id: outer_id,
+                    kind: WidgetKind::VLayout,
+                    children: vec![inner_id],
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: inner_id,
+                    kind: WidgetKind::GridLayout,
+                    children: vec![leaf_id],
+                    props: crate::project::schema::WidgetProps {
+                        grid_slot_names: vec!["Main".to_owned()],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: leaf_id,
+                    kind: WidgetKind::Button,
+                    on_click: "nested_clicked".to_owned(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let generated = gen_app_rs(&tree);
+        assert_eq!(generated.matches("egui::Area::new").count(), 1);
+        assert!(generated.contains("ui.vertical(|ui| {"));
+        assert!(generated.contains("egui::Grid::new"));
+        assert!(generated.contains("// grid slot: Main"));
+        assert!(generated.contains(&format!("// widget_{leaf_id}")));
+        assert!(generated.contains("self.nested_clicked();"));
     }
 
     #[test]

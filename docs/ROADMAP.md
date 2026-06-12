@@ -499,7 +499,7 @@ gap.
 - [x] Properties expose first-slice stretch/fill behavior through
       `layout_stretch`; container reflow preserves child size hints when
       stretch is disabled.
-- [ ] Properties expose alignment, grid row policies, and per-child
+- [x] Properties expose alignment, grid row policies, and per-child
       stretch/fixed-size behavior.
 - [x] Spacers are layout-aware first-slice items: `VerticalSpacer` flexes inside
       `VLayout`, `HorizontalSpacer` flexes inside `HLayout`, and generated code
@@ -508,17 +508,19 @@ gap.
       instead of as a flat draw-order row with incidental indentation.
 - [x] Delete, group, ungroup, and first-slice child reorder semantics respect
       layout-child ownership and reflow through `UiTree`.
-- [ ] Hit testing, rubber-band selection, and richer drag-reorder semantics need
-      more layout-aware polish.
+- [x] Hit testing, rubber-band selection, and drag-reorder are layout-aware;
+      Grid children can be dragged directly between row-major slots.
 - [x] Stack layout slice: live codegen and export place direct
       `VLayout`/`HLayout` children inside `ui.vertical(|ui| { ... })` or
       `ui.horizontal(|ui| { ... })` closures in child order.
-- [x] Lazare parser first-slice round-trips one-level layout-owned hierarchy
-      from generated/edited layout closures.
+- [x] Lazare round-trips multi-level layout-owned hierarchy from generated or
+      edited layout closures using explicit parent markers; empty containers
+      clear prior ownership.
 - [x] Add tests proving canvas child order, resize reflow, generated code
       nesting, export output, and first-slice parser behavior stay consistent.
-- [ ] Add richer cell/slot editor, named slots, drag-to-slot behavior, and
-      multi-level layout hierarchy round-trip tests.
+- [x] Grid cell/slot editor stores stable names, displays them on canvas and in
+      generated code, supports arrow reorder plus canvas drag-to-slot, and has
+      multi-level reflow/parser/export regression tests.
 
 ### New Widget Kinds — Containers
 - [x] Scroll Area — canvas box with simulated scrollbar indicator

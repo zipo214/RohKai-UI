@@ -71,6 +71,10 @@ pub struct ParsedWidget {
     pub min: Option<f32>,
     pub max: Option<f32>,
     pub children: Vec<Uuid>,
+    /// True when the source explicitly described this widget as a container.
+    /// This distinguishes an intentionally empty container from an unrelated
+    /// widget whose child ownership was not represented in the edited source.
+    pub children_declared: bool,
     pub source_span: Option<SourceSpan>,
 }
 
@@ -94,6 +98,7 @@ impl ParsedWidget {
             min: None,
             max: None,
             children: Vec::new(),
+            children_declared: false,
             source_span: None,
         }
     }
@@ -137,6 +142,7 @@ pub fn parse_egui_output(code: &str) -> ParseReport {
     let mut report = ParseReport::default();
     let mut builder: Option<AreaBuilder> = None;
     let mut pending_child: Option<ParsedWidget> = None;
+    let mut child_relations: Vec<(Uuid, Uuid)> = Vec::new();
 
     for (idx, byte_span) in line_byte_spans(code).into_iter().enumerate() {
         let line_no = idx + 1;
@@ -148,7 +154,10 @@ pub fn parse_egui_output(code: &str) -> ParseReport {
 
         if let Some(id) = extract_widget_uuid(t) {
             if t.starts_with("// widget_") {
-                if let Some(parent) = builder.as_mut().and_then(|b| b.widget.as_mut()) {
+                if let Some(parent_id) = extract_parent_uuid(t) {
+                    child_relations.push((parent_id, id));
+                } else if let Some(parent) = builder.as_mut().and_then(|b| b.widget.as_mut()) {
+                    parent.children_declared = true;
                     if !parent.children.contains(&id) {
                         parent.children.push(id);
                     }
@@ -237,6 +246,7 @@ pub fn parse_egui_output(code: &str) -> ParseReport {
     if let Some(done) = builder.take().and_then(AreaBuilder::emit) {
         report.widgets.push(done);
     }
+    apply_child_relations(&mut report.widgets, &child_relations);
 
     if report.widgets.is_empty() && code.contains("widget_") {
         report.diagnostics.push(ParseDiagnostic {
@@ -252,6 +262,17 @@ pub fn parse_egui_output(code: &str) -> ParseReport {
 fn flush_pending_child(pending: &mut Option<ParsedWidget>, report: &mut ParseReport) {
     if let Some(widget) = pending.take().filter(ParsedWidget::has_any_edit) {
         report.widgets.push(widget);
+    }
+}
+
+fn apply_child_relations(widgets: &mut [ParsedWidget], relations: &[(Uuid, Uuid)]) {
+    for &(parent_id, child_id) in relations {
+        if let Some(parent) = widgets.iter_mut().find(|widget| widget.id == parent_id) {
+            parent.children_declared = true;
+            if !parent.children.contains(&child_id) {
+                parent.children.push(child_id);
+            }
+        }
     }
 }
 
@@ -352,12 +373,16 @@ fn parse_widget_line(
         parse_add_sized(widget, line, line_no, report);
     } else if line.starts_with("egui::Frame::group(") {
         widget.kind = Some(WidgetKind::Frame);
+        widget.children_declared = true;
     } else if line.starts_with("ui.vertical(|ui|") {
         widget.kind = Some(WidgetKind::VLayout);
+        widget.children_declared = true;
     } else if line.starts_with("ui.horizontal(|ui|") {
         widget.kind = Some(WidgetKind::HLayout);
+        widget.children_declared = true;
     } else if line.starts_with("egui::Grid::new(") {
         widget.kind = Some(WidgetKind::GridLayout);
+        widget.children_declared = true;
     } else {
         // Fallback for custom widget template lines.  Kind is intentionally
         // not set so apply_parsed cannot overwrite a Custom kind.  Each field
@@ -453,6 +478,16 @@ fn looks_like_widget_edit(line: &str) -> bool {
 
 fn extract_widget_uuid(line: &str) -> Option<Uuid> {
     let marker = "widget_";
+    let start = line.find(marker)? + marker.len();
+    let rest = &line[start..];
+    let end = rest
+        .find(|c: char| !(c.is_ascii_hexdigit() || c == '-'))
+        .unwrap_or(rest.len());
+    Uuid::parse_str(&rest[..end]).ok()
+}
+
+fn extract_parent_uuid(line: &str) -> Option<Uuid> {
+    let marker = "parent_";
     let start = line.find(marker)? + marker.len();
     let rest = &line[start..];
     let end = rest
@@ -658,7 +693,7 @@ fn apply_fields(
     if let Some(max) = pw.max {
         w.props.max = max;
     }
-    if !offset_duplicate && !pw.children.is_empty() {
+    if !offset_duplicate && pw.children_declared {
         w.children = pw.children.clone();
     }
 }
@@ -961,6 +996,124 @@ mod tests {
                 .unwrap();
             assert_eq!(restored.children, vec![child_id]);
         }
+    }
+
+    #[test]
+    fn round_trips_multi_level_layout_hierarchy() {
+        let outer_id = Uuid::from_u128(0x110);
+        let inner_id = Uuid::from_u128(0x120);
+        let leaf_id = Uuid::from_u128(0x130);
+        let source_tree = UiTree {
+            widgets: vec![
+                WidgetInstance {
+                    id: outer_id,
+                    kind: WidgetKind::VLayout,
+                    children: vec![inner_id],
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: inner_id,
+                    kind: WidgetKind::HLayout,
+                    children: vec![leaf_id],
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: leaf_id,
+                    kind: WidgetKind::Button,
+                    props: WidgetProps {
+                        label: "Nested".to_owned(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let code = egui_emitter::emit_indexed(&source_tree)
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let report = parse_egui_output(&code);
+        assert!(!report.has_errors(), "{:?}", report.diagnostics);
+        let parsed_outer = report.widgets.iter().find(|w| w.id == outer_id).unwrap();
+        let parsed_inner = report.widgets.iter().find(|w| w.id == inner_id).unwrap();
+        assert_eq!(parsed_outer.children, vec![inner_id]);
+        assert_eq!(parsed_inner.children, vec![leaf_id]);
+        assert_eq!(
+            report
+                .widgets
+                .iter()
+                .find(|w| w.id == leaf_id)
+                .unwrap()
+                .kind,
+            Some(WidgetKind::Button)
+        );
+
+        let mut target_tree = source_tree.clone();
+        target_tree.get_mut(outer_id).unwrap().children.clear();
+        target_tree.get_mut(inner_id).unwrap().children.clear();
+        apply_parsed(&mut target_tree, &report.widgets);
+        assert_eq!(
+            target_tree
+                .widgets
+                .iter()
+                .find(|w| w.id == outer_id)
+                .unwrap()
+                .children,
+            vec![inner_id]
+        );
+        assert_eq!(
+            target_tree
+                .widgets
+                .iter()
+                .find(|w| w.id == inner_id)
+                .unwrap()
+                .children,
+            vec![leaf_id]
+        );
+    }
+
+    #[test]
+    fn parsed_empty_layout_clears_existing_children() {
+        let parent_id = Uuid::from_u128(0x210);
+        let child_id = Uuid::from_u128(0x220);
+        let code = format!(
+            "egui::Area::new(egui::Id::new(\"widget_{parent_id}\"))\n\
+             .fixed_pos(egui::pos2(0.0, 0.0))\n\
+             .show(ctx, |ui| {{\n\
+             ui.set_min_size(egui::vec2(100.0, 100.0));\n\
+             ui.vertical(|ui| {{\n\
+             }});\n\
+             }});"
+        );
+        let report = parse_egui_output(&code);
+        assert!(!report.has_errors(), "{:?}", report.diagnostics);
+        let mut tree = UiTree {
+            widgets: vec![
+                WidgetInstance {
+                    id: parent_id,
+                    kind: WidgetKind::VLayout,
+                    children: vec![child_id],
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: child_id,
+                    kind: WidgetKind::Button,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        apply_parsed(&mut tree, &report.widgets);
+        assert!(tree
+            .widgets
+            .iter()
+            .find(|w| w.id == parent_id)
+            .unwrap()
+            .children
+            .is_empty());
     }
 
     #[test]

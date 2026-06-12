@@ -1831,7 +1831,8 @@ fn show_layout_container(
             ui.separator();
             ui.label(egui::RichText::new("Grid slots").small().weak());
             let columns = w.props.grid_columns.clamp(1, 12);
-            for (idx, child_id) in w.children.iter().copied().enumerate() {
+            let child_ids = w.children.clone();
+            for (idx, child_id) in child_ids.iter().copied().enumerate() {
                 ui.horizontal(|ui| {
                     let row = idx / columns + 1;
                     let col = idx % columns + 1;
@@ -1840,7 +1841,35 @@ fn show_layout_container(
                             .small()
                             .monospace(),
                     );
-                    ui.label(short_uuid(child_id));
+                    let mut slot_name = w
+                        .props
+                        .grid_slot_names
+                        .get(idx)
+                        .cloned()
+                        .unwrap_or_default();
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut slot_name)
+                            .hint_text(format!("Slot {}", idx + 1))
+                            .desired_width(92.0),
+                        )
+                        .on_hover_text(
+                            "Stable name for this grid cell. Dragging a child changes which widget occupies the named slot.",
+                        )
+                        .changed()
+                    {
+                        w.props.grid_slot_names.resize(idx + 1, String::new());
+                        w.props.grid_slot_names[idx] = slot_name;
+                        while w
+                            .props
+                            .grid_slot_names
+                            .last()
+                            .is_some_and(String::is_empty)
+                        {
+                            w.props.grid_slot_names.pop();
+                        }
+                    }
+                    ui.label(egui::RichText::new(short_uuid(child_id)).small().weak());
                     if ui
                         .add_enabled(idx > 0, egui::Button::new("↑"))
                         .on_hover_text("Move child to previous grid slot")
@@ -1849,7 +1878,7 @@ fn show_layout_container(
                         *child_move = Some((w.id, child_id, idx - 1));
                     }
                     if ui
-                        .add_enabled(idx + 1 < w.children.len(), egui::Button::new("↓"))
+                        .add_enabled(idx + 1 < child_ids.len(), egui::Button::new("↓"))
                         .on_hover_text("Move child to next grid slot")
                         .clicked()
                     {
