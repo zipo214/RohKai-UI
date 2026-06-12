@@ -1081,23 +1081,18 @@ pub struct WidgetInstance {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub descriptor_state_fields: Vec<[String; 3]>,
 
-    // P2.4 — Per-child layout controls ------------------------------------------
-    /// Per-child cross-axis alignment override (VLayout / HLayout children only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub child_cross_align: Option<CrossAlign>,
-    /// Flex factor along the main axis (0.0 = fixed size; > 0.0 = proportional share).
     #[serde(default, skip_serializing_if = "child_flex_is_zero")]
     pub child_flex: f32,
-    /// GridLayout column-span for this child (1 = single cell, default).
     #[serde(default = "default_one_u32", skip_serializing_if = "is_one_u32")]
     pub grid_col_span: u32,
-    /// GridLayout row-span for this child (1 = single cell, default).
     #[serde(default = "default_one_u32", skip_serializing_if = "is_one_u32")]
     pub grid_row_span: u32,
-    // P2.3 — Constraint-based layout
-    /// Layout constraints applied by the P2.3 constraint solver.
     #[serde(default, skip_serializing_if = "constraints_are_default")]
     pub constraints: LayoutConstraints,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db_binding: Option<DbBinding>,
 }
 
 impl Default for WidgetInstance {
@@ -1141,6 +1136,7 @@ impl Default for WidgetInstance {
             grid_col_span: 1,
             grid_row_span: 1,
             constraints: LayoutConstraints::default(),
+            db_binding: None,
         }
     }
 }
@@ -1174,6 +1170,30 @@ pub struct SvgImportMetadata {
     /// the shared group id tying the chunks of one text element together.
     #[serde(default)]
     pub text_group: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Stage 13 — Database binding
+// ---------------------------------------------------------------------------
+
+/// A widget → database column binding.
+/// When present on a `WidgetInstance`, `state_emitter` emits a
+/// `rusqlite::Connection` field and a `load_from_db()` method stub.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DbBinding {
+    /// SQLite table name (unquoted, validated as a plain identifier).
+    pub table: String,
+    /// Column name to bind the widget value to.
+    pub column: String,
+}
+
+impl Default for DbBinding {
+    fn default() -> Self {
+        Self {
+            table: String::from("my_table"),
+            column: String::from("my_column"),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1231,6 +1251,25 @@ mod tests {
             assert!(k.is_event_capable());
             assert!(k.supported_events().contains(&WidgetEvent::Change));
         }
+    }
+
+    #[test]
+    fn db_binding_serde_default_is_none() {
+        // A WidgetInstance serialised without a db_binding field must deserialise
+        // with db_binding = None.  This guards the #[serde(default)] annotation.
+        let json = r#"{
+            "id": "00000000-0000-0000-0000-000000000000",
+            "kind": "Button",
+            "rect": {"x":20,"y":20,"w":120,"h":32},
+            "props": {"label":"X","min":0,"max":1,"default_value":0,
+                      "options":["Option A","Option B","Option C"]},
+            "state_binding": null
+        }"#;
+        let w: WidgetInstance = serde_json::from_str(json).unwrap();
+        assert!(
+            w.db_binding.is_none(),
+            "db_binding should default to None when absent from JSON"
+        );
     }
 
     #[test]

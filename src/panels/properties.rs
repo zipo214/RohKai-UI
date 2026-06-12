@@ -1,8 +1,8 @@
 use crate::codegen::widget_descriptor::{DescriptorPropType, WidgetDescriptor};
 use crate::project::schema::{
-    CrossAlign, CustomProp, CustomPropType, DataColumn, DataColumnType, HAlign, HandlerResult,
-    LayoutCrossAlign, Orientation, SizePolicy, TextAlign, VAlign, WidgetEvent, WidgetInstance,
-    WidgetKind,
+    CrossAlign, CustomProp, CustomPropType, DataColumn, DataColumnType, DbBinding, HAlign,
+    HandlerResult, LayoutCrossAlign, Orientation, SizePolicy, TextAlign, VAlign, WidgetEvent,
+    WidgetInstance, WidgetKind,
 };
 use crate::project::ui_tree::UiTree;
 use uuid::Uuid;
@@ -156,6 +156,7 @@ fn show_content_inner(
     }
 
     show_event_handler(ui, tree, id, &mut props_action);
+    show_db_binding(ui, tree, id);
 
     // P2.3 — constraint editor (shown for all widget kinds).
     if let Some(w) = tree.get_mut(id) {
@@ -1224,6 +1225,101 @@ fn event_field_set(w: &mut WidgetInstance, field: EventField, value: String) {
         EventField::LostFocus => w.on_lost_focus = value,
         EventField::DragStopped => w.on_drag_stopped = value,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Stage 13 — DB Binding section
+// ---------------------------------------------------------------------------
+
+fn show_db_binding(ui: &mut egui::Ui, tree: &mut UiTree, id: Uuid) {
+    ui.separator();
+    ui.label(egui::RichText::new("DB Binding").small().weak());
+
+    let has_binding = tree
+        .get_mut(id)
+        .map(|w| w.db_binding.is_some())
+        .unwrap_or(false);
+
+    ui.horizontal(|ui| {
+        if ui
+            .selectable_label(!has_binding, "None")
+            .on_hover_text("No database binding")
+            .clicked()
+            && has_binding
+        {
+            if let Some(w) = tree.get_mut(id) {
+                w.db_binding = None;
+            }
+        }
+        if ui
+            .selectable_label(has_binding, "Bound")
+            .on_hover_text("Bind this widget value to a database column")
+            .clicked()
+            && !has_binding
+        {
+            if let Some(w) = tree.get_mut(id) {
+                w.db_binding = Some(DbBinding::default());
+            }
+        }
+    });
+
+    if !has_binding {
+        return;
+    }
+
+    // Collect current values — borrow briefly, clone, release.
+    let (table_cur, column_cur) = tree
+        .get_mut(id)
+        .and_then(|w| w.db_binding.as_ref())
+        .map(|b| (b.table.clone(), b.column.clone()))
+        .unwrap_or_default();
+
+    let mut table_buf = table_cur;
+    let mut column_buf = column_cur;
+
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Table").small().weak());
+        if ui
+            .add(
+                egui::TextEdit::singleline(&mut table_buf)
+                    .hint_text("table_name")
+                    .desired_width(120.0),
+            )
+            .changed()
+        {
+            let trimmed = table_buf.trim().to_owned();
+            if let Some(w) = tree.get_mut(id) {
+                if let Some(b) = w.db_binding.as_mut() {
+                    b.table = trimmed;
+                }
+            }
+        }
+    });
+
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Column").small().weak());
+        if ui
+            .add(
+                egui::TextEdit::singleline(&mut column_buf)
+                    .hint_text("column_name")
+                    .desired_width(120.0),
+            )
+            .changed()
+        {
+            let trimmed = column_buf.trim().to_owned();
+            if let Some(w) = tree.get_mut(id) {
+                if let Some(b) = w.db_binding.as_mut() {
+                    b.column = trimmed;
+                }
+            }
+        }
+    });
+
+    ui.label(
+        egui::RichText::new("Codegen emits db_conn field + load_from_db() stub")
+            .small()
+            .weak(),
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -201,22 +201,13 @@ pub struct RohKaiApp {
     /// Visual Widget Maker window state.
     pub widget_maker_doc: crate::canvas::widget_maker::WidgetMakerDoc,
     pub widget_maker_open: bool,
-    /// Per-kind widget drop counter for auto-generating meaningful labels.
-    /// Key = `format!("{:?}", kind)` (debug name), value = last counter used.
-    /// Resets to empty when the project is cleared (New command).
     pub name_counter: std::collections::HashMap<String, u32>,
-    /// P2.5 — Runtime timer channel receiver.  Background threads send the
-    /// component name on every tick; the update loop drains this and requests
-    /// a repaint so timer-driven UIs feel alive.
     timer_rx: Option<std::sync::mpsc::Receiver<String>>,
-    /// P2.5 — Set to `true` after a project load or new-project command so the
-    /// next `update()` call re-spawns timer threads against the new tree.
     timers_need_respawn: bool,
+    pub db_engine: Option<Box<dyn crate::project::db_engine::DatabaseEngine>>,
+    pub db_panel: crate::panels::db_panel::DbPanelState,
 }
 
-/// Produce a snake_case slug from a widget's default label text for use in
-/// auto-generated names. Lowercases, replaces non-alphanumeric runs with `_`,
-/// strips leading/trailing underscores. Returns empty string for blank input.
 fn slugify_widget_hint(text: &str) -> String {
     let raw: String = text
         .to_lowercase()
@@ -281,6 +272,8 @@ impl RohKaiApp {
             name_counter: std::collections::HashMap::new(),
             timer_rx: None,
             timers_need_respawn: true,
+            db_engine: None,
+            db_panel: crate::panels::db_panel::DbPanelState::default(),
         }
     }
 
@@ -2071,6 +2064,14 @@ impl eframe::App for RohKaiApp {
                         self.session.macro_palette_open = true;
                         ui.close_menu();
                     }
+                    if ui
+                        .button("Database…")
+                        .on_hover_text("Connect to SQLite, browse schema, preview rows (Stage 13)")
+                        .clicked()
+                    {
+                        self.db_panel.open = true;
+                        ui.close_menu();
+                    }
                     ui.separator();
                     if ui.button("Theme…").clicked() {
                         self.session.theme_open = true;
@@ -2927,6 +2928,9 @@ impl eframe::App for RohKaiApp {
                 );
             }
         }
+
+        // Stage 13 — Database panel.
+        crate::panels::db_panel::show_window(ctx, &mut self.db_panel, &mut self.db_engine);
 
         // Stage 11 — Rust wiring editor + macro palette.
         crate::panels::rust_wiring::show(
