@@ -2698,6 +2698,10 @@ impl eframe::App for RohKaiApp {
 
             self.session.canvas_settings.guide_drag_active = self.session.dragging_guide.is_some();
             self.session.canvas_settings.input_blocked = canvas_modal_blocked;
+
+            // P2.3 — apply layout constraints once per frame before canvas renders.
+            crate::project::constraint_solver::apply_constraints(&mut self.project.ui_tree);
+
             crate::canvas::interaction::handle(
                 ui,
                 &mut self.project.ui_tree,
