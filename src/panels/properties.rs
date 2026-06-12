@@ -1691,9 +1691,10 @@ fn show_math_label(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bo
         );
     });
     if !w.props.formula_expr.is_empty() {
-        match crate::codegen::formula::parse_formula(&w.props.formula_expr) {
+        // P2.5: use validate() + deps() for the formula depth API.
+        match crate::codegen::formula::validate(&w.props.formula_expr) {
             Ok(node) => {
-                let vars = crate::codegen::formula::collect_variables(&node);
+                let vars = crate::codegen::formula::deps(&node);
                 let vars_str = if vars.is_empty() {
                     "no variables".to_owned()
                 } else {

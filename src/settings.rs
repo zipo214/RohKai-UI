@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 const APP_DIR: &str = "RohKai";
@@ -12,6 +13,11 @@ pub struct UserSettings {
     pub canvas_label_scale: f32,
     pub canvas_tag_scale: f32,
     pub default_snap_step: f32,
+    /// P2.5 — User-overridden keyboard shortcuts.
+    /// Maps an action name (e.g. `"new_project"`) to a key-combo string
+    /// (e.g. `"Ctrl+N"`).  Empty map = all built-in defaults.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub user_shortcuts: HashMap<String, String>,
 }
 
 impl Default for UserSettings {
@@ -22,6 +28,7 @@ impl Default for UserSettings {
             canvas_label_scale: 1.0,
             canvas_tag_scale: 1.0,
             default_snap_step: 8.0,
+            user_shortcuts: HashMap::new(),
         }
     }
 }
@@ -33,6 +40,7 @@ impl UserSettings {
         self.canvas_label_scale = sane_range(self.canvas_label_scale, 1.0, 0.75, 2.0);
         self.canvas_tag_scale = sane_range(self.canvas_tag_scale, 1.0, 0.75, 2.0);
         self.default_snap_step = sane_range(self.default_snap_step, 8.0, 1.0, 256.0);
+        // user_shortcuts: no sanitization needed — any String key+value is valid.
     }
 }
 
@@ -121,6 +129,7 @@ mod tests {
             canvas_label_scale: 0.1,
             canvas_tag_scale: 4.0,
             default_snap_step: -5.0,
+            user_shortcuts: HashMap::new(),
         };
 
         settings.sanitize();
@@ -136,5 +145,37 @@ mod tests {
         assert_eq!(saved, settings);
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn user_shortcuts_round_trip_serde() {
+        let mut settings = UserSettings::default();
+        settings
+            .user_shortcuts
+            .insert("new_project".to_owned(), "Ctrl+N".to_owned());
+        settings
+            .user_shortcuts
+            .insert("save".to_owned(), "Ctrl+S".to_owned());
+
+        let json = serde_json::to_string(&settings).expect("serialize");
+        let back: UserSettings = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(
+            back.user_shortcuts.get("new_project"),
+            Some(&"Ctrl+N".to_owned())
+        );
+        assert_eq!(
+            back.user_shortcuts.get("save"),
+            Some(&"Ctrl+S".to_owned())
+        );
+
+        // A settings file without user_shortcuts should deserialise to empty map
+        // (the #[serde(default)] on the struct covers this).
+        let legacy = r#"{"ui_scale":1.0,"code_font_size":11.0,"canvas_label_scale":1.0,"canvas_tag_scale":1.0,"default_snap_step":8.0}"#;
+        let from_legacy: UserSettings = serde_json::from_str(legacy).expect("legacy parse");
+        assert!(
+            from_legacy.user_shortcuts.is_empty(),
+            "legacy settings without user_shortcuts must deserialise to empty map"
+        );
     }
 }

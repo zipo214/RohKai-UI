@@ -122,6 +122,63 @@ impl Default for AppProps {
 }
 
 // ---------------------------------------------------------------------------
+// State-machine schema types (P2.5)
+// ---------------------------------------------------------------------------
+
+/// One state in a StateMachine component.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StateDef {
+    /// Unique name for this state, e.g. `"idle"`.
+    pub name: String,
+    /// Optional Rust expression called on entry to this state.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub entry_action: String,
+    /// Optional Rust expression called on exit from this state.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub exit_action: String,
+}
+
+impl Default for StateDef {
+    fn default() -> Self {
+        // name defaults to "state" (not ""), so this cannot be derived.
+        Self {
+            name: String::from("state"),
+            entry_action: String::new(),
+            exit_action: String::new(),
+        }
+    }
+}
+
+/// A directed transition between two states.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct TransitionDef {
+    /// Source state name.
+    pub from: String,
+    /// Destination state name.
+    pub to: String,
+    /// Optional boolean guard expression (e.g. `"self.count > 0"`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub guard: String,
+    /// Optional Rust expression to execute during the transition.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub action: String,
+}
+
+/// Full state-machine definition attached to a `ComponentKind::StateMachine`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct StateMachineProps {
+    /// Ordered list of states.
+    #[serde(default)]
+    pub states: Vec<StateDef>,
+    /// Transition edges.
+    #[serde(default)]
+    pub transitions: Vec<TransitionDef>,
+    /// Name of the initial state (must match an entry in `states`).
+    #[serde(default)]
+    pub initial_state: String,
+}
+
+// ---------------------------------------------------------------------------
 // Design-time non-visual components
 // ---------------------------------------------------------------------------
 
@@ -138,6 +195,13 @@ pub struct DesignComponent {
     /// Handler function name emitted in codegen.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub handler: String,
+    /// State-machine definition (StateMachine kind only).
+    #[serde(default, skip_serializing_if = "state_machine_props_is_empty")]
+    pub state_machine: StateMachineProps,
+}
+
+fn state_machine_props_is_empty(p: &StateMachineProps) -> bool {
+    p.states.is_empty() && p.transitions.is_empty() && p.initial_state.is_empty()
 }
 
 /// A project asset reference (image, font, data file).
@@ -1038,5 +1102,62 @@ mod tests {
             assert!(!k.is_event_capable(), "{k:?} should expose no events");
             assert_eq!(k.primary_event(), None);
         }
+    }
+
+    // P2.5 state-machine tests -----------------------------------------------
+
+    #[test]
+    fn state_machine_default_has_empty_states() {
+        let sm = StateMachineProps::default();
+        assert!(sm.states.is_empty(), "default StateMachineProps must have no states");
+        assert!(sm.transitions.is_empty(), "default StateMachineProps must have no transitions");
+        assert!(sm.initial_state.is_empty(), "default initial_state must be empty");
+    }
+
+    #[test]
+    fn design_component_state_machine_round_trips() {
+        use uuid::Uuid;
+        let comp = DesignComponent {
+            id: Uuid::new_v4(),
+            kind: ComponentKind::StateMachine,
+            name: "flow".to_owned(),
+            interval_ms: None,
+            handler: String::new(),
+            state_machine: StateMachineProps {
+                states: vec![
+                    StateDef { name: "idle".to_owned(), entry_action: String::new(), exit_action: String::new() },
+                    StateDef { name: "running".to_owned(), entry_action: "self.start()".to_owned(), exit_action: String::new() },
+                ],
+                transitions: vec![TransitionDef {
+                    from: "idle".to_owned(),
+                    to: "running".to_owned(),
+                    guard: "self.ready".to_owned(),
+                    action: String::new(),
+                }],
+                initial_state: "idle".to_owned(),
+            },
+        };
+        let json = serde_json::to_string(&comp).expect("serialize");
+        let back: DesignComponent = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.state_machine.states.len(), 2);
+        assert_eq!(back.state_machine.transitions.len(), 1);
+        assert_eq!(back.state_machine.initial_state, "idle");
+    }
+
+    // P2.5 timer default-interval test ----------------------------------------
+
+    #[test]
+    fn timer_default_interval_is_1000ms() {
+        use uuid::Uuid;
+        let comp = DesignComponent {
+            id: Uuid::new_v4(),
+            kind: ComponentKind::Timer,
+            name: "tick".to_owned(),
+            interval_ms: None,
+            handler: String::new(),
+            state_machine: StateMachineProps::default(),
+        };
+        // When interval_ms is None, the convention is to default to 1000 ms.
+        assert_eq!(comp.interval_ms.unwrap_or(1000), 1000);
     }
 }

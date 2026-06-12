@@ -307,6 +307,27 @@ pub fn parse_formula(expr: &str) -> Result<FormulaNode, FormulaError> {
 }
 
 // ---------------------------------------------------------------------------
+// Public depth API (P2.5)
+// ---------------------------------------------------------------------------
+
+/// Collect the direct-dependency variable names from a parsed formula node.
+///
+/// Alias for [`collect_variables`] with the shorter name specified by P2.5.
+pub fn deps(node: &FormulaNode) -> Vec<String> {
+    collect_variables(node)
+}
+
+/// Parse and validate a formula expression string.
+///
+/// Returns `Ok(FormulaNode)` when the expression is syntactically valid, or
+/// `Err(FormulaError)` describing the first problem found.  Distinct from
+/// [`parse_formula`] only in name — both invoke the same parser.  Use
+/// `validate` when the intent is checking validity rather than code emission.
+pub fn validate(expr: &str) -> Result<FormulaNode, FormulaError> {
+    parse_formula(expr)
+}
+
+// ---------------------------------------------------------------------------
 // Variable collection
 // ---------------------------------------------------------------------------
 
@@ -521,5 +542,28 @@ mod tests {
         let node = parse_formula("clamp(x, 0, 100)").unwrap();
         let rust = emit_formula_rust(&node);
         assert_eq!(rust, "(self.x as f64).clamp(0_f64, 100_f64)");
+    }
+
+    // P2.5 depth tests -------------------------------------------------------
+
+    #[test]
+    fn formula_validate_catches_syntax_error() {
+        // Unmatched parenthesis must return an error.
+        assert!(validate("(a + b").is_err());
+        // Empty expression must return an error.
+        assert!(validate("").is_err());
+        // Invalid character must return an error.
+        assert!(validate("a @ b").is_err());
+    }
+
+    #[test]
+    fn formula_deps_finds_bindings() {
+        let node = validate("sqrt(a^2 + b^2) * scale").unwrap();
+        let found = deps(&node);
+        assert!(found.contains(&"a".to_owned()), "must find 'a'");
+        assert!(found.contains(&"b".to_owned()), "must find 'b'");
+        assert!(found.contains(&"scale".to_owned()), "must find 'scale'");
+        // sqrt is a built-in call, not a variable.
+        assert!(!found.contains(&"sqrt".to_owned()), "must not list 'sqrt' as a dep");
     }
 }

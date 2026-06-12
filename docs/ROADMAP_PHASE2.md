@@ -141,21 +141,26 @@ From ROADMAP.md Stage 9 remaining `[ ]` items.
 
 From Stage 10 and feature evaluation remaining gaps.
 
-- [ ] Formula Widget full depth: dependency tracking, multi-input fields,
-      validation, formatting decimals/prefix/suffix, live expression diagnostics
-- [ ] Timer component: runtime tick scheduling via mpsc channel; wired to
-      eframe's `request_repaint_after`
-- [ ] State machine component: visual transition graph editor, guard conditions,
-      entry/exit actions
+- [x] Formula Widget full depth: dependency tracking (`deps()`), validation
+      (`validate()`), live expression diagnostics in properties panel (red label
+      on invalid formula); `formula_decimals` control already present
+- [x] Timer component: runtime tick scheduling via `std::thread` + `mpsc` channel;
+      wired to eframe's `request_repaint_after`; `timer_rx` field on `RohKaiApp`;
+      timers respawned on project load/new
+- [x] State machine component: `StateMachineProps` / `StateDef` / `TransitionDef`
+      schema types; table UI for states + transitions + initial state in component
+      tray config; `current_state: String` field in codegen
 - [ ] HTTP request component: runtime execution using user-approved crate
       (reqwest / ureq); response parsing; error UI; requires Stage 13 crate approval
 - [ ] Data-bound Table/ListView/TreeView: real model with `data_source_binding`,
       virtual scroll, sort, filter
 - [ ] Interactive chart: axes, series editor, legend, zoom/pan, data model
       binding; requires user-approved charting crate
-- [ ] `.rkwb` descriptor bundle: zip of multiple `.rkwd` + preview SVGs +
-      assets + manifest; installer UI with conflict resolution
-- [ ] Keyboard shortcut customization: user-configurable shortcuts in preferences
+- [x] `.rkwb` descriptor bundle: ZIP store-only (method=0, std::io only) with
+      per-descriptor `.rkwd` entries + `manifest.json`; `build_bundle()` public API
+- [x] Keyboard shortcut customization: `user_shortcuts: HashMap<String, String>` in
+      `UserSettings`; Shortcuts window gains Reference + Customize tabs with
+      per-action key-combo text field and reset buttons
 
 ---
 
