@@ -6,8 +6,9 @@
 //! primitive.  "Save" serialises via `doc_to_descriptor` → JSON → `.rkwd` file.
 
 use crate::canvas::widget_maker::{
-    doc_to_descriptor, gen_export_template, gen_live_preview, MakerPrimKind, MakerPrimitive,
-    PrimAnchor, StyleTokens, WidgetMakerDoc,
+    doc_to_descriptor, gen_export_template, gen_live_preview, is_group_kind, MakerPrimKind,
+    MakerPrimitive, PrimAnchor, PrimState, SlotDef, StyleTokens,
+    WidgetMakerDoc,
 };
 use egui::Color32;
 
@@ -237,6 +238,10 @@ fn show_primitive_list(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
                     MakerPrimKind::Ellipse => "Ellipse",
                     MakerPrimKind::Text => "Text",
                     MakerPrimKind::HitRegion => "HitRgn",
+                    MakerPrimKind::HGroup => "HGroup",
+                    MakerPrimKind::VGroup => "VGroup",
+                    MakerPrimKind::Grid => "Grid",
+                    MakerPrimKind::Stack => "Stack",
                 }
             );
             let selected = doc.selected == Some(i);
@@ -443,6 +448,42 @@ fn show_toolbar(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
             });
             doc.selected = Some(doc.primitives.len() - 1);
         }
+        if ui.small_button("↔ HGroup").clicked() {
+            doc.primitives.push(MakerPrimitive {
+                kind: MakerPrimKind::HGroup,
+                x: 0.0, y: 0.0, w: 1.0, h: 1.0,
+                group_gap: 4.0,
+                ..Default::default()
+            });
+            doc.selected = Some(doc.primitives.len() - 1);
+        }
+        if ui.small_button("↕ VGroup").clicked() {
+            doc.primitives.push(MakerPrimitive {
+                kind: MakerPrimKind::VGroup,
+                x: 0.0, y: 0.0, w: 1.0, h: 1.0,
+                group_gap: 4.0,
+                ..Default::default()
+            });
+            doc.selected = Some(doc.primitives.len() - 1);
+        }
+        if ui.small_button("⊞ Grid").clicked() {
+            doc.primitives.push(MakerPrimitive {
+                kind: MakerPrimKind::Grid,
+                x: 0.0, y: 0.0, w: 1.0, h: 1.0,
+                group_gap: 4.0,
+                grid_cols: 2,
+                ..Default::default()
+            });
+            doc.selected = Some(doc.primitives.len() - 1);
+        }
+        if ui.small_button("⬛ Stack").clicked() {
+            doc.primitives.push(MakerPrimitive {
+                kind: MakerPrimKind::Stack,
+                x: 0.0, y: 0.0, w: 1.0, h: 1.0,
+                ..Default::default()
+            });
+            doc.selected = Some(doc.primitives.len() - 1);
+        }
 
         let can_remove = doc
             .selected
@@ -522,6 +563,9 @@ fn show_widget_meta(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
 
     // Style Tokens collapsible group
     show_style_tokens(ui, &mut doc.style_tokens);
+
+    // Slots collapsible group
+    show_slots(ui, &mut doc.slots);
 }
 
 fn show_style_tokens(ui: &mut egui::Ui, tokens: &mut StyleTokens) {
@@ -568,6 +612,38 @@ fn show_style_tokens(ui: &mut egui::Ui, tokens: &mut StyleTokens) {
     });
 }
 
+fn show_slots(ui: &mut egui::Ui, slots: &mut Vec<SlotDef>) {
+    ui.collapsing(egui::RichText::new("Slots").small().strong(), |ui| {
+        let mut remove = None;
+        for (i, slot) in slots.iter_mut().enumerate() {
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut slot.name)
+                        .hint_text("slot name")
+                        .desired_width(80.0),
+                );
+                ui.label(egui::RichText::new("x").small().weak());
+                ui.add(egui::DragValue::new(&mut slot.x).range(0.0..=1.0_f32).speed(0.005));
+                ui.label(egui::RichText::new("y").small().weak());
+                ui.add(egui::DragValue::new(&mut slot.y).range(0.0..=1.0_f32).speed(0.005));
+                ui.label(egui::RichText::new("w").small().weak());
+                ui.add(egui::DragValue::new(&mut slot.w).range(0.01..=1.0_f32).speed(0.005));
+                ui.label(egui::RichText::new("h").small().weak());
+                ui.add(egui::DragValue::new(&mut slot.h).range(0.01..=1.0_f32).speed(0.005));
+                if ui.small_button("✕").clicked() {
+                    remove = Some(i);
+                }
+            });
+        }
+        if let Some(i) = remove {
+            slots.remove(i);
+        }
+        if ui.small_button("+ Add Slot").clicked() {
+            slots.push(SlotDef::default());
+        }
+    });
+}
+
 fn show_primitive_props(ui: &mut egui::Ui, prim: &mut MakerPrimitive) {
     // Kind selector
     ui.horizontal(|ui| {
@@ -578,6 +654,10 @@ fn show_primitive_props(ui: &mut egui::Ui, prim: &mut MakerPrimitive) {
             ("Ellipse", MakerPrimKind::Ellipse),
             ("Text", MakerPrimKind::Text),
             ("⊡ HitRgn", MakerPrimKind::HitRegion),
+            ("↔ HGroup", MakerPrimKind::HGroup),
+            ("↕ VGroup", MakerPrimKind::VGroup),
+            ("⊞ Grid", MakerPrimKind::Grid),
+            ("⬛ Stack", MakerPrimKind::Stack),
         ] {
             if ui
                 .selectable_label(prim.kind == kind, egui::RichText::new(label).small())
@@ -718,6 +798,22 @@ fn show_primitive_props(ui: &mut egui::Ui, prim: &mut MakerPrimitive) {
         });
     }
 
+    // Layout group properties
+    if is_group_kind(&prim.kind) {
+        ui.separator();
+        ui.label(egui::RichText::new("Group").small().strong());
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Gap").small().weak());
+            ui.add(egui::DragValue::new(&mut prim.group_gap).range(0.0..=64.0_f32).speed(0.5));
+        });
+        if matches!(prim.kind, MakerPrimKind::Grid) {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Cols").small().weak());
+                ui.add(egui::DragValue::new(&mut prim.grid_cols).range(1..=16_u32));
+            });
+        }
+    }
+
     // --- Item 3: Constraints ---
     ui.separator();
     ui.label(egui::RichText::new("Constraints").small().strong());
@@ -763,6 +859,42 @@ fn show_primitive_props(ui: &mut egui::Ui, prim: &mut MakerPrimitive) {
             }
             ui.end_row();
         });
+
+    // State variants (non-group, non-HitRegion kinds only)
+    if !is_group_kind(&prim.kind) && !matches!(prim.kind, MakerPrimKind::HitRegion) {
+        ui.separator();
+        ui.collapsing(egui::RichText::new("State Variants").small().strong(), |ui| {
+            for &state in PrimState::ALL {
+                if matches!(state, PrimState::Normal) {
+                    continue;
+                }
+                let enabled = prim.variants.get(state).is_some();
+                let mut is_enabled = enabled;
+                ui.horizontal(|ui| {
+                    if ui.checkbox(&mut is_enabled, egui::RichText::new(state.label()).small()).changed() {
+                        prim.variants.set_enabled(state, is_enabled);
+                    }
+                    if is_enabled {
+                        if let Some(ov) = prim.variants.get_mut(state) {
+                            let has_fill = ov.fill.is_some();
+                            let mut fill_on = has_fill;
+                            ui.checkbox(&mut fill_on, egui::RichText::new("Fill").small());
+                            if fill_on && !has_fill {
+                                ov.fill = Some([200, 200, 200]);
+                            } else if !fill_on {
+                                ov.fill = None;
+                            }
+                            if let Some(ref mut rgb) = ov.fill {
+                                ui.add(egui::DragValue::new(&mut rgb[0]).range(0..=255_u8));
+                                ui.add(egui::DragValue::new(&mut rgb[1]).range(0..=255_u8));
+                                ui.add(egui::DragValue::new(&mut rgb[2]).range(0..=255_u8));
+                            }
+                        }
+                    }
+                });
+            }
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -854,6 +986,13 @@ fn draw_primitive(
                     );
                 }
                 MakerPrimKind::HitRegion => unreachable!(),
+                // Groups render as a dashed outline in the mini-canvas
+                MakerPrimKind::HGroup
+                | MakerPrimKind::VGroup
+                | MakerPrimKind::Grid
+                | MakerPrimKind::Stack => {
+                    painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, Color32::from_rgb(100, 180, 100)));
+                }
             }
         }
     }

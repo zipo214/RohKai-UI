@@ -5,31 +5,34 @@
 //! are produced only within this module tree.
 
 use crate::canvas::widget_maker::{
-    MakerPrimKind, MakerPrimitive, PrimState, StyleTokens, WidgetMakerDoc,
+    group_children, is_group_kind, MakerPrimKind, MakerPrimitive, PrimState, StyleTokens,
+    WidgetMakerDoc,
 };
 use crate::codegen::rust::string_literal;
 
 /// Generate the `live_preview` template string from the maker doc.
 pub fn gen_live_preview(doc: &WidgetMakerDoc) -> String {
+    let indent = "        ";
     let mut lines = vec!["    {".to_owned()];
-    lines.push("        let _painter = ui.painter();".to_owned());
-    lines.push("        let _outer = ui.max_rect();".to_owned());
+    lines.push(format!("{indent}let _painter = ui.painter();"));
+    lines.push(format!("{indent}let _outer = ui.max_rect();"));
     // Emit style token const declarations
     let t = &doc.style_tokens;
     let [ar, ag, ab] = t.accent;
     let [br, bg, bb] = t.border;
     let [tr, tg, tb] = t.text_color;
-    lines.push(format!(
-        "        let _tok_accent = egui::Color32::from_rgb({ar}, {ag}, {ab});"
-    ));
-    lines.push(format!(
-        "        let _tok_border = egui::Color32::from_rgb({br}, {bg}, {bb});"
-    ));
-    lines.push(format!(
-        "        let _tok_text   = egui::Color32::from_rgb({tr}, {tg}, {tb});"
-    ));
-    for (idx, prim) in doc.primitives.iter().enumerate() {
-        lines.extend(prim_to_egui_lines(prim, &doc.style_tokens, idx));
+    lines.push(format!("{indent}let _tok_accent = egui::Color32::from_rgb({ar}, {ag}, {ab});"));
+    lines.push(format!("{indent}let _tok_border = egui::Color32::from_rgb({br}, {bg}, {bb});"));
+    lines.push(format!("{indent}let _tok_text   = egui::Color32::from_rgb({tr}, {tg}, {tb});"));
+    lines.extend(emit_primitives(&doc.primitives, &doc.style_tokens, indent));
+    for slot in &doc.slots {
+        let safe_name = slot.name.replace(|c: char| !c.is_alphanumeric(), "_");
+        let slot_rect = format!(
+            "egui::Rect::from_min_size(_outer.min + egui::vec2(_outer.width() * {:.3}, _outer.height() * {:.3}), egui::vec2(_outer.width() * {:.3}, _outer.height() * {:.3}))",
+            slot.x, slot.y, slot.w, slot.h
+        );
+        lines.push(format!("{indent}let _slot_{safe_name} = {slot_rect}; // slot: {}", slot.name));
+        lines.push(format!("{indent}// TODO: drop widget into slot '{}'", slot.name));
     }
     lines.push("    }".to_owned());
     lines.join("\n")
@@ -37,31 +40,125 @@ pub fn gen_live_preview(doc: &WidgetMakerDoc) -> String {
 
 /// Generate the `export` template string from the maker doc.
 pub fn gen_export_template(doc: &WidgetMakerDoc) -> String {
+    let indent = "                    ";
     let mut lines = vec!["                {".to_owned()];
-    lines.push("                    let _painter = ui.painter();".to_owned());
-    lines.push("                    let _outer = ui.max_rect();".to_owned());
+    lines.push(format!("{indent}let _painter = ui.painter();"));
+    lines.push(format!("{indent}let _outer = ui.max_rect();"));
     // Emit style token const declarations
     let t = &doc.style_tokens;
     let [ar, ag, ab] = t.accent;
     let [br, bg, bb] = t.border;
     let [tr, tg, tb] = t.text_color;
-    lines.push(format!(
-        "        let _tok_accent = egui::Color32::from_rgb({ar}, {ag}, {ab});"
-    ));
-    lines.push(format!(
-        "        let _tok_border = egui::Color32::from_rgb({br}, {bg}, {bb});"
-    ));
-    lines.push(format!(
-        "        let _tok_text   = egui::Color32::from_rgb({tr}, {tg}, {tb});"
-    ));
-    for (idx, prim) in doc.primitives.iter().enumerate() {
-        lines.extend(prim_to_egui_lines(prim, &doc.style_tokens, idx));
+    lines.push(format!("{indent}let _tok_accent = egui::Color32::from_rgb({ar}, {ag}, {ab});"));
+    lines.push(format!("{indent}let _tok_border = egui::Color32::from_rgb({br}, {bg}, {bb});"));
+    lines.push(format!("{indent}let _tok_text   = egui::Color32::from_rgb({tr}, {tg}, {tb});"));
+    lines.extend(emit_primitives(&doc.primitives, &doc.style_tokens, indent));
+    for slot in &doc.slots {
+        let safe_name = slot.name.replace(|c: char| !c.is_alphanumeric(), "_");
+        let slot_rect = format!(
+            "egui::Rect::from_min_size(_outer.min + egui::vec2(_outer.width() * {:.3}, _outer.height() * {:.3}), egui::vec2(_outer.width() * {:.3}, _outer.height() * {:.3}))",
+            slot.x, slot.y, slot.w, slot.h
+        );
+        lines.push(format!("{indent}let _slot_{safe_name} = {slot_rect}; // slot: {}", slot.name));
+        lines.push(format!("{indent}// TODO: drop widget into slot '{}'", slot.name));
     }
     lines.push("                }".to_owned());
     lines.join("\n")
 }
 
-fn prim_to_egui_lines(prim: &MakerPrimitive, _tokens: &StyleTokens, idx: usize) -> Vec<String> {
+/// Two-pass primitive emission: groups wrap their children; claimed children are skipped at top level.
+fn emit_primitives(primitives: &[MakerPrimitive], tokens: &StyleTokens, indent: &str) -> Vec<String> {
+    use std::collections::HashSet;
+    let claimed: HashSet<usize> = (0..primitives.len())
+        .filter(|&i| is_group_kind(&primitives[i].kind))
+        .flat_map(|i| group_children(primitives, i))
+        .collect();
+    let mut lines = Vec::new();
+    for (i, prim) in primitives.iter().enumerate() {
+        if claimed.contains(&i) {
+            continue;
+        }
+        if is_group_kind(&prim.kind) {
+            let children_idx = group_children(primitives, i);
+            let mut children: Vec<(usize, &MakerPrimitive)> =
+                children_idx.iter().map(|&j| (j, &primitives[j])).collect();
+            match prim.kind {
+                MakerPrimKind::HGroup => {
+                    children.sort_by(|a, b| a.1.x.partial_cmp(&b.1.x).unwrap_or(std::cmp::Ordering::Equal));
+                }
+                MakerPrimKind::VGroup => {
+                    children.sort_by(|a, b| a.1.y.partial_cmp(&b.1.y).unwrap_or(std::cmp::Ordering::Equal));
+                }
+                _ => {}
+            }
+            lines.extend(emit_group(prim, &children, tokens, indent));
+        } else {
+            lines.extend(prim_to_egui_lines(prim, tokens, i, indent));
+        }
+    }
+    lines
+}
+
+/// Emit the egui closure for a group primitive and its sorted children.
+fn emit_group(prim: &MakerPrimitive, children: &[(usize, &MakerPrimitive)], tokens: &StyleTokens, indent: &str) -> Vec<String> {
+    let sub_rect = format!(
+        "egui::Rect::from_min_size(\
+            _outer.min + egui::vec2(_outer.width() * {:.3}, _outer.height() * {:.3}), \
+            egui::vec2(_outer.width() * {:.3}, _outer.height() * {:.3}))",
+        prim.x, prim.y, prim.w, prim.h
+    );
+    let gap = prim.group_gap;
+    let child_indent = format!("{indent}        ");
+    let mut lines = Vec::new();
+    match prim.kind {
+        MakerPrimKind::HGroup => {
+            lines.push(format!("{indent}ui.allocate_ui_at_rect({sub_rect}, |ui| {{"));
+            lines.push(format!("{indent}    ui.set_min_size({sub_rect}.size());"));
+            lines.push(format!("{indent}    ui.spacing_mut().item_spacing.x = {gap:.1};"));
+            lines.push(format!("{indent}    ui.horizontal(|ui| {{"));
+            for (idx, child) in children {
+                lines.extend(prim_to_egui_lines(child, tokens, *idx, &child_indent));
+            }
+            lines.push(format!("{indent}    }});"));
+            lines.push(format!("{indent}}});"));
+        }
+        MakerPrimKind::VGroup => {
+            lines.push(format!("{indent}ui.allocate_ui_at_rect({sub_rect}, |ui| {{"));
+            lines.push(format!("{indent}    ui.set_min_size({sub_rect}.size());"));
+            lines.push(format!("{indent}    ui.spacing_mut().item_spacing.y = {gap:.1};"));
+            lines.push(format!("{indent}    ui.vertical(|ui| {{"));
+            for (idx, child) in children {
+                lines.extend(prim_to_egui_lines(child, tokens, *idx, &child_indent));
+            }
+            lines.push(format!("{indent}    }});"));
+            lines.push(format!("{indent}}});"));
+        }
+        MakerPrimKind::Grid => {
+            let cols = prim.grid_cols.max(1) as usize;
+            let grid_id = format!("\"wm_grid_{:.0}_{:.0}\"", prim.x * 1000.0, prim.y * 1000.0);
+            lines.push(format!("{indent}ui.allocate_ui_at_rect({sub_rect}, |ui| {{"));
+            lines.push(format!("{indent}    egui::Grid::new({grid_id}).spacing([{gap:.1}, {gap:.1}]).show(ui, |ui| {{"));
+            for (i, (idx, child)) in children.iter().enumerate() {
+                lines.extend(prim_to_egui_lines(child, tokens, *idx, &child_indent));
+                if (i + 1) % cols == 0 {
+                    lines.push(format!("{child_indent}ui.end_row();"));
+                }
+            }
+            lines.push(format!("{indent}    }});"));
+            lines.push(format!("{indent}}});"));
+        }
+        MakerPrimKind::Stack => {
+            lines.push(format!("{indent}// stack group"));
+            for (idx, child) in children {
+                lines.extend(prim_to_egui_lines(child, tokens, *idx, indent));
+            }
+        }
+        _ => {}
+    }
+    lines
+}
+
+fn prim_to_egui_lines(prim: &MakerPrimitive, _tokens: &StyleTokens, idx: usize, indent: &str) -> Vec<String> {
     let [r, g, b] = prim.fill;
     // Fill color: either token reference or literal RGB
     let color = if prim.use_token_fill {
@@ -81,44 +178,44 @@ fn prim_to_egui_lines(prim: &MakerPrimitive, _tokens: &StyleTokens, idx: usize) 
     let mut lines: Vec<String> = Vec::new();
     if needs_response {
         lines.push(format!(
-            "        let {resp_var} = ui.allocate_rect({sub_rect}, egui::Sense::click_and_drag());"
+            "{indent}let {resp_var} = ui.allocate_rect({sub_rect}, egui::Sense::click_and_drag());"
         ));
     }
 
     match prim.kind {
         MakerPrimKind::Rect => {
             lines.push(format!(
-                "        _painter.rect_filled({sub_rect}, {:.1}, {color});",
+                "{indent}_painter.rect_filled({sub_rect}, {:.1}, {color});",
                 prim.corner_radius
             ));
             if needs_response {
                 let cr = prim.corner_radius;
                 if let Some(ov) = prim.variants.get(PrimState::Hover) {
                     if let Some([hr, hg, hb]) = ov.fill {
-                        lines.push(format!("        if {resp_var}.hovered() {{ _painter.rect_filled({sub_rect}, {cr:.1}, egui::Color32::from_rgb({hr}, {hg}, {hb})); }}"));
+                        lines.push(format!("{indent}if {resp_var}.hovered() {{ _painter.rect_filled({sub_rect}, {cr:.1}, egui::Color32::from_rgb({hr}, {hg}, {hb})); }}"));
                     }
                 }
                 if let Some(ov) = prim.variants.get(PrimState::Pressed) {
                     if let Some([pr, pg, pb]) = ov.fill {
-                        lines.push(format!("        if {resp_var}.is_pointer_button_down_on() {{ _painter.rect_filled({sub_rect}, {cr:.1}, egui::Color32::from_rgb({pr}, {pg}, {pb})); }}"));
+                        lines.push(format!("{indent}if {resp_var}.is_pointer_button_down_on() {{ _painter.rect_filled({sub_rect}, {cr:.1}, egui::Color32::from_rgb({pr}, {pg}, {pb})); }}"));
                     }
                 }
             }
-            return lines;
+            lines
         }
         MakerPrimKind::Outline => {
             lines.push(format!(
-                "        _painter.rect_stroke({sub_rect}, {:.1}, egui::Stroke::new(1.0, {color}));",
+                "{indent}_painter.rect_stroke({sub_rect}, {:.1}, egui::Stroke::new(1.0, {color}));",
                 prim.corner_radius
             ));
-            return lines;
+            lines
         }
         MakerPrimKind::Ellipse => {
             lines.push(format!(
-                "        _painter.circle_filled({sub_rect}.center(), \
+                "{indent}_painter.circle_filled({sub_rect}.center(), \
                 {sub_rect}.width().min({sub_rect}.height()) * 0.5, {color});"
             ));
-            return lines;
+            lines
         }
         MakerPrimKind::Text => {
             let text_lit = if prim.use_label_token {
@@ -132,10 +229,10 @@ fn prim_to_egui_lines(prim: &MakerPrimitive, _tokens: &StyleTokens, idx: usize) 
                 format!("egui::Color32::from_rgb({r}, {g}, {b})")
             };
             lines.push(format!(
-                "        ui.put({sub_rect}, egui::Label::new(egui::RichText::new({text_lit}).size({:.1}).color({tc})).wrap(false));",
+                "{indent}ui.put({sub_rect}, egui::Label::new(egui::RichText::new({text_lit}).size({:.1}).color({tc})).wrap(false));",
                 prim.font_size
             ));
-            return lines;
+            lines
         }
         MakerPrimKind::HitRegion => {
             let varname = if prim.prim_name.is_empty() {
@@ -147,17 +244,21 @@ fn prim_to_egui_lines(prim: &MakerPrimitive, _tokens: &StyleTokens, idx: usize) 
             let drag = prim.sense_drag;
             let focus = false;
             lines.push(format!(
-                "        let {varname} = ui.allocate_rect({sub_rect}, egui::Sense {{ click: {click}, drag: {drag}, focusable: {focus} }}); // hit region",
+                "{indent}let {varname} = ui.allocate_rect({sub_rect}, egui::Sense {{ click: {click}, drag: {drag}, focusable: {focus} }}); // hit region",
             ));
             if prim.sense_click {
                 lines.push(format!(
-                    "        if {varname}.clicked() {{ /* on_{} */ }}",
+                    "{indent}if {varname}.clicked() {{ /* on_{} */ }}",
                     if prim.prim_name.is_empty() { idx.to_string() } else { prim.prim_name.clone() }
                 ));
             }
             if prim.sense_hover {
-                lines.push(format!("        let _{varname}_hovered = {varname}.hovered();"));
+                lines.push(format!("{indent}let _{varname}_hovered = {varname}.hovered();"));
             }
+            lines
+        }
+        // Group kinds are handled by emit_group; exhaustive match arm.
+        MakerPrimKind::HGroup | MakerPrimKind::VGroup | MakerPrimKind::Grid | MakerPrimKind::Stack => {
             lines
         }
     }
@@ -344,5 +445,60 @@ mod tests {
         };
         let out = gen_live_preview(&doc_with(prim));
         assert!(out.contains("is_pointer_button_down_on()"), "pressed variant must emit pointer_down: {out}");
+    }
+
+    // --- Group / slot codegen tests ---
+
+    #[test]
+    fn hgroup_emits_horizontal_closure() {
+        use crate::canvas::widget_maker::SlotDef;
+        let _ = SlotDef::default(); // ensure type is accessible
+        let group = MakerPrimitive {
+            kind: MakerPrimKind::HGroup,
+            x: 0.0, y: 0.0, w: 1.0, h: 1.0,
+            group_gap: 4.0,
+            ..Default::default()
+        };
+        let child = MakerPrimitive {
+            kind: MakerPrimKind::Rect,
+            x: 0.1, y: 0.1, w: 0.4, h: 0.8,
+            fill: [200, 100, 50],
+            ..Default::default()
+        };
+        let mut doc = WidgetMakerDoc::new_with_defaults();
+        doc.primitives = vec![group, child];
+        let code = gen_live_preview(&doc);
+        assert!(code.contains("ui.horizontal"), "HGroup must emit ui.horizontal: {code}");
+    }
+
+    #[test]
+    fn group_child_not_emitted_twice() {
+        let group = MakerPrimitive {
+            kind: MakerPrimKind::HGroup,
+            x: 0.0, y: 0.0, w: 1.0, h: 1.0,
+            group_gap: 0.0,
+            ..Default::default()
+        };
+        let child = MakerPrimitive {
+            kind: MakerPrimKind::Rect,
+            x: 0.1, y: 0.1, w: 0.4, h: 0.8,
+            fill: [200, 100, 50],
+            ..Default::default()
+        };
+        let mut doc = WidgetMakerDoc::new_with_defaults();
+        doc.primitives = vec![group, child];
+        let code = gen_live_preview(&doc);
+        let count = code.matches("rect_filled").count();
+        assert_eq!(count, 1, "child rect_filled should appear exactly once: {code}");
+    }
+
+    #[test]
+    fn slot_emits_slot_comment() {
+        use crate::canvas::widget_maker::SlotDef;
+        let mut doc = WidgetMakerDoc::new_with_defaults();
+        doc.primitives = vec![];
+        doc.slots.push(SlotDef { name: "content".to_owned(), x: 0.1, y: 0.1, w: 0.8, h: 0.8 });
+        let code = gen_live_preview(&doc);
+        assert!(code.contains("slot: content"), "slot comment expected: {code}");
     }
 }

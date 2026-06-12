@@ -74,10 +74,10 @@ Continues from the MVP (commit 4f60e72). See `docs/VISUAL_WIDGET_MAKER.md`.
       `live_preview` starts with `"    {"` (the VWM sentinel).
 - [x] Hit regions: interactive zones that receive click/hover/drag events,
       distinct from visual shapes (a rect can be a hit region without being visible)
-- [ ] Layout groups: horizontal, vertical, grid, stack inside the maker canvas
+- [x] Layout groups: horizontal, vertical, grid, stack inside the maker canvas
 - [x] State variants: normal, hover, pressed, disabled, checked — each variant
       carries independent primitive style overrides
-- [ ] Slots: named child content areas that accept widget instances at canvas time
+- [x] Slots: named child content areas that accept widget instances at canvas time
 - [x] Event zones: named interactive areas that emit click/change/custom signals
       (implemented via HitRegion primitives; see Hit regions above)
 - [x] Style tokens: accent color, border color, corner radius, text color,

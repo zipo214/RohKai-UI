@@ -70,6 +70,10 @@ impl Default for StyleTokens {
     }
 }
 
+fn default_grid_cols() -> u32 {
+    2
+}
+
 /// A visual state for which style overrides can be defined.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -195,6 +199,12 @@ pub struct MakerPrimitive {
     /// Per-state style overrides (hover, pressed, disabled, checked).
     #[serde(default)]
     pub variants: PrimVariants,
+    /// Gap between children in a layout group (pixels). Ignored for non-group kinds.
+    #[serde(default)]
+    pub group_gap: f32,
+    /// Column count for Grid groups. Ignored for non-Grid kinds.
+    #[serde(default = "default_grid_cols")]
+    pub grid_cols: u32,
 }
 
 impl Default for MakerPrimitive {
@@ -220,6 +230,8 @@ impl Default for MakerPrimitive {
             sense_hover: false,
             sense_drag: false,
             variants: PrimVariants::default(),
+            group_gap: 0.0,
+            grid_cols: 2,
         }
     }
 }
@@ -236,6 +248,37 @@ pub enum MakerPrimKind {
     Text,
     /// Interactive zone: no visual fill, generates allocate_rect with sense flags.
     HitRegion,
+    /// Horizontal layout container: children are laid out left-to-right.
+    HGroup,
+    /// Vertical layout container: children are laid out top-to-bottom.
+    VGroup,
+    /// Grid layout container: children are arranged in a fixed number of columns.
+    Grid,
+    /// Stack container: children are drawn in z-order, sharing the same space.
+    Stack,
+}
+
+/// A named child content area in a custom widget.
+/// At canvas time, widget instances can be dropped into a slot's rect area.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlotDef {
+    pub name: String,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+impl Default for SlotDef {
+    fn default() -> Self {
+        Self {
+            name: "slot".to_owned(),
+            x: 0.1,
+            y: 0.1,
+            w: 0.8,
+            h: 0.8,
+        }
+    }
 }
 
 /// Complete visual composition document for the Widget Maker.
@@ -261,6 +304,9 @@ pub struct WidgetMakerDoc {
     /// Style tokens for the widget's visual identity.
     #[serde(default)]
     pub style_tokens: StyleTokens,
+    /// Named child content areas (slots) for this widget.
+    #[serde(default)]
+    pub slots: Vec<SlotDef>,
 }
 
 impl WidgetMakerDoc {
@@ -297,8 +343,45 @@ impl WidgetMakerDoc {
             default_size: [120.0, 40.0],
             accent_color: [60, 80, 160],
             style_tokens: StyleTokens::default(),
+            slots: vec![],
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Group helpers
+// ---------------------------------------------------------------------------
+
+/// Return true if the given kind is a layout group container.
+pub fn is_group_kind(kind: &MakerPrimKind) -> bool {
+    matches!(
+        kind,
+        MakerPrimKind::HGroup | MakerPrimKind::VGroup | MakerPrimKind::Grid | MakerPrimKind::Stack
+    )
+}
+
+/// Return indices of all child primitives that belong to group at `group_idx`.
+///
+/// A child is a non-group primitive whose center falls within the group's rect.
+/// Only primitives with index > group_idx are considered (groups must precede children).
+pub fn group_children(primitives: &[MakerPrimitive], group_idx: usize) -> Vec<usize> {
+    let g = &primitives[group_idx];
+    let gx1 = g.x;
+    let gx2 = g.x + g.w;
+    let gy1 = g.y;
+    let gy2 = g.y + g.h;
+    primitives
+        .iter()
+        .enumerate()
+        .filter(|(i, p)| {
+            *i > group_idx && !is_group_kind(&p.kind) && {
+                let cx = p.x + p.w / 2.0;
+                let cy = p.y + p.h / 2.0;
+                cx >= gx1 && cx <= gx2 && cy >= gy1 && cy <= gy2
+            }
+        })
+        .map(|(i, _)| i)
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -384,6 +467,7 @@ pub fn doc_from_descriptor(
         selected: None,
         resize_corner: None,
         style_tokens: StyleTokens::default(),
+        slots: vec![],
     })
 }
 
@@ -676,5 +760,39 @@ mod tests {
         let json = r#"{"kind":"Rect","x":0.1,"y":0.1,"w":0.8,"h":0.8,"fill":[100,120,200],"corner_radius":4.0,"text_content":"Label","font_size":14.0,"use_label_token":false}"#;
         let prim: MakerPrimitive = serde_json::from_str(json).expect("must deserialise");
         assert!(!prim.variants.has_any(), "missing variants field => empty");
+    }
+
+    // --- Group helpers ---
+
+    #[test]
+    fn group_children_finds_overlapping_prims() {
+        let group = MakerPrimitive {
+            kind: MakerPrimKind::HGroup,
+            x: 0.0, y: 0.0, w: 1.0, h: 1.0,
+            group_gap: 4.0,
+            ..Default::default()
+        };
+        let child = MakerPrimitive {
+            kind: MakerPrimKind::Rect,
+            x: 0.2, y: 0.2, w: 0.3, h: 0.3,
+            ..Default::default()
+        };
+        let outside = MakerPrimitive {
+            kind: MakerPrimKind::Rect,
+            x: 1.2, y: 0.2, w: 0.3, h: 0.3,
+            ..Default::default()
+        };
+        let children = group_children(&[group, child, outside], 0);
+        assert_eq!(children, vec![1]);
+    }
+
+    #[test]
+    fn is_group_kind_returns_true_for_groups() {
+        assert!(is_group_kind(&MakerPrimKind::HGroup));
+        assert!(is_group_kind(&MakerPrimKind::VGroup));
+        assert!(is_group_kind(&MakerPrimKind::Grid));
+        assert!(is_group_kind(&MakerPrimKind::Stack));
+        assert!(!is_group_kind(&MakerPrimKind::Rect));
+        assert!(!is_group_kind(&MakerPrimKind::HitRegion));
     }
 }
