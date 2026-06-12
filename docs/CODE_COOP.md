@@ -7,6 +7,26 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-12 — Roadmaps de-deferred into ordered master backlog; RCA + parity checker shipped
+
+Branch `dev`, commits `1352975` (lib+bin) → `ca28d9e` (roadmaps) → this one.
+Rewrote `ROADMAP_PHASE2.md` as the single ordered backlog S1–S22 (renderer S22,
+LARGE projects spaced); removed all non-goal/deferral/strikethrough language from
+the SVG/JPEG/text roadmaps and pointed them at the S-stages. The only surviving
+"non-goals" are two CLAUDE.md architecture invariants — no external renderer dep,
+no C FFI — whose capability is delivered by the S22 in-house renderer, not by
+reversing the rule. **Flag for the user:** if they truly want C FFI / external
+renderer crates, that is a separate explicit decision; I did NOT convert those two
+to to-dos. Then RCA'd the recurring class (cross-surface parity drift) in
+`docs/RCA-2026-06-12-surface-parity-drift.md`: root cause = enum variants get
+exhaustive-match forcing but struct fields / roadmap claims / unsurfaced pub APIs
+do not. Built the guard: `scripts/check-surface-parity.ps1` (advisory; flags
+field→codegen gaps, roadmap↔code drift, dead-code pub) + extended
+`fidelity_audit.rs` with a `ALL_KINDS` codegen-completeness test (13 tests now).
+Checker surfaced real S1 follow-ups: `text_align`/`child_cross_align`/
+`constraints` have no `src/codegen/` reference; `validate_constraints` unsurfaced.
+All green: 495 lib + 13 integration + 1 doctest, zero clippy warnings.
+
 ## 2026-06-12 — Crate promoted to lib+bin; fidelity_audit harness green; de-defer pass starting
 
 Branch `dev`. Closed the in-flight fidelity thread: the uncommitted P2.4 codegen

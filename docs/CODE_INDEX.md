@@ -178,6 +178,10 @@ being comfortable.
 
 - `scripts/preflight-context.ps1` - agent preflight summary.
 - `scripts/check-dependency-policy.ps1` - blocks forbidden SVG dependency crates.
+- `scripts/check-surface-parity.ps1` - caveman-review cross-surface drift auditor:
+  flags schema fields with no codegen, roadmap `[x]`/`[ ]` claims that disagree
+  with code, and `#[allow(dead_code)]` public APIs. Advisory companion to
+  `tests/fidelity_audit.rs`. See `docs/RCA-2026-06-12-surface-parity-drift.md`.
 - `scripts/check-text-encoding.ps1` - blocks mojibake/replacement-character text
   from entering tracked repo files.
 - `scripts/validate-svg-import.ps1` - SVG importer validation suite.

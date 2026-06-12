@@ -140,7 +140,10 @@ pub fn default_for_descriptor(descriptor: &WidgetDescriptor) -> WidgetInstance {
     }
 }
 
-#[allow(dead_code)] // widget-addition protocol: step 3 of /new-widget — add variant here
+/// Canonical list of every unit `WidgetKind` (excludes `Custom`). Widget-addition
+/// protocol: step 3 of `/new-widget` is "add the variant here". Walked by the
+/// `every_widget_kind_emits_non_trivial_code` codegen-completeness test in
+/// `tests/fidelity_audit.rs`, so it is load-bearing, not just documentation.
 pub const ALL_KINDS: &[WidgetKind] = &[
     WidgetKind::Button,
     WidgetKind::Label,

@@ -2,6 +2,47 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-12 — Roadmap de-deferral + cross-surface-parity RCA & checker
+
+### Context Reviewed
+- All roadmaps (collated in the lib+bin entry below).
+- Existing anti-drift patterns: `WidgetKind::supported_events` exhaustive match,
+  `EVENT_CAPABLE_KINDS` cfg(test) parity list, exhaustive `emit_indexed` match.
+
+### Changes
+- **Roadmaps de-deferred** (`ca28d9e`): `ROADMAP_PHASE2.md` rewritten as the
+  ordered master backlog S1–S22 (in-house renderer S22, LARGE projects spaced so
+  agents are not driven to defer). Removed all non-goal/deferral/strikethrough
+  language from `SVG_RENDERER_ROADMAP.md`, `jpegdecoder roadmap.md`,
+  `TEXT_IMPORT_PLAN.md`; reframed `ROADMAP.md` header + Stage 13/15. Corrected
+  stale SVG gap-matrix cells (filter tier-3 listed as out-of-scope though done).
+  Kept exactly two architecture invariants (no external renderer dep, no C FFI);
+  their capability is the S22 renderer.
+- **RCA** `docs/RCA-2026-06-12-surface-parity-drift.md`: class = cross-surface
+  parity drift; root cause = asymmetric forcing functions (enums forced by
+  exhaustive match, struct fields / roadmap claims / unsurfaced pub APIs not).
+- **Checker** `scripts/check-surface-parity.ps1`: advisory caveman-review audit —
+  field→codegen coverage, roadmap `[x]`/`[ ]` ↔ code drift, dead-code `pub`.
+  Exit 0 by default; `-Strict` fails on a DONE-overclaim.
+- **Harness** `tests/fidelity_audit.rs`: added `every_widget_kind_emits_non_trivial_code`
+  (walks `widgets::ALL_KINDS`) + `all_kinds_list_is_not_empty`. Removed the now
+  load-bearing `ALL_KINDS`'s `#[allow(dead_code)]`.
+
+### Verification
+- `cargo test` — 495 lib + 13 `fidelity_audit` + 1 doctest, green.
+- `cargo clippy --all-targets -- -D warnings` — zero warnings.
+- `pwsh scripts/check-surface-parity.ps1` — 24 advisory findings, 0 overclaims.
+- `pwsh scripts/check-text-encoding.ps1` — OK.
+
+### Risks / Follow-ups (now ordered S-stage to-dos, not deferred)
+- S1: recurse `apply_constraints` into layout children; surface
+  `validate_constraints`; confirm/wire `text_align`/`child_cross_align`/
+  `constraints` codegen.
+- S4: sweep the ~16 `#[allow(dead_code)]` pub items (several redundant post-lib-split).
+- **User decision pending:** the two architecture invariants (C FFI / external
+  renderer) were intentionally NOT converted to to-dos; reversing them is a
+  separate explicit call.
+
 ## 2026-06-12 — Crate → lib+bin; fidelity_audit harness linked & green
 
 ### Context Reviewed

@@ -13,6 +13,16 @@
 //!    built-in set).
 //! 3. CSS at-rule diagnostic — SVG with `@keyframes` must produce a specific
 //!    named warning, not be silently swallowed.
+//! 4. WidgetKind codegen completeness — every kind in the canonical
+//!    `widgets::ALL_KINDS` list must emit non-trivial code (not silent nothing).
+//!
+//! **Root cause this harness guards (see `docs/RCA-2026-06-12-surface-parity-drift.md`):**
+//! RohKai guards *enum* drift with exhaustive `match` arms (a new `WidgetKind`
+//! will not compile until codegen handles it). *Struct fields* have no such
+//! forcing function — a new `WidgetInstance` field can be serialized, shown in
+//! Properties, and silently ignored by codegen, and it all still compiles. This
+//! file is the cross-surface backstop for that gap. The static companion is
+//! `scripts/check-surface-parity.ps1`.
 //!
 //! Adding a new schema field?  Add a matching codegen-parity test here.
 
@@ -20,6 +30,7 @@ use rohkai::codegen::egui_emitter::emit_indexed;
 use rohkai::panels::shortcuts::BUILTIN_SHORTCUTS;
 use rohkai::project::schema::{WidgetInstance, WidgetKind, WidgetProps};
 use rohkai::project::ui_tree::UiTree;
+use rohkai::widgets::ALL_KINDS;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -260,5 +271,51 @@ fn multiple_atrules_all_counted() {
         sheet.atrule_count >= 3,
         "Three at-rules must each increment atrule_count, got: {}",
         sheet.atrule_count
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 5. WidgetKind codegen completeness
+//
+// The main `emit_indexed` match is exhaustive, so a *new* kind cannot compile
+// without an arm — but an arm could still emit nothing but a comment.  Walk the
+// canonical `widgets::ALL_KINDS` list and prove every kind emits at least one
+// real (non-comment, non-empty) line.  This both backstops "silent nothing"
+// codegen and keeps `ALL_KINDS` load-bearing (it documents the /new-widget
+// protocol — step 3 is "add the variant here").
+// ---------------------------------------------------------------------------
+
+#[test]
+fn every_widget_kind_emits_non_trivial_code() {
+    for kind in ALL_KINDS {
+        let id = Uuid::from_u128(0xA11);
+        let tree = UiTree {
+            widgets: vec![WidgetInstance {
+                id,
+                kind: kind.clone(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let code = emit_code(&tree);
+        let has_real_line = code
+            .lines()
+            .any(|l| !l.trim().is_empty() && !l.trim_start().starts_with("//"));
+        assert!(
+            has_real_line,
+            "WidgetKind::{kind:?} emitted no real code (only comments/blank). \
+             Its emitter arm is a silent hole:\n{code}"
+        );
+    }
+}
+
+#[test]
+fn all_kinds_list_is_not_empty() {
+    // Guards the protocol const itself: if someone empties ALL_KINDS, the
+    // completeness test above would vacuously pass.
+    assert!(
+        ALL_KINDS.len() >= 30,
+        "ALL_KINDS should enumerate every unit WidgetKind (>=30), got {}",
+        ALL_KINDS.len()
     );
 }
