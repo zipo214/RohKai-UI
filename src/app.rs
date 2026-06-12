@@ -207,6 +207,21 @@ pub struct RohKaiApp {
     pub name_counter: std::collections::HashMap<String, u32>,
 }
 
+/// Produce a snake_case slug from a widget's default label text for use in
+/// auto-generated names. Lowercases, replaces non-alphanumeric runs with `_`,
+/// strips leading/trailing underscores. Returns empty string for blank input.
+fn slugify_widget_hint(text: &str) -> String {
+    let raw: String = text
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .collect();
+    raw.split('_')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("_")
+}
+
 impl RohKaiApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         setup_fonts(&cc.egui_ctx);
@@ -261,12 +276,19 @@ impl RohKaiApp {
     }
 
     /// Auto-generate a human-readable label for a newly dropped widget.
-    /// Returns `"button_1"`, `"button_2"`, etc. (snake_case kind + counter).
-    fn next_widget_label(&mut self, kind: &WidgetKind) -> String {
+    /// Returns `"button_1_submit"` — kind + counter + semantic slug from the
+    /// widget's default label text. Falls back to `"button_1"` when the slug
+    /// would be empty or identical to the kind key.
+    fn next_widget_label(&mut self, kind: &WidgetKind, default_text: &str) -> String {
         let key = format!("{kind:?}").to_lowercase();
         let count = self.name_counter.entry(key.clone()).or_insert(0);
         *count += 1;
-        format!("{key}_{}", *count)
+        let slug = slugify_widget_hint(default_text);
+        if slug.is_empty() || slug == key {
+            format!("{key}_{}", *count)
+        } else {
+            format!("{key}_{count}_{slug}")
+        }
     }
 
     fn compute_dirty_exact(&self) -> bool {
@@ -2602,7 +2624,8 @@ impl eframe::App for RohKaiApp {
             let cy = (-pan.y / zoom + win_h / 2.0).clamp(0.0, win_h);
             instance.rect.x = (cx - instance.rect.w / 2.0).max(0.0);
             instance.rect.y = (cy - instance.rect.h / 2.0).max(0.0);
-            instance.props.label = self.next_widget_label(&instance.kind.clone());
+            let default_text = instance.props.label.clone();
+            instance.props.label = self.next_widget_label(&instance.kind.clone(), &default_text);
             let id = instance.id;
             let center = (
                 instance.rect.x + instance.rect.w * 0.5,
@@ -2622,7 +2645,8 @@ impl eframe::App for RohKaiApp {
 
         // Palette drag — set interaction.template_drag for canvas drop next frame
         if let Some(mut instance) = palette_drag {
-            instance.props.label = self.next_widget_label(&instance.kind.clone());
+            let default_text = instance.props.label.clone();
+            instance.props.label = self.next_widget_label(&instance.kind.clone(), &default_text);
             self.session.interaction.template_drag = Some(vec![instance]);
         }
 
@@ -2864,41 +2888,60 @@ mod name_counter_tests {
     use crate::project::schema::WidgetKind;
     use std::collections::HashMap;
 
-    /// Minimal stand-in for the counter logic to keep tests headless.
-    fn next_label(counter: &mut HashMap<String, u32>, kind: &WidgetKind) -> String {
+    fn next_label(counter: &mut HashMap<String, u32>, kind: &WidgetKind, hint: &str) -> String {
         let key = format!("{kind:?}").to_lowercase();
         let count = counter.entry(key.clone()).or_insert(0);
         *count += 1;
-        format!("{key}_{}", *count)
+        let slug = super::slugify_widget_hint(hint);
+        if slug.is_empty() || slug == key {
+            format!("{key}_{count}")
+        } else {
+            format!("{key}_{count}_{slug}")
+        }
     }
 
     #[test]
     fn two_buttons_get_sequential_labels() {
         let mut counter: HashMap<String, u32> = HashMap::new();
-        let l1 = next_label(&mut counter, &WidgetKind::Button);
-        let l2 = next_label(&mut counter, &WidgetKind::Button);
-        assert_eq!(l1, "button_1");
-        assert_eq!(l2, "button_2");
+        let l1 = next_label(&mut counter, &WidgetKind::Button, "Submit");
+        let l2 = next_label(&mut counter, &WidgetKind::Button, "Cancel");
+        assert_eq!(l1, "button_1_submit");
+        assert_eq!(l2, "button_2_cancel");
     }
 
     #[test]
     fn different_kinds_have_independent_counters() {
         let mut counter: HashMap<String, u32> = HashMap::new();
-        let b1 = next_label(&mut counter, &WidgetKind::Button);
-        let l1 = next_label(&mut counter, &WidgetKind::Label);
-        let b2 = next_label(&mut counter, &WidgetKind::Button);
-        assert_eq!(b1, "button_1");
-        assert_eq!(l1, "label_1");
-        assert_eq!(b2, "button_2");
+        let b1 = next_label(&mut counter, &WidgetKind::Button, "OK");
+        let l1 = next_label(&mut counter, &WidgetKind::Label, "Title");
+        let b2 = next_label(&mut counter, &WidgetKind::Button, "Cancel");
+        assert_eq!(b1, "button_1_ok");
+        assert_eq!(l1, "label_1_title");
+        assert_eq!(b2, "button_2_cancel");
     }
 
     #[test]
     fn counter_resets_on_clear() {
         let mut counter: HashMap<String, u32> = HashMap::new();
-        let _ = next_label(&mut counter, &WidgetKind::Button);
-        let _ = next_label(&mut counter, &WidgetKind::Button);
-        counter.clear(); // simulates cmd_new
-        let l = next_label(&mut counter, &WidgetKind::Button);
+        let _ = next_label(&mut counter, &WidgetKind::Button, "Submit");
+        let _ = next_label(&mut counter, &WidgetKind::Button, "Cancel");
+        counter.clear();
+        let l = next_label(&mut counter, &WidgetKind::Button, "Submit");
+        assert_eq!(l, "button_1_submit");
+    }
+
+    #[test]
+    fn slug_falls_back_when_hint_matches_kind() {
+        let mut counter: HashMap<String, u32> = HashMap::new();
+        // hint "button" matches kind key — falls back to plain counter format
+        let l = next_label(&mut counter, &WidgetKind::Button, "Button");
         assert_eq!(l, "button_1");
+    }
+
+    #[test]
+    fn slug_falls_back_when_hint_is_empty() {
+        let mut counter: HashMap<String, u32> = HashMap::new();
+        let l = next_label(&mut counter, &WidgetKind::Label, "");
+        assert_eq!(l, "label_1");
     }
 }
