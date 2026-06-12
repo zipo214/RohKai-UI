@@ -14,23 +14,54 @@ use uuid::Uuid;
 /// Map a single-key string (e.g. "N", "F5", "Escape") to an egui Key.
 fn parse_egui_key(s: &str) -> Option<Key> {
     match s {
-        "A" => Some(Key::A), "B" => Some(Key::B), "C" => Some(Key::C),
-        "D" => Some(Key::D), "E" => Some(Key::E), "F" => Some(Key::F),
-        "G" => Some(Key::G), "H" => Some(Key::H), "I" => Some(Key::I),
-        "J" => Some(Key::J), "K" => Some(Key::K), "L" => Some(Key::L),
-        "M" => Some(Key::M), "N" => Some(Key::N), "O" => Some(Key::O),
-        "P" => Some(Key::P), "Q" => Some(Key::Q), "R" => Some(Key::R),
-        "S" => Some(Key::S), "T" => Some(Key::T), "U" => Some(Key::U),
-        "V" => Some(Key::V), "W" => Some(Key::W), "X" => Some(Key::X),
-        "Y" => Some(Key::Y), "Z" => Some(Key::Z),
-        "0" => Some(Key::Num0), "1" => Some(Key::Num1), "2" => Some(Key::Num2),
-        "3" => Some(Key::Num3), "4" => Some(Key::Num4), "5" => Some(Key::Num5),
-        "6" => Some(Key::Num6), "7" => Some(Key::Num7), "8" => Some(Key::Num8),
+        "A" => Some(Key::A),
+        "B" => Some(Key::B),
+        "C" => Some(Key::C),
+        "D" => Some(Key::D),
+        "E" => Some(Key::E),
+        "F" => Some(Key::F),
+        "G" => Some(Key::G),
+        "H" => Some(Key::H),
+        "I" => Some(Key::I),
+        "J" => Some(Key::J),
+        "K" => Some(Key::K),
+        "L" => Some(Key::L),
+        "M" => Some(Key::M),
+        "N" => Some(Key::N),
+        "O" => Some(Key::O),
+        "P" => Some(Key::P),
+        "Q" => Some(Key::Q),
+        "R" => Some(Key::R),
+        "S" => Some(Key::S),
+        "T" => Some(Key::T),
+        "U" => Some(Key::U),
+        "V" => Some(Key::V),
+        "W" => Some(Key::W),
+        "X" => Some(Key::X),
+        "Y" => Some(Key::Y),
+        "Z" => Some(Key::Z),
+        "0" => Some(Key::Num0),
+        "1" => Some(Key::Num1),
+        "2" => Some(Key::Num2),
+        "3" => Some(Key::Num3),
+        "4" => Some(Key::Num4),
+        "5" => Some(Key::Num5),
+        "6" => Some(Key::Num6),
+        "7" => Some(Key::Num7),
+        "8" => Some(Key::Num8),
         "9" => Some(Key::Num9),
-        "F1" => Some(Key::F1), "F2" => Some(Key::F2), "F3" => Some(Key::F3),
-        "F4" => Some(Key::F4), "F5" => Some(Key::F5), "F6" => Some(Key::F6),
-        "F7" => Some(Key::F7), "F8" => Some(Key::F8), "F9" => Some(Key::F9),
-        "F10" => Some(Key::F10), "F11" => Some(Key::F11), "F12" => Some(Key::F12),
+        "F1" => Some(Key::F1),
+        "F2" => Some(Key::F2),
+        "F3" => Some(Key::F3),
+        "F4" => Some(Key::F4),
+        "F5" => Some(Key::F5),
+        "F6" => Some(Key::F6),
+        "F7" => Some(Key::F7),
+        "F8" => Some(Key::F8),
+        "F9" => Some(Key::F9),
+        "F10" => Some(Key::F10),
+        "F11" => Some(Key::F11),
+        "F12" => Some(Key::F12),
         "Escape" => Some(Key::Escape),
         "Enter" => Some(Key::Enter),
         "Tab" => Some(Key::Tab),
@@ -1737,11 +1768,7 @@ impl eframe::App for RohKaiApp {
         // Undo: customizable primary + hardcoded Ctrl+Shift+Z alternative.
         let ctrl_z = effective_shortcut(ctx, "undo", us, "Ctrl+Z");
         let ctrl_redo = effective_shortcut(ctx, "redo", us, "Ctrl+Y")
-            || ctx.input(|i| {
-                i.modifiers.ctrl
-                    && i.modifiers.shift
-                    && i.key_pressed(Key::Z)
-            });
+            || ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::Z));
         // Don't hijack Ctrl+Z/Y while a TextEdit (code editor, property fields,
         // etc.) owns the keyboard — that would roll the UiTree instead of the
         // text-edit's own undo.
@@ -1918,46 +1945,6 @@ impl eframe::App for RohKaiApp {
                         self.cmd_import_svg_template();
                         ui.close_menu();
                     }
-                    if ui
-                        .button("Import Widget Definition…")
-                        .on_hover_text("Copy a .rkwd file into widgets/ and reload")
-                        .clicked()
-                    {
-                        self.cmd_import_widget_definition();
-                        ui.close_menu();
-                    }
-                    if ui
-                        .button("Reload Widget Descriptors")
-                        .on_hover_text("Rescan widgets/ folder for .rkwd files — no restart needed")
-                        .clicked()
-                    {
-                        self.cmd_reload_descriptors();
-                        ui.close_menu();
-                    }
-                    if ui
-                        .button("Create Custom Widget…")
-                        .on_hover_text("Guided builder for new custom widgets")
-                        .clicked()
-                    {
-                        self.cmd_new_widget_builder();
-                        ui.close_menu();
-                    }
-                    if ui
-                        .button("Visual Widget Maker…")
-                        .on_hover_text("Draw primitives and export as a custom widget descriptor")
-                        .clicked()
-                    {
-                        self.widget_maker_open = true;
-                        ui.close_menu();
-                    }
-                    if ui
-                        .button("New Widget Descriptor…")
-                        .on_hover_text("Open the in-app .rkwd editor to create a new widget type")
-                        .clicked()
-                    {
-                        self.cmd_new_descriptor();
-                        ui.close_menu();
-                    }
                     ui.separator();
                     if ui.button("Preferences…").clicked() {
                         self.prefs.draft = self.prefs.user_settings.clone();
@@ -1993,22 +1980,30 @@ impl eframe::App for RohKaiApp {
                 // Widgets menu
                 ui.menu_button("Widgets", |ui| {
                     if ui
-                        .button("Create Custom Widget…")
-                        .on_hover_text("Guided builder for new custom widgets")
+                        .button("Create New Widget…")
+                        .on_hover_text("Compose a reusable widget visually from primitives")
+                        .clicked()
+                    {
+                        self.widget_maker_open = true;
+                        ui.close_menu();
+                    }
+                    if ui
+                        .button("Guided Descriptor Builder…")
+                        .on_hover_text("Create a descriptor from simple label/button controls")
                         .clicked()
                     {
                         self.cmd_new_widget_builder();
                         ui.close_menu();
                     }
-                    ui.separator();
                     if ui
-                        .button("New Descriptor…")
-                        .on_hover_text("Open the in-app .rkwd editor to create a new widget type")
+                        .button("Advanced Descriptor Editor…")
+                        .on_hover_text("Edit every .rkwd schema and code-generation field")
                         .clicked()
                     {
                         self.cmd_new_descriptor();
                         ui.close_menu();
                     }
+                    ui.separator();
                     if ui
                         .button("Import Definition…")
                         .on_hover_text("Copy a .rkwd file into widgets/ and reload")
@@ -2989,10 +2984,7 @@ impl eframe::App for RohKaiApp {
                 &mut shortcuts_dirty,
             );
             if shortcuts_dirty {
-                let _ = crate::settings::save(
-                    &self.prefs.settings_path,
-                    &self.prefs.user_settings,
-                );
+                let _ = crate::settings::save(&self.prefs.settings_path, &self.prefs.user_settings);
             }
         }
 

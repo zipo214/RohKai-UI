@@ -54,7 +54,13 @@ fn tree_with_vlayout_child(child_flex: f32) -> (UiTree, Uuid) {
             ..Default::default()
         },
     ];
-    (UiTree { widgets, ..Default::default() }, child)
+    (
+        UiTree {
+            widgets,
+            ..Default::default()
+        },
+        child,
+    )
 }
 
 fn tree_with_hlayout_child(child_flex: f32) -> (UiTree, Uuid) {
@@ -74,7 +80,13 @@ fn tree_with_hlayout_child(child_flex: f32) -> (UiTree, Uuid) {
             ..Default::default()
         },
     ];
-    (UiTree { widgets, ..Default::default() }, child)
+    (
+        UiTree {
+            widgets,
+            ..Default::default()
+        },
+        child,
+    )
 }
 
 fn tree_with_grid_child(col_span: u32, row_span: u32, columns: usize) -> UiTree {
@@ -99,7 +111,10 @@ fn tree_with_grid_child(col_span: u32, row_span: u32, columns: usize) -> UiTree 
             ..Default::default()
         },
     ];
-    UiTree { widgets, ..Default::default() }
+    UiTree {
+        widgets,
+        ..Default::default()
+    }
 }
 
 fn emit_code(tree: &UiTree) -> String {
@@ -226,11 +241,58 @@ fn shortcut_builtins_all_have_parseable_keys() {
         // within the parser's coverage.
         let recognised = matches!(
             key_part,
-            "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M"
-                | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y"
-                | "Z" | "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"
-                | "F1" | "F2" | "F3" | "F4" | "F5" | "F6" | "F7" | "F8" | "F9" | "F10"
-                | "F11" | "F12" | "Escape" | "Enter" | "Tab" | "Delete" | "Backspace"
+            "A" | "B"
+                | "C"
+                | "D"
+                | "E"
+                | "F"
+                | "G"
+                | "H"
+                | "I"
+                | "J"
+                | "K"
+                | "L"
+                | "M"
+                | "N"
+                | "O"
+                | "P"
+                | "Q"
+                | "R"
+                | "S"
+                | "T"
+                | "U"
+                | "V"
+                | "W"
+                | "X"
+                | "Y"
+                | "Z"
+                | "0"
+                | "1"
+                | "2"
+                | "3"
+                | "4"
+                | "5"
+                | "6"
+                | "7"
+                | "8"
+                | "9"
+                | "F1"
+                | "F2"
+                | "F3"
+                | "F4"
+                | "F5"
+                | "F6"
+                | "F7"
+                | "F8"
+                | "F9"
+                | "F10"
+                | "F11"
+                | "F12"
+                | "Escape"
+                | "Enter"
+                | "Tab"
+                | "Delete"
+                | "Backspace"
                 | "Space"
         );
         assert!(

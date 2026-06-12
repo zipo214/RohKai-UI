@@ -42,12 +42,7 @@ pub const BUILTIN_SHORTCUTS: &[(&str, &str, &str)] = &[
 ///   when the user edits a combo in the Customize tab.
 /// * `dirty` — set to `true` whenever `user_shortcuts` is modified so the
 ///   caller knows to persist settings.
-pub fn show(
-    ctx: &egui::Context,
-    open: &mut bool,
-    settings: &mut UserSettings,
-    dirty: &mut bool,
-) {
+pub fn show(ctx: &egui::Context, open: &mut bool, settings: &mut UserSettings, dirty: &mut bool) {
     if !*open {
         return;
     }
@@ -112,7 +107,11 @@ fn show_reference(ui: &mut egui::Ui, user_shortcuts: &HashMap<String, String>) {
         ref_row(ui, "save_as", user_shortcuts);
 
         section(ui, "Canvas");
-        row(ui, "Arrow keys", "Nudge selected widget(s) 1 px (or grid step)");
+        row(
+            ui,
+            "Arrow keys",
+            "Nudge selected widget(s) 1 px (or grid step)",
+        );
         row(ui, "Delete", "Remove selected widget(s)");
         ref_row(ui, "reset_zoom", user_shortcuts);
         ref_row(ui, "toggle_rulers", user_shortcuts);
@@ -224,10 +223,7 @@ fn show_customize(
                     );
 
                     // Editable override field
-                    let current = user_shortcuts
-                        .get(action_key)
-                        .cloned()
-                        .unwrap_or_default();
+                    let current = user_shortcuts.get(action_key).cloned().unwrap_or_default();
                     let mut buf = current.clone();
                     let resp = ui.add(
                         egui::TextEdit::singleline(&mut buf)
@@ -245,7 +241,11 @@ fn show_customize(
 
                     // Reset button (only visible when there is an override)
                     if user_shortcuts.contains_key(action_key) {
-                        if ui.small_button("↺").on_hover_text("Restore default").clicked() {
+                        if ui
+                            .small_button("↺")
+                            .on_hover_text("Restore default")
+                            .clicked()
+                        {
                             reset_action = Some(action_key.to_owned());
                         }
                     } else {

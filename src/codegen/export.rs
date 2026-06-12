@@ -1,4 +1,4 @@
-use crate::codegen::formula::{collect_variables, emit_formula_rust, parse_formula};
+use crate::codegen::formula::{emit_formula_rust_with, parse_formula};
 use crate::codegen::{
     field_collector,
     rust::{field_binding, string_literal},
@@ -65,6 +65,12 @@ pub fn project_files(tree: &UiTree) -> Vec<(String, String)> {
         .any(|w| w.kind == WidgetKind::FilePicker)
     {
         let dep_line = String::from("rfd = \"0.14\"");
+        if seen_deps.insert(dep_line.clone()) {
+            extra_deps.push(dep_line);
+        }
+    }
+    if tree.widgets.iter().any(|w| w.db_binding.is_some()) {
+        let dep_line = String::from("rusqlite = { version = \"0.40\", features = [\"bundled\"] }");
         if seen_deps.insert(dep_line.clone()) {
             extra_deps.push(dep_line);
         }
@@ -358,8 +364,11 @@ fn gen_app_rs_wasm(tree: &UiTree) -> String {
 
 fn gen_app_rs(tree: &UiTree) -> String {
     let has_images = tree.widgets.iter().any(|w| w.kind == WidgetKind::Image);
+    let has_db = crate::codegen::state_emitter::has_db_bindings(tree);
     let collected = field_collector::collect(tree);
     let fields = &collected.fields;
+    let component_pairs =
+        crate::codegen::component_state::component_state_field_pairs(&tree.app_props.components);
 
     // Collect unique handler names; detect conflicts where the same name is used
     // with different async/result modes across widgets.  First definition wins.
@@ -430,9 +439,17 @@ fn gen_app_rs(tree: &UiTree) -> String {
     }
     s.push('\n');
     // AppState struct
-    s.push_str("pub struct AppState {\n");
+    s.push_str("#[allow(dead_code)]\npub struct AppState {\n");
     for f in fields {
         s.push_str(&format!("    pub {}: {},\n", f.name, f.ty));
+    }
+    for (declaration, _) in &component_pairs {
+        s.push_str("    pub ");
+        s.push_str(declaration.trim());
+        s.push('\n');
+    }
+    if has_db {
+        s.push_str("    pub db_conn: Option<rusqlite::Connection>,\n");
     }
     s.push_str("}\n\n");
 
@@ -441,7 +458,18 @@ fn gen_app_rs(tree: &UiTree) -> String {
     for f in fields {
         s.push_str(&format!("            {}: {},\n", f.name, f.default_expr));
     }
+    for (_, default_line) in &component_pairs {
+        s.push_str(default_line);
+        s.push('\n');
+    }
+    if has_db {
+        s.push_str("            db_conn: None,\n");
+    }
     s.push_str("        }\n    }\n}\n\n");
+    if has_db {
+        s.push_str(&crate::codegen::state_emitter::emit_db_impl(tree));
+        s.push('\n');
+    }
 
     // ExportedApp
     let channel_pairs =
@@ -513,6 +541,11 @@ fn gen_app_rs(tree: &UiTree) -> String {
             &async_handlers,
             "        ",
         ));
+    }
+    for line in crate::codegen::component_state::component_update_lines(&tree.app_props.components)
+    {
+        s.push_str(&line);
+        s.push('\n');
     }
     s.push_str(&gen_theme_setup(&tree.app_props.theme));
     s.push_str("        egui::CentralPanel::default().show(ctx, |_ui| {});\n");
@@ -884,10 +917,17 @@ fn gen_app_rs(tree: &UiTree) -> String {
             }
             WidgetKind::VLayout => {
                 use crate::project::schema::LayoutCrossAlign;
+                let ui_name = if w.children.is_empty() { "_ui" } else { "ui" };
                 let open = match w.props.layout_cross_align {
-                    LayoutCrossAlign::Start => "                ui.vertical(|ui| {\n".to_owned(),
-                    LayoutCrossAlign::Center => "                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {\n".to_owned(),
-                    LayoutCrossAlign::End => "                ui.with_layout(egui::Layout::top_down(egui::Align::RIGHT), |ui| {\n".to_owned(),
+                    LayoutCrossAlign::Start => {
+                        format!("                ui.vertical(|{ui_name}| {{\n")
+                    }
+                    LayoutCrossAlign::Center => format!(
+                        "                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |{ui_name}| {{\n"
+                    ),
+                    LayoutCrossAlign::End => format!(
+                        "                ui.with_layout(egui::Layout::top_down(egui::Align::RIGHT), |{ui_name}| {{\n"
+                    ),
                 };
                 let mut code = open;
                 for &child_id in &w.children {
@@ -900,10 +940,17 @@ fn gen_app_rs(tree: &UiTree) -> String {
             }
             WidgetKind::HLayout => {
                 use crate::project::schema::LayoutCrossAlign;
+                let ui_name = if w.children.is_empty() { "_ui" } else { "ui" };
                 let open = match w.props.layout_cross_align {
-                    LayoutCrossAlign::Start => "                ui.horizontal(|ui| {\n".to_owned(),
-                    LayoutCrossAlign::Center => "                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {\n".to_owned(),
-                    LayoutCrossAlign::End => "                ui.with_layout(egui::Layout::left_to_right(egui::Align::BOTTOM), |ui| {\n".to_owned(),
+                    LayoutCrossAlign::Start => {
+                        format!("                ui.horizontal(|{ui_name}| {{\n")
+                    }
+                    LayoutCrossAlign::Center => format!(
+                        "                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |{ui_name}| {{\n"
+                    ),
+                    LayoutCrossAlign::End => format!(
+                        "                ui.with_layout(egui::Layout::left_to_right(egui::Align::BOTTOM), |{ui_name}| {{\n"
+                    ),
                 };
                 let mut code = open;
                 for &child_id in &w.children {
@@ -919,14 +966,15 @@ fn gen_app_rs(tree: &UiTree) -> String {
             }
             WidgetKind::GridLayout => {
                 let columns = w.props.grid_columns.clamp(1, MAX_GRID_COLUMNS);
+                let ui_name = if w.children.is_empty() { "_ui" } else { "ui" };
                 let row_height_chain = w
                     .props
                     .grid_row_height
                     .map(|h| format!(".min_row_height({h:.1})"))
                     .unwrap_or_default();
                 let mut code = format!(
-                    "                egui::Grid::new(\"{}\"){row_height_chain}.show(ui, |ui| {{\n",
-                    w.id.as_simple()
+                    "                egui::Grid::new(\"{}\"){row_height_chain}.show(ui, |{ui_name}| {{\n",
+                    w.id.as_simple(),
                 );
                 for (idx, &child_id) in w.children.iter().enumerate() {
                     if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
@@ -949,7 +997,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 );
                 for tab in &w.props.options {
                     s.push_str(&format!(
-                        "                    ui.selectable_label(false, {});\n",
+                        "                    let _ = ui.selectable_label(false, {});\n",
                         string_literal(tab)
                     ));
                 }
@@ -988,14 +1036,14 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 if !w.props.formula_expr.is_empty() {
                     match parse_formula(&w.props.formula_expr) {
                         Ok(node) => {
-                            let vars = collect_variables(&node);
-                            let rust_expr = emit_formula_rust(&node);
-                            let binds: String = vars
-                                .iter()
-                                .map(|v| format!("                    let {v} = self.state.{v} as f64;\n"))
-                                .collect();
+                            let rust_expr = emit_formula_rust_with(&node, &|name| {
+                                format!(
+                                    "self.state.{}",
+                                    crate::codegen::rust::effective_binding(name)
+                                )
+                            });
                             format!(
-                                "                ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, {{\n{binds}                    {rust_expr}\n                }}));\n"
+                                "                ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, {rust_expr}));\n"
                             )
                         }
                         Err(e) => format!("                // Formula parse error: {e}\n"),
@@ -1520,14 +1568,14 @@ fn export_child_line(
             if !child.props.formula_expr.is_empty() {
                 match parse_formula(&child.props.formula_expr) {
                     Ok(node) => {
-                        let vars = collect_variables(&node);
-                        let rust_expr = emit_formula_rust(&node);
-                        let binds: String = vars
-                            .iter()
-                            .map(|v| format!("                                let {v} = self.state.{v} as f64;\n"))
-                            .collect();
+                        let rust_expr = emit_formula_rust_with(&node, &|name| {
+                            format!(
+                                "self.state.{}",
+                                crate::codegen::rust::effective_binding(name)
+                            )
+                        });
                         format!(
-                            "                        ui.put({rect_expr}, egui::Label::new(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, {{\n{binds}                                {rust_expr}\n                        }})));\n"
+                            "                        ui.put({rect_expr}, egui::Label::new(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, {rust_expr})));\n"
                         )
                     }
                     Err(e) => format!("                        // Formula parse error: {e}\n"),
@@ -1766,7 +1814,11 @@ fn export_layout_child_line(
     }
     // Per-child cross-axis alignment override (Center/End) inside V/H layouts;
     // Start (and the UI-hidden Stretch) fold to the container default.
-    let axis = if vertical { "top_down" } else { "left_to_right" };
+    let axis = if vertical {
+        "top_down"
+    } else {
+        "left_to_right"
+    };
     match child.child_cross_align {
         Some(crate::project::schema::CrossAlign::Center) => format!(
             "                ui.with_layout(egui::Layout::{axis}(egui::Align::Center), |ui| {{\n{code}                }});\n"
@@ -2940,6 +2992,62 @@ mod tests {
     }
 
     #[test]
+    fn database_binding_export_includes_rusqlite_dependency() {
+        let tree = UiTree {
+            widgets: vec![WidgetInstance {
+                id: Uuid::nil(),
+                kind: WidgetKind::TextInput,
+                state_binding: Some("database_value".to_owned()),
+                db_binding: Some(crate::project::schema::DbBinding {
+                    table: "settings".to_owned(),
+                    column: "value".to_owned(),
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let files = project_files(&tree);
+        let cargo_toml = files
+            .iter()
+            .find(|(path, _)| path == "Cargo.toml")
+            .map(|(_, contents)| contents.as_str())
+            .unwrap();
+        let app_rs = files
+            .iter()
+            .find(|(path, _)| path == "src/app.rs")
+            .map(|(_, contents)| contents.as_str())
+            .unwrap();
+
+        assert!(cargo_toml.contains("rusqlite = { version = \"0.40\", features = [\"bundled\"] }"));
+        assert!(app_rs.contains("db_conn: Option<rusqlite::Connection>"));
+        assert!(app_rs.contains("fn load_from_db"));
+    }
+
+    #[test]
+    fn formula_export_uses_state_paths_and_declares_dependencies() {
+        let tree = UiTree {
+            widgets: vec![WidgetInstance {
+                id: Uuid::nil(),
+                kind: WidgetKind::MathLabel,
+                props: crate::project::schema::WidgetProps {
+                    formula_expr: "width * height".to_owned(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let generated = gen_app_rs(&tree);
+        assert!(generated.contains("width: f32"));
+        assert!(generated.contains("height: f32"));
+        assert!(generated.contains("self.state.width as f64"));
+        assert!(generated.contains("self.state.height as f64"));
+        assert!(!generated.contains("(self.width as f64)"));
+    }
+
+    #[test]
     fn math_label_export_escapes_label_as_value() {
         let tree = UiTree {
             widgets: vec![WidgetInstance {
@@ -3190,9 +3298,8 @@ mod tests {
     // Generated-export compile proof
     //
     // One fixture tree exercising the full event+async export surface. The smoke
-    // test (always run) proves the project is generatable and the matrix is
-    // present; the `#[ignore]`d test runs a real `cargo check` on the generated
-    // crate (compiles eframe/egui — minutes on first run, so opt-in).
+    // test proves the project is generatable and the matrix is present; normal
+    // tests also run a real warning-denied `cargo check` on the generated crate.
     // -------------------------------------------------------------------------
 
     /// A unique temp directory path (std-only; no tempfile crate).
@@ -3208,6 +3315,33 @@ mod tests {
             std::process::id()
         ));
         dir
+    }
+
+    fn cargo_check_generated_project(tree: &UiTree, tag: &str) {
+        let dir = unique_temp_dir(tag);
+        write_project(tree, &dir).expect("write_project");
+
+        let mut target = std::env::temp_dir();
+        target.push("rohkai_export_fixture_target");
+
+        let output = std::process::Command::new("cargo")
+            .args(["check", "--quiet"])
+            .current_dir(&dir)
+            .env("CARGO_TARGET_DIR", &target)
+            .env("RUSTFLAGS", "-Dwarnings")
+            .output()
+            .expect("failed to spawn cargo check");
+
+        if !output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            panic!(
+                "generated export project failed warning-denied `cargo check` \
+                 (dir: {})\nstdout:\n{stdout}\nstderr:\n{stderr}",
+                dir.display()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The compile-proof fixture: top-level Button Click + DoubleClick, two async
@@ -3494,6 +3628,20 @@ mod tests {
             })
             .collect();
 
+        if let Some(formula) = widgets
+            .iter_mut()
+            .find(|widget| widget.kind == WidgetKind::MathLabel)
+        {
+            formula.props.formula_expr = "width * height".to_owned();
+        }
+        if let Some(text_input) = widgets
+            .iter_mut()
+            .find(|widget| widget.kind == WidgetKind::TextInput)
+        {
+            text_input.state_binding = Some("database_value".to_owned());
+            text_input.db_binding = Some(crate::project::schema::DbBinding::default());
+        }
+
         widgets.push(WidgetInstance {
             id: Uuid::from_u128(0x1FFF),
             kind: WidgetKind::Image,
@@ -3541,6 +3689,10 @@ mod tests {
         let embedded = SVG_RASTERIZER_SOURCE.replace(IMPORT, "use super::svg_core::{self, Rgba};");
         assert!(!embedded.contains("crate::"));
         assert!(embedded.contains("use super::svg_core::{self, Rgba};"));
+        assert!(
+            !SVG_RASTERIZER_SOURCE.contains("rayon::"),
+            "embedded SVG renderer must not leak RohKai-only dependencies"
+        );
     }
 
     /// Invariant: every SVG R4 feature that *renders* in the in-app rasterizer
@@ -3911,65 +4063,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Opt-in compile proof: run a real `cargo check` on the generated crate.
-    /// Ignored by default because it compiles eframe/egui (minutes on first run).
-    /// Run with: `cargo test -p rohkai export_compile_fixture_cargo_check -- --ignored`
-    /// A shared `CARGO_TARGET_DIR` caches deps across runs.
+    /// Compile proof: run a warning-denied `cargo check` on the generated crate.
+    /// A shared `CARGO_TARGET_DIR` caches dependencies across normal test runs.
     #[test]
-    #[ignore = "compiles a real eframe/egui crate; slow. Run with --ignored."]
     fn export_compile_fixture_cargo_check() {
-        let tree = compile_fixture_tree();
-        let dir = unique_temp_dir("check");
-        write_project(&tree, &dir).expect("write_project");
-
-        let mut target = std::env::temp_dir();
-        target.push("rohkai_export_fixture_target");
-
-        let output = std::process::Command::new("cargo")
-            .args(["check", "--quiet"])
-            .current_dir(&dir)
-            .env("CARGO_TARGET_DIR", &target)
-            .output()
-            .expect("failed to spawn cargo check");
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            // Leave `dir` in place for debugging on failure.
-            panic!(
-                "generated export project failed `cargo check` (dir: {})\n{stderr}",
-                dir.display()
-            );
-        }
-        let _ = std::fs::remove_dir_all(&dir);
+        cargo_check_generated_project(&compile_fixture_tree(), "check");
     }
 
-    /// Opt-in compile proof for the full built-in widget catalog.
-    /// Run with: `cargo test -p rohkai all_builtin_widgets_export_cargo_check -- --ignored`
+    /// Warning-denied compile proof for the full built-in widget catalog.
     #[test]
-    #[ignore = "compiles a real eframe/egui crate with every built-in widget; slow. Run with --ignored."]
     fn all_builtin_widgets_export_cargo_check() {
-        let tree = all_builtin_widgets_tree();
-        let dir = unique_temp_dir("all_widgets_check");
-        write_project(&tree, &dir).expect("write_project");
-
-        let mut target = std::env::temp_dir();
-        target.push("rohkai_export_fixture_target");
-
-        let output = std::process::Command::new("cargo")
-            .args(["check", "--quiet"])
-            .current_dir(&dir)
-            .env("CARGO_TARGET_DIR", &target)
-            .output()
-            .expect("failed to spawn cargo check");
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            panic!(
-                "all-widget export project failed `cargo check` (dir: {})\n{stderr}",
-                dir.display()
-            );
-        }
-        let _ = std::fs::remove_dir_all(&dir);
+        cargo_check_generated_project(&all_builtin_widgets_tree(), "all_widgets_check");
     }
 
     #[test]

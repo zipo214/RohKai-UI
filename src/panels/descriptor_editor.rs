@@ -1,7 +1,7 @@
 //! In-app editor for `.rkwd` widget descriptor files.
 //!
 //! Split view: left = structured form, right = live canvas + code preview.
-//! Opened via File → New Widget Descriptor… or the Custom widget properties button.
+//! Opened via Widgets → Advanced Descriptor Editor… or Custom widget properties.
 
 use crate::codegen::widget_descriptor::{
     CanvasPreviewMode, CargoDep, DescriptorCanvasPreview, DescriptorCodegen, DescriptorProp,
@@ -106,24 +106,24 @@ pub fn show(
     let title = if state.original_stem.is_some() {
         format!("Edit Descriptor — {}", state.draft.id)
     } else {
-        "New Widget Descriptor".to_owned()
+        "Advanced Widget Descriptor Editor".to_owned()
     };
 
-    let screen = ctx.screen_rect();
-    let default_pos = egui::pos2(
-        (screen.center().x - 430.0).max(screen.min.x + 20.0),
-        (screen.center().y - 280.0).max(screen.min.y + 20.0),
+    let bounds = crate::panels::window_bounds::authoring_window_bounds(
+        ctx.screen_rect(),
+        egui::vec2(860.0, 560.0),
+        egui::vec2(600.0, 400.0),
     );
 
     egui::Window::new(title)
         .id(egui::Id::new("descriptor_editor"))
         .open(&mut open)
-        .default_pos(default_pos)
-        .default_size([860.0, 560.0])
-        .min_size([600.0, 400.0])
-        .max_width(screen.width() - 40.0)
+        .default_pos(bounds.default_pos)
+        .default_size(bounds.default_size)
+        .min_size(bounds.min_size)
+        .max_size(bounds.max_size)
         .resizable(true)
-        .constrain(false)
+        .constrain(true)
         .show(ctx, |ui| {
             // Clamp available width so content never forces horizontal expansion.
             let avail = ui.available_width().min(860.0 - 16.0);

@@ -66,12 +66,16 @@ being comfortable.
   navigation scrolling, and generated/valid/invalid edit states.
 - `src/panels/templates.rs` - template file interactions and SVG import path.
 - `src/panels/descriptor_editor.rs` - full power-user `.rkwd` editor (all
-  template/schema fields). Entry: File → New Widget Descriptor… or Widgets menu.
+  template/schema fields). Entry: Widgets → Advanced Descriptor Editor….
 - `src/panels/widget_builder.rs` - Guided Descriptor Builder. Beginner-friendly
   form over `WidgetDescriptor` (name, type, label, click handler) with live
-  descriptor preview. It is not the future Visual Widget Maker; it creates
-  simple `.rkwd` descriptors and can hand off to the full editor. Entry:
-  File → Create Custom Widget… or Widgets menu.
+  descriptor preview. It creates simple `.rkwd` descriptors and can hand off to
+  the full editor. Entry: Widgets → Guided Descriptor Builder….
+- `src/panels/widget_maker_panel.rs` - true Visual Widget Maker: primitive
+  composition canvas, properties/code tabs, state variants, slots/groups, and
+  `.rkwd` output. Entry: Widgets → Create New Widget….
+- `src/panels/window_bounds.rs` - shared viewport-safe sizing for the three
+  widget-authoring windows. Clamps default/min/max sizes to the live viewport.
 - `src/panels/outline.rs` - document outline / layers panel (Ctrl+L).
 - `src/panels/project_tree.rs` - project file tree + read-only viewer + asset
   registry (File → Project Files…).
@@ -96,14 +100,13 @@ being comfortable.
   container stretch, grid child reorder controls, and one-level Lazare parser
   hierarchy round-trip. Rich alignment, per-child policies, slot editor, and
   multi-level layout semantics are still planned.
-- **Timer / StateMachine — real runtime slice (P2.5):** Timer schedules ticks via
-  `std::thread` + `mpsc` (`timer_rx`, `spawn_timers`, `request_repaint_after`);
-  StateMachine has `StateMachineProps`/`StateDef`/`TransitionDef` schema + table
-  editor + `current_state` codegen. HttpRequest remains a documented stub
-  (needs an approved HTTP crate).
+- **Component runtime status:** Timer has a designer-side repaint/scheduling
+  slice but generated handler dispatch remains a documented hook. StateMachine
+  has schema/table/current-state codegen but no generated transition runtime.
+  HttpRequest remains a documented stub pending an approved HTTP crate.
 - **Formula — real engine (P2.5):** `codegen/formula.rs` recursive-descent infix
-  parser with `deps()` dependency tracking and `validate()`; live red-label
-  diagnostics in Properties.
+  parser with semantic function/arity validation, dependency collection, and
+  context-aware live/export Rust paths; live diagnostics appear in Properties.
 - **Database — SQLite slice (P2.6):** `DatabaseEngine`/`SqliteEngine`, `DbBinding`
   on widgets, `DbPanelState` window, `state_emitter` `load_from_db()` codegen.
   Multi-backend, query builder, and schema viewer are ordered backlog, not
@@ -122,6 +125,8 @@ being comfortable.
 - `src/codegen/source_map.rs` - exact byte/line ranges for generated widget and
   future handler blocks; shared line-span utility used by Lazare parsing.
 - `src/codegen/export.rs` - generated standalone eframe project output.
+  Normal tests compile both a focused fixture and the complete built-in catalog
+  as separate warning-denied Cargo projects.
 - `src/codegen/field_collector.rs` - shared AppState field collection for live
   preview, export, and descriptor state fields.
 - `src/codegen/state_emitter.rs` - generated `AppState`.

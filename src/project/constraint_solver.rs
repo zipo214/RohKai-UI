@@ -305,9 +305,10 @@ fn detect_equal_size_cycles(tree: &UiTree, errors: &mut Vec<ConstraintError>) {
     for (a, b) in &width_map {
         if width_map.get(b) == Some(a) && a < b {
             // Find UUIDs from string.
-            if let (Some(wa), Some(wb)) =
-                (uuid_from_str_in_tree(tree, a), uuid_from_str_in_tree(tree, b))
-            {
+            if let (Some(wa), Some(wb)) = (
+                uuid_from_str_in_tree(tree, a),
+                uuid_from_str_in_tree(tree, b),
+            ) {
                 errors.push(ConstraintError::EqualSizeCycle {
                     widget_a: wa,
                     widget_b: wb,
@@ -319,9 +320,10 @@ fn detect_equal_size_cycles(tree: &UiTree, errors: &mut Vec<ConstraintError>) {
     // Check mutual cycles in height map.
     for (a, b) in &height_map {
         if height_map.get(b) == Some(a) && a < b {
-            if let (Some(wa), Some(wb)) =
-                (uuid_from_str_in_tree(tree, a), uuid_from_str_in_tree(tree, b))
-            {
+            if let (Some(wa), Some(wb)) = (
+                uuid_from_str_in_tree(tree, a),
+                uuid_from_str_in_tree(tree, b),
+            ) {
                 // Only report if not already reported for width.
                 let already = errors.iter().any(|e| {
                     matches!(e, ConstraintError::EqualSizeCycle { widget_a, widget_b }
@@ -381,8 +383,14 @@ mod tests {
         apply_constraints(&mut tree);
         let ww = tree.widgets[0].rect.w;
         let wh = tree.widgets[0].rect.h;
-        assert!((ww - 100.0).abs() < 0.01, "width should remain 100, got {ww}");
-        assert!((wh - 50.0).abs() < 0.01, "height should be 50 (100/2.0), got {wh}");
+        assert!(
+            (ww - 100.0).abs() < 0.01,
+            "width should remain 100, got {ww}"
+        );
+        assert!(
+            (wh - 50.0).abs() < 0.01,
+            "height should be 50 (100/2.0), got {wh}"
+        );
     }
 
     #[test]
@@ -393,7 +401,10 @@ mod tests {
         apply_constraints(&mut tree);
         let ww = tree.widgets[0].rect.w;
         let wh = tree.widgets[0].rect.h;
-        assert!((ww - wh).abs() < 0.01, "square: w={ww} h={wh} should be equal");
+        assert!(
+            (ww - wh).abs() < 0.01,
+            "square: w={ww} h={wh} should be equal"
+        );
     }
 
     #[test]
@@ -407,8 +418,16 @@ mod tests {
         let mut tree = make_tree_with_widgets(vec![w]);
         apply_constraints(&mut tree);
         let r = tree.widgets[0].rect.clone();
-        assert!((r.x - 20.0).abs() < 0.01, "x should be left margin 20, got {}", r.x);
-        assert!((r.y - 10.0).abs() < 0.01, "y should be top margin 10, got {}", r.y);
+        assert!(
+            (r.x - 20.0).abs() < 0.01,
+            "x should be left margin 20, got {}",
+            r.x
+        );
+        assert!(
+            (r.y - 10.0).abs() < 0.01,
+            "y should be top margin 10, got {}",
+            r.y
+        );
     }
 
     #[test]
@@ -459,8 +478,16 @@ mod tests {
         let r = tree.widgets[0].rect.clone();
         assert!((r.x - 40.0).abs() < 0.01, "x=left margin 40, got {}", r.x);
         assert!((r.y - 10.0).abs() < 0.01, "y=top margin 10, got {}", r.y);
-        assert!((r.w - (800.0 - 40.0 - 20.0)).abs() < 0.01, "w fills minus l+r, got {}", r.w);
-        assert!((r.h - (600.0 - 10.0 - 30.0)).abs() < 0.01, "h fills minus t+b, got {}", r.h);
+        assert!(
+            (r.w - (800.0 - 40.0 - 20.0)).abs() < 0.01,
+            "w fills minus l+r, got {}",
+            r.w
+        );
+        assert!(
+            (r.h - (600.0 - 10.0 - 30.0)).abs() < 0.01,
+            "h fills minus t+b, got {}",
+            r.h
+        );
     }
 
     #[test]
@@ -473,14 +500,24 @@ mod tests {
         let parent = WidgetInstance {
             id: parent_id,
             kind: WidgetKind::Frame,
-            rect: Rect { x: 100.0, y: 100.0, w: 400.0, h: 300.0 },
+            rect: Rect {
+                x: 100.0,
+                y: 100.0,
+                w: 400.0,
+                h: 300.0,
+            },
             children: vec![child_id],
             ..Default::default()
         };
         let mut child = WidgetInstance {
             id: child_id,
             kind: WidgetKind::Button,
-            rect: Rect { x: 0.0, y: 0.0, w: 80.0, h: 40.0 },
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 80.0,
+                h: 40.0,
+            },
             ..Default::default()
         };
         child.constraints.h_align = Some(HAlign::Center);
@@ -488,8 +525,16 @@ mod tests {
         let mut tree = make_tree_with_widgets(vec![parent, child]);
         apply_constraints(&mut tree);
         let r = tree.widgets[1].rect.clone();
-        assert!((r.x - 260.0).abs() < 0.01, "child x should centre in frame (260), got {}", r.x);
-        assert!((r.y - 230.0).abs() < 0.01, "child y should centre in frame (230), got {}", r.y);
+        assert!(
+            (r.x - 260.0).abs() < 0.01,
+            "child x should centre in frame (260), got {}",
+            r.x
+        );
+        assert!(
+            (r.y - 230.0).abs() < 0.01,
+            "child y should centre in frame (230), got {}",
+            r.y
+        );
     }
 
     #[test]
@@ -501,7 +546,10 @@ mod tests {
         let mut tree = make_tree_with_widgets(vec![source, follower]);
         apply_constraints(&mut tree);
         let fw = tree.widgets[1].rect.w;
-        assert!((fw - 150.0).abs() < 0.01, "follower width should equal source (150), got {fw}");
+        assert!(
+            (fw - 150.0).abs() < 0.01,
+            "follower width should equal source (150), got {fw}"
+        );
     }
 
     #[test]
@@ -513,7 +561,10 @@ mod tests {
         let mut tree = make_tree_with_widgets(vec![source, follower]);
         apply_constraints(&mut tree);
         let fh = tree.widgets[1].rect.h;
-        assert!((fh - 60.0).abs() < 0.01, "follower height should equal source (60), got {fh}");
+        assert!(
+            (fh - 60.0).abs() < 0.01,
+            "follower height should equal source (60), got {fh}"
+        );
     }
 
     #[test]
@@ -522,7 +573,10 @@ mod tests {
         w.constraints.min_w = Some(50.0);
         let mut tree = make_tree_with_widgets(vec![w]);
         apply_constraints(&mut tree);
-        assert!(tree.widgets[0].rect.w >= 50.0, "min_w should clamp width to 50");
+        assert!(
+            tree.widgets[0].rect.w >= 50.0,
+            "min_w should clamp width to 50"
+        );
     }
 
     #[test]
@@ -531,7 +585,10 @@ mod tests {
         w.constraints.max_w = Some(100.0);
         let mut tree = make_tree_with_widgets(vec![w]);
         apply_constraints(&mut tree);
-        assert!(tree.widgets[0].rect.w <= 100.0, "max_w should clamp width to 100");
+        assert!(
+            tree.widgets[0].rect.w <= 100.0,
+            "max_w should clamp width to 100"
+        );
     }
 
     #[test]
@@ -541,7 +598,9 @@ mod tests {
         let tree = make_tree_with_widgets(vec![w]);
         let errors = validate_constraints(&tree);
         assert!(
-            errors.iter().any(|e| matches!(e, ConstraintError::UnknownTarget { .. })),
+            errors
+                .iter()
+                .any(|e| matches!(e, ConstraintError::UnknownTarget { .. })),
             "should detect unknown target, errors={errors:?}"
         );
     }
@@ -554,7 +613,9 @@ mod tests {
         let tree = make_tree_with_widgets(vec![w]);
         let errors = validate_constraints(&tree);
         assert!(
-            errors.iter().any(|e| matches!(e, ConstraintError::SelfReference { .. })),
+            errors
+                .iter()
+                .any(|e| matches!(e, ConstraintError::SelfReference { .. })),
             "should detect self-reference, errors={errors:?}"
         );
     }
@@ -566,7 +627,9 @@ mod tests {
         let tree = make_tree_with_widgets(vec![w]);
         let errors = validate_constraints(&tree);
         assert!(
-            errors.iter().any(|e| matches!(e, ConstraintError::InvalidAspectRatio { .. })),
+            errors
+                .iter()
+                .any(|e| matches!(e, ConstraintError::InvalidAspectRatio { .. })),
             "should detect invalid aspect ratio, errors={errors:?}"
         );
     }
@@ -577,7 +640,10 @@ mod tests {
         let w2 = widget_at(200.0, 0.0, 80.0, 40.0);
         let tree = make_tree_with_widgets(vec![w1, w2]);
         let errors = validate_constraints(&tree);
-        assert!(errors.is_empty(), "clean tree should have no errors, got {errors:?}");
+        assert!(
+            errors.is_empty(),
+            "clean tree should have no errors, got {errors:?}"
+        );
     }
 
     #[test]
@@ -589,7 +655,9 @@ mod tests {
         let tree = make_tree_with_widgets(vec![a, b]);
         let errors = validate_constraints(&tree);
         assert!(
-            errors.iter().any(|e| matches!(e, ConstraintError::EqualSizeCycle { .. })),
+            errors
+                .iter()
+                .any(|e| matches!(e, ConstraintError::EqualSizeCycle { .. })),
             "should detect equal-size cycle, errors={errors:?}"
         );
     }

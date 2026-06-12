@@ -7,6 +7,20 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-12 — v0.2.0 audit remediation: export gates + widget-authoring UX
+
+Branch `dev`. Remediation is complete and ready for a scoped local commit.
+Generated-project checks now run normally with `-D warnings`; embedded SVG is
+std-only; formula/database export state and dependencies are complete. All six
+ignored tests were promoted, which exposed and fixed an infinite loop on
+malformed path numbers after `Z`; the suite is now 515 + 17 + doctest, zero
+ignored. Widget authoring is consolidated under Widgets: Create New Widget opens
+the true Visual Widget Maker, with guided/advanced descriptor paths clearly
+named; all three windows share viewport-safe bounds. Do not merge while Claude
+is active/ambiguous. After this commit, resume S1 anchor-handle drag and nested-
+layout Lazare round-trip, then reorder bespoke secure-code milestones before
+Stage 15.
+
 ## 2026-06-12 — S1 finished: constraint-solver bug fix + 3 half-wired fields wired
 
 Branch `dev`. Finished the S1 parity gaps the checker found. **Real latent bug

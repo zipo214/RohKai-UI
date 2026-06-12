@@ -596,7 +596,10 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                     }
                     emit_layout_child_lines(child, &mut lines);
                     for _ in 1..span {
-                        lines.push((Some(child.id), "            ui.label(\"\"); // span filler".to_owned()));
+                        lines.push((
+                            Some(child.id),
+                            "            ui.label(\"\"); // span filler".to_owned(),
+                        ));
                     }
                     col_pos += span;
                     if col_pos >= columns {
@@ -1205,7 +1208,11 @@ fn child_size_str(child: &WidgetInstance) -> String {
 /// container default applies). `Stretch` is not exposed in the UI (the
 /// container only supports Start/Center/End), so it folds to the default.
 fn cross_align_open(child: &WidgetInstance, vertical: bool) -> Option<String> {
-    let axis = if vertical { "top_down" } else { "left_to_right" };
+    let axis = if vertical {
+        "top_down"
+    } else {
+        "left_to_right"
+    };
     match child.child_cross_align {
         Some(CrossAlign::Center) => Some(format!(
             "        ui.with_layout(egui::Layout::{axis}(egui::Align::Center), |ui| {{"
@@ -2121,7 +2128,10 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let tree = UiTree { widgets, ..Default::default() };
+        let tree = UiTree {
+            widgets,
+            ..Default::default()
+        };
         let code = emit_indexed(&tree)
             .into_iter()
             .map(|(_, l)| l)
@@ -2156,7 +2166,10 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let tree = UiTree { widgets, ..Default::default() };
+        let tree = UiTree {
+            widgets,
+            ..Default::default()
+        };
         let code = emit_indexed(&tree)
             .into_iter()
             .map(|(_, l)| l)
@@ -2182,7 +2195,10 @@ mod tests {
                 id: parent_id,
                 kind: WidgetKind::GridLayout,
                 children: vec![span2_id, normal_id],
-                props: WidgetProps { grid_columns: 3, ..Default::default() },
+                props: WidgetProps {
+                    grid_columns: 3,
+                    ..Default::default()
+                },
                 ..Default::default()
             },
             WidgetInstance {
@@ -2198,7 +2214,10 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let tree = UiTree { widgets, ..Default::default() };
+        let tree = UiTree {
+            widgets,
+            ..Default::default()
+        };
         let code = emit_indexed(&tree)
             .into_iter()
             .map(|(_, l)| l)
@@ -2223,7 +2242,10 @@ mod tests {
                 id: parent_id,
                 kind: WidgetKind::GridLayout,
                 children: vec![child_id],
-                props: WidgetProps { grid_columns: 2, ..Default::default() },
+                props: WidgetProps {
+                    grid_columns: 2,
+                    ..Default::default()
+                },
                 ..Default::default()
             },
             WidgetInstance {
@@ -2233,7 +2255,10 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let tree = UiTree { widgets, ..Default::default() };
+        let tree = UiTree {
+            widgets,
+            ..Default::default()
+        };
         let code = emit_indexed(&tree)
             .into_iter()
             .map(|(_, l)| l)

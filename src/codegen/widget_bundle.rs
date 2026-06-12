@@ -133,9 +133,7 @@ pub fn build_bundle(descriptors: &[WidgetDescriptor], path: &Path) -> Result<(),
             let name_bytes = name.as_bytes().to_vec();
             let data_len = data.len() as u32;
             let crc = crc32_ieee(data);
-            let local_offset = cursor
-                .stream_position()
-                .map_err(|e| format!("seek: {e}"))? as u32;
+            let local_offset = cursor.stream_position().map_err(|e| format!("seek: {e}"))? as u32;
 
             // Local file header (30 bytes + filename)
             write_local_header(&mut cursor, &name_bytes, data_len, crc)
@@ -173,13 +171,8 @@ pub fn build_bundle(descriptors: &[WidgetDescriptor], path: &Path) -> Result<(),
         let cd_size = cd_end - cd_offset;
 
         // End of central directory record (22 bytes)
-        write_eocd(
-            &mut cursor,
-            central.len() as u16,
-            cd_size,
-            cd_offset,
-        )
-        .map_err(|e| format!("write eocd: {e}"))?;
+        write_eocd(&mut cursor, central.len() as u16, cd_size, cd_offset)
+            .map_err(|e| format!("write eocd: {e}"))?;
     } // cursor dropped here, releasing the mutable borrow on buf
 
     std::fs::write(path, &buf).map_err(|e| format!("write file: {e}"))
@@ -357,10 +350,12 @@ mod tests {
 
     #[test]
     fn bundle_write_produces_zip_magic_bytes() {
-        let dir =
-            std::env::temp_dir().join(format!("rohkai_bundle_{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("rohkai_bundle_{}", uuid::Uuid::new_v4()));
         let path = dir.join("test.rkwb");
-        let descriptors = vec![make_descriptor("test.button"), make_descriptor("test.label")];
+        let descriptors = vec![
+            make_descriptor("test.button"),
+            make_descriptor("test.label"),
+        ];
 
         build_bundle(&descriptors, &path).expect("build_bundle must succeed");
 
@@ -372,9 +367,18 @@ mod tests {
 
         // Verify we can find both .rkwd filenames in the raw bytes.
         let text = String::from_utf8_lossy(&bytes);
-        assert!(text.contains("test.button.rkwd"), "bundle must contain test.button.rkwd entry");
-        assert!(text.contains("test.label.rkwd"), "bundle must contain test.label.rkwd entry");
-        assert!(text.contains("manifest.json"), "bundle must contain manifest.json entry");
+        assert!(
+            text.contains("test.button.rkwd"),
+            "bundle must contain test.button.rkwd entry"
+        );
+        assert!(
+            text.contains("test.label.rkwd"),
+            "bundle must contain test.label.rkwd entry"
+        );
+        assert!(
+            text.contains("manifest.json"),
+            "bundle must contain manifest.json entry"
+        );
 
         let _ = std::fs::remove_dir_all(dir);
     }

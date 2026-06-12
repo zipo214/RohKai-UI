@@ -249,7 +249,7 @@
 - [x] Add `WidgetMakerDocument` internal model for visual primitive composition.
       (`WidgetMakerDoc` + `MakerPrimitive` in `src/canvas/widget_maker.rs`; commit 4f60e72)
 - [x] Add separate Visual Widget Maker window with mini-canvas and inspector.
-      (floating window via `widget_maker_panel`; "Visual Widget Maker…" in Tools menu)
+      (`widget_maker_panel`; Widgets → Create New Widget…)
 - [x] Primitive vertical slice: rect, outline, ellipse, text; drag/select/resize
       (interactive corner handles), normalised [0,1] coordinates.
       (hit region / z-order reorder remain as future depth items)
@@ -259,8 +259,13 @@
       (`doc_to_descriptor` → JSON with live_preview + export templates)
 - [x] Save generated descriptor to `widgets/`, reload palette, and preserve
       Advanced Descriptor escape hatch. (Save button + `load_from_widgets_dir` refresh)
-- [ ] Later: z-order reorder, hit regions, slots, layout groups, constraints,
-      state variants, event zones, style tokens, round-trip from .rkwd to maker doc.
+- [x] Z-order reorder, hit regions, slots, H/V/Grid/Stack layout groups, anchors,
+      state variants, event zones, style tokens, and Visual-Maker `.rkwd`
+      round-trip metadata.
+- [x] Consolidate widget authoring under the Widgets menu: Create New Widget
+      opens the Visual Widget Maker; guided and advanced descriptor editors are
+      explicitly named secondary paths. All three windows share viewport-safe
+      bounds and cannot persist off-screen.
 
 ## Stage 7.x - SVG Source Viewing — Historical Snapshot
 
@@ -611,8 +616,9 @@ See `docs/STAGE11_PLAN.md` for the full design (function, depth, UX, impact).
       definition wins, a near-handler `// CODEGEN CONFLICT` comment plus a
       top-of-`app.rs` conflict summary block. Button Click+DoubleClick fire
       independently per egui semantics (Click not suppressed). A real `cargo check`
-      compile fixture (`export_compile_fixture_cargo_check`, `#[ignore]`) +
-      always-run smoke now prove the generated crate compiles across top + nested
+      warning-denied compile fixtures (`export_compile_fixture_cargo_check` and
+      `all_builtin_widgets_export_cargo_check`) run in the normal test suite and
+      prove generated crates compile across top + nested
       events, async Plain/Result, FilePicker/rfd, channel fields, iterator methods,
       simple local trait binding, and state bindings. Remaining (not top-class):
       auto-bind status to a widget, cancellation/progress, typed task I/O, and
@@ -744,9 +750,10 @@ and prioritizes depth over more palette breadth.
       formula parser (formula.rs) and Rust emitter; Chart remains Vec<f32> bar
       MVP. Separate charting library system deferred to Stage 13.
 - [x] Visual Widget Maker: WidgetMakerDoc + MakerPrimitive data model
-      (Rect/Outline/Ellipse/Text); normalised primitive mini-canvas; toolbar;
-      RGB/position/size properties; generated code preview; Save Descriptor
-      button writes .rkwd + reloads palette. "Visual Widget Maker…" in Tools menu.
+      (Rect/Outline/Ellipse/Text/HitRegion plus layout groups); normalised
+      primitive mini-canvas; toolbar; RGB/position/size/state/slot properties;
+      generated code preview; Save Descriptor writes .rkwd + reloads palette.
+      Widgets → Create New Widget opens this true visual construction surface.
 - [x] Object Inspector/component tray depth: describe_kind() per-component
       description; "design-time stub" runtime status badge; sectioned Identity/
       Handler/Generated config layout; generated AppState field + update() comment

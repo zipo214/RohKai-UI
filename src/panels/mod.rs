@@ -21,3 +21,4 @@ pub mod svg_report;
 pub mod templates;
 pub mod widget_builder;
 pub mod widget_maker_panel;
+pub mod window_bounds;

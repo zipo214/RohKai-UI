@@ -7,8 +7,7 @@
 
 use crate::canvas::widget_maker::{
     doc_to_descriptor, gen_export_template, gen_live_preview, is_group_kind, MakerPrimKind,
-    MakerPrimitive, PrimAnchor, PrimState, SlotDef, StyleTokens,
-    WidgetMakerDoc,
+    MakerPrimitive, PrimAnchor, PrimState, SlotDef, StyleTokens, WidgetMakerDoc,
 };
 use egui::Color32;
 
@@ -36,73 +35,88 @@ pub fn show_widget_maker_window(
     };
 
     let mut keep_open = *open;
+    let bounds = crate::panels::window_bounds::authoring_window_bounds(
+        ctx.screen_rect(),
+        egui::vec2(960.0, 620.0),
+        egui::vec2(700.0, 460.0),
+    );
     egui::Window::new("Visual Widget Maker")
         .id(egui::Id::new("widget_maker_window"))
         .open(&mut keep_open)
+        .default_pos(bounds.default_pos)
+        .default_size(bounds.default_size)
+        .min_size(bounds.min_size)
+        .max_size(bounds.max_size)
         .resizable(true)
-        .min_width(700.0)
-        .min_height(460.0)
+        .constrain(true)
         .show(ctx, |ui| {
-            ui.horizontal_top(|ui| {
-                // ---- Left: mini-canvas + primitive list + toolbar ----
-                ui.vertical(|ui| {
-                    ui.label(egui::RichText::new("Canvas").strong());
-                    show_mini_canvas(ui, doc);
-                    ui.separator();
-                    show_toolbar(ui, doc);
-                    ui.separator();
-                    // Item 2: Primitive list with z-order ↑/↓ buttons
-                    show_primitive_list(ui, doc);
-                });
+            egui::ScrollArea::both()
+                .id_salt("widget_maker_window_scroll")
+                .show(ui, |ui| {
+                    ui.horizontal_top(|ui| {
+                        // ---- Left: mini-canvas + primitive list + toolbar ----
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new("Canvas").strong());
+                            show_mini_canvas(ui, doc);
+                            ui.separator();
+                            show_toolbar(ui, doc);
+                            ui.separator();
+                            // Item 2: Primitive list with z-order ↑/↓ buttons
+                            show_primitive_list(ui, doc);
+                        });
 
-                ui.separator();
+                        ui.separator();
 
-                // ---- Right: tabs (Properties | Code Preview) ----
-                ui.vertical(|ui| {
-                    ui.set_min_width(300.0);
+                        // ---- Right: tabs (Properties | Code Preview) ----
+                        ui.vertical(|ui| {
+                            ui.set_min_width(300.0);
 
-                    // Tab bar
-                    let active_tab = ui.data_mut(|d| {
-                        *d.get_temp_mut_or_default::<WmTab>(egui::Id::new("wm_active_tab"))
-                    });
-                    ui.horizontal(|ui| {
-                        if ui
-                            .selectable_label(active_tab == WmTab::Properties, "Properties")
-                            .clicked()
-                        {
-                            ui.data_mut(|d| {
-                                *d.get_temp_mut_or_default::<WmTab>(egui::Id::new(
-                                    "wm_active_tab",
-                                )) = WmTab::Properties;
+                            // Tab bar
+                            let active_tab = ui.data_mut(|d| {
+                                *d.get_temp_mut_or_default::<WmTab>(egui::Id::new("wm_active_tab"))
                             });
-                        }
-                        if ui
-                            .selectable_label(active_tab == WmTab::CodePreview, "Code Preview")
-                            .clicked()
-                        {
-                            ui.data_mut(|d| {
-                                *d.get_temp_mut_or_default::<WmTab>(egui::Id::new(
-                                    "wm_active_tab",
-                                )) = WmTab::CodePreview;
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .selectable_label(active_tab == WmTab::Properties, "Properties")
+                                    .clicked()
+                                {
+                                    ui.data_mut(|d| {
+                                        *d.get_temp_mut_or_default::<WmTab>(egui::Id::new(
+                                            "wm_active_tab",
+                                        )) = WmTab::Properties;
+                                    });
+                                }
+                                if ui
+                                    .selectable_label(
+                                        active_tab == WmTab::CodePreview,
+                                        "Code Preview",
+                                    )
+                                    .clicked()
+                                {
+                                    ui.data_mut(|d| {
+                                        *d.get_temp_mut_or_default::<WmTab>(egui::Id::new(
+                                            "wm_active_tab",
+                                        )) = WmTab::CodePreview;
+                                    });
+                                }
                             });
-                        }
-                    });
-                    ui.separator();
+                            ui.separator();
 
-                    // Re-read after possible mutation above
-                    let active_tab = ui.data_mut(|d| {
-                        *d.get_temp_mut_or_default::<WmTab>(egui::Id::new("wm_active_tab"))
+                            // Re-read after possible mutation above
+                            let active_tab = ui.data_mut(|d| {
+                                *d.get_temp_mut_or_default::<WmTab>(egui::Id::new("wm_active_tab"))
+                            });
+                            match active_tab {
+                                WmTab::Properties => {
+                                    show_properties_tab(ui, doc, &mut result);
+                                }
+                                WmTab::CodePreview => {
+                                    show_code_preview_tab(ui, doc);
+                                }
+                            }
+                        });
                     });
-                    match active_tab {
-                        WmTab::Properties => {
-                            show_properties_tab(ui, doc, &mut result);
-                        }
-                        WmTab::CodePreview => {
-                            show_code_preview_tab(ui, doc);
-                        }
-                    }
                 });
-            });
         });
 
     if !keep_open {
@@ -451,7 +465,10 @@ fn show_toolbar(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
         if ui.small_button("↔ HGroup").clicked() {
             doc.primitives.push(MakerPrimitive {
                 kind: MakerPrimKind::HGroup,
-                x: 0.0, y: 0.0, w: 1.0, h: 1.0,
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
                 group_gap: 4.0,
                 ..Default::default()
             });
@@ -460,7 +477,10 @@ fn show_toolbar(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
         if ui.small_button("↕ VGroup").clicked() {
             doc.primitives.push(MakerPrimitive {
                 kind: MakerPrimKind::VGroup,
-                x: 0.0, y: 0.0, w: 1.0, h: 1.0,
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
                 group_gap: 4.0,
                 ..Default::default()
             });
@@ -469,7 +489,10 @@ fn show_toolbar(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
         if ui.small_button("⊞ Grid").clicked() {
             doc.primitives.push(MakerPrimitive {
                 kind: MakerPrimKind::Grid,
-                x: 0.0, y: 0.0, w: 1.0, h: 1.0,
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
                 group_gap: 4.0,
                 grid_cols: 2,
                 ..Default::default()
@@ -479,7 +502,10 @@ fn show_toolbar(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
         if ui.small_button("⬛ Stack").clicked() {
             doc.primitives.push(MakerPrimitive {
                 kind: MakerPrimKind::Stack,
-                x: 0.0, y: 0.0, w: 1.0, h: 1.0,
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
                 ..Default::default()
             });
             doc.selected = Some(doc.primitives.len() - 1);
@@ -623,13 +649,29 @@ fn show_slots(ui: &mut egui::Ui, slots: &mut Vec<SlotDef>) {
                         .desired_width(80.0),
                 );
                 ui.label(egui::RichText::new("x").small().weak());
-                ui.add(egui::DragValue::new(&mut slot.x).range(0.0..=1.0_f32).speed(0.005));
+                ui.add(
+                    egui::DragValue::new(&mut slot.x)
+                        .range(0.0..=1.0_f32)
+                        .speed(0.005),
+                );
                 ui.label(egui::RichText::new("y").small().weak());
-                ui.add(egui::DragValue::new(&mut slot.y).range(0.0..=1.0_f32).speed(0.005));
+                ui.add(
+                    egui::DragValue::new(&mut slot.y)
+                        .range(0.0..=1.0_f32)
+                        .speed(0.005),
+                );
                 ui.label(egui::RichText::new("w").small().weak());
-                ui.add(egui::DragValue::new(&mut slot.w).range(0.01..=1.0_f32).speed(0.005));
+                ui.add(
+                    egui::DragValue::new(&mut slot.w)
+                        .range(0.01..=1.0_f32)
+                        .speed(0.005),
+                );
                 ui.label(egui::RichText::new("h").small().weak());
-                ui.add(egui::DragValue::new(&mut slot.h).range(0.01..=1.0_f32).speed(0.005));
+                ui.add(
+                    egui::DragValue::new(&mut slot.h)
+                        .range(0.01..=1.0_f32)
+                        .speed(0.005),
+                );
                 if ui.small_button("✕").clicked() {
                     remove = Some(i);
                 }
@@ -804,7 +846,11 @@ fn show_primitive_props(ui: &mut egui::Ui, prim: &mut MakerPrimitive) {
         ui.label(egui::RichText::new("Group").small().strong());
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Gap").small().weak());
-            ui.add(egui::DragValue::new(&mut prim.group_gap).range(0.0..=64.0_f32).speed(0.5));
+            ui.add(
+                egui::DragValue::new(&mut prim.group_gap)
+                    .range(0.0..=64.0_f32)
+                    .speed(0.5),
+            );
         });
         if matches!(prim.kind, MakerPrimKind::Grid) {
             ui.horizontal(|ui| {
@@ -863,37 +909,43 @@ fn show_primitive_props(ui: &mut egui::Ui, prim: &mut MakerPrimitive) {
     // State variants (non-group, non-HitRegion kinds only)
     if !is_group_kind(&prim.kind) && !matches!(prim.kind, MakerPrimKind::HitRegion) {
         ui.separator();
-        ui.collapsing(egui::RichText::new("State Variants").small().strong(), |ui| {
-            for &state in PrimState::ALL {
-                if matches!(state, PrimState::Normal) {
-                    continue;
-                }
-                let enabled = prim.variants.get(state).is_some();
-                let mut is_enabled = enabled;
-                ui.horizontal(|ui| {
-                    if ui.checkbox(&mut is_enabled, egui::RichText::new(state.label()).small()).changed() {
-                        prim.variants.set_enabled(state, is_enabled);
+        ui.collapsing(
+            egui::RichText::new("State Variants").small().strong(),
+            |ui| {
+                for &state in PrimState::ALL {
+                    if matches!(state, PrimState::Normal) {
+                        continue;
                     }
-                    if is_enabled {
-                        if let Some(ov) = prim.variants.get_mut(state) {
-                            let has_fill = ov.fill.is_some();
-                            let mut fill_on = has_fill;
-                            ui.checkbox(&mut fill_on, egui::RichText::new("Fill").small());
-                            if fill_on && !has_fill {
-                                ov.fill = Some([200, 200, 200]);
-                            } else if !fill_on {
-                                ov.fill = None;
-                            }
-                            if let Some(ref mut rgb) = ov.fill {
-                                ui.add(egui::DragValue::new(&mut rgb[0]).range(0..=255_u8));
-                                ui.add(egui::DragValue::new(&mut rgb[1]).range(0..=255_u8));
-                                ui.add(egui::DragValue::new(&mut rgb[2]).range(0..=255_u8));
+                    let enabled = prim.variants.get(state).is_some();
+                    let mut is_enabled = enabled;
+                    ui.horizontal(|ui| {
+                        if ui
+                            .checkbox(&mut is_enabled, egui::RichText::new(state.label()).small())
+                            .changed()
+                        {
+                            prim.variants.set_enabled(state, is_enabled);
+                        }
+                        if is_enabled {
+                            if let Some(ov) = prim.variants.get_mut(state) {
+                                let has_fill = ov.fill.is_some();
+                                let mut fill_on = has_fill;
+                                ui.checkbox(&mut fill_on, egui::RichText::new("Fill").small());
+                                if fill_on && !has_fill {
+                                    ov.fill = Some([200, 200, 200]);
+                                } else if !fill_on {
+                                    ov.fill = None;
+                                }
+                                if let Some(ref mut rgb) = ov.fill {
+                                    ui.add(egui::DragValue::new(&mut rgb[0]).range(0..=255_u8));
+                                    ui.add(egui::DragValue::new(&mut rgb[1]).range(0..=255_u8));
+                                    ui.add(egui::DragValue::new(&mut rgb[2]).range(0..=255_u8));
+                                }
                             }
                         }
-                    }
-                });
-            }
-        });
+                    });
+                }
+            },
+        );
     }
 }
 
@@ -991,7 +1043,11 @@ fn draw_primitive(
                 | MakerPrimKind::VGroup
                 | MakerPrimKind::Grid
                 | MakerPrimKind::Stack => {
-                    painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, Color32::from_rgb(100, 180, 100)));
+                    painter.rect_stroke(
+                        rect,
+                        2.0,
+                        egui::Stroke::new(1.0, Color32::from_rgb(100, 180, 100)),
+                    );
                 }
             }
         }

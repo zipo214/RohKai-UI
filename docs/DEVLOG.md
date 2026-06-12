@@ -2,6 +2,62 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-12 — Export gates, SVG fuzz hardening, and widget-authoring UX
+
+### Context Reviewed
+- Preflight, `AGENTS.md`, latest `CODE_COOP.md`, engineering invariants, project
+  model/SVG skills, exact `v0.2.0` release state, current `dev`, and Claude's S1
+  handoff.
+- Generated-project fixtures, SVG embedded-source contract, formula/state
+  collection, database export, widget-authoring menus/windows.
+
+### Findings
+- Six important tests were ignored. The two export fixtures failed when run:
+  embedded SVG referenced undeclared `rayon`; formula expressions emitted
+  `self.field` in an exported `self.state` context; DB-bound projects omitted
+  `rusqlite`; generated wiring/layout/tab code was not warning-clean.
+- Promoting the SVG fuzz sweep exposed an infinite path-parser loop for malformed
+  numeric operands after `Z`.
+- File and Widgets menus duplicated three authoring commands. “Create Custom
+  Widget” opened the guided descriptor builder rather than the true visual
+  composition tool. All three authoring windows could exceed the viewport.
+
+### Changes
+- Export compile fixtures are normal warning-denied tests, share a Cargo target,
+  and cover every built-in widget plus SVG, formula, DB, FilePicker, events, and
+  Rust wiring. Generated code now treats intentionally latent wiring/state APIs
+  explicitly and emits warning-clean empty layouts/tabs.
+- Embedded SVG batch rasterization uses scoped std threads with deterministic
+  ordering; no embedded `rayon` reference remains.
+- Formula functions/arity are validated; variables are collected as `f32`
+  AppState fields; live/export emission uses caller-provided state paths.
+- DB bindings add bundled `rusqlite`, emit state/default/loader parity, and get a
+  deterministic fallback field when no Binding is supplied.
+- All six ignores removed. Renderer perf/oracle/fuzz gates run normally. Added a
+  parser progress invariant and exact regression for malformed numbers after
+  close-path.
+- Widgets menu now owns Create New Widget (Visual Widget Maker), Guided
+  Descriptor Builder, and Advanced Descriptor Editor. File-menu duplicates were
+  removed. Shared viewport bounds constrain all three windows; Visual Widget
+  Maker content scrolls on small screens.
+- Ran `cargo fmt` to repair pre-existing repository-wide formatting drift.
+
+### Verification
+- `cargo test`: 515 unit tests + 17 fidelity tests + 1 doctest; zero failed,
+  zero ignored.
+- Both generated projects pass `cargo check` with `RUSTFLAGS=-Dwarnings`.
+- `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, encoding,
+  dependency policy, and `scripts/validate-svg-import.ps1`: pass.
+- App launches and responds. Windows GPU capture returned a blank wgpu client
+  surface in this automation desktop, so visual screenshot proof was not
+  claimed; viewport geometry is covered at normal and tiny sizes.
+
+### Risks / Follow-ups
+- S1 is not complete: anchor visual-handle drag and nested-layout Lazare
+  round-trip remain.
+- Do not merge while Claude is active or ambiguous. Next, finish those S1 items,
+  then reorder bespoke secure in-house code milestones before Stage 15.
+
 ## 2026-06-12 — S1 parity gaps finished (constraint solver bug + 3 half-wired fields)
 
 ### Context Reviewed

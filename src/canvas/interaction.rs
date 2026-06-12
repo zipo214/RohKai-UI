@@ -2517,12 +2517,8 @@ pub fn handle(
                                 {
                                     let v = (pos - origin) / zoom;
                                     let pos_canvas = egui::pos2(v.x, v.y);
-                                    let insert_idx = layout_insert_idx(
-                                        parent,
-                                        &tree.widgets,
-                                        pos_canvas,
-                                        did,
-                                    );
+                                    let insert_idx =
+                                        layout_insert_idx(parent, &tree.widgets, pos_canvas, did);
                                     state.reorder_drag = Some(ReorderDrag {
                                         child_id: did,
                                         parent_id: pid,
@@ -2925,9 +2921,7 @@ pub fn handle(
             if let Some(pos) = pointer {
                 let v = (pos - origin) / zoom;
                 let pos_canvas = egui::pos2(v.x, v.y);
-                if let Some(parent) =
-                    tree.widgets.iter().find(|w| w.id == rd.parent_id).cloned()
-                {
+                if let Some(parent) = tree.widgets.iter().find(|w| w.id == rd.parent_id).cloned() {
                     rd.insert_idx =
                         layout_insert_idx(&parent, &tree.widgets, pos_canvas, rd.child_id);
                     let accent = egui::Color32::from_rgb(52, 211, 153);

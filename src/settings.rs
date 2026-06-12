@@ -164,10 +164,7 @@ mod tests {
             back.user_shortcuts.get("new_project"),
             Some(&"Ctrl+N".to_owned())
         );
-        assert_eq!(
-            back.user_shortcuts.get("save"),
-            Some(&"Ctrl+S".to_owned())
-        );
+        assert_eq!(back.user_shortcuts.get("save"), Some(&"Ctrl+S".to_owned()));
 
         // A settings file without user_shortcuts should deserialise to empty map
         // (the #[serde(default)] on the struct covers this).

@@ -7,7 +7,7 @@
 //! SQL string is ever assembled with `format!()`. Every query that filters by
 //! a run-time value uses a prepared statement with positional parameters.
 
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use std::fmt;
 
 // ---------------------------------------------------------------------------
@@ -114,9 +114,7 @@ impl SqliteEngine {
         if name.is_empty() {
             return Err(DbError::Query("Empty identifier".to_owned()));
         }
-        let ok = name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_');
+        let ok = name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
         if ok {
             Ok(())
         } else {
@@ -135,8 +133,7 @@ impl Default for SqliteEngine {
 
 impl DatabaseEngine for SqliteEngine {
     fn connect(&mut self, path: &str) -> Result<(), DbError> {
-        let conn = Connection::open(path)
-            .map_err(|e| DbError::Connection(e.to_string()))?;
+        let conn = Connection::open(path).map_err(|e| DbError::Connection(e.to_string()))?;
         self.conn = Some(conn);
         Ok(())
     }
@@ -144,12 +141,9 @@ impl DatabaseEngine for SqliteEngine {
     fn list_tables(&self) -> Result<Vec<String>, DbError> {
         let conn = self.conn.as_ref().ok_or(DbError::NotConnected)?;
         // Filter by type='table'; the literal 'table' is a constant, not user input.
-        let mut stmt = conn.prepare(
-            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
-        )?;
-        let names: Result<Vec<String>, _> = stmt
-            .query_map([], |row| row.get(0))?
-            .collect();
+        let mut stmt =
+            conn.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")?;
+        let names: Result<Vec<String>, _> = stmt.query_map([], |row| row.get(0))?.collect();
         names.map_err(DbError::from)
     }
 
@@ -218,7 +212,9 @@ mod tests {
     #[test]
     fn sqlite_engine_connects_to_in_memory_db() {
         let mut engine = SqliteEngine::new();
-        engine.connect(":memory:").expect("should connect to :memory:");
+        engine
+            .connect(":memory:")
+            .expect("should connect to :memory:");
     }
 
     #[test]

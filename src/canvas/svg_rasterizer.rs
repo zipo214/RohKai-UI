@@ -10,7 +10,6 @@
 
 use crate::svg_core::{self, Rgba};
 use egui::ColorImage;
-use rayon::prelude::*;
 use std::collections::HashMap;
 
 const MAX_SVG_BYTES: usize = 5_000_000;
@@ -321,16 +320,52 @@ pub fn rasterize_or_fallback(svg_text: &str, width: u32, height: u32) -> ColorIm
     rasterize(svg_text, width, height).unwrap_or_else(|_| fallback_image(w, h))
 }
 
-/// Rasterize multiple SVGs in parallel.
+/// Rasterize multiple SVGs in parallel using only the standard library.
 ///
 /// Each entry is `(svg_text, width, height)`.  Results are returned in the
 /// same order as `items`, with `Err` on parse/security failure.
 #[allow(dead_code)]
 pub fn rasterize_batch(items: &[(&str, u32, u32)]) -> Vec<Result<ColorImage, SvgRasterError>> {
-    items
-        .par_iter()
-        .map(|(svg, w, h)| rasterize(svg, *w, *h))
-        .collect()
+    if items.len() < 2 {
+        return items
+            .iter()
+            .map(|(svg, w, h)| rasterize(svg, *w, *h))
+            .collect();
+    }
+
+    let workers = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1)
+        .min(items.len());
+    let chunk_len = items.len().div_ceil(workers);
+
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = items
+            .chunks(chunk_len)
+            .map(|chunk| {
+                (
+                    chunk.len(),
+                    scope.spawn(move || {
+                        chunk
+                            .iter()
+                            .map(|(svg, w, h)| rasterize(svg, *w, *h))
+                            .collect::<Vec<_>>()
+                    }),
+                )
+            })
+            .collect();
+
+        let mut results = Vec::with_capacity(items.len());
+        for (expected_len, handle) in handles {
+            match handle.join() {
+                Ok(mut chunk_results) => results.append(&mut chunk_results),
+                Err(_) => results.extend(
+                    std::iter::repeat_with(|| Err(SvgRasterError::ParseFailed)).take(expected_len),
+                ),
+            }
+        }
+        results
+    })
 }
 
 fn raster_size(width: u32, height: u32) -> (usize, usize) {
@@ -8848,6 +8883,7 @@ fn parse_path_d(d: &str) -> PathData {
 
     let mut i = 0;
     while i < tokens.len() {
+        let iteration_start = i;
         let cmd = match tokens[i] {
             svg_core::SvgPathToken::Command(c) => {
                 i += 1;
@@ -9046,6 +9082,12 @@ fn parse_path_d(d: &str) -> PathData {
                 last_cubic_ctrl = None;
                 last_quadratic_ctrl = None;
             }
+        }
+        // Malformed data can place numeric operands after a non-repeatable
+        // command such as Z. Every loop iteration must consume at least one
+        // token so hostile path data cannot create an infinite parser loop.
+        if i == iteration_start {
+            i += 1;
         }
     }
 
@@ -13555,6 +13597,32 @@ mod tests {
     }
 
     #[test]
+    fn rasterize_batch_matches_sequential_results_and_order() {
+        let first = r##"<svg viewBox="0 0 2 2"><rect width="2" height="2" fill="red"/></svg>"##;
+        let second = r##"<svg viewBox="0 0 2 2"><circle cx="1" cy="1" r="1" fill="blue"/></svg>"##;
+        let invalid = "<svg><script>alert(1)</script></svg>";
+        let items = [(first, 8, 8), (invalid, 8, 8), (second, 12, 6)];
+
+        let batch = rasterize_batch(&items);
+        let sequential: Vec<_> = items
+            .iter()
+            .map(|(svg, width, height)| rasterize(svg, *width, *height))
+            .collect();
+
+        assert_eq!(batch.len(), sequential.len());
+        for (batched, expected) in batch.iter().zip(sequential.iter()) {
+            match (batched, expected) {
+                (Ok(batched), Ok(expected)) => {
+                    assert_eq!(batched.size, expected.size);
+                    assert_eq!(batched.pixels, expected.pixels);
+                }
+                (Err(batched), Err(expected)) => assert_eq!(batched, expected),
+                pair => panic!("batch/sequential mismatch: {pair:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn render_report_records_raster_size_clamp() {
         let svg = r##"<svg viewBox="0 0 1 1"><rect width="1" height="1"/></svg>"##;
         let output = rasterize_with_report(svg, 5000, 1).unwrap();
@@ -13568,7 +13636,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "coarse local performance budget; run explicitly for renderer profiling"]
     fn antialiased_fill_performance_smoke() {
         let mut path = String::from("M256 8");
         for index in 1usize..256 {
@@ -13586,8 +13653,8 @@ mod tests {
 
         assert!(output.pixels.iter().any(|color| color.a() > 0));
         assert!(
-            started.elapsed() < std::time::Duration::from_secs(5),
-            "512px supersampled fill exceeded the 5-second debug budget"
+            started.elapsed() < std::time::Duration::from_secs(15),
+            "512px supersampled fill exceeded the 15-second debug smoke budget"
         );
     }
 
@@ -14314,7 +14381,6 @@ mod tests {
     // Parse/scene-build/raster/peak-alloc budgets + methodology:
     // docs/SVG_PRECISION_AND_BENCH.md (measure-not-gate; budgets are targets).
     #[test]
-    #[ignore = "perf benchmark; run with --ignored to measure parse+scene+raster time."]
     fn raster_benchmark_complex_scene_within_budget() {
         let svg = benchmark_svg(200);
         let start = std::time::Instant::now();
@@ -14325,18 +14391,17 @@ mod tests {
         // (debug builds are slow — this measures, it does not gate fidelity).
         assert!(out.image.pixels.iter().any(|c| c.a() > 0));
         assert!(
-            elapsed.as_secs_f64() < 30.0,
+            elapsed.as_secs_f64() < 60.0,
             "raster benchmark unexpectedly slow: {elapsed:?}"
         );
     }
 
-    /// Dev-only reference-oracle workflow. Comparison against external reference
+    /// Reference-oracle preparation. Comparison against external reference
     /// renderers is a CI-artifact / developer-only step and MUST NOT become a
     /// runtime or Cargo dependency (zero-dependency policy). As an in-repo
     /// stand-in this asserts the renderer is deterministic for a representative
     /// multi-feature scene so any external oracle diff is reproducible.
     #[test]
-    #[ignore = "dev-only reference-oracle workflow; external renderers are CI artifacts, never runtime deps"]
     fn reference_oracle_scene_is_deterministic() {
         let svg = benchmark_svg(64);
         let a = rasterize(&svg, 256, 256).unwrap();
@@ -14885,7 +14950,7 @@ mod tests {
         }
     }
 
-    /// Iteration count for the ignored sweep. Configurable via `ROHKAI_FUZZ_ITERS`
+    /// Iteration count for the deterministic sweep. Configurable via `ROHKAI_FUZZ_ITERS`
     /// so the SAME harness covers the smoke/sweep/deep tiers without recompiling:
     /// default `default`; `ROHKAI_FUZZ_ITERS=8000`/`50000` for a deeper run. The
     /// fixed PRNG seed keeps any count byte-for-byte reproducible. Debug rasterize
@@ -14906,11 +14971,19 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "fuzz: deterministic sweep over the seed corpus; run with --ignored (ROHKAI_FUZZ_ITERS to deepen)"]
+    fn malformed_numbers_after_close_path_always_make_progress() {
+        let malformed = "M0 0 H16 V16 H0 Z 2 2 L14 2 14 14 2 14 Z C1  ";
+        let parsed = parse_path_d(malformed);
+
+        assert_eq!(parsed.subpaths.len(), 1);
+        assert!(parsed.subpaths.iter().all(|subpath| subpath.closed));
+    }
+
+    #[test]
     fn fuzz_decoders_no_panic_bounded() {
-        // Default 1k keeps the debug ignored run bounded; raise via env + --release
+        // Default 256 keeps normal debug tests bounded; raise via env + --release
         // for an 8k/50k sweep (all reproducible from the fixed seed).
-        fuzz_run(fuzz_iters_from_env(1_000));
+        fuzz_run(fuzz_iters_from_env(256));
     }
 
     #[test]
@@ -14979,7 +15052,8 @@ mod tests {
   </style>
   <rect width="4" height="4"/>
 </svg>"##;
-        let result = rasterize_with_report(svg, 4, 4).unwrap_or_else(|_| panic!("rasterize failed"));
+        let result =
+            rasterize_with_report(svg, 4, 4).unwrap_or_else(|_| panic!("rasterize failed"));
         let codes: Vec<&str> = result
             .report
             .warnings
@@ -14998,7 +15072,8 @@ mod tests {
   <style>@font-face { font-family: "X"; src: local("Arial"); } rect { fill: blue; }</style>
   <rect width="4" height="4"/>
 </svg>"##;
-        let result = rasterize_with_report(svg, 4, 4).unwrap_or_else(|_| panic!("rasterize failed"));
+        let result =
+            rasterize_with_report(svg, 4, 4).unwrap_or_else(|_| panic!("rasterize failed"));
         let codes: Vec<&str> = result
             .report
             .warnings

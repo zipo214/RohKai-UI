@@ -110,6 +110,58 @@ fn collect_one(
         }
     }
 
+    // ---- Formula dependencies (MathLabel expression variables) ----
+    if w.kind == WidgetKind::MathLabel && !w.props.formula_expr.trim().is_empty() {
+        match crate::codegen::formula::parse_formula(&w.props.formula_expr) {
+            Ok(node) => {
+                for raw in crate::codegen::formula::collect_variables(&node) {
+                    let effective = crate::codegen::rust::effective_binding(&raw);
+                    if let Some(name) = field_binding(Some(effective.as_str())) {
+                        push_field(
+                            AppStateField {
+                                name: name.to_owned(),
+                                ty: "f32".to_owned(),
+                                default_expr: "0.0".to_owned(),
+                            },
+                            fields,
+                            seen,
+                            warnings,
+                        );
+                    } else {
+                        warnings.push(format!("Invalid formula variable {:?} skipped.", raw));
+                    }
+                }
+            }
+            Err(error) => warnings.push(format!(
+                "Formula for widget {} is invalid and was skipped: {error}",
+                w.id
+            )),
+        }
+    }
+
+    // ---- Database binding fallback field ----
+    // A DB-bound widget without an explicit Binding still needs a concrete
+    // AppState destination for the generated load_from_db() assignment.
+    if w.db_binding.is_some()
+        && w.state_binding
+            .as_deref()
+            .is_none_or(|binding| binding.trim().is_empty())
+    {
+        let (ty, default_expr) = kind_table::state_info(&w.kind)
+            .map(|info| (info.rust_type.to_owned(), default_expr_for_widget(w)))
+            .unwrap_or_else(|| ("String".to_owned(), "String::new()".to_owned()));
+        push_field(
+            AppStateField {
+                name: crate::codegen::state_emitter::db_field_name(w),
+                ty,
+                default_expr,
+            },
+            fields,
+            seen,
+            warnings,
+        );
+    }
+
     // ---- Custom props ----
     for prop in &w.custom_props {
         if let Some(b) = field_binding(Some(prop.name.as_str())) {
@@ -262,6 +314,45 @@ mod tests {
         // Button has no state_info → no fields
         assert!(r.fields.is_empty());
         assert!(r.warnings.is_empty());
+    }
+
+    #[test]
+    fn collects_formula_variables_as_f32_fields() {
+        let widget = WidgetInstance {
+            kind: WidgetKind::MathLabel,
+            props: WidgetProps {
+                formula_expr: "width * height + type".to_owned(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let result = collect(&make_tree(vec![widget]));
+        let names: Vec<_> = result
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["height", "type_value", "width"]);
+        assert!(result.fields.iter().all(|field| field.ty == "f32"));
+        assert!(result.warnings.is_empty());
+    }
+
+    #[test]
+    fn invalid_formula_adds_warning_without_fields() {
+        let widget = WidgetInstance {
+            kind: WidgetKind::MathLabel,
+            props: WidgetProps {
+                formula_expr: "unknown(value)".to_owned(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let result = collect(&make_tree(vec![widget]));
+        assert!(result.fields.is_empty());
+        assert_eq!(result.warnings.len(), 1);
+        assert!(result.warnings[0].contains("unsupported formula function"));
     }
 
     #[test]

@@ -24,11 +24,11 @@ pub fn channel_field_pairs(wiring: &RustWiring) -> Vec<(String, String)> {
         let name = dedup_name(sanitize(&ch.name), &mut used);
         let ty = ch.ty.trim();
         out.push((
-            format!("    {name}_tx: std::sync::mpsc::Sender<{ty}>,"),
+            format!("    #[allow(dead_code)]\n    {name}_tx: std::sync::mpsc::Sender<{ty}>,"),
             format!("        let ({name}_tx, {name}_rx) = std::sync::mpsc::channel::<{ty}>();"),
         ));
         out.push((
-            format!("    {name}_rx: std::sync::mpsc::Receiver<{ty}>,"),
+            format!("    #[allow(dead_code)]\n    {name}_rx: std::sync::mpsc::Receiver<{ty}>,"),
             String::new(),
         ));
     }
@@ -76,7 +76,9 @@ pub fn trait_impl_blocks(wiring: &RustWiring) -> String {
             continue;
         }
         if is_simple_ident(tr) {
-            s.push_str(&format!("\ntrait {tr} {{\n    {method};\n}}\n"));
+            s.push_str(&format!(
+                "\n#[allow(dead_code)]\ntrait {tr} {{\n    {method};\n}}\n"
+            ));
         }
         s.push_str(&format!(
             "\nimpl {tr} for ExportedApp {{\n    {method} {{\n        {body}\n    }}\n}}\n"

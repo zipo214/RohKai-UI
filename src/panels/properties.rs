@@ -1999,8 +1999,11 @@ fn show_layout_child_props(
                     .selectable_label(current == variant, variant.label())
                     .clicked()
                 {
-                    w.child_cross_align =
-                        if variant == CrossAlign::Start { None } else { Some(variant) };
+                    w.child_cross_align = if variant == CrossAlign::Start {
+                        None
+                    } else {
+                        Some(variant)
+                    };
                 }
             }
         });

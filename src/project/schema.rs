@@ -1323,7 +1323,10 @@ mod tests {
     fn layout_child_fields_skip_serialized_at_defaults() {
         let w = WidgetInstance::default();
         let json = serde_json::to_string(&w).expect("serialize");
-        assert!(!json.contains("child_cross_align"), "default cross_align omitted");
+        assert!(
+            !json.contains("child_cross_align"),
+            "default cross_align omitted"
+        );
         assert!(!json.contains("child_flex"), "zero flex omitted");
         assert!(!json.contains("grid_col_span"), "default col_span omitted");
         assert!(!json.contains("grid_row_span"), "default row_span omitted");
@@ -1334,9 +1337,18 @@ mod tests {
     #[test]
     fn state_machine_default_has_empty_states() {
         let sm = StateMachineProps::default();
-        assert!(sm.states.is_empty(), "default StateMachineProps must have no states");
-        assert!(sm.transitions.is_empty(), "default StateMachineProps must have no transitions");
-        assert!(sm.initial_state.is_empty(), "default initial_state must be empty");
+        assert!(
+            sm.states.is_empty(),
+            "default StateMachineProps must have no states"
+        );
+        assert!(
+            sm.transitions.is_empty(),
+            "default StateMachineProps must have no transitions"
+        );
+        assert!(
+            sm.initial_state.is_empty(),
+            "default initial_state must be empty"
+        );
     }
 
     #[test]
@@ -1350,8 +1362,16 @@ mod tests {
             handler: String::new(),
             state_machine: StateMachineProps {
                 states: vec![
-                    StateDef { name: "idle".to_owned(), entry_action: String::new(), exit_action: String::new() },
-                    StateDef { name: "running".to_owned(), entry_action: "self.start()".to_owned(), exit_action: String::new() },
+                    StateDef {
+                        name: "idle".to_owned(),
+                        entry_action: String::new(),
+                        exit_action: String::new(),
+                    },
+                    StateDef {
+                        name: "running".to_owned(),
+                        entry_action: "self.start()".to_owned(),
+                        exit_action: String::new(),
+                    },
                 ],
                 transitions: vec![TransitionDef {
                     from: "idle".to_owned(),

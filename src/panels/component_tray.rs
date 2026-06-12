@@ -343,7 +343,11 @@ fn show_state_machine_editor(ui: &mut egui::Ui, comp: &mut DesignComponent) {
                         .hint_text("code")
                         .desired_width(75.0),
                 );
-                if ui.small_button("✕").on_hover_text("Remove transition").clicked() {
+                if ui
+                    .small_button("✕")
+                    .on_hover_text("Remove transition")
+                    .clicked()
+                {
                     remove_trans = Some(i);
                 }
                 ui.end_row();

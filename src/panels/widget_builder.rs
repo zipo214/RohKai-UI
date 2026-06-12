@@ -4,7 +4,7 @@
 //! without exposing raw templates. Delegates to the advanced descriptor editor
 //! via the "Advanced Descriptor…" button, which closes this window atomically.
 //!
-//! Entry: File → Create Custom Widget… or Widgets → Create Custom Widget…
+//! Entry: Widgets → Guided Descriptor Builder…
 
 use crate::codegen::widget_descriptor::{
     validate_descriptor, DescriptorCodegen, DescriptorProp, DescriptorPropType, WidgetDescriptor,
@@ -178,20 +178,21 @@ pub fn show(
 
     let mut open = true;
 
-    let screen = ctx.screen_rect();
-    let default_pos = egui::pos2(
-        (screen.center().x - 390.0).max(screen.min.x + 20.0),
-        (screen.center().y - 240.0).max(screen.min.y + 20.0),
+    let bounds = crate::panels::window_bounds::authoring_window_bounds(
+        ctx.screen_rect(),
+        egui::vec2(780.0, 480.0),
+        egui::vec2(560.0, 360.0),
     );
 
-    egui::Window::new("Create Custom Widget")
+    egui::Window::new("Guided Widget Descriptor Builder")
         .id(egui::Id::new("widget_builder"))
         .open(&mut open)
-        .default_pos(default_pos)
-        .default_size([780.0, 480.0])
-        .min_size([560.0, 360.0])
+        .default_pos(bounds.default_pos)
+        .default_size(bounds.default_size)
+        .min_size(bounds.min_size)
+        .max_size(bounds.max_size)
         .resizable(true)
-        .constrain(false)
+        .constrain(true)
         .show(ctx, |ui| {
             let avail = ui.available_width().min(780.0 - 16.0);
             let inspector_w = (avail * 0.40 - 4.0).max(180.0);
