@@ -462,6 +462,33 @@ pub enum LayoutCrossAlign {
     End,
 }
 
+/// Per-child cross-axis alignment override for a widget placed inside a
+/// VLayout or HLayout. When set on the child, it overrides the parent's
+/// `layout_cross_align` for that child only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum CrossAlign {
+    /// Align to the start of the cross axis (left for VLayout, top for HLayout).
+    #[default]
+    Start,
+    /// Center on the cross axis.
+    Center,
+    /// Align to the end of the cross axis (right for VLayout, bottom for HLayout).
+    End,
+    /// Stretch to fill the full cross-axis extent.
+    Stretch,
+}
+
+impl CrossAlign {
+    pub fn label(&self) -> &'static str {
+        match self {
+            CrossAlign::Start => "Start",
+            CrossAlign::Center => "Center",
+            CrossAlign::End => "End",
+            CrossAlign::Stretch => "Stretch",
+        }
+    }
+}
+
 /// Per-child size policy for widgets placed inside a layout container.
 /// Controls how a child consumes available space along the main axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -696,6 +723,15 @@ fn default_formula_decimals() -> usize {
 fn is_default_formula_decimals(v: &usize) -> bool {
     *v == 2
 }
+fn child_flex_is_zero(v: &f32) -> bool {
+    *v == 0.0
+}
+fn default_one_u32() -> u32 {
+    1
+}
+fn is_one_u32(v: &u32) -> bool {
+    *v == 1
+}
 
 impl Default for WidgetProps {
     fn default() -> Self {
@@ -906,6 +942,22 @@ pub struct WidgetInstance {
     /// widget-creation time so state_emitter works without re-loading descriptors.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub descriptor_state_fields: Vec<[String; 3]>,
+
+    // P2.4 — Per-child layout controls ------------------------------------------
+    /// Per-child cross-axis alignment override (VLayout / HLayout children only).
+    /// When present, overrides the parent's `layout_cross_align` for this child.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_cross_align: Option<CrossAlign>,
+    /// Flex factor along the main axis (0.0 = fixed size; > 0.0 = proportional share).
+    /// Analogous to CSS `flex-grow`. Default 0.0 keeps existing behaviour.
+    #[serde(default, skip_serializing_if = "child_flex_is_zero")]
+    pub child_flex: f32,
+    /// GridLayout column-span for this child (1 = single cell, default).
+    #[serde(default = "default_one_u32", skip_serializing_if = "is_one_u32")]
+    pub grid_col_span: u32,
+    /// GridLayout row-span for this child (1 = single cell, default).
+    #[serde(default = "default_one_u32", skip_serializing_if = "is_one_u32")]
+    pub grid_row_span: u32,
 }
 
 impl Default for WidgetInstance {
@@ -944,6 +996,10 @@ impl Default for WidgetInstance {
             descriptor_props: HashMap::new(),
             descriptor_cargo_deps: Vec::new(),
             descriptor_state_fields: Vec::new(),
+            child_cross_align: None,
+            child_flex: 0.0,
+            grid_col_span: 1,
+            grid_row_span: 1,
         }
     }
 }
@@ -1038,5 +1094,48 @@ mod tests {
             assert!(!k.is_event_capable(), "{k:?} should expose no events");
             assert_eq!(k.primary_event(), None);
         }
+    }
+
+    // P2.4 tests ----------------------------------------------------------------
+
+    #[test]
+    fn child_flex_default_is_zero() {
+        let w = WidgetInstance::default();
+        assert_eq!(w.child_flex, 0.0, "child_flex must default to 0.0");
+        assert_eq!(w.grid_col_span, 1);
+        assert_eq!(w.grid_row_span, 1);
+        assert!(w.child_cross_align.is_none());
+    }
+
+    #[test]
+    fn layout_child_fields_serde_round_trip() {
+        let w = WidgetInstance {
+            child_cross_align: Some(CrossAlign::Center),
+            child_flex: 1.5,
+            grid_col_span: 2,
+            grid_row_span: 3,
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&w).expect("serialize");
+        let w2: WidgetInstance = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(w2.child_cross_align, Some(CrossAlign::Center));
+        assert!((w2.child_flex - 1.5).abs() < 0.001);
+        assert_eq!(w2.grid_col_span, 2);
+        assert_eq!(w2.grid_row_span, 3);
+    }
+
+    #[test]
+    fn layout_child_fields_skip_serialized_at_defaults() {
+        // When all fields are at their defaults the serde skip_serializing_if
+        // predicates should omit them from JSON to keep project files compact.
+        let w = WidgetInstance::default();
+        let json = serde_json::to_string(&w).expect("serialize");
+        assert!(!json.contains("child_cross_align"), "default cross_align omitted");
+        assert!(!json.contains("child_flex"), "zero flex omitted");
+        // grid_col_span and grid_row_span are 1 (default) — omitted too
+        assert!(!json.contains("grid_col_span"), "default col_span omitted");
+        assert!(!json.contains("grid_row_span"), "default row_span omitted");
     }
 }

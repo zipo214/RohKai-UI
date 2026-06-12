@@ -1,7 +1,7 @@
 use crate::codegen::widget_descriptor::{DescriptorPropType, WidgetDescriptor};
 use crate::project::schema::{
-    CustomProp, CustomPropType, DataColumn, DataColumnType, HandlerResult, LayoutCrossAlign,
-    Orientation, SizePolicy, TextAlign, WidgetEvent, WidgetInstance, WidgetKind,
+    CrossAlign, CustomProp, CustomPropType, DataColumn, DataColumnType, HandlerResult,
+    LayoutCrossAlign, Orientation, SizePolicy, TextAlign, WidgetEvent, WidgetInstance, WidgetKind,
 };
 use crate::project::ui_tree::UiTree;
 use uuid::Uuid;
@@ -75,6 +75,13 @@ fn show_content_inner(
     let mut props_action = PropertiesAction::None;
     let mut child_move: Option<(Uuid, Uuid, usize)> = None;
 
+    // Compute parent kind before taking the mutable borrow of the widget, so
+    // show_layout_child_props can accept (&mut WidgetInstance, parent_kind).
+    let parent_kind_for_child: Option<WidgetKind> = tree
+        .parent_of(id)
+        .and_then(|pid| tree.widgets.iter().find(|pw| pw.id == pid))
+        .map(|p| p.kind.clone());
+
     {
         let Some(w) = tree.get_mut(id) else {
             ui.label("Widget not found.");
@@ -131,6 +138,10 @@ fn show_content_inner(
                 }
             }
         }
+
+        // Per-child layout controls (shown whenever this widget is a child of a
+        // VLayout, HLayout, or GridLayout).
+        show_layout_child_props(ui, w, parent_kind_for_child.as_ref());
     } // w borrow ends
 
     if do_delete {
@@ -1742,6 +1753,80 @@ fn show_file_picker(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut b
     show_enabled(ui, w);
     show_custom_props(ui, w);
     show_delete_button(ui, do_delete);
+}
+
+/// Show per-child layout alignment + flex controls when the selected widget
+/// lives inside a VLayout, HLayout, or GridLayout parent.
+/// `parent_kind` is pre-computed from `UiTree::parent_of` to avoid a
+/// simultaneous mutable + shared borrow of the tree.
+fn show_layout_child_props(
+    ui: &mut egui::Ui,
+    w: &mut WidgetInstance,
+    parent_kind: Option<&WidgetKind>,
+) {
+    let is_vlayout_child = matches!(parent_kind, Some(WidgetKind::VLayout));
+    let is_hlayout_child = matches!(parent_kind, Some(WidgetKind::HLayout));
+    let is_gridlayout_child = matches!(parent_kind, Some(WidgetKind::GridLayout));
+
+    if is_vlayout_child || is_hlayout_child {
+        ui.separator();
+        ui.label(egui::RichText::new("Layout child").small().weak());
+        // Cross-axis alignment override
+        let cross_axis_label = if is_vlayout_child {
+            "Cross align (H)"
+        } else {
+            "Cross align (V)"
+        };
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(cross_axis_label).small());
+            let current = w.child_cross_align.unwrap_or(CrossAlign::Start);
+            for variant in [
+                CrossAlign::Start,
+                CrossAlign::Center,
+                CrossAlign::End,
+                CrossAlign::Stretch,
+            ] {
+                if ui
+                    .selectable_label(current == variant, variant.label())
+                    .clicked()
+                {
+                    w.child_cross_align =
+                        if variant == CrossAlign::Start { None } else { Some(variant) };
+                }
+            }
+        });
+        // Flex factor
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Flex").small());
+            let mut flex = w.child_flex;
+            if ui
+                .add(
+                    egui::DragValue::new(&mut flex)
+                        .range(0.0..=100.0_f32)
+                        .speed(0.05),
+                )
+                .on_hover_text("0 = fixed size; >0 = proportional flex growth")
+                .changed()
+            {
+                w.child_flex = flex.max(0.0);
+            }
+        });
+    }
+
+    if is_gridlayout_child {
+        ui.separator();
+        ui.label(egui::RichText::new("Grid child").small().weak());
+        egui::Grid::new("grid_child_props")
+            .num_columns(4)
+            .spacing([4.0, 2.0])
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Col span").small());
+                ui.add(egui::DragValue::new(&mut w.grid_col_span).range(1..=12_u32));
+                ui.label(egui::RichText::new("Row span").small());
+                ui.add(egui::DragValue::new(&mut w.grid_row_span).range(1..=12_u32));
+                ui.end_row();
+            });
+    }
 }
 
 /// Generic editor for widgets whose content is the `options` list

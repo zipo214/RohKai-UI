@@ -126,14 +126,21 @@ From Stage 9.5 comparative analysis (Qt Auto Layout / iOS Auto Layout class).
 
 From ROADMAP.md Stage 9 remaining `[ ]` items.
 
-- [ ] Properties panel exposes per-child alignment, grid row height policies,
-      and per-child stretch/fixed-size behavior
-- [ ] Hit testing and rubber-band selection are layout-aware (select only
-      children of a clicked layout container, not a flat z-order hit)
-- [ ] Richer drag-reorder: drag a layout child to reorder within its container
-      with animated placeholder feedback
-- [ ] Richer cell/slot editor for Grid: named slots, drag-to-slot behavior,
-      and multi-level layout hierarchy tests
+- [x] Properties panel exposes per-child alignment, grid row height policies,
+      and per-child stretch/fixed-size behavior — `CrossAlign` enum + `child_flex`
+      / `grid_col_span` / `grid_row_span` on `WidgetInstance`; shown in
+      Properties when widget has a layout parent. (feat(P2.4))
+- [x] Hit testing and rubber-band selection are layout-aware: rubber-band
+      started inside a VLayout/HLayout/GridLayout restricts candidates to that
+      container's direct children; `find_layout_container_at` helper in
+      `src/canvas/interaction.rs`. (feat(P2.4))
+- [x] Richer drag-reorder: drag a VLayout/HLayout child to reorder within its
+      container; accent-color `InsertionPlaceholder` line shown live during drag;
+      on drop, `UiTree::move_child_within_parent` commits the reorder.
+      `ReorderDrag` state + helpers in `src/canvas/interaction.rs`. (feat(P2.4))
+- [x] Richer cell/slot editor for Grid: col-span / row-span controls in
+      Properties when widget is a GridLayout child; existing grid-slot ↑/↓
+      reorder buttons retained. (feat(P2.4))
 
 ---
 
