@@ -6,13 +6,16 @@
 //! primitive.  "Save" serialises via `doc_to_descriptor` → JSON → `.rkwd` file.
 
 use crate::canvas::widget_maker::{
-    doc_to_descriptor, gen_live_preview, MakerPrimKind, MakerPrimitive, WidgetMakerDoc,
+    doc_to_descriptor, gen_live_preview, MakerPrimKind, MakerPrimitive, PrimState, WidgetMakerDoc,
 };
 use egui::Color32;
 
 const CANVAS_W: f32 = 280.0;
 const CANVAS_H: f32 = 140.0;
 const PRIM_MIN: f32 = 8.0;
+
+/// egui temp-data key for the active preview state per primitive selection.
+const STATE_KEY: &str = "wm_prim_state";
 
 /// Render the Visual Widget Maker window.
 ///
@@ -45,7 +48,14 @@ pub fn show_widget_maker_window(
                 // ---- Left: mini-canvas ----
                 ui.vertical(|ui| {
                     ui.label(egui::RichText::new("Canvas").strong());
-                    show_mini_canvas(ui, doc);
+
+                    // Read active preview state for the selected primitive.
+                    let active_state: PrimState = ui.data(|d| {
+                        d.get_temp::<PrimState>(egui::Id::new(STATE_KEY))
+                            .unwrap_or_default()
+                    });
+
+                    show_mini_canvas(ui, doc, active_state);
                     ui.separator();
                     show_toolbar(ui, doc);
                 });
@@ -87,7 +97,7 @@ pub fn show_widget_maker_window(
                     ui.separator();
                     ui.horizontal(|ui| {
                         if ui
-                            .button("💾 Save Descriptor")
+                            .button("Save Descriptor")
                             .on_hover_text("Export as .rkwd and reload palette")
                             .clicked()
                         {
@@ -112,7 +122,7 @@ pub fn show_widget_maker_window(
     result
 }
 
-fn show_mini_canvas(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
+fn show_mini_canvas(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc, active_state: PrimState) {
     let (canvas_rect, canvas_resp) = ui.allocate_exact_size(
         egui::vec2(CANVAS_W, CANVAS_H),
         egui::Sense::click_and_drag(),
@@ -130,7 +140,13 @@ fn show_mini_canvas(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
     // Draw primitives (bottom to top)
     for (idx, prim) in doc.primitives.iter().enumerate() {
         let pr = prim_canvas_rect(prim, canvas_rect);
-        draw_primitive(&painter, prim, pr);
+        // Apply the active preview state only for the selected primitive.
+        let preview_state = if doc.selected == Some(idx) {
+            active_state
+        } else {
+            PrimState::Normal
+        };
+        draw_primitive(&painter, prim, pr, preview_state);
 
         // Selection outline
         if doc.selected == Some(idx) {
@@ -447,6 +463,75 @@ fn show_primitive_props(ui: &mut egui::Ui, prim: &mut MakerPrimitive) {
             );
         });
     }
+
+    // --- State Variants ---
+    ui.separator();
+    ui.label(egui::RichText::new("State Variants").small().strong());
+
+    let state_key = egui::Id::new(STATE_KEY);
+    let active_state: PrimState =
+        ui.data(|d| d.get_temp::<PrimState>(state_key).unwrap_or_default());
+
+    // State selector tab row
+    ui.horizontal(|ui| {
+        for &state in PrimState::ALL {
+            let has_override = state != PrimState::Normal && prim.variants.get(state).is_some();
+            let label = if has_override {
+                egui::RichText::new(state.label()).small().strong()
+            } else {
+                egui::RichText::new(state.label()).small()
+            };
+            if ui.selectable_label(active_state == state, label).clicked() {
+                ui.data_mut(|d| d.insert_temp(state_key, state));
+            }
+        }
+    });
+
+    if active_state == PrimState::Normal {
+        ui.label(
+            egui::RichText::new("Normal — set fill/color above")
+                .small()
+                .weak(),
+        );
+    } else {
+        // Enable/disable this variant
+        let has = prim.variants.get(active_state).is_some();
+        let mut enabled = has;
+        if ui
+            .checkbox(
+                &mut enabled,
+                egui::RichText::new("Override this state").small(),
+            )
+            .changed()
+        {
+            prim.variants.set_enabled(active_state, enabled);
+        }
+
+        if enabled {
+            if let Some(ov) = prim.variants.get_mut(active_state) {
+                // Fill override
+                let mut has_fill = ov.fill.is_some();
+                ui.horizontal(|ui| {
+                    if ui
+                        .checkbox(&mut has_fill, egui::RichText::new("Override fill").small())
+                        .changed()
+                        && !has_fill
+                    {
+                        ov.fill = None;
+                    }
+                    if has_fill {
+                        let [r, g, b] = ov.fill.get_or_insert([128, 128, 200]);
+                        ui.label(egui::RichText::new("R").small());
+                        ui.add(egui::DragValue::new(r).range(0..=255_u8));
+                        ui.label(egui::RichText::new("G").small());
+                        ui.add(egui::DragValue::new(g).range(0..=255_u8));
+                        ui.label(egui::RichText::new("B").small());
+                        ui.add(egui::DragValue::new(b).range(0..=255_u8));
+                    }
+                });
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -465,9 +550,29 @@ fn prim_canvas_rect(prim: &MakerPrimitive, canvas: egui::Rect) -> egui::Rect {
     egui::Rect::from_min_max(min, max)
 }
 
-fn draw_primitive(painter: &egui::Painter, prim: &MakerPrimitive, rect: egui::Rect) {
-    let [r, g, b] = prim.fill;
+/// Draw a primitive to the mini-canvas painter.
+///
+/// `preview_state` allows the selected primitive to render with its state-variant
+/// fill override applied, so the designer can see hover/pressed/etc. visually.
+fn draw_primitive(
+    painter: &egui::Painter,
+    prim: &MakerPrimitive,
+    rect: egui::Rect,
+    preview_state: PrimState,
+) {
+    // Resolve fill: use the variant override fill if one is defined for this state.
+    let base_fill = prim.fill;
+    let fill = if preview_state != PrimState::Normal {
+        prim.variants
+            .get(preview_state)
+            .and_then(|ov| ov.fill)
+            .unwrap_or(base_fill)
+    } else {
+        base_fill
+    };
+    let [r, g, b] = fill;
     let color = Color32::from_rgb(r, g, b);
+
     match prim.kind {
         MakerPrimKind::Rect => {
             painter.rect_filled(rect, prim.corner_radius, color);
@@ -498,6 +603,16 @@ fn draw_primitive(painter: &egui::Painter, prim: &MakerPrimitive, rect: egui::Re
             }
         }
         MakerPrimKind::Text => {
+            // Text colour: use text_color variant if defined, otherwise fill variant.
+            let text_col = if preview_state != PrimState::Normal {
+                prim.variants
+                    .get(preview_state)
+                    .and_then(|ov| ov.text_color.or(ov.fill))
+                    .map(|[r, g, b]| Color32::from_rgb(r, g, b))
+                    .unwrap_or(color)
+            } else {
+                color
+            };
             let font_id = egui::FontId::proportional(prim.font_size);
             let text = if prim.use_label_token {
                 "Label"
@@ -509,7 +624,7 @@ fn draw_primitive(painter: &egui::Painter, prim: &MakerPrimitive, rect: egui::Re
                 egui::Align2::CENTER_CENTER,
                 text,
                 font_id,
-                color,
+                text_col,
             );
         }
     }

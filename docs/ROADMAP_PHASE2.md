@@ -68,7 +68,7 @@ Continues from the MVP (commit 4f60e72). See `docs/VISUAL_WIDGET_MAKER.md`.
 - [ ] Layout groups: horizontal, vertical, grid, stack inside the maker canvas
 - [ ] Primitive constraints: anchor (TL/TR/BL/BR/Center), padding, min/max
       size, proportional sizing relative to widget bounding box
-- [ ] State variants: normal, hover, pressed, disabled, checked — each variant
+- [x] State variants: normal, hover, pressed, disabled, checked — each variant
       carries independent primitive style overrides
 - [ ] Slots: named child content areas that accept widget instances at canvas time
 - [ ] Event zones: named interactive areas that emit click/change/custom signals
