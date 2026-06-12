@@ -4,7 +4,7 @@
 //! in a horizontal strip.  Lives in the left panel below the outline.
 //! Components are stored in `AppProps.components` (persisted in project file).
 
-use crate::project::schema::{ComponentKind, DesignComponent};
+use crate::project::schema::{ComponentKind, DesignComponent, StateDef, TransitionDef};
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -189,6 +189,12 @@ pub fn show_config(ui: &mut egui::Ui, comp: &mut DesignComponent) {
         comp.handler.clone()
     };
 
+    // --- Section 4 (StateMachine only): states + transitions table ----------
+    if comp.kind == ComponentKind::StateMachine {
+        ui.separator();
+        show_state_machine_editor(ui, comp);
+    }
+
     // Generated code preview
     ui.separator();
     ui.label(egui::RichText::new("Generated").small().strong());
@@ -230,12 +236,136 @@ pub fn show_config(ui: &mut egui::Ui, comp: &mut DesignComponent) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// State machine editor (table UI for states + transitions)
+// ---------------------------------------------------------------------------
+
+fn show_state_machine_editor(ui: &mut egui::Ui, comp: &mut DesignComponent) {
+    let sm = &mut comp.state_machine;
+
+    // --- States section ---
+    ui.label(egui::RichText::new("States").small().strong());
+
+    let mut remove_state: Option<usize> = None;
+    egui::Grid::new(("sm_states", comp.id))
+        .num_columns(4)
+        .spacing([4.0, 2.0])
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new("Name").small().weak());
+            ui.label(egui::RichText::new("Entry action").small().weak());
+            ui.label(egui::RichText::new("Exit action").small().weak());
+            ui.label(""); // remove button column
+            ui.end_row();
+
+            for (i, state) in sm.states.iter_mut().enumerate() {
+                ui.add(
+                    egui::TextEdit::singleline(&mut state.name)
+                        .hint_text("name")
+                        .desired_width(60.0),
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut state.entry_action)
+                        .hint_text("on_enter()")
+                        .desired_width(80.0),
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut state.exit_action)
+                        .hint_text("on_exit()")
+                        .desired_width(80.0),
+                );
+                if ui.small_button("✕").on_hover_text("Remove state").clicked() {
+                    remove_state = Some(i);
+                }
+                ui.end_row();
+            }
+        });
+
+    if let Some(i) = remove_state {
+        sm.states.remove(i);
+    }
+
+    if ui.small_button("+ Add state").clicked() {
+        sm.states.push(StateDef::default());
+    }
+
+    // Initial state selector
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Initial state").small().weak());
+        egui::ComboBox::from_id_salt(("sm_initial", comp.id))
+            .selected_text(if sm.initial_state.is_empty() {
+                "(none)".to_owned()
+            } else {
+                sm.initial_state.clone()
+            })
+            .show_ui(ui, |ui| {
+                let names: Vec<String> = sm.states.iter().map(|s| s.name.clone()).collect();
+                for name in &names {
+                    ui.selectable_value(&mut sm.initial_state, name.clone(), name);
+                }
+            });
+    });
+
+    ui.add_space(4.0);
+
+    // --- Transitions section ---
+    ui.label(egui::RichText::new("Transitions").small().strong());
+
+    let mut remove_trans: Option<usize> = None;
+    egui::Grid::new(("sm_transitions", comp.id))
+        .num_columns(5)
+        .spacing([4.0, 2.0])
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new("From").small().weak());
+            ui.label(egui::RichText::new("To").small().weak());
+            ui.label(egui::RichText::new("Guard").small().weak());
+            ui.label(egui::RichText::new("Action").small().weak());
+            ui.label(""); // remove button
+            ui.end_row();
+
+            for (i, tr) in sm.transitions.iter_mut().enumerate() {
+                ui.add(
+                    egui::TextEdit::singleline(&mut tr.from)
+                        .hint_text("from")
+                        .desired_width(55.0),
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut tr.to)
+                        .hint_text("to")
+                        .desired_width(55.0),
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut tr.guard)
+                        .hint_text("bool expr")
+                        .desired_width(75.0),
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut tr.action)
+                        .hint_text("code")
+                        .desired_width(75.0),
+                );
+                if ui.small_button("✕").on_hover_text("Remove transition").clicked() {
+                    remove_trans = Some(i);
+                }
+                ui.end_row();
+            }
+        });
+
+    if let Some(i) = remove_trans {
+        sm.transitions.remove(i);
+    }
+
+    if ui.small_button("+ Add transition").clicked() {
+        sm.transitions.push(TransitionDef::default());
+    }
+}
+
 /// Returns a one-sentence description of what a component kind does (and does not) at runtime.
 pub fn describe_kind(kind: &ComponentKind) -> &'static str {
     match kind {
         ComponentKind::Timer => {
-            "Generates a handler stub comment in update(). \
-             Real tick scheduling requires a Rust clock + mpsc channel (not yet wired)."
+            "Spawns a background thread on startup that sends a tick every interval_ms \
+             via std::sync::mpsc. The designer drains the channel each frame and calls \
+             ctx.request_repaint_after so timer-driven UIs stay live."
         }
         ComponentKind::DataSource => {
             "Generates a String AppState field for fetched data. \
@@ -246,8 +376,8 @@ pub fn describe_kind(kind: &ComponentKind) -> &'static str {
              Wire the stub to eframe App lifecycle hooks in the exported project."
         }
         ComponentKind::StateMachine => {
-            "Generates a usize AppState field for current state + a transition handler stub. \
-             Transition logic and visual editor are deferred to Stage 13."
+            "Defines named states, entry/exit actions, and guarded transitions. \
+             Generates a current_state field in AppState + a transition handler stub."
         }
         ComponentKind::HttpRequest => {
             "Generates a response String AppState field + a handler stub comment. \

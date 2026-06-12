@@ -205,6 +205,13 @@ pub struct RohKaiApp {
     /// Key = `format!("{:?}", kind)` (debug name), value = last counter used.
     /// Resets to empty when the project is cleared (New command).
     pub name_counter: std::collections::HashMap<String, u32>,
+    /// P2.5 — Runtime timer channel receiver.  Background threads send the
+    /// component name on every tick; the update loop drains this and requests
+    /// a repaint so timer-driven UIs feel alive.
+    timer_rx: Option<std::sync::mpsc::Receiver<String>>,
+    /// P2.5 — Set to `true` after a project load or new-project command so the
+    /// next `update()` call re-spawns timer threads against the new tree.
+    timers_need_respawn: bool,
 }
 
 /// Produce a snake_case slug from a widget's default label text for use in
@@ -272,13 +279,11 @@ impl RohKaiApp {
             widget_maker_doc: crate::canvas::widget_maker::WidgetMakerDoc::new_with_defaults(),
             widget_maker_open: false,
             name_counter: std::collections::HashMap::new(),
+            timer_rx: None,
+            timers_need_respawn: true,
         }
     }
 
-    /// Auto-generate a human-readable label for a newly dropped widget.
-    /// Returns `"button_1_submit"` — kind + counter + semantic slug from the
-    /// widget's default label text. Falls back to `"button_1"` when the slug
-    /// would be empty or identical to the kind key.
     fn next_widget_label(&mut self, kind: &WidgetKind, default_text: &str) -> String {
         let key = format!("{kind:?}").to_lowercase();
         let count = self.name_counter.entry(key.clone()).or_insert(0);
@@ -289,6 +294,54 @@ impl RohKaiApp {
         } else {
             format!("{key}_{count}_{slug}")
         }
+    }
+
+    /// Spawn background threads for every `ComponentKind::Timer` in the
+    /// current project.  Each thread sleeps for `interval_ms` milliseconds and
+    /// then sends the component name on a shared `mpsc` channel.
+    ///
+    /// This replaces any previously spawned timer threads (old `Sender` clones
+    /// are dropped when the old `Receiver` is replaced).  Call this after
+    /// opening or creating a project so timers always match the tree.
+    pub fn spawn_timers(&mut self, ctx: &egui::Context) {
+        use crate::project::schema::ComponentKind;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let timers: Vec<(String, u64)> = self
+            .project
+            .ui_tree
+            .app_props
+            .components
+            .iter()
+            .filter(|c| c.kind == ComponentKind::Timer)
+            .map(|c| {
+                let ms = c.interval_ms.unwrap_or(1000) as u64;
+                (c.name.clone(), ms)
+            })
+            .collect();
+
+        if timers.is_empty() {
+            self.timer_rx = None;
+            return;
+        }
+
+        let (tx, rx) = mpsc::channel::<String>();
+        for (name, interval_ms) in timers {
+            let tx2 = tx.clone();
+            let ctx2 = ctx.clone();
+            std::thread::Builder::new()
+                .name(format!("rohkai-timer-{name}"))
+                .spawn(move || loop {
+                    std::thread::sleep(Duration::from_millis(interval_ms));
+                    if tx2.send(name.clone()).is_err() {
+                        break; // receiver dropped — stop the thread
+                    }
+                    ctx2.request_repaint_after(Duration::from_millis(interval_ms));
+                })
+                .ok();
+        }
+        self.timer_rx = Some(rx);
     }
 
     fn compute_dirty_exact(&self) -> bool {
@@ -373,6 +426,7 @@ impl RohKaiApp {
         self.name_counter.clear();
         self.reset_undo_baseline();
         self.refresh_preview_state();
+        self.timers_need_respawn = true;
     }
 
     /// Re-seed the undo stack to the current tree, clearing history.
@@ -429,6 +483,7 @@ impl RohKaiApp {
                     self.dirty_cache_checked_at = 0.0;
                     self.reset_undo_baseline();
                     self.refresh_preview_state();
+                    self.timers_need_respawn = true;
                 }
                 Err(e) => self.messages.last_error = Some(e),
             }
@@ -1575,6 +1630,21 @@ fn setup_fonts(ctx: &egui::Context) {
 
 impl eframe::App for RohKaiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // P2.5 — (re-)spawn timer threads when the project changes.
+        if self.timers_need_respawn {
+            self.timers_need_respawn = false;
+            self.spawn_timers(ctx);
+        }
+
+        // Drain timer ticks (non-blocking); each tick is a component name
+        // string.  We discard the value here — callers care only about the
+        // repaint that `spawn_timers` already scheduled via
+        // `ctx.request_repaint_after`.  The drain prevents the channel buffer
+        // from growing unboundedly if a frame is delayed.
+        if let Some(rx) = &self.timer_rx {
+            while rx.try_recv().is_ok() {}
+        }
+
         self.apply_theme(ctx);
         self.apply_ui_scale(ctx);
         let now = ctx.input(|i| i.time);
@@ -2597,6 +2667,7 @@ impl eframe::App for RohKaiApp {
                         name: format!("{name}_{count}"),
                         interval_ms,
                         handler: String::new(),
+                        state_machine: crate::project::schema::StateMachineProps::default(),
                     },
                 );
                 self.session.selected_component = Some(new_id);
@@ -2841,7 +2912,21 @@ impl eframe::App for RohKaiApp {
         self.show_widget_maker_window(ctx);
         self.show_theme_window(ctx);
         self.show_project_tree_window(ctx);
-        crate::panels::shortcuts::show(ctx, &mut self.session.shortcuts_open);
+        {
+            let mut shortcuts_dirty = false;
+            crate::panels::shortcuts::show(
+                ctx,
+                &mut self.session.shortcuts_open,
+                &mut self.prefs.user_settings,
+                &mut shortcuts_dirty,
+            );
+            if shortcuts_dirty {
+                let _ = crate::settings::save(
+                    &self.prefs.settings_path,
+                    &self.prefs.user_settings,
+                );
+            }
+        }
 
         // Stage 11 — Rust wiring editor + macro palette.
         crate::panels::rust_wiring::show(
