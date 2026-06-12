@@ -121,18 +121,18 @@ From Stage 8.5 comparative analysis and feature evaluation gaps.
 
 From Stage 9.5 comparative analysis (Qt Auto Layout / iOS Auto Layout class).
 
-- [ ] Horizontal and vertical constraint rules (leading/trailing/top/bottom)
-- [ ] Center-alignment constraints (horizontal center, vertical center)
-- [ ] Equal-size constraints between two widgets
-- [ ] Aspect-ratio constraints (lock w:h ratio)
-- [ ] Min/max size constraints per widget
-- [ ] Margin and padding visual editor (inset handles)
-- [ ] Anchor system with visual handle drag
-- [ ] Constraint validation: detect conflicting or unsatisfiable constraints
-- [ ] Responsive size class breakpoints (e.g., compact vs. regular)
-- [ ] Layout preview: scrub canvas size to see layout reflow live
-- [ ] Layout templates: save and reuse constraint presets
-- [ ] Nested layout hierarchy round-trip in Lazare
+- [x] Horizontal and vertical constraint rules (leading/trailing/top/bottom) — `HAlign`/`VAlign` on `LayoutConstraints`; solver applies in `apply_constraints`
+- [x] Center-alignment constraints (horizontal center, vertical center) — `HAlign::Center`, `VAlign::Center`
+- [x] Equal-size constraints between two widgets — `equal_width_to`/`equal_height_to` on `LayoutConstraints`
+- [x] Aspect-ratio constraints (lock w:h ratio) — `aspect_ratio: Option<f32>` on `LayoutConstraints`
+- [x] Min/max size constraints per widget — `min_w`, `max_w`, `min_h`, `max_h` on `LayoutConstraints`
+- [x] Margin and padding visual editor (inset handles) — `margin: [f32; 4]`; 4-corner DragValues in Properties panel
+- [ ] Anchor system with visual handle drag — deferred: requires canvas overlay pass
+- [x] Constraint validation: detect conflicting or unsatisfiable constraints — `validate_constraints` in `constraint_solver.rs`; detects unknown targets, self-references, cycles, invalid ratios
+- [ ] Responsive size class breakpoints (e.g., compact vs. regular) — deferred: requires breakpoint system
+- [ ] Layout preview: scrub canvas size to see layout reflow live — deferred: requires canvas scrubber UI
+- [ ] Layout templates: save and reuse constraint presets — deferred
+- [ ] Nested layout hierarchy round-trip in Lazare — deferred
 
 ---
 

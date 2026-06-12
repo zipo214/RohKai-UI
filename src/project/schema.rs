@@ -840,6 +840,80 @@ pub struct CustomProp {
 }
 
 // ---------------------------------------------------------------------------
+// P2.3 — Constraint-Based Layout
+// ---------------------------------------------------------------------------
+
+/// Horizontal alignment anchor for constraint layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum HAlign {
+    /// Align to the left / leading edge.
+    #[default]
+    Leading,
+    /// Align to the right / trailing edge.
+    Trailing,
+    /// Center horizontally.
+    Center,
+    /// Stretch to fill available width.
+    Stretch,
+}
+
+/// Vertical alignment anchor for constraint layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum VAlign {
+    /// Align to the top edge.
+    #[default]
+    Top,
+    /// Align to the bottom edge.
+    Bottom,
+    /// Center vertically.
+    Center,
+    /// Stretch to fill available height.
+    Stretch,
+}
+
+/// Per-widget layout constraints applied by the constraint solver.
+///
+/// All fields are optional / defaulted so old project files deserialize cleanly.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LayoutConstraints {
+    /// Horizontal alignment anchor. `None` = unconstrained (position free).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub h_align: Option<HAlign>,
+    /// Vertical alignment anchor. `None` = unconstrained.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v_align: Option<VAlign>,
+    /// ID of another widget whose width this widget should equal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equal_width_to: Option<String>,
+    /// ID of another widget whose height this widget should equal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equal_height_to: Option<String>,
+    /// Locked width-to-height aspect ratio (e.g. `Some(1.0)` for square).
+    /// `None` = no lock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aspect_ratio: Option<f32>,
+    /// Minimum width in logical pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_w: Option<f32>,
+    /// Maximum width in logical pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_w: Option<f32>,
+    /// Minimum height in logical pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_h: Option<f32>,
+    /// Maximum height in logical pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_h: Option<f32>,
+    /// Margin insets `[top, right, bottom, left]` in logical pixels.
+    #[serde(default, skip_serializing_if = "margin_is_zero")]
+    pub margin: [f32; 4],
+}
+
+fn margin_is_zero(m: &[f32; 4]) -> bool {
+    m[0] == 0.0 && m[1] == 0.0 && m[2] == 0.0 && m[3] == 0.0
+}
+
+// ---------------------------------------------------------------------------
 // WidgetInstance
 // ---------------------------------------------------------------------------
 
@@ -945,11 +1019,9 @@ pub struct WidgetInstance {
 
     // P2.4 — Per-child layout controls ------------------------------------------
     /// Per-child cross-axis alignment override (VLayout / HLayout children only).
-    /// When present, overrides the parent's `layout_cross_align` for this child.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub child_cross_align: Option<CrossAlign>,
     /// Flex factor along the main axis (0.0 = fixed size; > 0.0 = proportional share).
-    /// Analogous to CSS `flex-grow`. Default 0.0 keeps existing behaviour.
     #[serde(default, skip_serializing_if = "child_flex_is_zero")]
     pub child_flex: f32,
     /// GridLayout column-span for this child (1 = single cell, default).
@@ -958,6 +1030,10 @@ pub struct WidgetInstance {
     /// GridLayout row-span for this child (1 = single cell, default).
     #[serde(default = "default_one_u32", skip_serializing_if = "is_one_u32")]
     pub grid_row_span: u32,
+    // P2.3 — Constraint-based layout
+    /// Layout constraints applied by the P2.3 constraint solver.
+    #[serde(default, skip_serializing_if = "constraints_are_default")]
+    pub constraints: LayoutConstraints,
 }
 
 impl Default for WidgetInstance {
@@ -1000,8 +1076,22 @@ impl Default for WidgetInstance {
             child_flex: 0.0,
             grid_col_span: 1,
             grid_row_span: 1,
+            constraints: LayoutConstraints::default(),
         }
     }
+}
+
+fn constraints_are_default(c: &LayoutConstraints) -> bool {
+    c.h_align.is_none()
+        && c.v_align.is_none()
+        && c.equal_width_to.is_none()
+        && c.equal_height_to.is_none()
+        && c.aspect_ratio.is_none()
+        && c.min_w.is_none()
+        && c.max_w.is_none()
+        && c.min_h.is_none()
+        && c.max_h.is_none()
+        && margin_is_zero(&c.margin)
 }
 
 // ---------------------------------------------------------------------------

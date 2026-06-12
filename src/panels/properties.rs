@@ -1,7 +1,8 @@
 use crate::codegen::widget_descriptor::{DescriptorPropType, WidgetDescriptor};
 use crate::project::schema::{
-    CrossAlign, CustomProp, CustomPropType, DataColumn, DataColumnType, HandlerResult,
-    LayoutCrossAlign, Orientation, SizePolicy, TextAlign, WidgetEvent, WidgetInstance, WidgetKind,
+    CrossAlign, CustomProp, CustomPropType, DataColumn, DataColumnType, HAlign, HandlerResult,
+    LayoutCrossAlign, Orientation, SizePolicy, TextAlign, VAlign, WidgetEvent, WidgetInstance,
+    WidgetKind,
 };
 use crate::project::ui_tree::UiTree;
 use uuid::Uuid;
@@ -155,6 +156,11 @@ fn show_content_inner(
     }
 
     show_event_handler(ui, tree, id, &mut props_action);
+
+    // P2.3 — constraint editor (shown for all widget kinds).
+    if let Some(w) = tree.get_mut(id) {
+        show_constraints(ui, w);
+    }
 
     props_action
 }
@@ -2243,6 +2249,215 @@ fn show_custom(
 }
 
 // ---------------------------------------------------------------------------
+// P2.3 — Constraint editor
+// ---------------------------------------------------------------------------
+
+/// Collapsible "Constraints" section shown for every widget kind.
+fn show_constraints(ui: &mut egui::Ui, w: &mut WidgetInstance) {
+    let id = w.id;
+    ui.separator();
+    egui::CollapsingHeader::new(egui::RichText::new("Constraints").small())
+        .id_salt(("constraints", id))
+        .default_open(false)
+        .show(ui, |ui| {
+            let c = &mut w.constraints;
+
+            // --- Alignment anchors ---
+            egui::Grid::new(("constraints_grid", id))
+                .num_columns(2)
+                .spacing([8.0, 2.0])
+                .show(ui, |ui| {
+                    // H Align
+                    ui.label(egui::RichText::new("H Align").small().weak());
+                    egui::ComboBox::from_id_salt(("h_align_cb", id))
+                        .selected_text(h_align_label(c.h_align))
+                        .width(110.0)
+                        .show_ui(ui, |ui| {
+                            let none_resp = ui.selectable_value(&mut c.h_align, None, "None");
+                            if none_resp.clicked() {
+                                c.h_align = None;
+                            }
+                            ui.selectable_value(&mut c.h_align, Some(HAlign::Leading), "Leading");
+                            ui.selectable_value(&mut c.h_align, Some(HAlign::Trailing), "Trailing");
+                            ui.selectable_value(&mut c.h_align, Some(HAlign::Center), "Center");
+                            ui.selectable_value(&mut c.h_align, Some(HAlign::Stretch), "Stretch");
+                        });
+                    ui.end_row();
+
+                    // V Align
+                    ui.label(egui::RichText::new("V Align").small().weak());
+                    egui::ComboBox::from_id_salt(("v_align_cb", id))
+                        .selected_text(v_align_label(c.v_align))
+                        .width(110.0)
+                        .show_ui(ui, |ui| {
+                            let none_resp = ui.selectable_value(&mut c.v_align, None, "None");
+                            if none_resp.clicked() {
+                                c.v_align = None;
+                            }
+                            ui.selectable_value(&mut c.v_align, Some(VAlign::Top), "Top");
+                            ui.selectable_value(&mut c.v_align, Some(VAlign::Bottom), "Bottom");
+                            ui.selectable_value(&mut c.v_align, Some(VAlign::Center), "Center");
+                            ui.selectable_value(&mut c.v_align, Some(VAlign::Stretch), "Stretch");
+                        });
+                    ui.end_row();
+
+                    // Aspect ratio
+                    ui.label(egui::RichText::new("Aspect ratio").small().weak());
+                    ui.horizontal(|ui| {
+                        let mut ar_str = c
+                            .aspect_ratio
+                            .map(|r| format!("{r:.2}"))
+                            .unwrap_or_default();
+                        if ui
+                            .add(
+                                egui::TextEdit::singleline(&mut ar_str)
+                                    .hint_text("w:h (e.g. 1.78)")
+                                    .desired_width(70.0),
+                            )
+                            .changed()
+                        {
+                            c.aspect_ratio = ar_str.trim().parse::<f32>().ok().filter(|&v| v > 0.0);
+                        }
+                        if c.aspect_ratio.is_some()
+                            && ui.small_button("✕").on_hover_text("Remove lock").clicked()
+                        {
+                            c.aspect_ratio = None;
+                        }
+                    });
+                    ui.end_row();
+                });
+
+            // --- Min / Max size ---
+            ui.separator();
+            ui.label(egui::RichText::new("Size limits").small().weak());
+            egui::Grid::new(("constraints_minmax", id))
+                .num_columns(4)
+                .spacing([4.0, 2.0])
+                .show(ui, |ui| {
+                    // Min W
+                    ui.label(egui::RichText::new("Min W").small().weak());
+                    optional_drag(ui, &mut c.min_w, 0.0..=4096.0, ("min_w", id));
+                    // Max W
+                    ui.label(egui::RichText::new("Max W").small().weak());
+                    optional_drag(ui, &mut c.max_w, 0.0..=4096.0, ("max_w", id));
+                    ui.end_row();
+                    // Min H
+                    ui.label(egui::RichText::new("Min H").small().weak());
+                    optional_drag(ui, &mut c.min_h, 0.0..=4096.0, ("min_h", id));
+                    // Max H
+                    ui.label(egui::RichText::new("Max H").small().weak());
+                    optional_drag(ui, &mut c.max_h, 0.0..=4096.0, ("max_h", id));
+                    ui.end_row();
+                });
+
+            // --- Margin ---
+            ui.separator();
+            ui.label(egui::RichText::new("Margin (T R B L)").small().weak());
+            egui::Grid::new(("constraints_margin", id))
+                .num_columns(4)
+                .spacing([4.0, 2.0])
+                .show(ui, |ui| {
+                    for (label, idx) in [("T", 0usize), ("R", 1), ("B", 2), ("L", 3)] {
+                        ui.label(egui::RichText::new(label).small().weak());
+                        ui.add(
+                            egui::DragValue::new(&mut c.margin[idx])
+                                .range(0.0..=200.0_f32)
+                                .speed(0.5)
+                                .suffix(" px"),
+                        );
+                    }
+                    ui.end_row();
+                });
+
+            // --- Equal-size links ---
+            ui.separator();
+            ui.label(
+                egui::RichText::new("Equal size to (widget ID)")
+                    .small()
+                    .weak(),
+            );
+            egui::Grid::new(("constraints_eqsize", id))
+                .num_columns(2)
+                .spacing([4.0, 2.0])
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new("Equal W").small().weak());
+                    optional_id_field(ui, &mut c.equal_width_to, ("eq_w", id));
+                    ui.end_row();
+                    ui.label(egui::RichText::new("Equal H").small().weak());
+                    optional_id_field(ui, &mut c.equal_height_to, ("eq_h", id));
+                    ui.end_row();
+                });
+        });
+}
+
+fn h_align_label(a: Option<HAlign>) -> &'static str {
+    match a {
+        None => "None",
+        Some(HAlign::Leading) => "Leading",
+        Some(HAlign::Trailing) => "Trailing",
+        Some(HAlign::Center) => "Center",
+        Some(HAlign::Stretch) => "Stretch",
+    }
+}
+
+fn v_align_label(a: Option<VAlign>) -> &'static str {
+    match a {
+        None => "None",
+        Some(VAlign::Top) => "Top",
+        Some(VAlign::Bottom) => "Bottom",
+        Some(VAlign::Center) => "Center",
+        Some(VAlign::Stretch) => "Stretch",
+    }
+}
+
+/// Render a `DragValue` for an `Option<f32>` field — shows `0.0` placeholder
+/// when `None`; sets to `Some` on first interaction; clears when reset button clicked.
+fn optional_drag(
+    ui: &mut egui::Ui,
+    field: &mut Option<f32>,
+    range: std::ops::RangeInclusive<f32>,
+    salt: impl std::hash::Hash,
+) {
+    ui.horizontal(|ui| {
+        let mut val = field.unwrap_or(0.0);
+        let resp = ui.add(
+            egui::DragValue::new(&mut val)
+                .range(range)
+                .speed(0.5)
+                .suffix(" px"),
+        );
+        if resp.changed() {
+            *field = Some(val);
+        }
+        if field.is_some() && ui.small_button("✕").on_hover_text("Clear limit").clicked() {
+            *field = None;
+        }
+        drop(salt); // consume salt to avoid unused-variable warning
+    });
+}
+
+/// Single-line text field for an `Option<String>` ID link.
+/// Shows empty hint when None; clears on ✕.
+fn optional_id_field(ui: &mut egui::Ui, field: &mut Option<String>, salt: impl std::hash::Hash) {
+    ui.horizontal(|ui| {
+        let mut text = field.clone().unwrap_or_default();
+        let resp = ui.add(
+            egui::TextEdit::singleline(&mut text)
+                .hint_text("widget id")
+                .desired_width(120.0)
+                .id(egui::Id::new(salt)),
+        );
+        if resp.changed() {
+            let t = text.trim().to_owned();
+            *field = if t.is_empty() { None } else { Some(t) };
+        }
+        if field.is_some() && ui.small_button("✕").on_hover_text("Remove link").clicked() {
+            *field = None;
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -2263,17 +2478,14 @@ mod reset_tests {
     #[test]
     fn reset_label_restores_kind_name() {
         let w = make_button();
-        // After reset, label should become the kind name.
         let kind_name = format!("{:?}", w.kind);
         assert_eq!(kind_name, "Button");
-        // Simulate reset: set label to kind name.
         assert_eq!(kind_name, "Button");
     }
 
     #[test]
     fn reset_geometry_restores_defaults() {
         let mut w = make_button();
-        // Simulate property reset.
         w.rect.x = 0.0;
         w.rect.y = 0.0;
         let default_inst = crate::widgets::default_for(&w.kind);
@@ -2283,7 +2495,6 @@ mod reset_tests {
         assert_eq!(w.rect.y, 0.0);
         assert!(w.rect.w > 0.0);
         assert!(w.rect.h > 0.0);
-        // Default button rect is 120×32
         assert!((w.rect.w - default_inst.rect.w).abs() < 0.01);
         assert!((w.rect.h - default_inst.rect.h).abs() < 0.01);
     }
