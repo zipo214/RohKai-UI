@@ -327,6 +327,17 @@ pub struct DragState {
     pub start_rects: Vec<(Uuid, SchemaRect)>,
 }
 
+/// Tracks an in-progress drag-reorder of a layout child.
+/// Active from mouse-down on a layout-child until release.
+pub struct ReorderDrag {
+    /// The child being dragged.
+    pub child_id: Uuid,
+    /// Parent layout container.
+    pub parent_id: Uuid,
+    /// Current insertion index (between children) — updated every frame.
+    pub insert_idx: usize,
+}
+
 #[derive(Default)]
 pub struct InteractionState {
     pub drag: Option<DragState>,
@@ -343,6 +354,8 @@ pub struct InteractionState {
     /// Keyboard shortcuts target the canvas only after the user interacts with
     /// the visible canvas surface. Clicking another panel/window clears this.
     pub canvas_focused: bool,
+    /// Active drag-reorder session (VLayout / HLayout child being repositioned).
+    pub reorder_drag: Option<ReorderDrag>,
 }
 
 // ---------------------------------------------------------------------------
@@ -526,6 +539,137 @@ fn hit_widget_id(
                 .find(|w| !child_ids.contains(&w.id) && crect(w, origin, zoom).contains(pos))
         })
         .map(|w| w.id)
+}
+
+/// Returns the topmost VLayout/HLayout/GridLayout container whose canvas rect
+/// contains `pos` (in screen space). Used for layout-aware rubber-band and
+/// drag-reorder candidate restriction.
+pub fn find_layout_container_at(
+    pos: egui::Pos2,
+    tree: &crate::project::ui_tree::UiTree,
+    origin: egui::Pos2,
+    zoom: f32,
+) -> Option<Uuid> {
+    tree.widgets
+        .iter()
+        .rev()
+        .find(|w| {
+            matches!(
+                w.kind,
+                WidgetKind::VLayout | WidgetKind::HLayout | WidgetKind::GridLayout
+            ) && crect(w, origin, zoom).contains(pos)
+        })
+        .map(|w| w.id)
+}
+
+/// Given a dragged layout child and its current screen position, compute which
+/// insertion index within the parent's `children` list best corresponds to the
+/// cursor position. For VLayout, insertion is by Y; for HLayout, by X.
+fn layout_insert_idx(
+    parent: &crate::project::schema::WidgetInstance,
+    widgets: &[crate::project::schema::WidgetInstance],
+    pos_canvas: egui::Pos2,
+    dragged_id: Uuid,
+) -> usize {
+    let mut insertion = parent.children.len(); // default: append at end
+    match parent.kind {
+        WidgetKind::VLayout => {
+            for (i, cid) in parent.children.iter().enumerate() {
+                if *cid == dragged_id {
+                    continue;
+                }
+                if let Some(c) = widgets.iter().find(|w| w.id == *cid) {
+                    let mid_y = c.rect.y + c.rect.h * 0.5;
+                    if pos_canvas.y < mid_y {
+                        insertion = i;
+                        break;
+                    }
+                }
+            }
+        }
+        WidgetKind::HLayout => {
+            for (i, cid) in parent.children.iter().enumerate() {
+                if *cid == dragged_id {
+                    continue;
+                }
+                if let Some(c) = widgets.iter().find(|w| w.id == *cid) {
+                    let mid_x = c.rect.x + c.rect.w * 0.5;
+                    if pos_canvas.x < mid_x {
+                        insertion = i;
+                        break;
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    insertion
+}
+
+/// Draw the insertion-placeholder line for drag-reorder feedback.
+fn draw_insertion_placeholder(
+    painter: &egui::Painter,
+    parent: &crate::project::schema::WidgetInstance,
+    widgets: &[crate::project::schema::WidgetInstance],
+    insert_idx: usize,
+    accent: egui::Color32,
+    origin: egui::Pos2,
+    zoom: f32,
+) {
+    let stroke = egui::Stroke::new(2.5, accent);
+    let parent_rect = crect(parent, origin, zoom);
+
+    // Determine the Y (VLayout) or X (HLayout) position of the placeholder line
+    match parent.kind {
+        WidgetKind::VLayout => {
+            let line_y = if parent.children.is_empty() || insert_idx == 0 {
+                parent_rect.min.y + 4.0
+            } else {
+                // Find the bottom edge of the child just before the insert index
+                let ref_idx = insert_idx.saturating_sub(1).min(parent.children.len() - 1);
+                if let Some(cid) = parent.children.get(ref_idx) {
+                    if let Some(c) = widgets.iter().find(|w| w.id == *cid) {
+                        crect(c, origin, zoom).max.y + 2.0
+                    } else {
+                        parent_rect.max.y - 4.0
+                    }
+                } else {
+                    parent_rect.max.y - 4.0
+                }
+            };
+            painter.line_segment(
+                [
+                    egui::pos2(parent_rect.min.x + 4.0, line_y),
+                    egui::pos2(parent_rect.max.x - 4.0, line_y),
+                ],
+                stroke,
+            );
+        }
+        WidgetKind::HLayout => {
+            let line_x = if parent.children.is_empty() || insert_idx == 0 {
+                parent_rect.min.x + 4.0
+            } else {
+                let ref_idx = insert_idx.saturating_sub(1).min(parent.children.len() - 1);
+                if let Some(cid) = parent.children.get(ref_idx) {
+                    if let Some(c) = widgets.iter().find(|w| w.id == *cid) {
+                        crect(c, origin, zoom).max.x + 2.0
+                    } else {
+                        parent_rect.max.x - 4.0
+                    }
+                } else {
+                    parent_rect.max.x - 4.0
+                }
+            };
+            painter.line_segment(
+                [
+                    egui::pos2(line_x, parent_rect.min.y + 4.0),
+                    egui::pos2(line_x, parent_rect.max.y - 4.0),
+                ],
+                stroke,
+            );
+        }
+        _ => {}
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2256,8 +2400,10 @@ pub fn handle(
     if settings.guide_drag_active {
         state.rubber_band = None;
         state.drag = None;
+        state.reorder_drag = None;
     }
     if just_pressed && !settings.guide_drag_active && state.context_menu.is_none() {
+        state.reorder_drag = None; // clear any stale reorder from previous gesture
         if let Some(pos) = pointer {
             if resp.rect.contains(pos) {
                 let mut started_resize = false;
@@ -2354,6 +2500,35 @@ pub fn handle(
                                 state.drag = None;
                                 state.resize = None;
                                 state.rubber_band = Some(pos);
+                            }
+                        }
+                    }
+                }
+
+                // After drag is established, check if the dragged widget is a
+                // direct child of a VLayout or HLayout — if so, start reorder.
+                if state.drag.is_some() && !shift_held {
+                    let drag_id = selected.last().copied();
+                    if let Some(did) = drag_id {
+                        let parent_id = tree.parent_of(did);
+                        if let Some(pid) = parent_id {
+                            if let Some(parent) = tree.widgets.iter().find(|w| w.id == pid) {
+                                if matches!(parent.kind, WidgetKind::VLayout | WidgetKind::HLayout)
+                                {
+                                    let v = (pos - origin) / zoom;
+                                    let pos_canvas = egui::pos2(v.x, v.y);
+                                    let insert_idx = layout_insert_idx(
+                                        parent,
+                                        &tree.widgets,
+                                        pos_canvas,
+                                        did,
+                                    );
+                                    state.reorder_drag = Some(ReorderDrag {
+                                        child_id: did,
+                                        parent_id: pid,
+                                        insert_idx,
+                                    });
+                                }
                             }
                         }
                     }
@@ -2743,9 +2918,41 @@ pub fn handle(
     }
 
     // -------------------------------------------------------------------
+    // Reorder-drag: update insertion index + draw placeholder
+    // -------------------------------------------------------------------
+    if is_down {
+        if let Some(ref mut rd) = state.reorder_drag {
+            if let Some(pos) = pointer {
+                let v = (pos - origin) / zoom;
+                let pos_canvas = egui::pos2(v.x, v.y);
+                if let Some(parent) =
+                    tree.widgets.iter().find(|w| w.id == rd.parent_id).cloned()
+                {
+                    rd.insert_idx =
+                        layout_insert_idx(&parent, &tree.widgets, pos_canvas, rd.child_id);
+                    let accent = egui::Color32::from_rgb(52, 211, 153);
+                    draw_insertion_placeholder(
+                        &painter,
+                        &parent,
+                        &tree.widgets,
+                        rd.insert_idx,
+                        accent,
+                        origin,
+                        zoom,
+                    );
+                }
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------
     // Release — rubber-band finalise
     // -------------------------------------------------------------------
     if !is_down {
+        // Commit reorder-drag first (before attach_to_layout clears the parent rel)
+        if let Some(rd) = state.reorder_drag.take() {
+            tree.move_child_within_parent(rd.parent_id, rd.child_id, rd.insert_idx);
+        }
         if let Some(ds) = &state.drag {
             let dragged_ids: Vec<Uuid> = ds.start_rects.iter().map(|(id, _)| *id).collect();
             for id in dragged_ids {
@@ -2769,8 +2976,22 @@ pub fn handle(
             let band_rect = egui::Rect::from_two_pos(band_start, pos);
             if band_rect.width() > 4.0 || band_rect.height() > 4.0 {
                 let before_len = selected.len();
+                // Layout-aware rubber-band: if the band started inside a layout
+                // container, restrict candidates to direct children of that container.
+                let container_children: Option<HashSet<Uuid>> =
+                    find_layout_container_at(band_start, tree, origin, zoom).and_then(|pid| {
+                        tree.widgets
+                            .iter()
+                            .find(|w| w.id == pid)
+                            .map(|p| p.children.iter().copied().collect())
+                    });
                 for widget in &tree.widgets {
-                    if band_rect.intersects(crect(widget, origin, zoom))
+                    let in_scope = container_children
+                        .as_ref()
+                        .map(|allowed| allowed.contains(&widget.id))
+                        .unwrap_or(true);
+                    if in_scope
+                        && band_rect.intersects(crect(widget, origin, zoom))
                         && !selected.contains(&widget.id)
                     {
                         selected.push(widget.id);
@@ -2784,6 +3005,8 @@ pub fn handle(
         state.drag = None;
         state.resize = None;
         state.rubber_band = None;
+        // reorder_drag already consumed above via take(); set None in case of early exit
+        state.reorder_drag = None;
     }
 
     // -------------------------------------------------------------------
