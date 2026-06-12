@@ -7,7 +7,7 @@
 
 use crate::canvas::widget_maker::{
     doc_to_descriptor, gen_export_template, gen_live_preview, MakerPrimKind, MakerPrimitive,
-    PrimAnchor, WidgetMakerDoc,
+    PrimAnchor, StyleTokens, WidgetMakerDoc,
 };
 use egui::Color32;
 
@@ -236,6 +236,7 @@ fn show_primitive_list(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
                     MakerPrimKind::Outline => "Outline",
                     MakerPrimKind::Ellipse => "Ellipse",
                     MakerPrimKind::Text => "Text",
+                    MakerPrimKind::HitRegion => "HitRgn",
                 }
             );
             let selected = doc.selected == Some(i);
@@ -308,7 +309,7 @@ fn show_mini_canvas(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
     // Draw primitives (bottom to top)
     for (idx, prim) in doc.primitives.iter().enumerate() {
         let pr = prim_canvas_rect(prim, canvas_rect);
-        draw_primitive(&painter, prim, pr);
+        draw_primitive(&painter, prim, pr, &doc.style_tokens);
 
         // Selection outline
         if doc.selected == Some(idx) {
@@ -430,6 +431,18 @@ fn show_toolbar(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
             });
             doc.selected = Some(doc.primitives.len() - 1);
         }
+        if ui.small_button("⊡ HitRgn").clicked() {
+            doc.primitives.push(MakerPrimitive {
+                kind: MakerPrimKind::HitRegion,
+                sense_click: true,
+                x: 0.1,
+                y: 0.1,
+                w: 0.8,
+                h: 0.8,
+                ..Default::default()
+            });
+            doc.selected = Some(doc.primitives.len() - 1);
+        }
 
         let can_remove = doc
             .selected
@@ -506,6 +519,53 @@ fn show_widget_meta(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
             });
             ui.end_row();
         });
+
+    // Style Tokens collapsible group
+    show_style_tokens(ui, &mut doc.style_tokens);
+}
+
+fn show_style_tokens(ui: &mut egui::Ui, tokens: &mut StyleTokens) {
+    ui.collapsing(egui::RichText::new("Style Tokens").small().strong(), |ui| {
+        egui::Grid::new("wm_tokens")
+            .num_columns(4)
+            .spacing([4.0, 2.0])
+            .show(ui, |ui| {
+                // Accent
+                ui.label(egui::RichText::new("Accent").small());
+                ui.add(egui::DragValue::new(&mut tokens.accent[0]).range(0..=255_u8));
+                ui.add(egui::DragValue::new(&mut tokens.accent[1]).range(0..=255_u8));
+                ui.add(egui::DragValue::new(&mut tokens.accent[2]).range(0..=255_u8));
+                ui.end_row();
+                // Border
+                ui.label(egui::RichText::new("Border").small());
+                ui.add(egui::DragValue::new(&mut tokens.border[0]).range(0..=255_u8));
+                ui.add(egui::DragValue::new(&mut tokens.border[1]).range(0..=255_u8));
+                ui.add(egui::DragValue::new(&mut tokens.border[2]).range(0..=255_u8));
+                ui.end_row();
+                // Text color
+                ui.label(egui::RichText::new("Text").small());
+                ui.add(egui::DragValue::new(&mut tokens.text_color[0]).range(0..=255_u8));
+                ui.add(egui::DragValue::new(&mut tokens.text_color[1]).range(0..=255_u8));
+                ui.add(egui::DragValue::new(&mut tokens.text_color[2]).range(0..=255_u8));
+                ui.end_row();
+                // Corner radius
+                ui.label(egui::RichText::new("Radius").small());
+                ui.add(
+                    egui::DragValue::new(&mut tokens.corner_radius)
+                        .range(0.0..=32.0_f32)
+                        .speed(0.5),
+                );
+                ui.end_row();
+                // Spacing
+                ui.label(egui::RichText::new("Spacing").small());
+                ui.add(
+                    egui::DragValue::new(&mut tokens.spacing)
+                        .range(0.0..=32.0_f32)
+                        .speed(0.5),
+                );
+                ui.end_row();
+            });
+    });
 }
 
 fn show_primitive_props(ui: &mut egui::Ui, prim: &mut MakerPrimitive) {
@@ -517,6 +577,7 @@ fn show_primitive_props(ui: &mut egui::Ui, prim: &mut MakerPrimitive) {
             ("Outline", MakerPrimKind::Outline),
             ("Ellipse", MakerPrimKind::Ellipse),
             ("Text", MakerPrimKind::Text),
+            ("⊡ HitRgn", MakerPrimKind::HitRegion),
         ] {
             if ui
                 .selectable_label(prim.kind == kind, egui::RichText::new(label).small())
@@ -585,25 +646,40 @@ fn show_primitive_props(ui: &mut egui::Ui, prim: &mut MakerPrimitive) {
                 prim.h = (hp / 100.0).max(prim.min_h);
             }
             ui.end_row();
-            ui.label(egui::RichText::new("R").small());
-            ui.add(egui::DragValue::new(&mut prim.fill[0]).range(0..=255_u8));
-            ui.label(egui::RichText::new("G").small());
-            ui.add(egui::DragValue::new(&mut prim.fill[1]).range(0..=255_u8));
-            ui.end_row();
-            ui.label(egui::RichText::new("B").small());
-            ui.add(egui::DragValue::new(&mut prim.fill[2]).range(0..=255_u8));
-            if matches!(prim.kind, MakerPrimKind::Rect | MakerPrimKind::Outline) {
-                ui.label(egui::RichText::new("Rad").small());
-                ui.add(
-                    egui::DragValue::new(&mut prim.corner_radius)
-                        .range(0.0..=32.0_f32)
-                        .speed(0.5),
-                );
+            // Fill RGB only for non-HitRegion kinds
+            if !matches!(prim.kind, MakerPrimKind::HitRegion) {
+                ui.label(egui::RichText::new("R").small());
+                ui.add(egui::DragValue::new(&mut prim.fill[0]).range(0..=255_u8));
+                ui.label(egui::RichText::new("G").small());
+                ui.add(egui::DragValue::new(&mut prim.fill[1]).range(0..=255_u8));
+                ui.end_row();
+                ui.label(egui::RichText::new("B").small());
+                ui.add(egui::DragValue::new(&mut prim.fill[2]).range(0..=255_u8));
+                if matches!(prim.kind, MakerPrimKind::Rect | MakerPrimKind::Outline) {
+                    ui.label(egui::RichText::new("Rad").small());
+                    ui.add(
+                        egui::DragValue::new(&mut prim.corner_radius)
+                            .range(0.0..=32.0_f32)
+                            .speed(0.5),
+                    );
+                }
+                ui.end_row();
             }
-            ui.end_row();
         });
 
+    // Token fill checkbox (all non-HitRegion kinds)
+    if !matches!(prim.kind, MakerPrimKind::HitRegion) {
+        ui.checkbox(
+            &mut prim.use_token_fill,
+            egui::RichText::new("Use accent token fill").small(),
+        );
+    }
+
     if matches!(prim.kind, MakerPrimKind::Text) {
+        ui.checkbox(
+            &mut prim.use_token_text_color,
+            egui::RichText::new("Use text-color token").small(),
+        );
         ui.checkbox(
             &mut prim.use_label_token,
             egui::RichText::new("Use {{label}} token").small(),
@@ -623,6 +699,22 @@ fn show_primitive_props(ui: &mut egui::Ui, prim: &mut MakerPrimitive) {
                     .range(6.0..=72.0_f32)
                     .speed(0.5),
             );
+        });
+    }
+
+    // HitRegion sense flags
+    if matches!(prim.kind, MakerPrimKind::HitRegion) {
+        ui.separator();
+        ui.label(egui::RichText::new("Hit Region").small().strong());
+        ui.add(
+            egui::TextEdit::singleline(&mut prim.prim_name)
+                .hint_text("zone name (optional)")
+                .desired_width(f32::INFINITY),
+        );
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut prim.sense_click, egui::RichText::new("Click").small());
+            ui.checkbox(&mut prim.sense_hover, egui::RichText::new("Hover").small());
+            ui.checkbox(&mut prim.sense_drag, egui::RichText::new("Drag").small());
         });
     }
 
@@ -689,52 +781,80 @@ fn prim_canvas_rect(prim: &MakerPrimitive, canvas: egui::Rect) -> egui::Rect {
     egui::Rect::from_min_max(min, max)
 }
 
-fn draw_primitive(painter: &egui::Painter, prim: &MakerPrimitive, rect: egui::Rect) {
-    let [r, g, b] = prim.fill;
-    let color = Color32::from_rgb(r, g, b);
+fn draw_primitive(
+    painter: &egui::Painter,
+    prim: &MakerPrimitive,
+    rect: egui::Rect,
+    tokens: &StyleTokens,
+) {
     match prim.kind {
-        MakerPrimKind::Rect => {
-            painter.rect_filled(rect, prim.corner_radius, color);
-        }
-        MakerPrimKind::Outline => {
-            painter.rect_stroke(rect, prim.corner_radius, egui::Stroke::new(1.5, color));
-        }
-        MakerPrimKind::Ellipse => {
-            let cx = rect.center();
-            let rx = rect.width() * 0.5;
-            let ry = rect.height() * 0.5;
-            if (rx - ry).abs() < 2.0 {
-                painter.circle_filled(cx, rx, color);
-            } else {
-                // Approximate ellipse with 32 segments
-                let n = 32usize;
-                let points: Vec<egui::Pos2> = (0..=n)
-                    .map(|i| {
-                        let t = i as f32 * std::f32::consts::TAU / n as f32;
-                        egui::pos2(cx.x + rx * t.cos(), cx.y + ry * t.sin())
-                    })
-                    .collect();
-                painter.add(egui::Shape::convex_polygon(
-                    points,
-                    color,
-                    egui::Stroke::NONE,
-                ));
-            }
-        }
-        MakerPrimKind::Text => {
-            let font_id = egui::FontId::proportional(prim.font_size);
-            let text = if prim.use_label_token {
-                "Label"
-            } else {
-                prim.text_content.as_str()
-            };
-            painter.text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                text,
-                font_id,
-                color,
+        MakerPrimKind::HitRegion => {
+            // Dashed orange outline — no fill
+            painter.rect_stroke(
+                rect,
+                2.0,
+                egui::Stroke::new(1.5, Color32::from_rgb(255, 165, 0)),
             );
+        }
+        _ => {
+            let [r, g, b] = if prim.use_token_fill {
+                tokens.accent
+            } else {
+                prim.fill
+            };
+            let color = Color32::from_rgb(r, g, b);
+            match prim.kind {
+                MakerPrimKind::Rect => {
+                    painter.rect_filled(rect, prim.corner_radius, color);
+                }
+                MakerPrimKind::Outline => {
+                    painter.rect_stroke(rect, prim.corner_radius, egui::Stroke::new(1.5, color));
+                }
+                MakerPrimKind::Ellipse => {
+                    let cx = rect.center();
+                    let rx = rect.width() * 0.5;
+                    let ry = rect.height() * 0.5;
+                    if (rx - ry).abs() < 2.0 {
+                        painter.circle_filled(cx, rx, color);
+                    } else {
+                        // Approximate ellipse with 32 segments
+                        let n = 32usize;
+                        let points: Vec<egui::Pos2> = (0..=n)
+                            .map(|i| {
+                                let t = i as f32 * std::f32::consts::TAU / n as f32;
+                                egui::pos2(cx.x + rx * t.cos(), cx.y + ry * t.sin())
+                            })
+                            .collect();
+                        painter.add(egui::Shape::convex_polygon(
+                            points,
+                            color,
+                            egui::Stroke::NONE,
+                        ));
+                    }
+                }
+                MakerPrimKind::Text => {
+                    let [tr, tg, tb] = if prim.use_token_text_color {
+                        tokens.text_color
+                    } else {
+                        prim.fill
+                    };
+                    let text_color = Color32::from_rgb(tr, tg, tb);
+                    let font_id = egui::FontId::proportional(prim.font_size);
+                    let text = if prim.use_label_token {
+                        "Label"
+                    } else {
+                        prim.text_content.as_str()
+                    };
+                    painter.text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        text,
+                        font_id,
+                        text_color,
+                    );
+                }
+                MakerPrimKind::HitRegion => unreachable!(),
+            }
         }
     }
 }

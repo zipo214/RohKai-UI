@@ -49,6 +49,27 @@ impl PrimAnchor {
     ];
 }
 
+/// Named design variables for the widget's visual identity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StyleTokens {
+    pub accent: [u8; 3],
+    pub border: [u8; 3],
+    pub corner_radius: f32,
+    pub text_color: [u8; 3],
+    pub spacing: f32,
+}
+impl Default for StyleTokens {
+    fn default() -> Self {
+        Self {
+            accent: [60, 80, 160],
+            border: [120, 120, 140],
+            corner_radius: 4.0,
+            text_color: [240, 240, 240],
+            spacing: 4.0,
+        }
+    }
+}
+
 /// A visual primitive in the Widget Maker mini-canvas.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MakerPrimitive {
@@ -77,6 +98,22 @@ pub struct MakerPrimitive {
     /// Minimum normalised height (clamped during resize). Default 0.0.
     #[serde(default)]
     pub min_h: f32,
+    /// If true, use the doc-level accent token for fill instead of `fill`.
+    #[serde(default)]
+    pub use_token_fill: bool,
+    /// If true, use the doc-level text_color token instead of `fill` (Text kind only).
+    #[serde(default)]
+    pub use_token_text_color: bool,
+    /// Name for the hit region (used in generated variable name). Empty = use index.
+    #[serde(default)]
+    pub prim_name: String,
+    /// Sense flags for HitRegion primitives.
+    #[serde(default)]
+    pub sense_click: bool,
+    #[serde(default)]
+    pub sense_hover: bool,
+    #[serde(default)]
+    pub sense_drag: bool,
 }
 
 impl Default for MakerPrimitive {
@@ -95,6 +132,12 @@ impl Default for MakerPrimitive {
             anchor: PrimAnchor::TopLeft,
             min_w: 0.0,
             min_h: 0.0,
+            use_token_fill: false,
+            use_token_text_color: false,
+            prim_name: String::new(),
+            sense_click: false,
+            sense_hover: false,
+            sense_drag: false,
         }
     }
 }
@@ -109,6 +152,8 @@ pub enum MakerPrimKind {
     Ellipse,
     /// Text label.
     Text,
+    /// Interactive zone: no visual fill, generates allocate_rect with sense flags.
+    HitRegion,
 }
 
 /// Complete visual composition document for the Widget Maker.
@@ -131,6 +176,9 @@ pub struct WidgetMakerDoc {
     pub default_size: [f32; 2],
     /// Accent colour RGB.
     pub accent_color: [u8; 3],
+    /// Style tokens for the widget's visual identity.
+    #[serde(default)]
+    pub style_tokens: StyleTokens,
 }
 
 impl WidgetMakerDoc {
@@ -166,6 +214,7 @@ impl WidgetMakerDoc {
             category: "Custom".to_owned(),
             default_size: [120.0, 40.0],
             accent_color: [60, 80, 160],
+            style_tokens: StyleTokens::default(),
         }
     }
 }
@@ -252,6 +301,7 @@ pub fn doc_from_descriptor(
         primitives: vec![],
         selected: None,
         resize_corner: None,
+        style_tokens: StyleTokens::default(),
     })
 }
 
