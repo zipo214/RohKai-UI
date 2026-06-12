@@ -180,51 +180,57 @@ From Stage 10 and feature evaluation remaining gaps.
 - [x] `.rkwb` descriptor bundle: ZIP store-only (method=0, std::io only) with
       per-descriptor `.rkwd` entries + `manifest.json`; `build_bundle()` public API
 - [x] Keyboard shortcut customization: `user_shortcuts: HashMap<String, String>` in
-      `UserSettings`; Shortcuts window gains Reference + Customize tabs with
-      per-action key-combo text field and reset buttons
+      `UserSettings`; Shortcuts window gains Reference + Customize tabs; custom combos
+      now wired to runtime via `effective_shortcut()` in `src/app.rs` (canvas-owned
+      shortcuts G/Escape/Ctrl+0 remain hardcoded in `canvas/interaction.rs`)
 
 ---
 
 ## P2.6 — Stage 13 — Data & Database Integration
 
-Blocked until crate is user-approved (P2-B research must complete first).
+`rusqlite = { version = "0.40", features = ["bundled"] }` approved (2026-06-11).
+Multi-backend (PostgreSQL / MySQL / Supabase) and async codegen deferred; SQLite path only for now.
 
-- [ ] DB connection configurator — SQLite / PostgreSQL / MySQL / Supabase
+- [x] DB connection configurator — SQLite path via `DatabaseEngine` trait + `SqliteEngine` in `src/project/db_engine.rs`; floating `DbPanelState` window in `src/app.rs`
 - [ ] Visual query builder — select table, columns, WHERE filter
-- [ ] Widget-to-query-result binding (field name → widget binding)
+- [x] Widget-to-query-result binding — `DbBinding` on `WidgetInstance`; shown in Properties panel (`show_db_binding`)
 - [ ] Schema viewer: see tables and columns visually in a side panel
-- [ ] Generates `AppState` with a connection pool field and async query calls
-- [ ] Generated code uses correct Rust DB crate with documented dependency line
+- [x] Generates `AppState` with db field and `load_from_db()` stub — emitted by `src/codegen/state_emitter.rs` when any widget has a `DbBinding`
+- [x] Generated code uses correct Rust DB crate — `rusqlite::Connection` in emitted code (SQLite only; multi-backend deferred)
 - [ ] Design-time data preview: show sample rows without runtime execution
 
 ---
 
 ## P2.7 — SVG Renderer Remaining Lanes
 
-From `docs/SVG_RENDERER_ROADMAP.md` deferred items.
+Authoritative source: `docs/SVG_RENDERER_ROADMAP.md` (closed post-R12). Items below reconciled
+with code in `src/canvas/svg_rasterizer.rs` on 2026-06-11.
 
-- [ ] **Filter tier-3** (identity passthrough + diagnostic currently):
-      `feTile`, `feImage`, `feTurbulence`, `feDisplacementMap`,
-      `feConvolveMatrix`, `feDiffuseLighting`, `feSpecularLighting`
-- [ ] **Progressive JPEG** (SOF2): currently diagnosed; implement
-      progressive scan decoding
-- [ ] **Real font-file glyph rendering**: parse TrueType/OpenType `.ttf`/`.otf`
-      within the zero-dependency profile (no fontdue/rusttype); or gate on the
-      P2-A shaping engine completing first
-- [ ] **Full shaping and BIDI** in SVG rasterizer: Arabic, Hebrew, Indic scripts;
-      depends on P2-A shaping engine
-- [ ] **ICC colour management**: parse embedded ICC profiles; map to sRGB
-- [ ] **`foreignObject`**: render embedded HTML content as a rasterized blob or
-      diagnosed stub
+- [x] **Filter tier-3**: `feTile`, `feImage`, `feTurbulence`, `feDisplacementMap`,
+      `feConvolveMatrix`, `feDiffuseLighting`, `feSpecularLighting` — fully
+      implemented in commit `397f450`; acceptance tests at svg_rasterizer.rs:14177+
+- [x] **Progressive JPEG** (SOF2): `decode_progressive_scan` + `decode_progressive_finish`
+      implemented; live test `progressive_jpeg_decodes_to_gray_pixels` passes
+- [x] **`foreignObject`**: diagnosed via `"foreignObject content is rejected from
+      the secure static renderer profile"` (svg_rasterizer.rs:3690)
+- [x] **SMIL animation** (`animate`, `animateTransform`, `animateMotion`, `set`,
+      `mpath`): diagnosed at svg_rasterizer.rs:3693+; clock/repaint loop is a
+      deliberate non-goal for the static renderer
+- [x] **CSS animation / transitions** — `@keyframes` and other CSS at-rules:
+      `animation.css_atrule` diagnostic emitted by `report_stylesheet`; `<animate>`
+      elements produce `"animation elements are ignored"` (svg_rasterizer.rs:3694)
+- [x] **Scripting**: security gate rejects `<script>` tags (svg_rasterizer.rs:357)
 - [ ] **`SvgRenderOptions` struct**: add only if scene split needs caller-controlled
-      rendering options
+      rendering options (conditional; not yet needed)
 - [ ] **R8.2 deep-fuzz hardening** (optional): 50k+ iteration fuzz pass with
-      structured mutation over the full W3C corpus
-- [ ] **SMIL animation** (long range): `animate`, `animateTransform`,
-      `animateMotion` — requires a clock/repaint loop
-- [ ] **CSS animation / transitions** (long range): `@keyframes`, `transition`
-- [ ] **Scripting** (deliberately out of scope / security): JavaScript/ECMAScript
-      execution is not planned; document explicitly as unsupported
+      structured mutation over the full W3C corpus; goal prompt at
+      `docs/svg-goal-plan-prompts/R8.2-deep-fuzz-ci-coverage.goal.md`
+- ~~**Real font-file glyph rendering**~~ — **explicit non-goal**: SVG rasterizer is
+  `std::io`-only; Hershey simplex remains the rasterizer font. P2-A `rustybuzz`
+  shaper is for the main app canvas only.
+- ~~**Full shaping and BIDI**~~ — **explicit non-goal**: same std-only constraint.
+- ~~**ICC colour management**~~ — **explicit non-goal**: sRGB-assumed per
+  `docs/SVG_RENDERER_ROADMAP.md` gap matrix.
 
 ---
 

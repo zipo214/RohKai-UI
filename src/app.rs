@@ -7,6 +7,70 @@ use egui::Key;
 use std::path::PathBuf;
 use uuid::Uuid;
 
+// ---------------------------------------------------------------------------
+// Keyboard shortcut helpers
+// ---------------------------------------------------------------------------
+
+/// Map a single-key string (e.g. "N", "F5", "Escape") to an egui Key.
+fn parse_egui_key(s: &str) -> Option<Key> {
+    match s {
+        "A" => Some(Key::A), "B" => Some(Key::B), "C" => Some(Key::C),
+        "D" => Some(Key::D), "E" => Some(Key::E), "F" => Some(Key::F),
+        "G" => Some(Key::G), "H" => Some(Key::H), "I" => Some(Key::I),
+        "J" => Some(Key::J), "K" => Some(Key::K), "L" => Some(Key::L),
+        "M" => Some(Key::M), "N" => Some(Key::N), "O" => Some(Key::O),
+        "P" => Some(Key::P), "Q" => Some(Key::Q), "R" => Some(Key::R),
+        "S" => Some(Key::S), "T" => Some(Key::T), "U" => Some(Key::U),
+        "V" => Some(Key::V), "W" => Some(Key::W), "X" => Some(Key::X),
+        "Y" => Some(Key::Y), "Z" => Some(Key::Z),
+        "0" => Some(Key::Num0), "1" => Some(Key::Num1), "2" => Some(Key::Num2),
+        "3" => Some(Key::Num3), "4" => Some(Key::Num4), "5" => Some(Key::Num5),
+        "6" => Some(Key::Num6), "7" => Some(Key::Num7), "8" => Some(Key::Num8),
+        "9" => Some(Key::Num9),
+        "F1" => Some(Key::F1), "F2" => Some(Key::F2), "F3" => Some(Key::F3),
+        "F4" => Some(Key::F4), "F5" => Some(Key::F5), "F6" => Some(Key::F6),
+        "F7" => Some(Key::F7), "F8" => Some(Key::F8), "F9" => Some(Key::F9),
+        "F10" => Some(Key::F10), "F11" => Some(Key::F11), "F12" => Some(Key::F12),
+        "Escape" => Some(Key::Escape),
+        "Enter" => Some(Key::Enter),
+        "Tab" => Some(Key::Tab),
+        "Delete" => Some(Key::Delete),
+        "Backspace" => Some(Key::Backspace),
+        "Space" => Some(Key::Space),
+        _ => None,
+    }
+}
+
+/// Return true when the egui context sees the key combo defined for `action`
+/// in `settings.user_shortcuts`, falling back to `default_combo` if no
+/// override is set.  Combo syntax: "Ctrl+Shift+S", "F5", "Escape".
+fn effective_shortcut(
+    ctx: &egui::Context,
+    action: &str,
+    settings: &UserSettings,
+    default_combo: &str,
+) -> bool {
+    let combo = settings
+        .user_shortcuts
+        .get(action)
+        .map(|s| s.as_str())
+        .unwrap_or(default_combo);
+    let parts: Vec<&str> = combo.split('+').collect();
+    let want_ctrl = parts.contains(&"Ctrl");
+    let want_shift = parts.contains(&"Shift");
+    let want_alt = parts.contains(&"Alt");
+    let key_part = parts.last().copied().unwrap_or("");
+    let Some(key) = parse_egui_key(key_part) else {
+        return false;
+    };
+    ctx.input(|i| {
+        i.modifiers.ctrl == want_ctrl
+            && i.modifiers.shift == want_shift
+            && i.modifiers.alt == want_alt
+            && i.key_pressed(key)
+    })
+}
+
 #[derive(Clone, Copy)]
 enum PendingCommand {
     New,
@@ -1655,26 +1719,29 @@ impl eframe::App for RohKaiApp {
         }
 
         // ---------------------------------------------------------------
-        // Global keyboard shortcuts
+        // Global keyboard shortcuts — user-customizable via user_shortcuts.
+        // Canvas-owned shortcuts (G=snap, Ctrl+0=zoom-reset, Escape=deselect)
+        // remain hardcoded in canvas/interaction.rs for now.
         // ---------------------------------------------------------------
-        let ctrl_n = ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::N));
-        let ctrl_o = ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::O));
-        let ctrl_shift_s =
-            ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::S));
-        let ctrl_s = ctx.input(|i| i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(Key::S));
-        let ctrl_shift_g =
-            ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::G));
-        let ctrl_g = ctx.input(|i| i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(Key::G));
-        let ctrl_r = ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::R));
-        let ctrl_l = ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::L));
-        let f5 = ctx.input(|i| i.key_pressed(Key::F5));
-        let f1 = ctx.input(|i| i.key_pressed(Key::F1));
-        // Undo: Ctrl+Z. Redo: Ctrl+Y or Ctrl+Shift+Z.
-        let ctrl_z = ctx.input(|i| i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(Key::Z));
-        let ctrl_redo = ctx.input(|i| {
-            i.modifiers.ctrl
-                && (i.key_pressed(Key::Y) || (i.modifiers.shift && i.key_pressed(Key::Z)))
-        });
+        let us = &self.prefs.user_settings;
+        let ctrl_n = effective_shortcut(ctx, "new_project", us, "Ctrl+N");
+        let ctrl_o = effective_shortcut(ctx, "open_project", us, "Ctrl+O");
+        let ctrl_shift_s = effective_shortcut(ctx, "save_as", us, "Ctrl+Shift+S");
+        let ctrl_s = effective_shortcut(ctx, "save", us, "Ctrl+S");
+        let ctrl_shift_g = effective_shortcut(ctx, "ungroup", us, "Ctrl+Shift+G");
+        let ctrl_g = effective_shortcut(ctx, "group", us, "Ctrl+G");
+        let ctrl_r = effective_shortcut(ctx, "toggle_rulers", us, "Ctrl+R");
+        let ctrl_l = effective_shortcut(ctx, "toggle_outline", us, "Ctrl+L");
+        let f5 = effective_shortcut(ctx, "toggle_preview", us, "F5");
+        let f1 = effective_shortcut(ctx, "shortcuts_help", us, "F1");
+        // Undo: customizable primary + hardcoded Ctrl+Shift+Z alternative.
+        let ctrl_z = effective_shortcut(ctx, "undo", us, "Ctrl+Z");
+        let ctrl_redo = effective_shortcut(ctx, "redo", us, "Ctrl+Y")
+            || ctx.input(|i| {
+                i.modifiers.ctrl
+                    && i.modifiers.shift
+                    && i.key_pressed(Key::Z)
+            });
         // Don't hijack Ctrl+Z/Y while a TextEdit (code editor, property fields,
         // etc.) owns the keyboard — that would roll the UiTree instead of the
         // text-edit's own undo.

@@ -2981,6 +2981,12 @@ fn report_stylesheet(sheet: &svg_core::SvgCssStyleSheet, report: &mut SvgRenderR
             "CSS rules exceeded renderer byte, rule, or declaration limits",
         );
     }
+    if sheet.atrule_count > 0 {
+        report.warning(
+            "animation.css_atrule",
+            "@keyframes / @font-face / @media at-rules are not supported by the static renderer and were skipped",
+        );
+    }
 }
 
 fn local_reference_targets(attrs: &[(String, String)]) -> Vec<String> {
@@ -14959,6 +14965,49 @@ mod tests {
         assert!(
             inflate(&data, 2).is_none(),
             "inflate must honor the ceiling"
+        );
+    }
+
+    #[test]
+    fn css_keyframes_atrule_produces_diagnostic() {
+        // SVG with a @keyframes CSS at-rule must produce animation.css_atrule warning,
+        // NOT be silently consumed into the generic unsupported-selector bucket.
+        let svg = r##"<svg viewBox="0 0 4 4" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    rect { fill: #ff0000; }
+  </style>
+  <rect width="4" height="4"/>
+</svg>"##;
+        let result = rasterize_with_report(svg, 4, 4).unwrap_or_else(|_| panic!("rasterize failed"));
+        let codes: Vec<&str> = result
+            .report
+            .warnings
+            .iter()
+            .map(|w| w.code.as_str())
+            .collect();
+        assert!(
+            codes.contains(&"animation.css_atrule"),
+            "@keyframes must produce animation.css_atrule diagnostic, got: {codes:?}"
+        );
+    }
+
+    #[test]
+    fn css_font_face_atrule_produces_diagnostic() {
+        let svg = r##"<svg viewBox="0 0 4 4" xmlns="http://www.w3.org/2000/svg">
+  <style>@font-face { font-family: "X"; src: local("Arial"); } rect { fill: blue; }</style>
+  <rect width="4" height="4"/>
+</svg>"##;
+        let result = rasterize_with_report(svg, 4, 4).unwrap_or_else(|_| panic!("rasterize failed"));
+        let codes: Vec<&str> = result
+            .report
+            .warnings
+            .iter()
+            .map(|w| w.code.as_str())
+            .collect();
+        assert!(
+            codes.contains(&"animation.css_atrule"),
+            "@font-face must produce animation.css_atrule diagnostic, got: {codes:?}"
         );
     }
 }

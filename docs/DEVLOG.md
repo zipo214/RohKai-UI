@@ -2,6 +2,48 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-12 — Crate → lib+bin; fidelity_audit harness linked & green
+
+### Context Reviewed
+- Session continuation after compaction; user asked to (1) finish the work
+  stalled around `tests/fidelity_audit.rs`, (2) prove tier-3 SVG filters are
+  real in code, (3) collate a functionality index, and (4) de-defer + re-enumerate
+  every roadmap with the in-house renderer last.
+- Read all roadmaps: `ROADMAP.md`, `ROADMAP_PHASE2.md`, `SVG_RENDERER_ROADMAP.md`,
+  `jpegdecoder roadmap.md`, `TEXT_IMPORT_PLAN.md`, `ROADMAP_COMPARATIVE_ANALYSIS.md`.
+
+### Findings (code cross-reference)
+- **Tier-3 SVG filters are real**, not identity passthrough: `filter_tile`
+  (`svg_rasterizer.rs:6760`), `displacement_map` (6783), `feConvolveMatrix`
+  (6816), `feTurbulence` Perlin (6881-7056), lighting (7059+), `feImage` data-URI
+  (7350+), with 7 acceptance tests (14177+). The `[ ]` claims in `ROADMAP_PHASE2.md`
+  P2.7 were stale; the prior session had already reconciled them to `[x]`.
+- **Root cause of the stalled thread:** RohKai was a binary-only crate (no
+  `[lib]`, no `src/lib.rs`), so `tests/fidelity_audit.rs` (`use rohkai::…`) could
+  not link — 6 `unresolved crate rohkai` errors. The harness was untracked,
+  never linked, never linted: a hollow surface.
+
+### Changes
+- Added `src/lib.rs` (crate root, `pub mod` × 9). Slimmed `src/main.rs` to a
+  shell over `rohkai::app::RohKaiApp` (no module declarations; icon raster kept).
+- Fixed `tests/fidelity_audit.rs:212` clippy `double_ended_iterator_last`
+  (`.last()`→`.next_back()`).
+- Updated `docs/CODE_INDEX.md`: added `lib.rs`, `constraint_solver`, `db_engine`,
+  `undo`, `formula`, `component_state`, `widget_bundle`, `widget_maker_emit`,
+  `db_panel`, `shaper/`; corrected stale Timer/StateMachine/Formula/DB depth.
+
+### Verification
+- `cargo test` — **495 passed, 0 failed, 6 ignored** + 11 `fidelity_audit` + 1 doctest
+- `cargo clippy --all-targets -- -D warnings` — zero warnings
+
+### Risks / Follow-ups
+- Promoting to a lib enables doctests (1 ran, passed). Future doc examples now
+  execute under `cargo test`.
+- Shallow surfaces to schedule (NOT defer): `apply_constraints` flat iteration
+  (no recursion into layout children); `validate_constraints` not surfaced in UI.
+- Next: rewrite the roadmaps to remove all deferral/non-goal language and produce
+  one ordered master backlog (renderer last); build the RCA parity-check system.
+
 ## 2026-06-11 — P2.3/P2.4/P2.5/P2.6 merged; 489 tests, zero warnings
 
 ### Context Reviewed

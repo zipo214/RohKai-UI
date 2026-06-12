@@ -1,16 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod app;
-mod canvas;
-mod codegen;
-mod panels;
-mod project;
-mod settings;
-mod svg_core;
-mod svg_import;
-mod widgets;
+//! Binary entry point. All designer modules live in the `rohkai` library crate
+//! (`src/lib.rs`); this shell only bootstraps eframe and rasterises the window
+//! icon.
 
 use ab_glyph::{Font as _, FontRef, PxScale, ScaleFont as _};
+use rohkai::app;
 use std::sync::Arc;
 
 fn main() -> eframe::Result<()> {

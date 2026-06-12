@@ -11,10 +11,21 @@ being comfortable.
 - `src/project/ui_tree.rs` - mutation API for the widget tree. Prefer this over
   direct `Vec` edits.
 - `src/project/io.rs` - save/load and versioned `.rohkai.json` envelope.
+- `src/project/constraint_solver.rs` - P2.3 layout constraints: `apply_constraints`
+  (margin/equal-size/aspect/min-max/align) and `validate_constraints`
+  (cycle/self-ref/unknown-target detection).
+- `src/project/db_engine.rs` - P2.6 `DatabaseEngine` trait + `SqliteEngine`
+  (rusqlite, `params![]` only — never `format!()` SQL).
+- `src/project/undo.rs` - Stage 14 snapshot undo/redo (50-step cap).
 
 ## App Shell
 
-- `src/main.rs` - eframe startup and app icon.
+- `src/lib.rs` - **crate root**. RohKai is a lib + bin: every designer module is
+  declared `pub mod` here so integration tests in `tests/` (e.g. the
+  cross-surface `fidelity_audit.rs` parity harness) can import the real public
+  API. `crate::` paths inside modules resolve here.
+- `src/main.rs` - thin binary shell: eframe startup and the window-icon
+  rasteriser. Constructs `rohkai::app::RohKaiApp`; declares no modules itself.
 - `src/app.rs` - `RohKaiApp`, panel wiring, file menu, preferences, dirty
   checks, import/export coordination. App state is split into focused structs:
   `ProjectState`, `SessionState`, `MessageState`, `PreferencesState`,
@@ -64,6 +75,8 @@ being comfortable.
   registry (File → Project Files…).
 - `src/panels/component_tray.rs` - design-time non-visual component tray
   (timers, data sources, state machines, HTTP).
+- `src/panels/db_panel.rs` - P2.6 Database floating window (connection config +
+  per-widget `DbBinding` editor via `show_db_binding`).
 - `src/panels/shortcuts.rs` - keyboard shortcut reference (F1 / ?).
 - `src/panels/rust_wiring.rs` - Stage 11 Rust Wiring editor: mpsc channels,
   iterator pipelines, trait impls, with live generated-code preview.
@@ -81,11 +94,25 @@ being comfortable.
   container stretch, grid child reorder controls, and one-level Lazare parser
   hierarchy round-trip. Rich alignment, per-child policies, slot editor, and
   multi-level layout semantics are still planned.
-- **Design-time MVP / documented stubs:** Timer, StateMachine, and HttpRequest
-  components expose state/config and generated comments, not full runtime
-  schedulers, transition engines, or HTTP clients.
-- **Planned depth:** formula engine, model-bound data views, chart axes/series,
-  runtime component dispatch, and true visual widget construction.
+- **Timer / StateMachine — real runtime slice (P2.5):** Timer schedules ticks via
+  `std::thread` + `mpsc` (`timer_rx`, `spawn_timers`, `request_repaint_after`);
+  StateMachine has `StateMachineProps`/`StateDef`/`TransitionDef` schema + table
+  editor + `current_state` codegen. HttpRequest remains a documented stub
+  (needs an approved HTTP crate).
+- **Formula — real engine (P2.5):** `codegen/formula.rs` recursive-descent infix
+  parser with `deps()` dependency tracking and `validate()`; live red-label
+  diagnostics in Properties.
+- **Database — SQLite slice (P2.6):** `DatabaseEngine`/`SqliteEngine`, `DbBinding`
+  on widgets, `DbPanelState` window, `state_emitter` `load_from_db()` codegen.
+  Multi-backend, query builder, and schema viewer are ordered backlog, not
+  deferred.
+- **Shaper — P2-A scaffolding:** `src/canvas/shaper/` has the `ShaperEngine` trait
+  with `RustyBuzzShaper` (main-app canvas) and `HersheyShaper` fallback. The
+  export-embedded `svg_rasterizer.rs` stays std-only and does NOT use rustybuzz.
+- **Planned depth (ordered, not deferred):** model-bound data views, chart
+  axes/series, runtime HTTP dispatch, constraint-solver recursion into layout
+  children + validation UI, and true visual widget construction. See
+  `docs/ROADMAP_PHASE2.md` for the ordered backlog.
 
 ## Codegen
 
@@ -106,6 +133,14 @@ being comfortable.
 - `src/codegen/widget_descriptor.rs` - `.rkwd` descriptor types, loader,
   template engine. Drop `.rkwd` files in `<binary_dir>/widgets/` to extend
   the palette without recompiling.
+- `src/codegen/formula.rs` - P2.5 recursive-descent infix formula parser;
+  `deps()` / `validate()` plus the Rust emitter for `MathLabel`.
+- `src/codegen/component_state.rs` - design-time component (Timer/StateMachine/
+  HttpRequest/DataSource) AppState fields and update() hooks.
+- `src/codegen/widget_bundle.rs` - `.rkwb` ZIP bundle (store-only, std::io,
+  hand-coded CRC-32) packing `.rkwd` entries + `manifest.json`.
+- `src/codegen/widget_maker_emit.rs` - Visual Widget Maker doc → `.rkwd`
+  descriptor emission.
 
 ## SVG Import
 

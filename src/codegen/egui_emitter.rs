@@ -475,9 +475,24 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                 }
             };
             lines.push((Some(w.id), open));
+            let total_flex: f32 = w
+                .children
+                .iter()
+                .filter_map(|&cid| tree.widgets.iter().find(|cw| cw.id == cid))
+                .map(|c| c.child_flex)
+                .sum();
             for &child_id in &w.children {
                 if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
-                    emit_layout_child_lines(child, &mut lines);
+                    if child.child_flex > 0.0 && total_flex > 0.0 {
+                        let ratio = child.child_flex / total_flex;
+                        lines.push((Some(child.id), format!(
+                            "        ui.allocate_ui(egui::vec2(ui.available_width(), (ui.available_height() * {ratio:.4}).max(0.0)), |ui| {{"
+                        )));
+                        emit_layout_child_lines(child, &mut lines);
+                        lines.push((Some(child.id), "        });".to_owned()));
+                    } else {
+                        emit_layout_child_lines(child, &mut lines);
+                    }
                 }
             }
             lines.push((Some(w.id), "        });".to_owned()));
@@ -493,9 +508,24 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                     }
                 };
             lines.push((Some(w.id), open));
+            let total_flex: f32 = w
+                .children
+                .iter()
+                .filter_map(|&cid| tree.widgets.iter().find(|cw| cw.id == cid))
+                .map(|c| c.child_flex)
+                .sum();
             for &child_id in &w.children {
                 if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
-                    emit_layout_child_lines(child, &mut lines);
+                    if child.child_flex > 0.0 && total_flex > 0.0 {
+                        let ratio = child.child_flex / total_flex;
+                        lines.push((Some(child.id), format!(
+                            "        ui.allocate_ui(egui::vec2((ui.available_width() * {ratio:.4}).max(0.0), ui.available_height()), |ui| {{"
+                        )));
+                        emit_layout_child_lines(child, &mut lines);
+                        lines.push((Some(child.id), "        });".to_owned()));
+                    } else {
+                        emit_layout_child_lines(child, &mut lines);
+                    }
                 }
             }
             lines.push((Some(w.id), "        });".to_owned()));
@@ -520,15 +550,39 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                     w.id.as_simple()
                 ),
             ));
-            for (idx, &child_id) in w.children.iter().enumerate() {
+            let mut col_pos = 0usize;
+            for &child_id in &w.children {
                 if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
-                    emit_layout_child_lines(child, &mut lines);
-                    if (idx + 1) % columns == 0 {
+                    let span = (child.grid_col_span as usize).clamp(1, columns);
+                    // Force row-break if this child + span would overflow.
+                    if col_pos > 0 && col_pos + span > columns {
                         lines.push((Some(w.id), "            ui.end_row();".to_owned()));
+                        col_pos = 0;
+                    }
+                    if span > 1 {
+                        lines.push((Some(child.id), format!(
+                            "            // grid_col_span={span}: egui::Grid has no native span; {} empty filler cell(s) appended",
+                            span - 1
+                        )));
+                    }
+                    if child.grid_row_span > 1 {
+                        lines.push((Some(child.id), format!(
+                            "            // grid_row_span={}: row spans are not supported in egui::Grid",
+                            child.grid_row_span
+                        )));
+                    }
+                    emit_layout_child_lines(child, &mut lines);
+                    for _ in 1..span {
+                        lines.push((Some(child.id), "            ui.label(\"\"); // span filler".to_owned()));
+                    }
+                    col_pos += span;
+                    if col_pos >= columns {
+                        lines.push((Some(w.id), "            ui.end_row();".to_owned()));
+                        col_pos = 0;
                     }
                 }
             }
-            if !w.children.is_empty() && !w.children.len().is_multiple_of(columns) {
+            if col_pos > 0 {
                 lines.push((Some(w.id), "            ui.end_row();".to_owned()));
             }
             lines.push((Some(w.id), "        });".to_owned()));
@@ -1996,6 +2050,155 @@ mod tests {
         assert!(
             code.contains(".min_row_height(48.0)"),
             "GridLayout with grid_row_height must emit min_row_height: {code}"
+        );
+    }
+
+    #[test]
+    fn vlayout_child_flex_emits_allocate_ui() {
+        let parent_id = Uuid::from_u128(0xA0);
+        let flex_id = Uuid::from_u128(0xA1);
+        let fixed_id = Uuid::from_u128(0xA2);
+        let widgets = vec![
+            WidgetInstance {
+                id: parent_id,
+                kind: WidgetKind::VLayout,
+                children: vec![flex_id, fixed_id],
+                ..Default::default()
+            },
+            WidgetInstance {
+                id: flex_id,
+                kind: WidgetKind::Button,
+                child_flex: 1.0,
+                ..Default::default()
+            },
+            WidgetInstance {
+                id: fixed_id,
+                kind: WidgetKind::Button,
+                child_flex: 0.0,
+                ..Default::default()
+            },
+        ];
+        let tree = UiTree { widgets, ..Default::default() };
+        let code = emit_indexed(&tree)
+            .into_iter()
+            .map(|(_, l)| l)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            code.contains("allocate_ui"),
+            "flex child in VLayout must emit allocate_ui, got: {code}"
+        );
+        // flex ratio for a single flex=1 vs total=1 is 1.0000
+        assert!(
+            code.contains("available_height()"),
+            "VLayout flex must allocate proportional height: {code}"
+        );
+    }
+
+    #[test]
+    fn hlayout_child_flex_emits_allocate_ui() {
+        let parent_id = Uuid::from_u128(0xB0);
+        let flex_id = Uuid::from_u128(0xB1);
+        let widgets = vec![
+            WidgetInstance {
+                id: parent_id,
+                kind: WidgetKind::HLayout,
+                children: vec![flex_id],
+                ..Default::default()
+            },
+            WidgetInstance {
+                id: flex_id,
+                kind: WidgetKind::Label,
+                child_flex: 2.0,
+                ..Default::default()
+            },
+        ];
+        let tree = UiTree { widgets, ..Default::default() };
+        let code = emit_indexed(&tree)
+            .into_iter()
+            .map(|(_, l)| l)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            code.contains("allocate_ui"),
+            "flex child in HLayout must emit allocate_ui: {code}"
+        );
+        assert!(
+            code.contains("available_width()"),
+            "HLayout flex must allocate proportional width: {code}"
+        );
+    }
+
+    #[test]
+    fn grid_col_span_emits_filler_cells_and_comment() {
+        let parent_id = Uuid::from_u128(0xC0);
+        let span2_id = Uuid::from_u128(0xC1);
+        let normal_id = Uuid::from_u128(0xC2);
+        let widgets = vec![
+            WidgetInstance {
+                id: parent_id,
+                kind: WidgetKind::GridLayout,
+                children: vec![span2_id, normal_id],
+                props: WidgetProps { grid_columns: 3, ..Default::default() },
+                ..Default::default()
+            },
+            WidgetInstance {
+                id: span2_id,
+                kind: WidgetKind::Label,
+                grid_col_span: 2,
+                ..Default::default()
+            },
+            WidgetInstance {
+                id: normal_id,
+                kind: WidgetKind::Label,
+                grid_col_span: 1,
+                ..Default::default()
+            },
+        ];
+        let tree = UiTree { widgets, ..Default::default() };
+        let code = emit_indexed(&tree)
+            .into_iter()
+            .map(|(_, l)| l)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            code.contains("span filler"),
+            "grid_col_span=2 must emit a filler cell: {code}"
+        );
+        assert!(
+            code.contains("grid_col_span=2"),
+            "span comment must identify the span value: {code}"
+        );
+    }
+
+    #[test]
+    fn grid_row_span_emits_comment() {
+        let parent_id = Uuid::from_u128(0xD0);
+        let child_id = Uuid::from_u128(0xD1);
+        let widgets = vec![
+            WidgetInstance {
+                id: parent_id,
+                kind: WidgetKind::GridLayout,
+                children: vec![child_id],
+                props: WidgetProps { grid_columns: 2, ..Default::default() },
+                ..Default::default()
+            },
+            WidgetInstance {
+                id: child_id,
+                kind: WidgetKind::Label,
+                grid_row_span: 2,
+                ..Default::default()
+            },
+        ];
+        let tree = UiTree { widgets, ..Default::default() };
+        let code = emit_indexed(&tree)
+            .into_iter()
+            .map(|(_, l)| l)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            code.contains("grid_row_span=2"),
+            "grid_row_span=2 must emit a diagnostic comment: {code}"
         );
     }
 }

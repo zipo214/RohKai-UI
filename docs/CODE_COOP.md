@@ -7,6 +7,25 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-12 — Crate promoted to lib+bin; fidelity_audit harness green; de-defer pass starting
+
+Branch `dev`. Closed the in-flight fidelity thread: the uncommitted P2.4 codegen
+parity (child_flex/grid spans in `egui_emitter`), P2.5 `effective_shortcut()`
+wiring, and the CSS-at-rule diagnostic (`parse_css_stylesheet.atrule_count`)
+were all real but the new `tests/fidelity_audit.rs` cross-surface harness could
+not link — RohKai was a **binary-only crate**. Added `src/lib.rs` as the crate
+root (`pub mod` for all 9 modules) and slimmed `src/main.rs` to a shell over
+`rohkai::app`; `tests/` can now import the public API. Fixed one clippy error the
+untracked harness carried (`.last()`→`.next_back()`). Now **495 lib + 11
+integration + 1 doctest pass, zero clippy warnings**. Next: per user directive,
+de-defer EVERY roadmap (remove all non-goal/deferral/strikethrough language,
+convert to ordered to-dos), re-enumerate one master backlog ending in the
+in-house renderer with large projects spaced — the ONLY surviving non-goal is the
+zero-external-renderer-dependency architecture invariant (CLAUDE.md). Known
+shallow surfaces found: `constraint_solver::apply_constraints` iterates flat
+`tree.widgets` (no recursion into layout children); `validate_constraints` is
+`#[allow(dead_code)]` (no properties-panel surface).
+
 ## 2026-06-11 — P2.3/P2.5/P2.6 merged into dev; 489 tests green, zero warnings
 
 Branch `dev`. Merged three of the five background agents: P2.3 (constraint-based layout — LayoutConstraints, HAlign/VAlign, constraint solver, show_constraints panel), P2.5 (formula depth, timer wiring via mpsc, state machine schema + editor, shortcut customization, .rkwb ZIP bundle), and P2.6 (Stage 13 DB integration — DatabaseEngine trait, SqliteEngine, db_panel, DbBinding on WidgetInstance, Invariant 10 in ENGINEERING_INVARIANTS.md, rusqlite added to Cargo.toml). P2.4 was merged in the prior session. P2.7 (SVG R9) had nothing new to merge (R9 was already done in v0.2.0). All conflicts were struct-field additions resolved by keeping both sides; 489 tests pass. Next work: run cargo run smoke, then decide whether to start P2.8 or address open items from the caveman review.
