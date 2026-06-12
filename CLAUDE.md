@@ -32,6 +32,12 @@ Never write code that mutates canvas state and code state separately.
   Wire behind a `ShaperEngine` trait in `src/canvas/shaper/` so it can be
   swapped out for a bespoke HarfBuzz port later. Do NOT embed it in the
   export-embedded svg_rasterizer.rs (that source must remain std-only).
+- `rusqlite = { version = "0.40", features = ["bundled"] }` is an approved
+  dependency for Stage 13 / P2.6 database integration. Use only behind a
+  `DatabaseEngine` trait (see `docs/DB_INTEGRATION_RESEARCH.md` Section 7).
+  Never add to Cargo.toml until P2.6 implementation actually begins. SQL
+  codegen must never use `format!()` to build SQL — all values via `params![]`
+  (Invariant 10, pending addition to ENGINEERING_INVARIANTS.md).
 - SVG import, SVG image preview, and SVG raster/vector work are zero-new-crate
   zones: no `resvg`, no `usvg`, no `tiny-skia`, and no substitute renderer
   dependency chain. Implement required SVG behavior in RohKai source.
