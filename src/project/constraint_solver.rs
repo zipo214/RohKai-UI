@@ -1,17 +1,32 @@
 //! P2.3 — Constraint-Based Layout solver.
 //!
-//! [`apply_constraints`] iterates all widgets in a [`UiTree`] and adjusts each
-//! widget's `rect` (x, y, w, h) according to the [`LayoutConstraints`] stored on
-//! it.  The solve is single-pass and intentionally simple: it handles margin
-//! insets, equal-size links, and aspect-ratio locking.  Alignment anchors are
-//! applied relative to the canvas root (the app window rect defined by
-//! `UiTree::app_props.win_w` / `win_h`).
+//! [`apply_constraints`] adjusts each widget's `rect` (x, y, w, h) according to
+//! the [`LayoutConstraints`] stored on it. Two properties make it safe to call
+//! every frame (it is, from `app.rs`):
+//!
+//! 1. **Idempotent.** Every operation is an *absolute* assignment derived from
+//!    the widget's authored size and its alignment frame — never a cumulative
+//!    `+=` / `-=`. Running the solve N times equals running it once, so the
+//!    persisted `rect` never drifts and margins never compound. (The earlier
+//!    implementation shifted `x += margin.left` every frame, walking widgets off
+//!    screen; margin is now folded into the absolute alignment computation.)
+//! 2. **Parent-relative.** A widget's alignment frame is its *parent's* solved
+//!    rect, falling back to the canvas (app window) only for top-level widgets.
+//!    Widgets are solved parents-before-children so a child sees its parent's
+//!    final rect. (The earlier implementation always anchored to the canvas
+//!    root, so a constrained child of a Frame centred against the whole window.)
+//!
+//! Margin `[top, right, bottom, left]` insets the widget *within* its aligned
+//! anchor — it has no effect on an axis with no alignment, because there is no
+//! anchor to inset from (and inventing one is what made the old code drift).
 //!
 //! [`validate_constraints`] detects conflicting or unsatisfiable constraints and
-//! returns a list of [`ConstraintError`] values — one per problem found.
+//! returns a list of [`ConstraintError`] values — surfaced in the Properties
+//! panel's Constraints section (see `panels::properties::show_constraints`).
 
-use crate::project::schema::{HAlign, LayoutConstraints, VAlign};
+use crate::project::schema::{HAlign, LayoutConstraints, Rect, VAlign};
 use crate::project::ui_tree::UiTree;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
@@ -20,7 +35,6 @@ use uuid::Uuid;
 
 /// A constraint problem detected by [`validate_constraints`].
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)] // used in tests and future validation UI
 pub enum ConstraintError {
     /// `equal_width_to` / `equal_height_to` references a widget ID that does
     /// not exist in the tree.
@@ -33,63 +47,84 @@ pub enum ConstraintError {
     InvalidAspectRatio { widget_id: Uuid, value: f32 },
 }
 
+impl ConstraintError {
+    /// Human-readable one-line description for the Properties panel.
+    pub fn message(&self) -> String {
+        match self {
+            ConstraintError::UnknownTarget { target_id, .. } => {
+                format!("equal-size target {target_id} does not exist")
+            }
+            ConstraintError::SelfReference { .. } => {
+                "equal-size constraint references itself".to_owned()
+            }
+            ConstraintError::EqualSizeCycle { .. } => {
+                "mutual equal-size cycle (A=B and B=A)".to_owned()
+            }
+            ConstraintError::InvalidAspectRatio { value, .. } => {
+                format!("aspect ratio {value} is not a positive number")
+            }
+        }
+    }
+
+    /// The widget this error is attached to (for per-widget filtering in the UI).
+    pub fn widget_id(&self) -> Uuid {
+        match self {
+            ConstraintError::UnknownTarget { widget_id, .. }
+            | ConstraintError::SelfReference { widget_id }
+            | ConstraintError::InvalidAspectRatio { widget_id, .. } => *widget_id,
+            ConstraintError::EqualSizeCycle { widget_a, .. } => *widget_a,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
 /// Apply all [`LayoutConstraints`] stored in `tree`, adjusting widget rects
-/// in-place.
-///
-/// Pass order:
-/// 1. Equal-size links — copy w/h from target widget.
-/// 2. Aspect-ratio lock — adjust h from w (preserves width, adjusts height).
-/// 3. Min/max clamps on w and h.
-/// 4. Margin insets — shift x/y and shrink w/h by the margin.
-/// 5. Alignment anchors — reposition relative to the canvas root.
-///
-/// The solve is non-iterative; constraints that depend on other constrained
-/// widgets are resolved in document order.  For production layouts that require
-/// full constraint propagation, a multi-pass solve would be needed — that is
-/// deferred to P2.3's follow-on stages.
+/// in-place. Idempotent and parent-relative (see module docs). Safe to call
+/// every frame.
 pub fn apply_constraints(tree: &mut UiTree) {
-    let canvas_w = tree.app_props.win_w;
-    let canvas_h = tree.app_props.win_h;
+    let canvas = Rect {
+        x: 0.0,
+        y: 0.0,
+        w: tree.app_props.win_w,
+        h: tree.app_props.win_h,
+    };
 
-    // Pass 1 — collect target rects for equal-size links (snapshot before mutation).
-    // Build a map: widget_id → (w, h) before any changes.
-    let size_snapshot: std::collections::HashMap<String, (f32, f32)> = tree
+    // Snapshot authored sizes for equal-size links (id string → (w, h)).
+    let size_snapshot: HashMap<String, (f32, f32)> = tree
         .widgets
         .iter()
         .map(|w| (w.id.to_string(), (w.rect.w, w.rect.h)))
         .collect();
 
-    let n = tree.widgets.len();
-    for i in 0..n {
+    // Solve parents before children so a child's frame is its parent's *solved*
+    // rect. Widgets with default constraints solve to a no-op.
+    for id in solve_order(tree) {
+        let Some(i) = tree.widgets.iter().position(|w| w.id == id) else {
+            continue;
+        };
         let constraints = tree.widgets[i].constraints.clone();
 
-        // Extract values before taking mutable borrows to avoid the borrow-checker
-        // complaining about multiple simultaneous mutable borrows of `widgets[i]`.
-        let mut rx = tree.widgets[i].rect.x;
-        let mut ry = tree.widgets[i].rect.y;
-        let mut rw = tree.widgets[i].rect.w;
-        let mut rh = tree.widgets[i].rect.h;
+        let frame = match tree.parent_of(id) {
+            Some(pid) => tree
+                .widgets
+                .iter()
+                .find(|w| w.id == pid)
+                .map(|p| p.rect.clone())
+                .unwrap_or_else(|| canvas.clone()),
+            None => canvas.clone(),
+        };
 
-        apply_equal_size(&mut rw, &mut rh, &constraints, &size_snapshot);
-        apply_aspect_ratio(&mut rw, &mut rh, &constraints);
-        apply_min_max_clamps(&mut rw, &mut rh, &constraints);
-        apply_margin(&mut rx, &mut ry, &mut rw, &mut rh, &constraints);
-        apply_alignment(&mut rx, &mut ry, rw, rh, &constraints, canvas_w, canvas_h);
-
-        tree.widgets[i].rect.x = rx;
-        tree.widgets[i].rect.y = ry;
-        tree.widgets[i].rect.w = rw;
-        tree.widgets[i].rect.h = rh;
+        let mut r = tree.widgets[i].rect.clone();
+        solve_one(&mut r, &constraints, &size_snapshot, frame);
+        tree.widgets[i].rect = r;
     }
 }
 
 /// Validate all constraints in `tree` and return a list of detected problems.
 /// An empty result means no problems were found.
-#[allow(dead_code)] // used in tests; future validation UI will call this
 pub fn validate_constraints(tree: &UiTree) -> Vec<ConstraintError> {
     let mut errors = Vec::new();
     let id_set: std::collections::HashSet<String> =
@@ -147,110 +182,109 @@ pub fn validate_constraints(tree: &UiTree) -> Vec<ConstraintError> {
 }
 
 // ---------------------------------------------------------------------------
-// Private helpers
+// Private solver
 // ---------------------------------------------------------------------------
 
-fn apply_equal_size(
-    w: &mut f32,
-    h: &mut f32,
+/// Order widget IDs so that every parent precedes its children (ascending tree
+/// depth). A child's alignment frame is its parent's already-solved rect.
+fn solve_order(tree: &UiTree) -> Vec<Uuid> {
+    let mut depths: Vec<(usize, Uuid)> = tree
+        .widgets
+        .iter()
+        .map(|w| {
+            let mut depth = 0usize;
+            let mut cur = w.id;
+            // Bounded walk up the parent chain (guard against cycles in data).
+            while let Some(p) = tree.parent_of(cur) {
+                depth += 1;
+                cur = p;
+                if depth > 64 {
+                    break;
+                }
+            }
+            (depth, w.id)
+        })
+        .collect();
+    depths.sort_by_key(|(d, _)| *d);
+    depths.into_iter().map(|(_, id)| id).collect()
+}
+
+/// Idempotent, absolute solve of one widget's rect within `frame`.
+fn solve_one(
+    r: &mut Rect,
     c: &LayoutConstraints,
-    snapshot: &std::collections::HashMap<String, (f32, f32)>,
+    snapshot: &HashMap<String, (f32, f32)>,
+    frame: Rect,
 ) {
+    // 1. Equal-size links — copy authored w/h from the target's snapshot.
     if let Some(ref target_id) = c.equal_width_to {
         if let Some(&(target_w, _)) = snapshot.get(target_id) {
-            *w = target_w;
+            r.w = target_w;
         }
     }
     if let Some(ref target_id) = c.equal_height_to {
         if let Some(&(_, target_h)) = snapshot.get(target_id) {
-            *h = target_h;
+            r.h = target_h;
         }
     }
-}
 
-fn apply_aspect_ratio(w: &mut f32, h: &mut f32, c: &LayoutConstraints) {
+    // 2. Aspect-ratio lock — preserve width, derive height.
     if let Some(ratio) = c.aspect_ratio {
         if ratio.is_finite() && ratio > 0.0 {
-            // Preserve width; derive height.
-            *h = *w / ratio;
+            r.h = r.w / ratio;
         }
     }
-}
 
-fn apply_min_max_clamps(w: &mut f32, h: &mut f32, c: &LayoutConstraints) {
+    // 3. Min/max clamps.
     if let Some(min_w) = c.min_w {
-        if *w < min_w {
-            *w = min_w;
-        }
+        r.w = r.w.max(min_w);
     }
     if let Some(max_w) = c.max_w {
-        if *w > max_w {
-            *w = max_w;
-        }
+        r.w = r.w.min(max_w);
     }
     if let Some(min_h) = c.min_h {
-        if *h < min_h {
-            *h = min_h;
-        }
+        r.h = r.h.max(min_h);
     }
     if let Some(max_h) = c.max_h {
-        if *h > max_h {
-            *h = max_h;
+        r.h = r.h.min(max_h);
+    }
+
+    // 4. Alignment + margin, folded into one absolute computation per axis so the
+    //    result is idempotent. margin = [top, right, bottom, left].
+    let [m_top, m_right, m_bottom, m_left] = c.margin;
+
+    match c.h_align {
+        Some(HAlign::Stretch) => {
+            r.x = frame.x + m_left;
+            r.w = (frame.w - m_left - m_right).max(0.0);
         }
+        Some(HAlign::Leading) => r.x = frame.x + m_left,
+        Some(HAlign::Trailing) => r.x = frame.x + frame.w - r.w - m_right,
+        Some(HAlign::Center) => {
+            let avail = frame.w - m_left - m_right;
+            r.x = frame.x + m_left + (avail - r.w) / 2.0;
+        }
+        // No horizontal anchor: position is free, so a horizontal margin has
+        // nothing to inset against and is intentionally a no-op (keeps the solve
+        // idempotent — see module docs).
+        None => {}
+    }
+
+    match c.v_align {
+        Some(VAlign::Stretch) => {
+            r.y = frame.y + m_top;
+            r.h = (frame.h - m_top - m_bottom).max(0.0);
+        }
+        Some(VAlign::Top) => r.y = frame.y + m_top,
+        Some(VAlign::Bottom) => r.y = frame.y + frame.h - r.h - m_bottom,
+        Some(VAlign::Center) => {
+            let avail = frame.h - m_top - m_bottom;
+            r.y = frame.y + m_top + (avail - r.h) / 2.0;
+        }
+        None => {}
     }
 }
 
-/// Apply margin insets: shift x/y by the left/top margin, shrink w/h by total
-/// horizontal/vertical margin.
-fn apply_margin(x: &mut f32, y: &mut f32, w: &mut f32, h: &mut f32, c: &LayoutConstraints) {
-    let [top, right, bottom, left] = c.margin;
-    *x += left;
-    *y += top;
-    let dw = left + right;
-    let dh = top + bottom;
-    if *w > dw {
-        *w -= dw;
-    }
-    if *h > dh {
-        *h -= dh;
-    }
-}
-
-fn apply_alignment(
-    x: &mut f32,
-    y: &mut f32,
-    w: f32,
-    h: f32,
-    c: &LayoutConstraints,
-    canvas_w: f32,
-    canvas_h: f32,
-) {
-    if let Some(h_align) = c.h_align {
-        match h_align {
-            HAlign::Leading => *x = 0.0,
-            HAlign::Trailing => *x = (canvas_w - w).max(0.0),
-            HAlign::Center => *x = ((canvas_w - w) / 2.0).max(0.0),
-            HAlign::Stretch => {
-                *x = 0.0;
-                // width is handled by the caller via Stretch logic; here we
-                // only reposition.  Full Stretch width requires the caller to
-                // set w = canvas_w, which is done as a separate pass if needed.
-            }
-        }
-    }
-    if let Some(v_align) = c.v_align {
-        match v_align {
-            VAlign::Top => *y = 0.0,
-            VAlign::Bottom => *y = (canvas_h - h).max(0.0),
-            VAlign::Center => *y = ((canvas_h - h) / 2.0).max(0.0),
-            VAlign::Stretch => {
-                *y = 0.0;
-            }
-        }
-    }
-}
-
-#[allow(dead_code)]
 fn detect_equal_size_cycles(tree: &UiTree, errors: &mut Vec<ConstraintError>) {
     // Build adjacency for equal-width links: id → target_id.
     let mut width_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
@@ -271,10 +305,9 @@ fn detect_equal_size_cycles(tree: &UiTree, errors: &mut Vec<ConstraintError>) {
     for (a, b) in &width_map {
         if width_map.get(b) == Some(a) && a < b {
             // Find UUIDs from string.
-            if let (Some(wa), Some(wb)) = (
-                uuid_from_str_in_tree(tree, a),
-                uuid_from_str_in_tree(tree, b),
-            ) {
+            if let (Some(wa), Some(wb)) =
+                (uuid_from_str_in_tree(tree, a), uuid_from_str_in_tree(tree, b))
+            {
                 errors.push(ConstraintError::EqualSizeCycle {
                     widget_a: wa,
                     widget_b: wb,
@@ -286,10 +319,9 @@ fn detect_equal_size_cycles(tree: &UiTree, errors: &mut Vec<ConstraintError>) {
     // Check mutual cycles in height map.
     for (a, b) in &height_map {
         if height_map.get(b) == Some(a) && a < b {
-            if let (Some(wa), Some(wb)) = (
-                uuid_from_str_in_tree(tree, a),
-                uuid_from_str_in_tree(tree, b),
-            ) {
+            if let (Some(wa), Some(wb)) =
+                (uuid_from_str_in_tree(tree, a), uuid_from_str_in_tree(tree, b))
+            {
                 // Only report if not already reported for width.
                 let already = errors.iter().any(|e| {
                     matches!(e, ConstraintError::EqualSizeCycle { widget_a, widget_b }
@@ -306,7 +338,6 @@ fn detect_equal_size_cycles(tree: &UiTree, errors: &mut Vec<ConstraintError>) {
     }
 }
 
-#[allow(dead_code)]
 fn uuid_from_str_in_tree(tree: &UiTree, id_str: &str) -> Option<Uuid> {
     tree.widgets
         .iter()
@@ -321,8 +352,7 @@ fn uuid_from_str_in_tree(tree: &UiTree, id_str: &str) -> Option<Uuid> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::schema::WidgetInstance;
-    use crate::project::ui_tree::UiTree;
+    use crate::project::schema::{Rect, WidgetInstance, WidgetKind};
     use uuid::Uuid;
 
     fn make_tree_with_widgets(widgets: Vec<WidgetInstance>) -> UiTree {
@@ -336,7 +366,6 @@ mod tests {
     }
 
     fn widget_at(x: f32, y: f32, w: f32, h: f32) -> WidgetInstance {
-        use crate::project::schema::Rect;
         WidgetInstance {
             id: Uuid::new_v4(),
             rect: Rect { x, y, w, h },
@@ -352,15 +381,8 @@ mod tests {
         apply_constraints(&mut tree);
         let ww = tree.widgets[0].rect.w;
         let wh = tree.widgets[0].rect.h;
-        // Width should be unchanged; height should equal width/ratio.
-        assert!(
-            (ww - 100.0).abs() < 0.01,
-            "width should remain 100, got {ww}"
-        );
-        assert!(
-            (wh - 50.0).abs() < 0.01,
-            "height should be 50 (100/2.0), got {wh}"
-        );
+        assert!((ww - 100.0).abs() < 0.01, "width should remain 100, got {ww}");
+        assert!((wh - 50.0).abs() < 0.01, "height should be 50 (100/2.0), got {wh}");
     }
 
     #[test]
@@ -371,27 +393,103 @@ mod tests {
         apply_constraints(&mut tree);
         let ww = tree.widgets[0].rect.w;
         let wh = tree.widgets[0].rect.h;
-        assert!(
-            (ww - wh).abs() < 0.01,
-            "square: w={ww} h={wh} should be equal"
-        );
+        assert!((ww - wh).abs() < 0.01, "square: w={ww} h={wh} should be equal");
     }
 
     #[test]
-    fn margin_insets_rect() {
+    fn margin_insets_within_alignment() {
+        // New idempotent semantics: margin insets *within* the alignment anchor.
+        // Leading + left margin 20 → x = frame.x + 20; Top + top margin 10 → y = 10.
         let mut w = widget_at(0.0, 0.0, 200.0, 100.0);
-        // margin: [top=10, right=20, bottom=10, left=20]
+        w.constraints.h_align = Some(HAlign::Leading);
+        w.constraints.v_align = Some(VAlign::Top);
+        w.constraints.margin = [10.0, 20.0, 10.0, 20.0]; // [top,right,bottom,left]
+        let mut tree = make_tree_with_widgets(vec![w]);
+        apply_constraints(&mut tree);
+        let r = tree.widgets[0].rect.clone();
+        assert!((r.x - 20.0).abs() < 0.01, "x should be left margin 20, got {}", r.x);
+        assert!((r.y - 10.0).abs() < 0.01, "y should be top margin 10, got {}", r.y);
+    }
+
+    #[test]
+    fn margin_without_alignment_is_noop() {
+        // No anchor → margin must not move or resize the widget (idempotency
+        // contract: there is nothing to inset against).
+        let mut w = widget_at(50.0, 60.0, 200.0, 100.0);
         w.constraints.margin = [10.0, 20.0, 10.0, 20.0];
         let mut tree = make_tree_with_widgets(vec![w]);
         apply_constraints(&mut tree);
-        let r = &tree.widgets[0].rect;
-        // x += left(20) = 20, y += top(10) = 10
-        assert!((r.x - 20.0).abs() < 0.01, "x should be 20, got {}", r.x);
-        assert!((r.y - 10.0).abs() < 0.01, "y should be 10, got {}", r.y);
-        // w -= left+right = 200-40 = 160
-        assert!((r.w - 160.0).abs() < 0.01, "w should be 160, got {}", r.w);
-        // h -= top+bottom = 100-20 = 80
-        assert!((r.h - 80.0).abs() < 0.01, "h should be 80, got {}", r.h);
+        let r = tree.widgets[0].rect.clone();
+        assert_eq!((r.x, r.y, r.w, r.h), (50.0, 60.0, 200.0, 100.0));
+    }
+
+    #[test]
+    fn solve_is_idempotent_across_frames() {
+        // The regression that motivated the rewrite: running the solve every
+        // frame must not walk a margined/aligned widget off screen.
+        let mut w = widget_at(0.0, 0.0, 120.0, 40.0);
+        w.constraints.h_align = Some(HAlign::Trailing);
+        w.constraints.v_align = Some(VAlign::Bottom);
+        w.constraints.margin = [5.0, 8.0, 5.0, 8.0];
+        let mut tree = make_tree_with_widgets(vec![w]);
+        apply_constraints(&mut tree);
+        let after_one = tree.widgets[0].rect.clone();
+        for _ in 0..30 {
+            apply_constraints(&mut tree);
+        }
+        let after_many = tree.widgets[0].rect.clone();
+        assert_eq!(
+            (after_one.x, after_one.y, after_one.w, after_one.h),
+            (after_many.x, after_many.y, after_many.w, after_many.h),
+            "solve must be idempotent: 1 pass != 31 passes"
+        );
+        // Trailing anchor: x = 800 - 120 - 8 = 672; Bottom: y = 600 - 40 - 5 = 555.
+        assert!((after_one.x - 672.0).abs() < 0.01, "x={}", after_one.x);
+        assert!((after_one.y - 555.0).abs() < 0.01, "y={}", after_one.y);
+    }
+
+    #[test]
+    fn stretch_fills_frame_minus_margins() {
+        let mut w = widget_at(0.0, 0.0, 50.0, 50.0);
+        w.constraints.h_align = Some(HAlign::Stretch);
+        w.constraints.v_align = Some(VAlign::Stretch);
+        w.constraints.margin = [10.0, 20.0, 30.0, 40.0]; // t,r,b,l
+        let mut tree = make_tree_with_widgets(vec![w]);
+        apply_constraints(&mut tree);
+        let r = tree.widgets[0].rect.clone();
+        assert!((r.x - 40.0).abs() < 0.01, "x=left margin 40, got {}", r.x);
+        assert!((r.y - 10.0).abs() < 0.01, "y=top margin 10, got {}", r.y);
+        assert!((r.w - (800.0 - 40.0 - 20.0)).abs() < 0.01, "w fills minus l+r, got {}", r.w);
+        assert!((r.h - (600.0 - 10.0 - 30.0)).abs() < 0.01, "h fills minus t+b, got {}", r.h);
+    }
+
+    #[test]
+    fn alignment_is_parent_relative_not_canvas() {
+        // A Center-aligned child of a Frame centres within the Frame, not the
+        // 800x600 canvas. Frame at (100,100) size 400x300 → child centres at
+        // x = 100 + (400-80)/2 = 260, y = 100 + (300-40)/2 = 230.
+        let parent_id = Uuid::from_u128(0x100);
+        let child_id = Uuid::from_u128(0x101);
+        let parent = WidgetInstance {
+            id: parent_id,
+            kind: WidgetKind::Frame,
+            rect: Rect { x: 100.0, y: 100.0, w: 400.0, h: 300.0 },
+            children: vec![child_id],
+            ..Default::default()
+        };
+        let mut child = WidgetInstance {
+            id: child_id,
+            kind: WidgetKind::Button,
+            rect: Rect { x: 0.0, y: 0.0, w: 80.0, h: 40.0 },
+            ..Default::default()
+        };
+        child.constraints.h_align = Some(HAlign::Center);
+        child.constraints.v_align = Some(VAlign::Center);
+        let mut tree = make_tree_with_widgets(vec![parent, child]);
+        apply_constraints(&mut tree);
+        let r = tree.widgets[1].rect.clone();
+        assert!((r.x - 260.0).abs() < 0.01, "child x should centre in frame (260), got {}", r.x);
+        assert!((r.y - 230.0).abs() < 0.01, "child y should centre in frame (230), got {}", r.y);
     }
 
     #[test]
@@ -403,10 +501,7 @@ mod tests {
         let mut tree = make_tree_with_widgets(vec![source, follower]);
         apply_constraints(&mut tree);
         let fw = tree.widgets[1].rect.w;
-        assert!(
-            (fw - 150.0).abs() < 0.01,
-            "follower width should equal source (150), got {fw}"
-        );
+        assert!((fw - 150.0).abs() < 0.01, "follower width should equal source (150), got {fw}");
     }
 
     #[test]
@@ -418,10 +513,7 @@ mod tests {
         let mut tree = make_tree_with_widgets(vec![source, follower]);
         apply_constraints(&mut tree);
         let fh = tree.widgets[1].rect.h;
-        assert!(
-            (fh - 60.0).abs() < 0.01,
-            "follower height should equal source (60), got {fh}"
-        );
+        assert!((fh - 60.0).abs() < 0.01, "follower height should equal source (60), got {fh}");
     }
 
     #[test]
@@ -430,8 +522,7 @@ mod tests {
         w.constraints.min_w = Some(50.0);
         let mut tree = make_tree_with_widgets(vec![w]);
         apply_constraints(&mut tree);
-        let rw = tree.widgets[0].rect.w;
-        assert!(rw >= 50.0, "min_w should clamp width to 50, got {rw}");
+        assert!(tree.widgets[0].rect.w >= 50.0, "min_w should clamp width to 50");
     }
 
     #[test]
@@ -440,8 +531,7 @@ mod tests {
         w.constraints.max_w = Some(100.0);
         let mut tree = make_tree_with_widgets(vec![w]);
         apply_constraints(&mut tree);
-        let rw = tree.widgets[0].rect.w;
-        assert!(rw <= 100.0, "max_w should clamp width to 100, got {rw}");
+        assert!(tree.widgets[0].rect.w <= 100.0, "max_w should clamp width to 100");
     }
 
     #[test]
@@ -451,9 +541,7 @@ mod tests {
         let tree = make_tree_with_widgets(vec![w]);
         let errors = validate_constraints(&tree);
         assert!(
-            errors
-                .iter()
-                .any(|e| matches!(e, ConstraintError::UnknownTarget { .. })),
+            errors.iter().any(|e| matches!(e, ConstraintError::UnknownTarget { .. })),
             "should detect unknown target, errors={errors:?}"
         );
     }
@@ -466,9 +554,7 @@ mod tests {
         let tree = make_tree_with_widgets(vec![w]);
         let errors = validate_constraints(&tree);
         assert!(
-            errors
-                .iter()
-                .any(|e| matches!(e, ConstraintError::SelfReference { .. })),
+            errors.iter().any(|e| matches!(e, ConstraintError::SelfReference { .. })),
             "should detect self-reference, errors={errors:?}"
         );
     }
@@ -480,9 +566,7 @@ mod tests {
         let tree = make_tree_with_widgets(vec![w]);
         let errors = validate_constraints(&tree);
         assert!(
-            errors
-                .iter()
-                .any(|e| matches!(e, ConstraintError::InvalidAspectRatio { .. })),
+            errors.iter().any(|e| matches!(e, ConstraintError::InvalidAspectRatio { .. })),
             "should detect invalid aspect ratio, errors={errors:?}"
         );
     }
@@ -490,13 +574,10 @@ mod tests {
     #[test]
     fn validate_clean_tree_has_no_errors() {
         let w1 = widget_at(0.0, 0.0, 100.0, 40.0);
-        let w2_id = widget_at(200.0, 0.0, 80.0, 40.0);
-        let tree = make_tree_with_widgets(vec![w1, w2_id]);
+        let w2 = widget_at(200.0, 0.0, 80.0, 40.0);
+        let tree = make_tree_with_widgets(vec![w1, w2]);
         let errors = validate_constraints(&tree);
-        assert!(
-            errors.is_empty(),
-            "clean tree should have no errors, got {errors:?}"
-        );
+        assert!(errors.is_empty(), "clean tree should have no errors, got {errors:?}");
     }
 
     #[test]
@@ -508,15 +589,13 @@ mod tests {
         let tree = make_tree_with_widgets(vec![a, b]);
         let errors = validate_constraints(&tree);
         assert!(
-            errors
-                .iter()
-                .any(|e| matches!(e, ConstraintError::EqualSizeCycle { .. })),
+            errors.iter().any(|e| matches!(e, ConstraintError::EqualSizeCycle { .. })),
             "should detect equal-size cycle, errors={errors:?}"
         );
     }
 
     #[test]
-    fn h_align_leading_sets_x_zero() {
+    fn h_align_leading_sets_x_to_frame_origin() {
         let mut w = widget_at(200.0, 100.0, 80.0, 40.0);
         w.constraints.h_align = Some(HAlign::Leading);
         let mut tree = make_tree_with_widgets(vec![w]);

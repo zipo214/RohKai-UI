@@ -7,6 +7,24 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-12 — S1 finished: constraint-solver bug fix + 3 half-wired fields wired
+
+Branch `dev`. Finished the S1 parity gaps the checker found. **Real latent bug
+fixed:** `apply_constraints` ran every frame with `margin += `, so any margin
+constraint walked the widget off screen and shrank it; it also anchored every
+widget to the canvas, never its parent. Rewrote the solver to be **idempotent**
+(margin folded into absolute alignment — safe per-frame, no save/load drift) and
+**parent-relative** (parents-before-children, frame = parent's solved rect).
+Surfaced `validate_constraints` in the Properties Constraints section (red
+messages). Wired the two half-wired fields end-to-end: `text_align` (was dead
+everywhere) → egui_emitter + export + preview; `child_cross_align` per-child
+override → VLayout/HLayout codegen (dropped UI Stretch — no proven egui path).
+Parity tests added. 499 lib + 17 integration + 1 doctest green, zero warnings,
+export cargo-check fixture green. Margin semantics intentionally changed (insets
+within the alignment anchor; no-op without one) — see `constraint_solver.rs`
+header + the RCA's resolved follow-ups. Next: S1 remainder (anchor visual-handle
+drag, nested-layout Lazare round-trip) or S2.
+
 ## 2026-06-12 — Roadmaps de-deferred into ordered master backlog; RCA + parity checker shipped
 
 Branch `dev`, commits `1352975` (lib+bin) → `ca28d9e` (roadmaps) → this one.

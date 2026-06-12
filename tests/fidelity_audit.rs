@@ -28,7 +28,7 @@
 
 use rohkai::codegen::egui_emitter::emit_indexed;
 use rohkai::panels::shortcuts::BUILTIN_SHORTCUTS;
-use rohkai::project::schema::{WidgetInstance, WidgetKind, WidgetProps};
+use rohkai::project::schema::{CrossAlign, TextAlign, WidgetInstance, WidgetKind, WidgetProps};
 use rohkai::project::ui_tree::UiTree;
 use rohkai::widgets::ALL_KINDS;
 use uuid::Uuid;
@@ -307,6 +307,107 @@ fn every_widget_kind_emits_non_trivial_code() {
              Its emitter arm is a silent hole:\n{code}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// 6. text_align parity — set in Properties, must reach codegen (was fully dead)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn parity_label_text_align_center_emits_with_layout() {
+    let tree = UiTree {
+        widgets: vec![WidgetInstance {
+            id: Uuid::from_u128(0xB01),
+            kind: WidgetKind::Label,
+            text_align: Some(TextAlign::Center),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let code = emit_code(&tree);
+    assert!(
+        code.contains("egui::Layout::top_down(egui::Align::Center)"),
+        "Label text_align=Center must wrap in a centering with_layout: {code}"
+    );
+}
+
+#[test]
+fn parity_label_text_align_default_no_with_layout() {
+    let tree = UiTree {
+        widgets: vec![WidgetInstance {
+            id: Uuid::from_u128(0xB02),
+            kind: WidgetKind::Label,
+            text_align: None,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let code = emit_code(&tree);
+    assert!(
+        !code.contains("with_layout"),
+        "Label with no text_align must NOT emit a with_layout wrap: {code}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 7. child_cross_align parity — per-child override must reach layout codegen
+// ---------------------------------------------------------------------------
+
+#[test]
+fn parity_vlayout_child_cross_align_center_emits_with_layout() {
+    let parent = Uuid::from_u128(0xC01);
+    let child = Uuid::from_u128(0xC02);
+    let tree = UiTree {
+        widgets: vec![
+            WidgetInstance {
+                id: parent,
+                kind: WidgetKind::VLayout,
+                children: vec![child],
+                ..Default::default()
+            },
+            WidgetInstance {
+                id: child,
+                kind: WidgetKind::Label,
+                child_cross_align: Some(CrossAlign::Center),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let code = emit_code(&tree);
+    assert!(
+        code.contains("egui::Layout::top_down(egui::Align::Center)"),
+        "VLayout child cross_align=Center must emit a per-child centering with_layout: {code}"
+    );
+}
+
+#[test]
+fn parity_vlayout_child_cross_align_default_no_override() {
+    let parent = Uuid::from_u128(0xC03);
+    let child = Uuid::from_u128(0xC04);
+    let tree = UiTree {
+        widgets: vec![
+            WidgetInstance {
+                id: parent,
+                kind: WidgetKind::VLayout,
+                children: vec![child],
+                ..Default::default()
+            },
+            WidgetInstance {
+                id: child,
+                kind: WidgetKind::Label,
+                child_cross_align: None,
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let code = emit_code(&tree);
+    // Default container is `ui.vertical`; no per-child override wrapper.
+    assert!(
+        code.contains("ui.vertical(|ui|"),
+        "default VLayout should use ui.vertical: {code}"
+    );
 }
 
 #[test]

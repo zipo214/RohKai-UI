@@ -2,7 +2,7 @@ use crate::codegen::formula::{collect_variables, emit_formula_rust, parse_formul
 use crate::codegen::rust::{field_binding, string_literal};
 use crate::codegen::source_map::{GeneratedCodeDocument, SourceSpan, WidgetSourceSpan};
 use crate::project::schema::{
-    LayoutCrossAlign, Orientation, SizePolicy, WidgetInstance, WidgetKind,
+    CrossAlign, LayoutCrossAlign, Orientation, SizePolicy, TextAlign, WidgetInstance, WidgetKind,
 };
 use crate::project::ui_tree::UiTree;
 use rayon::prelude::*;
@@ -202,7 +202,16 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                 }
             }
             let base = format!("ui.add({lbl})");
-            let line = format!("        {};", append_tip(base, tip.as_deref()));
+            let stmt = append_tip(base, tip.as_deref());
+            let line = match &w.text_align {
+                Some(TextAlign::Center) => format!(
+                    "        ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {{ {stmt}; }});"
+                ),
+                Some(TextAlign::Right) => format!(
+                    "        ui.with_layout(egui::Layout::top_down(egui::Align::RIGHT), |ui| {{ {stmt}; }});"
+                ),
+                _ => format!("        {stmt};"),
+            };
             lines.push((Some(w.id), line));
         }
         WidgetKind::TextInput => {
@@ -483,6 +492,10 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                 .sum();
             for &child_id in &w.children {
                 if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
+                    let cross = cross_align_open(child, true);
+                    if let Some(open) = &cross {
+                        lines.push((Some(child.id), open.clone()));
+                    }
                     if child.child_flex > 0.0 && total_flex > 0.0 {
                         let ratio = child.child_flex / total_flex;
                         lines.push((Some(child.id), format!(
@@ -492,6 +505,9 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                         lines.push((Some(child.id), "        });".to_owned()));
                     } else {
                         emit_layout_child_lines(child, &mut lines);
+                    }
+                    if cross.is_some() {
+                        lines.push((Some(child.id), "        });".to_owned()));
                     }
                 }
             }
@@ -516,6 +532,10 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                 .sum();
             for &child_id in &w.children {
                 if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
+                    let cross = cross_align_open(child, false);
+                    if let Some(open) = &cross {
+                        lines.push((Some(child.id), open.clone()));
+                    }
                     if child.child_flex > 0.0 && total_flex > 0.0 {
                         let ratio = child.child_flex / total_flex;
                         lines.push((Some(child.id), format!(
@@ -525,6 +545,9 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                         lines.push((Some(child.id), "        });".to_owned()));
                     } else {
                         emit_layout_child_lines(child, &mut lines);
+                    }
+                    if cross.is_some() {
+                        lines.push((Some(child.id), "        });".to_owned()));
                     }
                 }
             }
@@ -1174,6 +1197,26 @@ fn child_size_str(child: &WidgetInstance) -> String {
         SizePolicy::Fixed => format!("[{:.1}, {:.1}]", child.rect.w, child.rect.h),
         SizePolicy::FillWidth => format!("[ui.available_width(), {:.1}]", child.rect.h),
         SizePolicy::Fill => "ui.available_size()".to_owned(),
+    }
+}
+
+/// Opening line for a per-child cross-axis alignment override inside a
+/// VLayout (`vertical = true`) or HLayout. Returns `None` for Start (the
+/// container default applies). `Stretch` is not exposed in the UI (the
+/// container only supports Start/Center/End), so it folds to the default.
+fn cross_align_open(child: &WidgetInstance, vertical: bool) -> Option<String> {
+    let axis = if vertical { "top_down" } else { "left_to_right" };
+    match child.child_cross_align {
+        Some(CrossAlign::Center) => Some(format!(
+            "        ui.with_layout(egui::Layout::{axis}(egui::Align::Center), |ui| {{"
+        )),
+        Some(CrossAlign::End) => {
+            let end = if vertical { "RIGHT" } else { "BOTTOM" };
+            Some(format!(
+                "        ui.with_layout(egui::Layout::{axis}(egui::Align::{end}), |ui| {{"
+            ))
+        }
+        _ => None,
     }
 }
 

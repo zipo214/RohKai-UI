@@ -2,6 +2,56 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-12 — S1 parity gaps finished (constraint solver bug + 3 half-wired fields)
+
+### Context Reviewed
+- The RCA/checker S1 follow-ups from earlier this session.
+- `constraint_solver.rs`, `app.rs:2887` (every-frame solve call), Properties
+  `show_constraints`, egui_emitter/export layout + Label emission, preview Label.
+
+### Findings
+- **Latent bug:** `apply_constraints` ran every frame and `apply_margin` used
+  `x += left` / `w -= dw` — a widget with a margin constraint drifted off screen
+  and shrank each frame. Also aligned every widget to the **canvas**, never its
+  parent. (My earlier RCA wording "doesn't recurse" was imprecise — all widgets
+  are in the flat `tree.widgets`; the real gaps were idempotency + parent frame.)
+- `text_align` was set in Properties but applied **nowhere** (not even canvas).
+- `child_cross_align` per-child override was set in Properties but only the
+  container's `layout_cross_align` reached codegen.
+
+### Changes
+- **Constraint solver rewrite** (`constraint_solver.rs`): idempotent (margin
+  folded into absolute alignment; safe to run every frame — no drift, no
+  save/load corruption) + parent-relative (solve parents-before-children, frame =
+  parent's solved rect, canvas for top-level). Added `ConstraintError::message`/
+  `widget_id`. New tests: idempotency, parent-relative, stretch, margin-within-
+  alignment, margin-without-alignment-noop.
+- **Validation surfaced**: `show_constraints` renders this widget's
+  `validate_constraints` messages (red); caller computes over the whole tree
+  before the mutable borrow. `#[allow(dead_code)]` removed.
+- **text_align wired**: egui_emitter + export (top-level Label) + preview, via the
+  proven `with_layout(top_down(Center/RIGHT))` pattern.
+- **child_cross_align wired**: VLayout/HLayout child emission in egui_emitter +
+  export (Center/End); Stretch removed from the per-child UI (no proven egui
+  codegen path → avoids a new half-wired control).
+- Parity tests in `fidelity_audit.rs` for text_align + child_cross_align.
+
+### Verification
+- `cargo test` — **499 lib + 17 fidelity_audit + 1 doctest**, 0 failed, 6 ignored.
+- `cargo clippy --all-targets -- -D warnings` — zero warnings.
+- `export_compile_fixture_cargo_check` (`--ignored`) — generated project
+  `cargo check`s clean after the export changes.
+- `scripts/check-surface-parity.ps1` — text_align/child_cross_align findings
+  cleared; only the genuinely geometry/canvas-only `constraints`/`descriptor_accent`
+  remain (correct).
+
+### Risks / Follow-ups
+- `Rect` left as `Clone` (not `Copy`) to avoid `clone_on_copy` churn on existing
+  `rect.clone()` sites; solver uses explicit clones (16-byte struct, cheap).
+- Margin semantics changed: margin now insets within the alignment anchor and is a
+  no-op without one (the only way to make a per-frame solve idempotent). Documented
+  in the module header and the updated `margin_*` tests.
+
 ## 2026-06-12 — Roadmap de-deferral + cross-surface-parity RCA & checker
 
 ### Context Reviewed

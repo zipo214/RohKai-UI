@@ -12,8 +12,10 @@ being comfortable.
   direct `Vec` edits.
 - `src/project/io.rs` - save/load and versioned `.rohkai.json` envelope.
 - `src/project/constraint_solver.rs` - P2.3 layout constraints: `apply_constraints`
-  (margin/equal-size/aspect/min-max/align) and `validate_constraints`
-  (cycle/self-ref/unknown-target detection).
+  (equal-size/aspect/min-max + margin folded into absolute alignment) — idempotent
+  (safe every frame) and parent-relative (frame = parent's solved rect). Plus
+  `validate_constraints` (cycle/self-ref/unknown-target/bad-ratio), surfaced in
+  the Properties Constraints section.
 - `src/project/db_engine.rs` - P2.6 `DatabaseEngine` trait + `SqliteEngine`
   (rusqlite, `params![]` only — never `format!()` SQL).
 - `src/project/undo.rs` - Stage 14 snapshot undo/redo (50-step cap).

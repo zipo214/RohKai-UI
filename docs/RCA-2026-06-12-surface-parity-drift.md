@@ -114,21 +114,25 @@ ambiguous (a field may be geometry-only; a `pub` item may be planned API or
 test-only). The tool's job is to put those candidates in front of a human in
 caveman-review form, not to pretend it can decide.
 
-## Open follow-ups (scheduled, not deferred)
+## Open follow-ups
 
-The audit surfaced real shallow surfaces. Each is now an ordered to-do, not a
-parked one:
+The audit surfaced real shallow surfaces. The S1 batch was **resolved the same
+session** (2026-06-12 follow-up commit); the rest stay ordered, not parked:
 
-- `risk:` `apply_constraints` iterates flat `tree.widgets`; recurse into layout
-  children. → **S1**
-- `risk:` `validate_constraints` unsurfaced; render it under `show_constraints()`.
-  → **S1**
-- `risk:` `child_cross_align`, `text_align`, `constraints` have no
-  `src/codegen/` reference — confirm geometry-only or wire export. → **S1**
-- `nit:` ~17 `#[allow(dead_code)]` `pub` items (several now redundant after the
-  lib split — e.g. `ALL_KINDS` was cleared this session). Sweep them: wire,
-  delete, or drop the now-unneeded attribute. → folded into **S4** codegen
-  cleanup.
+- ✅ **DONE** — `apply_constraints` was not just non-recursive but
+  *non-idempotent*: it ran every frame and `margin += ` walked widgets off
+  screen. Rewritten to be idempotent (margin folded into absolute alignment) and
+  **parent-relative** (frame = parent's solved rect, parents-before-children).
+  Tests: `solve_is_idempotent_across_frames`, `alignment_is_parent_relative_not_canvas`.
+- ✅ **DONE** — `validate_constraints` now renders under `show_constraints()`
+  (red per-widget messages); `#[allow(dead_code)]` removed.
+- ✅ **DONE** — `text_align` (was dead everywhere) wired into egui_emitter +
+  export + preview; `child_cross_align` per-child override wired into VLayout/
+  HLayout codegen (Stretch dropped from the UI — no proven egui path). Parity
+  tests added to `fidelity_audit.rs`. `constraints` / `descriptor_accent` confirmed
+  geometry/canvas-only (correctly no codegen reference).
+- `nit:` ~15 remaining `#[allow(dead_code)]` `pub` items (several redundant after
+  the lib split). Sweep them: wire, delete, or drop the attribute. → **S4**.
 
 ## Verification
 

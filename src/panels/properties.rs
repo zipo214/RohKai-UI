@@ -158,9 +158,17 @@ fn show_content_inner(
     show_event_handler(ui, tree, id, &mut props_action);
     show_db_binding(ui, tree, id);
 
-    // P2.3 — constraint editor (shown for all widget kinds).
+    // P2.3 — constraint editor (shown for all widget kinds). Validation needs
+    // cross-widget context, so compute it over the whole tree before the
+    // mutable borrow, then pass this widget's messages in.
+    let constraint_errors: Vec<String> =
+        crate::project::constraint_solver::validate_constraints(tree)
+            .into_iter()
+            .filter(|e| e.widget_id() == id)
+            .map(|e| e.message())
+            .collect();
     if let Some(w) = tree.get_mut(id) {
-        show_constraints(ui, w);
+        show_constraints(ui, w, &constraint_errors);
     }
 
     props_action
@@ -1983,12 +1991,10 @@ fn show_layout_child_props(
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(cross_axis_label).small());
             let current = w.child_cross_align.unwrap_or(CrossAlign::Start);
-            for variant in [
-                CrossAlign::Start,
-                CrossAlign::Center,
-                CrossAlign::End,
-                CrossAlign::Stretch,
-            ] {
+            // Start/Center/End only — these are the cross-aligns the layout codegen
+            // (egui_emitter + export) honors. Stretch has no proven egui codegen
+            // path, so it is not offered (avoids a half-wired control).
+            for variant in [CrossAlign::Start, CrossAlign::Center, CrossAlign::End] {
                 if ui
                     .selectable_label(current == variant, variant.label())
                     .clicked()
@@ -2350,7 +2356,9 @@ fn show_custom(
 // ---------------------------------------------------------------------------
 
 /// Collapsible "Constraints" section shown for every widget kind.
-fn show_constraints(ui: &mut egui::Ui, w: &mut WidgetInstance) {
+/// `errors` are this widget's [`ConstraintError`] messages, pre-computed over the
+/// whole tree by the caller (validation needs cross-widget context).
+fn show_constraints(ui: &mut egui::Ui, w: &mut WidgetInstance, errors: &[String]) {
     let id = w.id;
     ui.separator();
     egui::CollapsingHeader::new(egui::RichText::new("Constraints").small())
@@ -2484,6 +2492,15 @@ fn show_constraints(ui: &mut egui::Ui, w: &mut WidgetInstance) {
                     optional_id_field(ui, &mut c.equal_height_to, ("eq_h", id));
                     ui.end_row();
                 });
+
+            // --- Validation (cross-widget; conflicts/cycles detected over the
+            //     whole tree by the caller) ---
+            if !errors.is_empty() {
+                ui.separator();
+                for msg in errors {
+                    ui.colored_label(egui::Color32::from_rgb(220, 80, 80), format!("⚠ {msg}"));
+                }
+            }
         });
 }
 

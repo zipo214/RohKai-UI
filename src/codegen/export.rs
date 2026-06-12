@@ -597,7 +597,16 @@ fn gen_app_rs(tree: &UiTree) -> String {
                         format!("ui.add({lbl})")
                     }
                 };
-                format!("                {};\n", export_tip(expr, tip.as_deref()))
+                let stmt = export_tip(expr, tip.as_deref());
+                match &w.text_align {
+                    Some(crate::project::schema::TextAlign::Center) => format!(
+                        "                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {{ {stmt}; }});\n"
+                    ),
+                    Some(crate::project::schema::TextAlign::Right) => format!(
+                        "                ui.with_layout(egui::Layout::top_down(egui::Align::RIGHT), |ui| {{ {stmt}; }});\n"
+                    ),
+                    _ => format!("                {stmt};\n"),
+                }
             }
             WidgetKind::TextInput => match binding {
                 Some(b) => {
@@ -883,7 +892,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 let mut code = open;
                 for &child_id in &w.children {
                     if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
-                        code.push_str(&export_layout_child_line(child, &handler_registry));
+                        code.push_str(&export_layout_child_line(child, &handler_registry, true));
                     }
                 }
                 code.push_str("                });\n");
@@ -899,7 +908,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 let mut code = open;
                 for &child_id in &w.children {
                     if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
-                        code.push_str(&export_layout_child_line(child, &handler_registry));
+                        code.push_str(&export_layout_child_line(child, &handler_registry, false));
                     }
                 }
                 code.push_str("                });\n");
@@ -921,7 +930,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 );
                 for (idx, &child_id) in w.children.iter().enumerate() {
                     if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
-                        code.push_str(&export_layout_child_line(child, &handler_registry));
+                        code.push_str(&export_layout_child_line(child, &handler_registry, false));
                         if (idx + 1) % columns == 0 {
                             code.push_str("                    ui.end_row();\n");
                         }
@@ -1607,6 +1616,7 @@ fn export_child_size_str(child: &WidgetInstance) -> String {
 fn export_layout_child_line(
     child: &WidgetInstance,
     registry: &HashMap<String, (crate::project::schema::HandlerResult, bool)>,
+    vertical: bool,
 ) -> String {
     let child_label = string_literal(&child.props.label);
     let child_binding = field_binding(child.state_binding.as_deref());
@@ -1754,7 +1764,21 @@ fn export_layout_child_line(
             child.kind
         )),
     }
-    code
+    // Per-child cross-axis alignment override (Center/End) inside V/H layouts;
+    // Start (and the UI-hidden Stretch) fold to the container default.
+    let axis = if vertical { "top_down" } else { "left_to_right" };
+    match child.child_cross_align {
+        Some(crate::project::schema::CrossAlign::Center) => format!(
+            "                ui.with_layout(egui::Layout::{axis}(egui::Align::Center), |ui| {{\n{code}                }});\n"
+        ),
+        Some(crate::project::schema::CrossAlign::End) => {
+            let end = if vertical { "RIGHT" } else { "BOTTOM" };
+            format!(
+                "                ui.with_layout(egui::Layout::{axis}(egui::Align::{end}), |ui| {{\n{code}                }});\n"
+            )
+        }
+        _ => code,
+    }
 }
 
 fn export_layout_combo(

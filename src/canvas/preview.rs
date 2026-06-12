@@ -136,8 +136,21 @@ fn render_widget(
         }
         WidgetKind::Label => {
             let label = widget.props.label.clone();
+            // Mirror the codegen text alignment (egui_emitter / export) so the
+            // preview surface does not diverge from generated output.
+            let align = match widget.text_align {
+                Some(crate::project::schema::TextAlign::Center) => Some(egui::Align::Center),
+                Some(crate::project::schema::TextAlign::Right) => Some(egui::Align::RIGHT),
+                _ => None,
+            };
             ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
-                ui.add_sized(size, egui::Label::new(&label));
+                if let Some(a) = align {
+                    ui.with_layout(egui::Layout::top_down(a), |ui| {
+                        ui.add_sized(size, egui::Label::new(&label));
+                    });
+                } else {
+                    ui.add_sized(size, egui::Label::new(&label));
+                }
             });
         }
         WidgetKind::TextInput => {
