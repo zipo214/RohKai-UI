@@ -6,13 +6,14 @@
 //! primitive.  "Save" serialises via `doc_to_descriptor` → JSON → `.rkwd` file.
 
 use crate::canvas::widget_maker::{
-    doc_to_descriptor, gen_live_preview, MakerPrimKind, MakerPrimitive, WidgetMakerDoc,
+    doc_to_descriptor, gen_export_template, gen_live_preview, group_children, is_group_kind,
+    MakerPrimKind, MakerPrimitive, PrimAnchor, SlotDef, WidgetMakerDoc,
 };
 use egui::Color32;
 
 const CANVAS_W: f32 = 280.0;
 const CANVAS_H: f32 = 140.0;
-const PRIM_MIN: f32 = 8.0;
+const PRIM_MIN: f32 = 0.05; // minimum normalised size enforced by drag-value UI
 
 /// Render the Visual Widget Maker window.
 ///
@@ -38,68 +39,67 @@ pub fn show_widget_maker_window(
         .id(egui::Id::new("widget_maker_window"))
         .open(&mut keep_open)
         .resizable(true)
-        .min_width(620.0)
-        .min_height(420.0)
+        .min_width(700.0)
+        .min_height(460.0)
         .show(ctx, |ui| {
             ui.horizontal_top(|ui| {
-                // ---- Left: mini-canvas ----
+                // ---- Left: mini-canvas + primitive list + toolbar ----
                 ui.vertical(|ui| {
                     ui.label(egui::RichText::new("Canvas").strong());
                     show_mini_canvas(ui, doc);
                     ui.separator();
                     show_toolbar(ui, doc);
+                    ui.separator();
+                    // Primitive list with z-order ↑/↓ buttons
+                    show_primitive_list(ui, doc);
                 });
 
                 ui.separator();
 
-                // ---- Right: properties + export ----
+                // ---- Right: tabs (Properties | Code Preview) ----
                 ui.vertical(|ui| {
-                    ui.set_min_width(280.0);
-                    ui.label(egui::RichText::new("Widget Properties").strong());
-                    show_widget_meta(ui, doc);
-                    ui.separator();
-                    if let Some(idx) = doc.selected {
-                        if idx < doc.primitives.len() {
-                            ui.label(egui::RichText::new("Primitive").strong());
-                            show_primitive_props(ui, &mut doc.primitives[idx]);
-                        }
-                    } else {
-                        ui.label(
-                            egui::RichText::new("Select a primitive to edit its properties")
-                                .small()
-                                .weak(),
-                        );
-                    }
-                    ui.separator();
-                    // Generated code preview
-                    ui.label(egui::RichText::new("Generated Template").strong());
-                    let preview = gen_live_preview(doc);
-                    egui::ScrollArea::vertical()
-                        .id_salt("wm_code_scroll")
-                        .max_height(120.0)
-                        .show(ui, |ui| {
-                            ui.add(
-                                egui::TextEdit::multiline(&mut preview.as_str())
-                                    .desired_width(f32::INFINITY)
-                                    .font(egui::TextStyle::Monospace),
-                            );
-                        });
-                    ui.separator();
+                    ui.set_min_width(300.0);
+
+                    // Tab bar
+                    let active_tab = ui.data_mut(|d| {
+                        *d.get_temp_mut_or_default::<WmTab>(egui::Id::new("wm_active_tab"))
+                    });
                     ui.horizontal(|ui| {
                         if ui
-                            .button("💾 Save Descriptor")
-                            .on_hover_text("Export as .rkwd and reload palette")
+                            .selectable_label(active_tab == WmTab::Properties, "Properties")
                             .clicked()
                         {
-                            let descriptor = doc_to_descriptor(doc);
-                            if let Ok(json) = serde_json::to_string_pretty(&descriptor) {
-                                result.save_json = Some(json);
-                            }
+                            ui.data_mut(|d| {
+                                *d.get_temp_mut_or_default::<WmTab>(egui::Id::new(
+                                    "wm_active_tab",
+                                )) = WmTab::Properties;
+                            });
                         }
-                        if ui.button("Reset").clicked() {
-                            *doc = WidgetMakerDoc::new_with_defaults();
+                        if ui
+                            .selectable_label(active_tab == WmTab::CodePreview, "Code Preview")
+                            .clicked()
+                        {
+                            ui.data_mut(|d| {
+                                *d.get_temp_mut_or_default::<WmTab>(egui::Id::new(
+                                    "wm_active_tab",
+                                )) = WmTab::CodePreview;
+                            });
                         }
                     });
+                    ui.separator();
+
+                    // Re-read after possible mutation above
+                    let active_tab = ui.data_mut(|d| {
+                        *d.get_temp_mut_or_default::<WmTab>(egui::Id::new("wm_active_tab"))
+                    });
+                    match active_tab {
+                        WmTab::Properties => {
+                            show_properties_tab(ui, doc, &mut result);
+                        }
+                        WmTab::CodePreview => {
+                            show_code_preview_tab(ui, doc);
+                        }
+                    }
                 });
             });
         });
@@ -111,6 +111,285 @@ pub fn show_widget_maker_window(
 
     result
 }
+
+// ---------------------------------------------------------------------------
+// Tab enum (stored in egui temp storage per-frame)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum WmTab {
+    #[default]
+    Properties,
+    CodePreview,
+}
+
+// ---------------------------------------------------------------------------
+// Properties tab
+// ---------------------------------------------------------------------------
+
+fn show_properties_tab(
+    ui: &mut egui::Ui,
+    doc: &mut WidgetMakerDoc,
+    result: &mut WidgetMakerResult,
+) {
+    ui.label(egui::RichText::new("Widget Properties").strong());
+    show_widget_meta(ui, doc);
+    ui.separator();
+    if let Some(idx) = doc.selected {
+        if idx < doc.primitives.len() {
+            ui.label(egui::RichText::new("Primitive").strong());
+            // Show group child count if the selected prim is a group
+            if is_group_kind(&doc.primitives[idx].kind) {
+                let child_count = group_children(&doc.primitives, idx).len();
+                ui.label(
+                    egui::RichText::new(format!("  Children: {child_count}"))
+                        .small()
+                        .weak(),
+                );
+            }
+            show_primitive_props(ui, &mut doc.primitives[idx]);
+        }
+    } else {
+        ui.label(
+            egui::RichText::new("Select a primitive to edit its properties")
+                .small()
+                .weak(),
+        );
+    }
+
+    // --- Slots section ---
+    ui.separator();
+    show_slots_section(ui, doc);
+
+    ui.separator();
+    ui.horizontal(|ui| {
+        if ui
+            .button("💾 Save Descriptor")
+            .on_hover_text("Export as .rkwd and reload palette")
+            .clicked()
+        {
+            let descriptor = doc_to_descriptor(doc);
+            if let Ok(json) = serde_json::to_string_pretty(&descriptor) {
+                result.save_json = Some(json);
+            }
+        }
+        if ui.button("Reset").clicked() {
+            *doc = WidgetMakerDoc::new_with_defaults();
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Slots section
+// ---------------------------------------------------------------------------
+
+fn show_slots_section(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
+    ui.label(egui::RichText::new("Slots").small().strong());
+    if ui.small_button("+ Add Slot").clicked() {
+        doc.slots.push(SlotDef::default());
+    }
+    let mut to_remove: Option<usize> = None;
+    for (i, slot) in doc.slots.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut slot.name)
+                    .desired_width(100.0)
+                    .hint_text("slot name"),
+            );
+            if ui.small_button("✕").clicked() {
+                to_remove = Some(i);
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("x%").small());
+            let mut xp = slot.x * 100.0;
+            if ui
+                .add(
+                    egui::DragValue::new(&mut xp)
+                        .range(0.0..=95.0_f32)
+                        .speed(0.5)
+                        .suffix("%"),
+                )
+                .changed()
+            {
+                slot.x = xp / 100.0;
+            }
+            ui.label(egui::RichText::new("w%").small());
+            let mut wp = slot.w * 100.0;
+            if ui
+                .add(
+                    egui::DragValue::new(&mut wp)
+                        .range(5.0..=100.0_f32)
+                        .speed(0.5)
+                        .suffix("%"),
+                )
+                .changed()
+            {
+                slot.w = wp / 100.0;
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("y%").small());
+            let mut yp = slot.y * 100.0;
+            if ui
+                .add(
+                    egui::DragValue::new(&mut yp)
+                        .range(0.0..=95.0_f32)
+                        .speed(0.5)
+                        .suffix("%"),
+                )
+                .changed()
+            {
+                slot.y = yp / 100.0;
+            }
+            ui.label(egui::RichText::new("h%").small());
+            let mut hp = slot.h * 100.0;
+            if ui
+                .add(
+                    egui::DragValue::new(&mut hp)
+                        .range(5.0..=100.0_f32)
+                        .speed(0.5)
+                        .suffix("%"),
+                )
+                .changed()
+            {
+                slot.h = hp / 100.0;
+            }
+        });
+    }
+    if let Some(i) = to_remove {
+        doc.slots.remove(i);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Code Preview tab
+// ---------------------------------------------------------------------------
+
+fn show_code_preview_tab(ui: &mut egui::Ui, doc: &WidgetMakerDoc) {
+    ui.label(egui::RichText::new("Code Preview").strong());
+    ui.label(
+        egui::RichText::new("Live-updated from current primitives. Read-only.")
+            .small()
+            .weak(),
+    );
+    ui.separator();
+
+    let live = gen_live_preview(doc);
+    let export = gen_export_template(doc);
+
+    ui.label(egui::RichText::new("live_preview").small().strong());
+    egui::ScrollArea::vertical()
+        .id_salt("wm_code_live_scroll")
+        .max_height(140.0)
+        .show(ui, |ui| {
+            ui.add(
+                egui::TextEdit::multiline(&mut live.as_str())
+                    .desired_width(f32::INFINITY)
+                    .font(egui::TextStyle::Monospace),
+            );
+        });
+
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new("export template").small().strong());
+    egui::ScrollArea::vertical()
+        .id_salt("wm_code_export_scroll")
+        .max_height(140.0)
+        .show(ui, |ui| {
+            ui.add(
+                egui::TextEdit::multiline(&mut export.as_str())
+                    .desired_width(f32::INFINITY)
+                    .font(egui::TextStyle::Monospace),
+            );
+        });
+}
+
+// ---------------------------------------------------------------------------
+// Primitive list with ↑/↓ reorder buttons
+// ---------------------------------------------------------------------------
+
+fn show_primitive_list(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
+    ui.label(egui::RichText::new("Primitives").small().strong());
+    let n = doc.primitives.len();
+    if n == 0 {
+        ui.label(
+            egui::RichText::new("No primitives — add one above")
+                .small()
+                .weak(),
+        );
+        return;
+    }
+
+    // Collect reorder actions to apply after the loop (avoids borrow conflict).
+    let mut move_up: Option<usize> = None;
+    let mut move_down: Option<usize> = None;
+
+    for i in 0..n {
+        ui.horizontal(|ui| {
+            let label = format!(
+                "{i}: {}",
+                match doc.primitives[i].kind {
+                    MakerPrimKind::Rect => "Rect",
+                    MakerPrimKind::Outline => "Outline",
+                    MakerPrimKind::Ellipse => "Ellipse",
+                    MakerPrimKind::Text => "Text",
+                    MakerPrimKind::HGroup => "HGroup",
+                    MakerPrimKind::VGroup => "VGroup",
+                    MakerPrimKind::Grid => "Grid",
+                    MakerPrimKind::Stack => "Stack",
+                }
+            );
+            let selected = doc.selected == Some(i);
+            if ui
+                .selectable_label(selected, egui::RichText::new(&label).small())
+                .clicked()
+            {
+                doc.selected = Some(i);
+            }
+            // ↑ moves earlier in the list (lower index = rendered first = behind)
+            ui.add_enabled_ui(i > 0, |ui| {
+                if ui
+                    .small_button("↑")
+                    .on_hover_text("Move up (render earlier / further back)")
+                    .clicked()
+                {
+                    move_up = Some(i);
+                }
+            });
+            // ↓ moves later in the list (higher index = rendered last = in front)
+            ui.add_enabled_ui(i + 1 < n, |ui| {
+                if ui
+                    .small_button("↓")
+                    .on_hover_text("Move down (render later / further forward)")
+                    .clicked()
+                {
+                    move_down = Some(i);
+                }
+            });
+        });
+    }
+
+    if let Some(i) = move_up {
+        doc.primitives.swap(i, i - 1);
+        if doc.selected == Some(i) {
+            doc.selected = Some(i - 1);
+        } else if doc.selected == Some(i - 1) {
+            doc.selected = Some(i);
+        }
+    }
+    if let Some(i) = move_down {
+        doc.primitives.swap(i, i + 1);
+        if doc.selected == Some(i) {
+            doc.selected = Some(i + 1);
+        } else if doc.selected == Some(i + 1) {
+            doc.selected = Some(i);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Mini-canvas
+// ---------------------------------------------------------------------------
 
 fn show_mini_canvas(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
     let (canvas_rect, canvas_resp) = ui.allocate_exact_size(
@@ -141,6 +420,32 @@ fn show_mini_canvas(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
             );
             draw_resize_handles(&painter, pr);
         }
+    }
+
+    // Draw slots as purple dotted rectangles with name labels
+    for slot in &doc.slots {
+        let slot_r = egui::Rect::from_min_max(
+            egui::pos2(
+                canvas_rect.min.x + slot.x * canvas_rect.width(),
+                canvas_rect.min.y + slot.y * canvas_rect.height(),
+            ),
+            egui::pos2(
+                canvas_rect.min.x + (slot.x + slot.w) * canvas_rect.width(),
+                canvas_rect.min.y + (slot.y + slot.h) * canvas_rect.height(),
+            ),
+        );
+        painter.rect_stroke(
+            slot_r,
+            2.0,
+            egui::Stroke::new(1.0, Color32::from_rgb(160, 100, 220)),
+        );
+        painter.text(
+            slot_r.center(),
+            egui::Align2::CENTER_CENTER,
+            format!("slot: {}", slot.name),
+            egui::FontId::proportional(10.0),
+            Color32::from_rgb(200, 150, 255),
+        );
     }
 
     // Interaction: click to select
@@ -253,6 +558,58 @@ fn show_toolbar(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
             doc.selected = Some(doc.primitives.len() - 1);
         }
 
+        ui.separator();
+        ui.label(egui::RichText::new("Group:").small().weak());
+        if ui.small_button("↔ HGroup").clicked() {
+            doc.primitives.push(MakerPrimitive {
+                kind: MakerPrimKind::HGroup,
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
+                group_gap: 4.0,
+                ..Default::default()
+            });
+            doc.selected = Some(doc.primitives.len() - 1);
+        }
+        if ui.small_button("↕ VGroup").clicked() {
+            doc.primitives.push(MakerPrimitive {
+                kind: MakerPrimKind::VGroup,
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
+                group_gap: 4.0,
+                ..Default::default()
+            });
+            doc.selected = Some(doc.primitives.len() - 1);
+        }
+        if ui.small_button("⊞ Grid").clicked() {
+            doc.primitives.push(MakerPrimitive {
+                kind: MakerPrimKind::Grid,
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
+                group_gap: 4.0,
+                grid_cols: 2,
+                ..Default::default()
+            });
+            doc.selected = Some(doc.primitives.len() - 1);
+        }
+        if ui.small_button("⧉ Stack").clicked() {
+            doc.primitives.push(MakerPrimitive {
+                kind: MakerPrimKind::Stack,
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
+                group_gap: 0.0,
+                ..Default::default()
+            });
+            doc.selected = Some(doc.primitives.len() - 1);
+        }
+
         let can_remove = doc
             .selected
             .map(|i| i < doc.primitives.len())
@@ -265,7 +622,7 @@ fn show_toolbar(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
             }
         });
 
-        // Z-order
+        // Z-order (existing toolbar buttons kept for discoverability)
         if let Some(idx) = doc.selected {
             let n = doc.primitives.len();
             ui.add_enabled_ui(idx > 0, |ui| {
@@ -331,7 +688,7 @@ fn show_widget_meta(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
 }
 
 fn show_primitive_props(ui: &mut egui::Ui, prim: &mut MakerPrimitive) {
-    // Kind selector
+    // Kind selector — basic kinds
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Kind").small().weak());
         for (label, kind) in [
@@ -339,6 +696,23 @@ fn show_primitive_props(ui: &mut egui::Ui, prim: &mut MakerPrimitive) {
             ("Outline", MakerPrimKind::Outline),
             ("Ellipse", MakerPrimKind::Ellipse),
             ("Text", MakerPrimKind::Text),
+        ] {
+            if ui
+                .selectable_label(prim.kind == kind, egui::RichText::new(label).small())
+                .clicked()
+            {
+                prim.kind = kind;
+            }
+        }
+    });
+    // Group kinds row
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("    ").small());
+        for (label, kind) in [
+            ("HGroup", MakerPrimKind::HGroup),
+            ("VGroup", MakerPrimKind::VGroup),
+            ("Grid", MakerPrimKind::Grid),
+            ("Stack", MakerPrimKind::Stack),
         ] {
             if ui
                 .selectable_label(prim.kind == kind, egui::RichText::new(label).small())
@@ -385,44 +759,46 @@ fn show_primitive_props(ui: &mut egui::Ui, prim: &mut MakerPrimitive) {
             if ui
                 .add(
                     egui::DragValue::new(&mut wp)
-                        .range(PRIM_MIN..=100.0_f32)
+                        .range((PRIM_MIN * 100.0)..=100.0_f32)
                         .speed(0.5)
                         .suffix("%"),
                 )
                 .changed()
             {
-                prim.w = wp / 100.0;
+                prim.w = (wp / 100.0).max(prim.min_w);
             }
             ui.label(egui::RichText::new("H%").small());
             let mut hp = prim.h * 100.0;
             if ui
                 .add(
                     egui::DragValue::new(&mut hp)
-                        .range(PRIM_MIN..=100.0_f32)
+                        .range((PRIM_MIN * 100.0)..=100.0_f32)
                         .speed(0.5)
                         .suffix("%"),
                 )
                 .changed()
             {
-                prim.h = hp / 100.0;
+                prim.h = (hp / 100.0).max(prim.min_h);
             }
             ui.end_row();
-            ui.label(egui::RichText::new("R").small());
-            ui.add(egui::DragValue::new(&mut prim.fill[0]).range(0..=255_u8));
-            ui.label(egui::RichText::new("G").small());
-            ui.add(egui::DragValue::new(&mut prim.fill[1]).range(0..=255_u8));
-            ui.end_row();
-            ui.label(egui::RichText::new("B").small());
-            ui.add(egui::DragValue::new(&mut prim.fill[2]).range(0..=255_u8));
-            if matches!(prim.kind, MakerPrimKind::Rect | MakerPrimKind::Outline) {
-                ui.label(egui::RichText::new("Rad").small());
-                ui.add(
-                    egui::DragValue::new(&mut prim.corner_radius)
-                        .range(0.0..=32.0_f32)
-                        .speed(0.5),
-                );
+            if !is_group_kind(&prim.kind) {
+                ui.label(egui::RichText::new("R").small());
+                ui.add(egui::DragValue::new(&mut prim.fill[0]).range(0..=255_u8));
+                ui.label(egui::RichText::new("G").small());
+                ui.add(egui::DragValue::new(&mut prim.fill[1]).range(0..=255_u8));
+                ui.end_row();
+                ui.label(egui::RichText::new("B").small());
+                ui.add(egui::DragValue::new(&mut prim.fill[2]).range(0..=255_u8));
+                if matches!(prim.kind, MakerPrimKind::Rect | MakerPrimKind::Outline) {
+                    ui.label(egui::RichText::new("Rad").small());
+                    ui.add(
+                        egui::DragValue::new(&mut prim.corner_radius)
+                            .range(0.0..=32.0_f32)
+                            .speed(0.5),
+                    );
+                }
+                ui.end_row();
             }
-            ui.end_row();
         });
 
     if matches!(prim.kind, MakerPrimKind::Text) {
@@ -446,6 +822,74 @@ fn show_primitive_props(ui: &mut egui::Ui, prim: &mut MakerPrimitive) {
                     .speed(0.5),
             );
         });
+    }
+
+    // --- Group settings ---
+    if is_group_kind(&prim.kind) {
+        ui.separator();
+        ui.label(egui::RichText::new("Group Settings").small().strong());
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Gap").small());
+            ui.add(
+                egui::DragValue::new(&mut prim.group_gap)
+                    .range(0.0..=32.0_f32)
+                    .speed(0.5),
+            );
+        });
+        if matches!(prim.kind, MakerPrimKind::Grid) {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Columns").small());
+                ui.add(egui::DragValue::new(&mut prim.grid_cols).range(1..=8_u32));
+            });
+        }
+    }
+
+    // --- Constraints ---
+    if !is_group_kind(&prim.kind) {
+        ui.separator();
+        ui.label(egui::RichText::new("Constraints").small().strong());
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Anchor").small().weak());
+            egui::ComboBox::from_id_salt("prim_anchor")
+                .selected_text(prim.anchor.label())
+                .show_ui(ui, |ui| {
+                    for &anchor in PrimAnchor::ALL {
+                        ui.selectable_value(&mut prim.anchor, anchor, anchor.label());
+                    }
+                });
+        });
+        egui::Grid::new("prim_constraints")
+            .num_columns(4)
+            .spacing([4.0, 2.0])
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Min W%").small());
+                let mut min_wp = prim.min_w * 100.0;
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut min_wp)
+                            .range(0.0..=100.0_f32)
+                            .speed(0.5)
+                            .suffix("%"),
+                    )
+                    .changed()
+                {
+                    prim.min_w = min_wp / 100.0;
+                }
+                ui.label(egui::RichText::new("Min H%").small());
+                let mut min_hp = prim.min_h * 100.0;
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut min_hp)
+                            .range(0.0..=100.0_f32)
+                            .speed(0.5)
+                            .suffix("%"),
+                    )
+                    .changed()
+                {
+                    prim.min_h = min_hp / 100.0;
+                }
+                ui.end_row();
+            });
     }
 }
 
@@ -512,6 +956,28 @@ fn draw_primitive(painter: &egui::Painter, prim: &MakerPrimitive, rect: egui::Re
                 color,
             );
         }
+        MakerPrimKind::HGroup
+        | MakerPrimKind::VGroup
+        | MakerPrimKind::Grid
+        | MakerPrimKind::Stack => {
+            // Draw group as teal dashed border with a kind label
+            let teal = Color32::from_rgb(52, 211, 153);
+            painter.rect_stroke(rect, 2.0, egui::Stroke::new(1.5, teal));
+            let kind_label = match prim.kind {
+                MakerPrimKind::HGroup => "H",
+                MakerPrimKind::VGroup => "V",
+                MakerPrimKind::Grid => "Grid",
+                MakerPrimKind::Stack => "\u{29C9}", // ⧉
+                _ => "",
+            };
+            painter.text(
+                rect.left_top() + egui::vec2(2.0, 2.0),
+                egui::Align2::LEFT_TOP,
+                kind_label,
+                egui::FontId::proportional(10.0),
+                teal,
+            );
+        }
     }
 }
 
@@ -535,18 +1001,27 @@ fn corner_hit(pos: egui::Pos2, rect: egui::Rect) -> Option<u8> {
 
 /// Apply a normalised `(dx, dy)` resize delta for the given corner index to `p`.
 /// Corners: 0=TL, 1=TR, 2=BL, 3=BR.
-fn apply_corner_resize(
+///
+/// Respects `p.min_w` and `p.min_h` — the resulting width/height will never
+/// drop below those thresholds.
+///
+/// Exported `pub(crate)` so unit tests in `widget_maker.rs` can call it directly.
+pub(crate) fn apply_corner_resize(
     p: &mut crate::canvas::widget_maker::MakerPrimitive,
     corner: u8,
     dx: f32,
     dy: f32,
 ) {
-    const MIN: f32 = 0.05;
+    // The hard absolute floor for a drag (independent of the user min_w/min_h).
+    const ABS_MIN: f32 = 0.05;
+    let floor_w = p.min_w.max(ABS_MIN);
+    let floor_h = p.min_h.max(ABS_MIN);
+
     match corner {
         0 => {
             // Top-left: x and y move, w and h shrink/grow inversely
-            let new_x = (p.x + dx).clamp(0.0, p.x + p.w - MIN);
-            let new_y = (p.y + dy).clamp(0.0, p.y + p.h - MIN);
+            let new_x = (p.x + dx).clamp(0.0, p.x + p.w - floor_w);
+            let new_y = (p.y + dy).clamp(0.0, p.y + p.h - floor_h);
             p.w += p.x - new_x;
             p.h += p.y - new_y;
             p.x = new_x;
@@ -554,22 +1029,22 @@ fn apply_corner_resize(
         }
         1 => {
             // Top-right: y moves, w and h change
-            let new_y = (p.y + dy).clamp(0.0, p.y + p.h - MIN);
-            p.w = (p.w + dx).clamp(MIN, 1.0 - p.x);
+            let new_y = (p.y + dy).clamp(0.0, p.y + p.h - floor_h);
+            p.w = (p.w + dx).clamp(floor_w, 1.0 - p.x);
             p.h += p.y - new_y;
             p.y = new_y;
         }
         2 => {
             // Bottom-left: x moves, h grows/shrinks
-            let new_x = (p.x + dx).clamp(0.0, p.x + p.w - MIN);
+            let new_x = (p.x + dx).clamp(0.0, p.x + p.w - floor_w);
             p.w += p.x - new_x;
             p.x = new_x;
-            p.h = (p.h + dy).clamp(MIN, 1.0 - p.y);
+            p.h = (p.h + dy).clamp(floor_h, 1.0 - p.y);
         }
         3 => {
             // Bottom-right: pure w/h change
-            p.w = (p.w + dx).clamp(MIN, 1.0 - p.x);
-            p.h = (p.h + dy).clamp(MIN, 1.0 - p.y);
+            p.w = (p.w + dx).clamp(floor_w, 1.0 - p.x);
+            p.h = (p.h + dy).clamp(floor_h, 1.0 - p.y);
         }
         _ => {}
     }
