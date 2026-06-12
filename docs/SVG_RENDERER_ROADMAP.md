@@ -26,9 +26,13 @@ and SVG-facing editor UX.
    `data:` images; R6: editable text import — chunked multi-label with
    anchor/baseline diagnostics; R7: alpha/luminance masks + filter tier-1 on the
    R4 offscreen pipeline; R8: in-app report UI + source viewer, golden corpus,
-   benchmark, and dev-only oracle). **The SVG renderer roadmap is closed.**
-2. Deferred follow-ons (tracked, runtime-diagnosed): progressive JPEG, the R6
-   vector-outline snapshot / raster text, and filter tier 2/3.
+   benchmark, and dev-only oracle). **R0–R12 + filter tier-3 are complete** for
+   the secure-static profile.
+2. The post-R12 lanes are no longer deferred — they are **scheduled** in
+   `docs/ROADMAP_PHASE2.md`: ICC + progressive/CMYK/12-bit JPEG (S7), real-font
+   text + shaping/bidi (S3→S9), full CSS (S10), animation (S14), foreignObject +
+   external resources (S16), scripting sandbox (S18). The static profile stays
+   the runtime default; each unlocks behind opt-in / new infrastructure.
 
 Unchecked derivative-backlog entries are implementation notes for these phases,
 not separate roadmap phases.
@@ -40,9 +44,10 @@ not separate roadmap phases.
 - No hollow features: every checked item needs parser behavior, renderer output,
   diagnostics for unsupported cases, tests, and documentation.
 - Preserve the original SVG source whenever fidelity is partial.
-- Prefer a secure static-image profile first. Animation, scripting, external
-  network resources, and browser DOM behavior remain out of scope unless the
-  user explicitly opens that lane.
+- Prefer a secure static-image profile first. Animation (S14), scripting (S18),
+  and external network/file resources (S16) stay **off by default** and unlock
+  only when the user explicitly opts a document into that lane — they are
+  scheduled in `docs/ROADMAP_PHASE2.md`, not rejected.
 
 ## Comparison Targets
 
@@ -720,9 +725,11 @@ Acceptance:
 and does not block the roadmap). All post-R8 lanes (R9 markers/patterns/
 vector-effect, R10 filter tier 2/linearRGB/blend/regions, R11 raster text/
 textPath, R12 namespace model/recovery/a11y) are now done — see the R9–R12
-completion sections below. Remaining work is explicitly deferred: progressive
-JPEG, filter tier 3, animation, scripting, and external network/file loading,
-all diagnosed at runtime per the secure-static profile.
+completion sections below. Filter tier-3 is also done (post-R12). Remaining work
+is **scheduled, not deferred** (`docs/ROADMAP_PHASE2.md`): progressive/CMYK JPEG
++ ICC (S7), real-font text (S3→S9), full CSS (S10), animation (S14),
+foreignObject + external resources (S16), scripting (S18). Each is diagnosed at
+runtime today and stays off by default until its stage lands.
 
 ## Derivative Task Backlog
 
@@ -778,14 +785,25 @@ The original R0–R8 backlog is closed. New work lives in
 **Post-R8 Gap Analysis And Future Lanes** below (R8.1, R9–R12), with paste-ready
 goal prompts in `docs/svg-goal-plan-prompts/`.
 
-## Non-Goals For The Next Pass
+## Scheduled Lanes (formerly "Non-Goals For The Next Pass")
 
-- Full browser DOM.
-- Scripting.
-- Animation.
-- External network/file loading.
-- Complete CSS.
-- Claiming equivalence to Batik/librsvg/resvg without a golden test corpus.
+Deferral is no longer an option (see `docs/ROADMAP_PHASE2.md`). What used to be
+parked here is now ordered work. The static-secure profile remains the **default
+posture** — animation, scripting, and external loads stay off until the user
+opts a document in — but the *capability* is scheduled, not rejected:
+
+- Full CSS engine — **S10**.
+- SVG animation (SMIL + CSS) — **S14**.
+- `foreignObject` HTML/CSS sub-layout + opt-in external resource loading — **S16**.
+- Sandboxed ECMAScript execution — **S18**.
+- Browser-DOM-grade behaviour is delivered incrementally by S10/S14/S16/S18, not
+  by embedding a browser.
+
+The one item that is **not** scheduled and stays a hard invariant: claiming
+equivalence to / depending on any external renderer (Batik/librsvg/resvg/usvg/
+tiny-skia/Skia/Cairo/browser). Those remain comparison/oracle targets only;
+renderer-grade fidelity is delivered by RohKai's own renderer (master backlog
+S22), never by adding a renderer crate.
 
 ## Definition Of Done For Any SVG Renderer Feature
 
@@ -820,13 +838,13 @@ deferred; **extra-roadmap** = a real gap the roadmap never represented.
 | Patterns | tiled via offscreen (R9) | full tiling (patternUnits/contentUnits/viewBox/transform) | P1/P2 | implementation | intra-roadmap deferred | DONE (R9); colour-space tuning later |
 | Markers | marker-start/mid/end rendered (R9) | marker-start/mid/end, orient, markerUnits, viewBox | P1 | implementation | extra-roadmap | DONE (R9) |
 | vector-effect=non-scaling-stroke | supported (R9) | supported | P2 | implementation | extra-roadmap | DONE (R9) |
-| Raster text / textPath | rendered (R11): bundled Hershey simplex vector font, ASCII coverage, anchored runs, arc-length textPath, honest diagnostics | full glyph layout + textPath | P1 | implementation | intra-roadmap deferred (R6 ph3) | DONE (R11); real font files + shaping/bidi remain out of scope |
+| Raster text / textPath | rendered (R11): bundled Hershey simplex vector font, ASCII coverage, anchored runs, arc-length textPath, honest diagnostics | full glyph layout + textPath | P1 | implementation | intra-roadmap deferred (R6 ph3) | DONE (R11); real font files + shaping/bidi scheduled S3 then S9 |
 | Namespace model | bounded xmlns scope model (R12): scope stack, qualified names → svg/xlink/foreign, foreign-ns skip+diagnostic | real xmlns/qualified-name model | P1 | architecture/conformance | extra-roadmap | DONE (R12) |
 | Malformed-document recovery | recover-and-diagnose (R12): mismatched/unclosed tags + junk → partial render + recovery counter, hard-fail only for security gates | lenient recovery + diagnostics | P1 | robustness | extra-roadmap | DONE (R12) |
 | Accessibility metadata | `<title>`/`<desc>` (+ root aria-label fallback) extracted, bounded, surfaced in the report panel, preserved on export (R12) | `title`/`desc`/`aria-*`/`role` exposed | P2 | editor/diagnostics | extra-roadmap | DONE (R12) |
 | Blend modes (mix-blend-mode) | normal/multiply/screen/darken/lighten on group layers (R10) | full isolation/blend | P2/P3 | implementation | extra-roadmap | DONE (R10) for the separable modes; remaining CSS blend modes future |
 | CSS combinators/@media/vars | tier-1 selectors only | descendant/child/attr/pseudo, @media, custom props | P2/P3 | implementation | intra-roadmap (only justified tiers) | implement only fixture-justified tiers |
-| Color management (ICC) | sRGB assumed | ICC/`color-interpolation` | P4 | conformance | extra-roadmap | reject (out of scope) |
+| Color management (ICC) | sRGB assumed | ICC/`color-interpolation` | P4 | conformance | extra-roadmap | scheduled S7 |
 | Conformance corpus validation | per-feature goldens + curated W3C-1.1 subset | W3C test-suite + reference oracles | P1 | conformance/testing | yes (R8.1 curated subset) | DONE (R8.1); broader licensed corpus future |
 | Fuzzing | in-repo deterministic fuzz harness (XML/path/PNG/JPEG/inflate) | fuzzed parsers/decoders | P0/P1 | testing/security | yes (R8.1 smoke + ignored sweep) | DONE (R8.1) |
 | Benchmark methodology | documented parse/scene/raster/alloc budgets + memory-cap tests | budgets + regression tests | P2 | performance/testing | yes (R8.1) | DONE (R8.1, docs/SVG_PRECISION_AND_BENCH.md) |
@@ -923,17 +941,27 @@ deferred; **extra-roadmap** = a real gap the roadmap never represented.
 - A rendering-precision policy doc (coverage grid, sampling, premultiplied/sRGB
   vs linearRGB boundaries).
 
-### Explicit Non-Goals (remain rejected)
+### Scheduled Lanes (formerly "Explicit Non-Goals") + the one surviving invariant
 
-- Scripting, SMIL/CSS animation, DOM, event handling.
-- External network/file loading; non-`data:` references stay fail-closed.
-- Full browser CSS layout engine; complete selector/cascade parity.
-- ICC color management beyond sRGB.
-- `foreignObject` content rendering.
-- Progressive/arithmetic/CMYK/12-bit JPEG; full HarfBuzz-class shaping + Unicode
-  bidi (editable-first text remains the contract).
-- Any external renderer dependency (resvg/usvg/tiny-skia/librsvg/Skia/Cairo/
-  browser) — comparison/oracle only.
+Every capability below is now ordered in `docs/ROADMAP_PHASE2.md`. The
+secure-static profile stays the runtime default; these unlock behind explicit
+opt-in and/or new infrastructure:
+
+- Full CSS layout engine + complete selector/cascade parity — **S10**.
+- SMIL + CSS animation, DOM event surface — **S14** (clock/repaint) + **S18**.
+- `foreignObject` content rendering — **S16**.
+- Opt-in external network/file loading (non-`data:` refs); default stays
+  fail-closed — **S16**.
+- ICC colour management beyond sRGB — **S7**.
+- Progressive / arithmetic / CMYK / 12-bit JPEG — **S7**.
+- Real font-file glyphs + HarfBuzz-class shaping + Unicode bidi — **S3** (engine)
+  then **S9** (rasterizer integration). Editable-first text stays the import
+  default; raster fidelity is the upgrade.
+- Sandboxed scripting (ECMAScript) — **S18**.
+
+**Surviving invariant (never scheduled):** any external renderer dependency
+(resvg/usvg/tiny-skia/librsvg/Skia/Cairo/browser) — comparison/oracle only.
+Renderer-grade parity comes from the in-house renderer (S22).
 
 ### Maturity Assessment
 
@@ -949,15 +977,20 @@ deferred; **extra-roadmap** = a real gap the roadmap never represented.
 - **Renderer-grade (resvg/librsvg-class): approaching — all post-R8 lanes
   complete.** R8.1 (W3C-subset conformance corpus + fuzzing + precision policy),
   R9 (markers/patterns/vector-effect), R10 (linearRGB filters + precise regions +
-  tier-2 + blend modes), R11 (raster text + textPath), and R12 (bounded namespace
-  model + malformed recovery + a11y) are **done**. What still separates RohKai
-  from full resvg/librsvg parity is deliberately out of the zero-dependency
-  secure-static profile: real font-file glyph rendering + HarfBuzz-class shaping/
-  bidi, tier-3 filter primitives (turbulence/displacement/convolution/lighting),
-  progressive/CMYK JPEG, ICC colour management, and `foreignObject`. Within the
-  profile the renderer is deterministic, bounded, and honestly diagnosed.
+  tier-2 + blend modes), R11 (raster text + textPath), R12 (bounded namespace
+  model + malformed recovery + a11y), and filter tier-3 are **done**. What still
+  separates RohKai from full resvg/librsvg parity is now **scheduled work**, not
+  rejected: real font-file glyph rendering + HarfBuzz-class shaping/bidi (S3→S9),
+  progressive/CMYK JPEG + ICC colour management (S7), full CSS (S10),
+  `foreignObject` + external resources (S16), and animation/scripting (S14/S18).
+  The only permanent exclusion is an external renderer dependency; that fidelity
+  is delivered by the in-house renderer (S22). Within the current profile the
+  renderer is deterministic, bounded, and honestly diagnosed.
 
 Maturity ladder (all complete): **R8.1 (conformance/fuzz) ✅ → R9
 (markers/patterns/vector-effect) ✅ → R10 (filter correctness) ✅ → R11 (raster
-text) ✅ → R12 (namespace/robustness/a11y) ✅**. The post-R8 SVG renderer roadmap
-is closed; remaining items are the explicit out-of-profile non-goals above.
+text) ✅ → R12 (namespace/robustness/a11y) ✅**. The post-R8 secure-static
+profile is closed; the formerly out-of-profile items are now **scheduled lanes**
+(S3/S7/S9/S10/S14/S16/S18 in `docs/ROADMAP_PHASE2.md`), with the in-house
+renderer (S22) as the final fidelity step. The only permanently rejected item is
+an external renderer dependency.

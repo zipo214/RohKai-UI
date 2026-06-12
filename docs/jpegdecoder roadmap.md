@@ -4,10 +4,11 @@
 > `src/canvas/svg_rasterizer.rs` (`decode_jpeg`) for inline `data:` JPEG images,
 > wired through the SVG R5 image path. Implemented: baseline / extended-sequential
 > Huffman (SOF0/SOF1), 8-bit, grayscale + YCbCr, 4:4:4 / 4:2:2 / 4:2:0, restart
-> markers, `0xFF00` de-stuffing, separable float IDCT. Still deferred (the "Defer
-> Initially" list below): progressive, arithmetic, CMYK/YCCK, 12-bit, lossless —
-> all diagnosed `image.unsupported_jpeg`. A future optimization is the integer/AAN
-> IDCT. See `docs/SVG_RENDERER_ROADMAP.md` R5 for the authoritative status.
+> markers, `0xFF00` de-stuffing, separable float IDCT. **Scheduled (master
+> backlog S7), not deferred:** progressive, arithmetic, CMYK/YCCK, 12-bit,
+> lossless, and the integer/AAN IDCT — all diagnosed `image.unsupported_jpeg`
+> today and ordered for implementation in `docs/ROADMAP_PHASE2.md` S7. See
+> `docs/SVG_RENDERER_ROADMAP.md` R5 for the authoritative shipped status.
 
 JPEG is a family of formats, so a scratch decoder should begin with the most common subset.
 
@@ -23,14 +24,19 @@ JPEG is a family of formats, so a scratch decoder should begin with the most com
   - 4:2:2
   - 4:2:0
 
-## Defer Initially
+## Scheduled Next (master backlog **S7** — no longer deferred)
 
-- Progressive JPEG
+These are now ordered work in `docs/ROADMAP_PHASE2.md` S7, not a "later" list.
+Each is diagnosed (`image.unsupported_jpeg`) today and becomes a real decode path
+in S7:
+
+- Progressive JPEG (SOF2)
 - Arithmetic coding
 - CMYK/YCCK
 - Exotic restart behavior
 - 12-bit JPEG
 - Lossless JPEG
+- Integer/AAN IDCT (speed) replacing the float IDCT
 
 ---
 

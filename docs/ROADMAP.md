@@ -1,17 +1,21 @@
 # RohKai Roadmap
 
-## Current Active Work — Pre-Release Depth (SVG Renderer Roadmap R0–R8 Closed)
+## Current Active Work — Master Execution Backlog (no deferral)
 
-- Keep RohKai on egui/eframe while closing reliability and feature-depth gaps.
-- SVG execution follows `docs/SVG_RENDERER_ROADMAP.md`, now **complete R0–R8**:
-  R0 metadata, shared microsyntax/style, bounded references, R1 geometry, R3
-  linear/radial paint servers, R4 clipping/viewport-overflow/group-compositing,
-  R5 PNG + baseline JPEG `data:` embedded images, R6 editable chunked text
-  import, R7 alpha/luminance masks + filter tier-1, and R8 in-app report UI +
-  source viewer + golden corpus + benchmark + dev-only oracle. Deferred,
-  runtime-diagnosed follow-ons: progressive JPEG, the R6 vector-outline snapshot
-  / raster text, and filter tier 2/3.
-- Stage 15's general RohKai renderer is deferred and is not the current stage.
+- This file (`ROADMAP.md`) is the **strategic stage history**. The single
+  ordered list of everything still to do lives in
+  **`docs/ROADMAP_PHASE2.md`** (stages S1–S22). Deferral is no longer an option:
+  every formerly-deferred item or non-goal is an ordered to-do there, ending with
+  the in-house renderer (S22).
+- Keep RohKai on egui/eframe until S22; close reliability and depth gaps in order.
+- SVG execution follows `docs/SVG_RENDERER_ROADMAP.md`, now **complete R0–R12 +
+  filter tier-3** (geometry, paint servers, clip/mask, filters tier-1/2/3,
+  patterns, markers, raster text/textPath, namespace recovery, a11y). The
+  formerly-deferred follow-ons are **scheduled**, not parked: ICC + progressive/
+  CMYK JPEG (S7), real-font text + shaping/bidi (S3→S9), full CSS (S10),
+  animation (S14), foreignObject + external resources (S16), scripting (S18).
+- Stage 15's general RohKai renderer is the **final** stage (S22), by design —
+  it is last in the order, not abandoned.
 
 ## Stage 0 — Bootstrap ✅
 - [x] Cargo scaffold, eframe window opens
@@ -649,14 +653,19 @@ See `docs/STAGE11_PLAN.md` for the full design (function, depth, UX, impact).
 
 ---
 
-## Stage 13 — Data & Integration
-- [ ] DB connection configurator — SQLite/PostgreSQL/MySQL/Supabase
-- [ ] Uses sqlx or rusqlite crate (user approves exact crate at stage start)
-- [ ] Visual query builder — select table, columns, filter
-- [ ] Bind widget to query result field
-- [ ] Generated code uses correct Rust DB crate with async/sync query calls
-- [ ] Schema viewer — see tables and fields visually
-- [ ] Generates AppState with db connection pool field
+## Stage 13 — Data & Integration (SQLite slice shipped; depth → S12)
+
+Detailed ordered work in `docs/ROADMAP_PHASE2.md` **S12**.
+
+- [x] DB connection configurator (SQLite) — `DatabaseEngine` trait + `SqliteEngine`
+      (`rusqlite`, `params![]` only — Invariant 10)
+- [x] Bind widget to query result field — `DbBinding` on `WidgetInstance`
+- [x] Generates `AppState` with db field + `load_from_db()` codegen
+- [ ] Multi-backend (PostgreSQL / MySQL / Supabase), async query calls,
+      connection pool — **S12** (approved crate(s) at stage start)
+- [ ] Visual query builder — **S12**
+- [ ] Schema viewer — **S12**
+- [ ] Design-time data preview — **S12**
 
 ---
 
@@ -745,24 +754,24 @@ and prioritizes depth over more palette breadth.
 
 ---
 
-## Stage 15 — Own Renderer
+## Stage 15 — Own Renderer → master backlog **S22** (FINAL)
 
-> This is **not** the SVG renderer roadmap. SVG R0-R8 improves SVG import,
+> This is **not** the SVG renderer roadmap. SVG R0–R12 improves SVG import,
 > Image preview, and SVG export while RohKai continues to run on egui/eframe.
-> Stage 15 would replace RohKai's general widget/runtime rendering layer and
-> remains deferred until the pre-release depth gate is closed and a separate
-> architecture decision explicitly activates it.
+> Stage 15 replaces RohKai's general widget/runtime rendering layer. It is the
+> **final** stage in the ordered backlog (S22), not deferred — it runs last by
+> design, after S1–S21, and is where the two architecture invariants (no
+> external renderer dependency, no C FFI) pay off in full visual control.
 
-- [ ] Replace egui rendering layer with RohKai-owned pure Rust renderer
-- [ ] Widget descriptor format drives renderer widget model directly
-- [ ] Zero transient C dependencies
-- [ ] All previously constrained visual properties become available:
-      per-widget color, corner radius on all types, border widths, drop shadows
+- [ ] Replace egui rendering layer with RohKai-owned pure Rust renderer — **S22**
+- [ ] Widget descriptor format drives renderer widget model directly — **S22**
+- [ ] Zero transient C dependencies — **S22**
+- [ ] All previously constrained visual properties (per-widget color, corner
+      radius on all types, border widths, drop shadows, gradients, blend modes) — **S22**
 
-### Later / High Risk
-- [ ] Model-based item views
-- [ ] Dock Widget
-- [ ] MDI Area
-- [ ] Multi-window support
-- [ ] QAxWidget-style platform integrations
-      (not compatible with RohKai's pure Rust / no C FFI rule)
+### Multi-document & windowing → master backlog **S19**
+- [ ] Model-based item views, Dock Widget, MDI Area, Multi-window support — **S19**
+- [ ] Native-quality platform integrations (the capability formerly framed as
+      "QAxWidget") are delivered by the in-house renderer + pure-Rust platform
+      layer in **S22** — **never** via C FFI. C FFI / system-toolkit bindings
+      remain a permanent architecture invariant, not a deferral.
