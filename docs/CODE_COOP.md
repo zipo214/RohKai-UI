@@ -46,6 +46,16 @@ serde untouched, codegen still consumes graph actions not recipe IDs. Full gate
 green (552 unit + 17 fidelity + doctest, all-target clippy, fmt, encoding).
 Committed locally only — coop hazard (external agent state) still says don't push.
 
+## 2026-06-13 - Project surfaces and modal dialogs
+
+Branch `codex/project-surfaces-modal`, isolated from `dev`. I am replacing the
+single-window project root with a versioned `ProjectDocument` containing a main
+surface plus modal-dialog surfaces, then wiring authoring, behaviors, preview,
+Lazare, export, and transactional modal state through that model. The main
+hazard is accidental duplicated authority between project-global properties,
+surface properties, and the old `UiTree.app_props`; the completed migration
+must leave one canonical owner and preserve schema-v1 projects losslessly.
+
 ## 2026-06-12 - Rust 1.96 and dependency alignment audit
 
 Branch `codex/toolchain-dependency-refresh`, isolated from `dev`. RohKai now

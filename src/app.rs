@@ -1,7 +1,7 @@
 use crate::canvas::interaction::{CanvasSettings, InteractionState};
 use crate::panels::code_preview::{CodePreviewArgs, CodeStatus};
 use crate::project::schema::{WidgetInstance, WidgetKind};
-use crate::project::ui_tree::UiTree;
+use crate::project::document::ActiveDocument;
 use crate::settings::UserSettings;
 use egui::Key;
 use std::path::PathBuf;
@@ -128,7 +128,7 @@ pub enum LeftPanelTab {
 
 /// The persistent project document: tree, file path, last-saved snapshot.
 pub struct ProjectState {
-    pub ui_tree: UiTree,
+    pub ui_tree: ActiveDocument,
     pub current_file: Option<PathBuf>,
     pub saved_json: Option<String>,
 }
@@ -331,7 +331,7 @@ impl RohKaiApp {
             crate::codegen::widget_descriptor::load_from_widgets_dir();
         Self {
             project: ProjectState {
-                ui_tree: UiTree::default(),
+                ui_tree: ActiveDocument::default(),
                 current_file: None,
                 saved_json: None,
             },
@@ -437,10 +437,14 @@ impl RohKaiApp {
     }
 
     fn compute_dirty_exact(&self) -> bool {
-        let current = crate::project::io::serialize(&self.project.ui_tree).unwrap_or_default();
+        let current =
+            crate::project::io::serialize(&self.project.ui_tree.snapshot()).unwrap_or_default();
         match &self.project.saved_json {
             Some(snap) => current != *snap,
-            None => !self.project.ui_tree.widgets.is_empty(),
+            None => {
+                let document = self.project.ui_tree.document();
+                document.surfaces.len() > 1 || !self.project.ui_tree.widgets.is_empty()
+            }
         }
     }
 
@@ -479,7 +483,8 @@ impl RohKaiApp {
     }
 
     fn do_save(&mut self, path: PathBuf) {
-        match crate::project::io::save(&path, &self.project.ui_tree) {
+        let snapshot = self.project.ui_tree.snapshot();
+        match crate::project::io::save(&path, &snapshot) {
             Ok(json) => {
                 self.project.saved_json = Some(json);
                 self.project.current_file = Some(path);
@@ -507,7 +512,7 @@ impl RohKaiApp {
     }
 
     fn cmd_new(&mut self) {
-        self.project.ui_tree = UiTree::default();
+        self.project.ui_tree = ActiveDocument::default();
         self.project.current_file = None;
         self.project.saved_json = None;
         self.session.selected.clear();
@@ -523,7 +528,8 @@ impl RohKaiApp {
 
     /// Re-seed the undo stack to the current tree, clearing history.
     fn reset_undo_baseline(&mut self) {
-        let json = crate::project::io::serialize(&self.project.ui_tree).unwrap_or_default();
+        let json =
+            crate::project::io::serialize(&self.project.ui_tree.snapshot()).unwrap_or_default();
         self.undo.reset(json);
         self.undo_suppress_record = true;
     }
@@ -531,8 +537,8 @@ impl RohKaiApp {
     /// Apply a restored snapshot (from undo/redo) to the live tree.
     fn apply_undo_snapshot(&mut self, json: String) {
         match crate::project::io::deserialize(&json) {
-            Ok(tree) => {
-                self.project.ui_tree = tree;
+            Ok(document) => {
+                self.project.ui_tree.replace(document);
                 // Drop selections that no longer exist.
                 let live: std::collections::HashSet<Uuid> =
                     self.project.ui_tree.widgets.iter().map(|w| w.id).collect();
@@ -563,9 +569,9 @@ impl RohKaiApp {
             .pick_file();
         if let Some(path) = path {
             match crate::project::io::load(&path) {
-                Ok(tree) => {
-                    let snap = crate::project::io::serialize(&tree).unwrap_or_default();
-                    self.project.ui_tree = tree;
+                Ok(document) => {
+                    let snap = crate::project::io::serialize(&document).unwrap_or_default();
+                    self.project.ui_tree = ActiveDocument::new(document);
                     self.project.saved_json = Some(snap);
                     self.project.current_file = Some(path);
                     self.session.selected.clear();
@@ -3059,13 +3065,15 @@ impl eframe::App for RohKaiApp {
         // ---------------------------------------------------------------
         if self.undo_suppress_record {
             // Re-seed `current` to the restored/baseline tree without history churn.
-            let json = crate::project::io::serialize(&self.project.ui_tree).unwrap_or_default();
+            let json =
+                crate::project::io::serialize(&self.project.ui_tree.snapshot()).unwrap_or_default();
             self.undo.sync_current(json);
             self.undo_suppress_record = false;
         } else if !self.session.preview_mode {
             let pointer_down = ctx.input(|i| i.pointer.any_down());
             if !pointer_down {
-                let json = crate::project::io::serialize(&self.project.ui_tree).unwrap_or_default();
+                let json = crate::project::io::serialize(&self.project.ui_tree.snapshot())
+                    .unwrap_or_default();
                 self.undo.record(json);
             }
         }
