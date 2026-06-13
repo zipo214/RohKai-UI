@@ -1,7 +1,7 @@
 use crate::canvas::interaction::{CanvasSettings, InteractionState};
 use crate::panels::code_preview::{CodePreviewArgs, CodeStatus};
-use crate::project::schema::{WidgetInstance, WidgetKind};
 use crate::project::document::ActiveDocument;
+use crate::project::schema::{WidgetInstance, WidgetKind};
 use crate::settings::UserSettings;
 use egui::Key;
 use std::path::PathBuf;
@@ -115,6 +115,7 @@ struct PendingSvgImport {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LeftPanelTab {
+    Surfaces,
     Palette,
     Properties,
     Layers,
@@ -180,6 +181,8 @@ pub struct SessionState {
     pub rust_wiring_open: bool,
     /// Stage 11 — macro palette window open.
     pub macro_palette_open: bool,
+    /// Surface awaiting guarded deletion confirmation.
+    pub pending_surface_delete: Option<Uuid>,
 }
 
 impl Default for SessionState {
@@ -209,6 +212,7 @@ impl Default for SessionState {
             show_error_flow: false,
             rust_wiring_open: false,
             macro_palette_open: false,
+            pending_surface_delete: None,
         }
     }
 }
@@ -249,6 +253,22 @@ pub struct CodePanelState {
     pub search_match_idx: usize,
 }
 
+impl Clone for CodePanelState {
+    fn clone(&self) -> Self {
+        Self {
+            buffer: self.buffer.clone(),
+            status: self.status.clone(),
+            last_generated: self.last_generated.clone(),
+            split_ratio: self.split_ratio,
+            wrap_code: self.wrap_code,
+            editor_has_focus: false,
+            search_query: self.search_query.clone(),
+            search_open: self.search_open,
+            search_match_idx: self.search_match_idx,
+        }
+    }
+}
+
 impl Default for CodePanelState {
     fn default() -> Self {
         Self {
@@ -261,6 +281,24 @@ impl Default for CodePanelState {
             search_query: String::new(),
             search_open: false,
             search_match_idx: 0,
+        }
+    }
+}
+
+struct SurfaceWorkspaceState {
+    selected: Vec<Uuid>,
+    zoom: f32,
+    pan: egui::Vec2,
+    code: CodePanelState,
+}
+
+impl Default for SurfaceWorkspaceState {
+    fn default() -> Self {
+        Self {
+            selected: Vec::new(),
+            zoom: 1.0,
+            pan: egui::Vec2::ZERO,
+            code: CodePanelState::default(),
         }
     }
 }
@@ -301,6 +339,7 @@ pub struct RohKaiApp {
     timers_need_respawn: bool,
     pub db_engine: Option<Box<dyn crate::project::db_engine::DatabaseEngine>>,
     pub db_panel: crate::panels::db_panel::DbPanelState,
+    surface_workspaces: std::collections::HashMap<Uuid, SurfaceWorkspaceState>,
 }
 
 fn slugify_widget_hint(text: &str) -> String {
@@ -369,6 +408,139 @@ impl RohKaiApp {
             timers_need_respawn: true,
             db_engine: None,
             db_panel: crate::panels::db_panel::DbPanelState::default(),
+            surface_workspaces: std::collections::HashMap::new(),
+        }
+    }
+
+    fn switch_surface(&mut self, target: Uuid) -> bool {
+        let current = self.project.ui_tree.active_surface_id();
+        if current == target {
+            return true;
+        }
+        if self.project.ui_tree.document().surface(target).is_none() {
+            return false;
+        }
+
+        self.surface_workspaces.insert(
+            current,
+            SurfaceWorkspaceState {
+                selected: std::mem::take(&mut self.session.selected),
+                zoom: self.session.canvas_settings.zoom,
+                pan: self.session.canvas_settings.pan,
+                code: std::mem::take(&mut self.code),
+            },
+        );
+        if !self.project.ui_tree.set_active_surface(target) {
+            return false;
+        }
+        let restored = self.surface_workspaces.remove(&target).unwrap_or_default();
+        self.session.selected = restored.selected;
+        self.session.canvas_settings.zoom = restored.zoom;
+        self.session.canvas_settings.pan = restored.pan;
+        self.code = restored.code;
+        self.session.interaction = InteractionState::default();
+        self.session.code_navigation_target = None;
+        self.session.scroll_to_handler = None;
+        self.session.hovered_guide = None;
+        self.session.dragging_guide = None;
+        self.session.preview_state =
+            crate::canvas::preview::PreviewState::init_from_tree(&self.project.ui_tree);
+        true
+    }
+
+    fn handle_surface_action(&mut self, action: crate::panels::surfaces::SurfaceAction) {
+        use crate::panels::surfaces::SurfaceAction;
+        match action {
+            SurfaceAction::None => {}
+            SurfaceAction::Activate(id) => {
+                let _ = self.switch_surface(id);
+            }
+            SurfaceAction::Add(template) => {
+                let id = self
+                    .project
+                    .ui_tree
+                    .add_modal_surface(template.label().trim_end_matches(" Dialog"));
+                let tree = crate::panels::surfaces::dialog_template_tree(template);
+                let _ = self.project.ui_tree.replace_surface_tree(id, tree);
+                let _ = self.switch_surface(id);
+            }
+            SurfaceAction::Duplicate(id) => {
+                if let Some(duplicate) = self.project.ui_tree.duplicate_surface(id) {
+                    let _ = self.switch_surface(duplicate);
+                }
+            }
+            SurfaceAction::Delete(id) => {
+                if id != self.project.ui_tree.document().root_surface {
+                    self.session.pending_surface_delete = Some(id);
+                }
+            }
+            SurfaceAction::MoveUp(id) | SurfaceAction::MoveDown(id) => {
+                let document = self.project.ui_tree.document();
+                let Some(index) = document
+                    .surfaces
+                    .iter()
+                    .position(|surface| surface.id == id)
+                else {
+                    return;
+                };
+                let target = if matches!(action, SurfaceAction::MoveUp(_)) {
+                    index.saturating_sub(1).max(1)
+                } else {
+                    (index + 1).min(document.surfaces.len().saturating_sub(1))
+                };
+                let _ = self.project.ui_tree.move_surface(id, target);
+            }
+        }
+    }
+
+    fn show_surface_delete_confirmation(&mut self, ctx: &egui::Context) {
+        let Some(surface_id) = self.session.pending_surface_delete else {
+            return;
+        };
+        let Some(surface) = self.project.ui_tree.document().surface(surface_id) else {
+            self.session.pending_surface_delete = None;
+            return;
+        };
+        let surface_name = surface.name.clone();
+        let widget_count = surface.tree.widgets.len();
+        let mut confirm = false;
+        let mut cancel = false;
+        let response =
+            egui::Modal::new(egui::Id::new("delete_surface_confirmation")).show(ctx, |ui| {
+                ui.set_min_width(360.0);
+                ui.heading("Delete dialog surface?");
+                ui.label(format!(
+                    "\"{surface_name}\" contains {widget_count} widget{}.",
+                    if widget_count == 1 { "" } else { "s" }
+                ));
+                ui.label("Incoming behavior references will be reported or removed.");
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                    if ui
+                        .button(egui::RichText::new("Delete").color(egui::Color32::LIGHT_RED))
+                        .clicked()
+                    {
+                        confirm = true;
+                    }
+                });
+            });
+        cancel |= response.should_close();
+
+        if cancel {
+            self.session.pending_surface_delete = None;
+        } else if confirm {
+            let was_active = self.project.ui_tree.active_surface_id() == surface_id;
+            if was_active {
+                let root = self.project.ui_tree.document().root_surface;
+                let _ = self.switch_surface(root);
+            }
+            if self.project.ui_tree.remove_surface(surface_id) {
+                self.surface_workspaces.remove(&surface_id);
+            }
+            self.session.pending_surface_delete = None;
         }
     }
 
@@ -521,6 +693,9 @@ impl RohKaiApp {
         self.dirty_cache = false;
         self.dirty_cache_checked_at = 0.0;
         self.name_counter.clear();
+        self.surface_workspaces.clear();
+        self.code = CodePanelState::default();
+        self.session.interaction = InteractionState::default();
         self.reset_undo_baseline();
         self.refresh_preview_state();
         self.timers_need_respawn = true;
@@ -538,7 +713,27 @@ impl RohKaiApp {
     fn apply_undo_snapshot(&mut self, json: String) {
         match crate::project::io::deserialize(&json) {
             Ok(document) => {
+                let previous_surface = self.project.ui_tree.active_surface_id();
                 self.project.ui_tree.replace(document);
+                if self
+                    .project
+                    .ui_tree
+                    .document()
+                    .surface(previous_surface)
+                    .is_some()
+                {
+                    let _ = self.project.ui_tree.set_active_surface(previous_surface);
+                }
+                let live_surfaces: std::collections::HashSet<Uuid> = self
+                    .project
+                    .ui_tree
+                    .document()
+                    .surfaces
+                    .iter()
+                    .map(|surface| surface.id)
+                    .collect();
+                self.surface_workspaces
+                    .retain(|surface, _| live_surfaces.contains(surface));
                 // Drop selections that no longer exist.
                 let live: std::collections::HashSet<Uuid> =
                     self.project.ui_tree.widgets.iter().map(|w| w.id).collect();
@@ -586,6 +781,9 @@ impl RohKaiApp {
                         let key = format!("{:?}", w.kind).to_lowercase();
                         *self.name_counter.entry(key).or_insert(0) += 1;
                     }
+                    self.surface_workspaces.clear();
+                    self.code = CodePanelState::default();
+                    self.session.interaction = InteractionState::default();
                     self.reset_undo_baseline();
                     self.refresh_preview_state();
                     self.timers_need_respawn = true;
@@ -2404,7 +2602,7 @@ impl eframe::App for RohKaiApp {
         let preview_mode = self.session.preview_mode;
         let selected_component = self.session.selected_component;
 
-        let (palette_click, palette_drag, tmpl_action, props_action) =
+        let (palette_click, palette_drag, tmpl_action, props_action, surface_action) =
             egui::Panel::left("left_panel")
                 .resizable(left_full)
                 .min_size(if left_full { 160.0 } else { 28.0 })
@@ -2420,6 +2618,7 @@ impl eframe::App for RohKaiApp {
                             None,
                             crate::panels::templates::TemplateAction::None,
                             crate::panels::properties::PropertiesAction::None,
+                            crate::panels::surfaces::SurfaceAction::None,
                         );
                     }
 
@@ -2449,10 +2648,16 @@ impl eframe::App for RohKaiApp {
                             None,
                             crate::panels::templates::TemplateAction::None,
                             crate::panels::properties::PropertiesAction::None,
+                            crate::panels::surfaces::SurfaceAction::None,
                         );
                     }
 
                     ui.horizontal_wrapped(|ui| {
+                        ui.selectable_value(
+                            &mut self.session.left_panel_tab,
+                            LeftPanelTab::Surfaces,
+                            "Surfaces",
+                        );
                         ui.selectable_value(
                             &mut self.session.left_panel_tab,
                             LeftPanelTab::Palette,
@@ -2488,6 +2693,7 @@ impl eframe::App for RohKaiApp {
                     let mut palette_drag = None;
                     let mut props_action = crate::panels::properties::PropertiesAction::None;
                     let mut tmpl_action = crate::panels::templates::TemplateAction::None;
+                    let mut surface_action = crate::panels::surfaces::SurfaceAction::None;
 
                     egui::ScrollArea::vertical()
                         .id_salt("left_panel_tab_scroll")
@@ -2507,6 +2713,15 @@ impl eframe::App for RohKaiApp {
                             };
 
                             if self.session.left_panel_stack {
+                                egui::CollapsingHeader::new("Surfaces")
+                                    .default_open(true)
+                                    .show(ui, |ui| {
+                                        surface_action = crate::panels::surfaces::show_content(
+                                            ui,
+                                            self.project.ui_tree.document(),
+                                            self.project.ui_tree.active_surface_id(),
+                                        );
+                                    });
                                 egui::CollapsingHeader::new("Palette")
                                     .default_open(true)
                                     .show(ui, |ui| {
@@ -2520,18 +2735,26 @@ impl eframe::App for RohKaiApp {
                                     .default_open(!self.session.selected.is_empty())
                                     .show(ui, |ui| {
                                         let shift_held = ui.input(|i| i.modifiers.shift);
-                                        crate::panels::behaviors::show_selected(
-                                            ui,
-                                            &mut self.project.ui_tree,
-                                            &mut self.session.interaction.selected_behavior,
-                                        );
-                                        props_action = crate::panels::properties::show_content(
-                                            ui,
-                                            &mut self.project.ui_tree,
-                                            &mut self.session.selected,
-                                            shift_held,
-                                            &self.descriptors.widgets,
-                                        );
+                                        if self.session.selected.is_empty() {
+                                            crate::panels::surfaces::show_active_surface_properties(
+                                                ui,
+                                                &mut self.project.ui_tree,
+                                            );
+                                        } else {
+                                            crate::panels::behaviors::show_selected(
+                                                ui,
+                                                &mut self.project.ui_tree,
+                                                &mut self.session.interaction.selected_behavior,
+                                            );
+                                            props_action =
+                                                crate::panels::properties::show_content(
+                                                    ui,
+                                                    &mut self.project.ui_tree,
+                                                    &mut self.session.selected,
+                                                    shift_held,
+                                                    &self.descriptors.widgets,
+                                                );
+                                        }
                                         if let Some(wid) = self.session.selected.last().copied() {
                                             crate::panels::behaviors::show_for_widget(
                                                 ui,
@@ -2599,6 +2822,13 @@ impl eframe::App for RohKaiApp {
                                     });
                             } else {
                                 match self.session.left_panel_tab {
+                                    LeftPanelTab::Surfaces => {
+                                        surface_action = crate::panels::surfaces::show_content(
+                                            ui,
+                                            self.project.ui_tree.document(),
+                                            self.project.ui_tree.active_surface_id(),
+                                        );
+                                    }
                                     LeftPanelTab::Palette => {
                                         show_palette(ui, &mut palette_click, &mut palette_drag);
                                     }
@@ -2619,18 +2849,26 @@ impl eframe::App for RohKaiApp {
                                             );
                                             ui.separator();
                                         }
-                                        crate::panels::behaviors::show_selected(
-                                            ui,
-                                            &mut self.project.ui_tree,
-                                            &mut self.session.interaction.selected_behavior,
-                                        );
-                                        props_action = crate::panels::properties::show_content(
-                                            ui,
-                                            &mut self.project.ui_tree,
-                                            &mut self.session.selected,
-                                            shift_held,
-                                            &self.descriptors.widgets,
-                                        );
+                                        if self.session.selected.is_empty() {
+                                            crate::panels::surfaces::show_active_surface_properties(
+                                                ui,
+                                                &mut self.project.ui_tree,
+                                            );
+                                        } else {
+                                            crate::panels::behaviors::show_selected(
+                                                ui,
+                                                &mut self.project.ui_tree,
+                                                &mut self.session.interaction.selected_behavior,
+                                            );
+                                            props_action =
+                                                crate::panels::properties::show_content(
+                                                    ui,
+                                                    &mut self.project.ui_tree,
+                                                    &mut self.session.selected,
+                                                    shift_held,
+                                                    &self.descriptors.widgets,
+                                                );
+                                        }
                                         if let Some(wid) = self.session.selected.last().copied() {
                                             crate::panels::behaviors::show_for_widget(
                                                 ui,
@@ -2699,9 +2937,32 @@ impl eframe::App for RohKaiApp {
                             }
                         });
 
-                    (palette_click, palette_drag, tmpl_action, props_action)
+                    (
+                        palette_click,
+                        palette_drag,
+                        tmpl_action,
+                        props_action,
+                        surface_action,
+                    )
                 })
                 .inner;
+
+        self.handle_surface_action(surface_action);
+
+        let mut tab_request = None;
+        egui::Panel::top("surface_tabs")
+            .exact_size(32.0)
+            .show_inside(root_ui, |ui| {
+                tab_request = crate::panels::surfaces::show_tabs(
+                    ui,
+                    self.project.ui_tree.document(),
+                    self.project.ui_tree.active_surface_id(),
+                );
+            });
+        if let Some(surface_id) = tab_request {
+            let _ = self.switch_surface(surface_id);
+        }
+        self.show_surface_delete_confirmation(ctx);
 
         // Tracé — properties panel requested scroll-to-handler
         match props_action {

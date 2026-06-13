@@ -5,12 +5,10 @@
 //! [`UiTree`], which remains the source of truth for that surface's widgets.
 
 use crate::project::{
-    schema::{
-        AppProps, AssetEntry, Behavior, DesignComponent, RustWiring, ThemeSettings,
-    },
+    schema::{AppProps, AssetEntry, Behavior, DesignComponent, RustWiring, ThemeSettings},
     ui_tree::UiTree,
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::{
     collections::{HashMap, HashSet},
     ops::{Deref, DerefMut},
@@ -102,15 +100,81 @@ pub enum SurfaceKind {
 }
 
 /// One independently editable form.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct UiSurface {
     pub id: Uuid,
     pub name: String,
     pub kind: SurfaceKind,
-    #[serde(default)]
     pub props: SurfaceProps,
-    #[serde(default)]
     pub tree: UiTree,
+}
+
+#[derive(Serialize)]
+struct UiSurfaceRef<'a> {
+    id: Uuid,
+    name: &'a str,
+    kind: &'a SurfaceKind,
+    props: &'a SurfaceProps,
+    tree: SurfaceTreeRef<'a>,
+}
+
+#[derive(Serialize)]
+struct SurfaceTreeRef<'a> {
+    widgets: &'a [crate::project::schema::WidgetInstance],
+}
+
+#[derive(Deserialize)]
+struct UiSurfaceOwned {
+    id: Uuid,
+    name: String,
+    kind: SurfaceKind,
+    #[serde(default)]
+    props: SurfaceProps,
+    #[serde(default)]
+    tree: SurfaceTreeOwned,
+}
+
+#[derive(Default, Deserialize)]
+struct SurfaceTreeOwned {
+    #[serde(default)]
+    widgets: Vec<crate::project::schema::WidgetInstance>,
+}
+
+impl Serialize for UiSurface {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        UiSurfaceRef {
+            id: self.id,
+            name: &self.name,
+            kind: &self.kind,
+            props: &self.props,
+            tree: SurfaceTreeRef {
+                widgets: &self.tree.widgets,
+            },
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for UiSurface {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let surface = UiSurfaceOwned::deserialize(deserializer)?;
+        Ok(Self {
+            id: surface.id,
+            name: surface.name,
+            kind: surface.kind,
+            props: surface.props,
+            tree: UiTree {
+                widgets: surface.tree.widgets,
+                app_props: AppProps::default(),
+            },
+        })
+    }
 }
 
 /// Canonical source of truth for a RohKai project.
@@ -250,10 +314,27 @@ impl ProjectDocument {
         true
     }
 
+    pub fn move_surface(&mut self, id: Uuid, target_index: usize) -> bool {
+        if id == self.root_surface {
+            return false;
+        }
+        let Some(source_index) = self.surfaces.iter().position(|surface| surface.id == id) else {
+            return false;
+        };
+        let surface = self.surfaces.remove(source_index);
+        let target = target_index.clamp(1, self.surfaces.len());
+        self.surfaces.insert(target, surface);
+        true
+    }
+
     pub fn duplicate_surface(&mut self, source: Uuid) -> Option<Uuid> {
         let original = self.surface(source)?.clone();
-        let widget_ids: HashSet<Uuid> =
-            original.tree.widgets.iter().map(|widget| widget.id).collect();
+        let widget_ids: HashSet<Uuid> = original
+            .tree
+            .widgets
+            .iter()
+            .map(|widget| widget.id)
+            .collect();
         let name = self.unique_surface_name(&format!("{} Copy", original.name), None);
         let new_surface_id = Uuid::new_v4();
         let mut duplicate = original;
@@ -469,6 +550,39 @@ impl ActiveDocument {
         removed
     }
 
+    pub fn move_surface(&mut self, id: Uuid, target_index: usize) -> bool {
+        self.flush_active_cache();
+        self.document.move_surface(id, target_index)
+    }
+
+    pub fn replace_active_tree(&mut self, tree: UiTree) {
+        if let Some(surface) = self.document.surface_mut(self.active_surface) {
+            surface.tree = tree;
+        }
+        self.hydrate_active_cache();
+    }
+
+    pub fn replace_surface_tree(&mut self, id: Uuid, tree: UiTree) -> bool {
+        self.flush_active_cache();
+        let Some(surface) = self.document.surface_mut(id) else {
+            return false;
+        };
+        surface.tree = tree;
+        self.hydrate_active_cache();
+        true
+    }
+
+    pub fn set_modal_dialog_props(&mut self, props: ModalDialogProps) -> bool {
+        let Some(surface) = self.document.surface_mut(self.active_surface) else {
+            return false;
+        };
+        if !matches!(surface.kind, SurfaceKind::ModalDialog(_)) {
+            return false;
+        }
+        surface.kind = SurfaceKind::ModalDialog(props);
+        true
+    }
+
     #[must_use]
     pub fn snapshot(&self) -> ProjectDocument {
         let mut active = self.clone();
@@ -485,8 +599,12 @@ impl ActiveDocument {
         let Some(surface) = self.document.surface_mut(self.active_surface) else {
             return;
         };
-        let widget_ids: HashSet<Uuid> =
-            surface.tree.widgets.iter().map(|widget| widget.id).collect();
+        let widget_ids: HashSet<Uuid> = surface
+            .tree
+            .widgets
+            .iter()
+            .map(|widget| widget.id)
+            .collect();
         surface.tree.app_props = AppProps {
             title: surface.props.title.clone(),
             win_w: surface.props.size[0],
@@ -524,8 +642,12 @@ impl ActiveDocument {
             guides: cache.guides,
             show_bezel: cache.show_bezel,
         };
-        let widget_ids: HashSet<Uuid> =
-            surface.tree.widgets.iter().map(|widget| widget.id).collect();
+        let widget_ids: HashSet<Uuid> = surface
+            .tree
+            .widgets
+            .iter()
+            .map(|widget| widget.id)
+            .collect();
         self.document
             .props
             .behaviors

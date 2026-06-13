@@ -8,7 +8,7 @@ const CODE_EDITOR_GUTTER_Y: f32 = 8.0;
 const CODE_HIGHLIGHT_PADDING: f32 = 4.0;
 const CODE_HIGHLIGHT_STROKE_WIDTH: f32 = 1.25;
 
-#[derive(Default, PartialEq)]
+#[derive(Clone, Default, PartialEq)]
 pub enum CodeStatus {
     #[default]
     Generated,

@@ -14,10 +14,7 @@ struct ProjectFile {
 #[serde(untagged)]
 enum ProjectJson {
     Project(ProjectFile),
-    VersionOne {
-        schema_version: u32,
-        tree: UiTree,
-    },
+    VersionOne { schema_version: u32, tree: UiTree },
     Legacy(UiTree),
 }
 
@@ -48,8 +45,7 @@ pub fn load(path: &Path) -> Result<ProjectDocument, String> {
 /// Deserialize a project from schema v2, schema v1, or a legacy bare tree.
 /// Used by both file load and the undo/redo stack.
 pub fn deserialize(json: &str) -> Result<ProjectDocument, String> {
-    let mut document =
-        match serde_json::from_str(json).map_err(|e| format!("Parse error: {e}"))? {
+    let mut document = match serde_json::from_str(json).map_err(|e| format!("Parse error: {e}"))? {
         ProjectJson::Project(project) => {
             if project.schema_version > PROJECT_SCHEMA_VERSION {
                 return Err(format!(

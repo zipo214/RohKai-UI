@@ -1,3 +1,4 @@
+use rohkai::panels::surfaces::{DialogTemplate, dialog_template_tree};
 use rohkai::project::{
     document::{ActiveDocument, ProjectDocument, SurfaceKind},
     io,
@@ -21,7 +22,10 @@ fn modal_surface_crud_preserves_root_and_unique_names() {
     let second = document.add_modal_surface("Settings");
 
     assert_ne!(first, second);
-    assert_eq!(document.surface(first).map(|s| s.name.as_str()), Some("Settings"));
+    assert_eq!(
+        document.surface(first).map(|s| s.name.as_str()),
+        Some("Settings")
+    );
     assert_eq!(
         document.surface(second).map(|s| s.name.as_str()),
         Some("Settings 2")
@@ -36,11 +40,15 @@ fn duplicating_surface_rewrites_widget_and_behavior_ids() {
     let mut document = ProjectDocument::default();
     let source = document.add_modal_surface("Editor");
     let button_id = Uuid::new_v4();
-    document.surface_mut(source).unwrap().tree.add(WidgetInstance {
-        id: button_id,
-        kind: WidgetKind::Button,
-        ..Default::default()
-    });
+    document
+        .surface_mut(source)
+        .unwrap()
+        .tree
+        .add(WidgetInstance {
+            id: button_id,
+            kind: WidgetKind::Button,
+            ..Default::default()
+        });
     document.props.behaviors.push(Behavior {
         id: Uuid::new_v4(),
         source_widget: button_id,
@@ -102,6 +110,22 @@ fn schema_v2_round_trip_preserves_multiple_surfaces() {
 }
 
 #[test]
+fn schema_v2_serializes_surface_trees_without_compatibility_app_props() {
+    let mut document = ProjectDocument::default();
+    document.root_surface_mut().tree.app_props.title = "stale cache".to_owned();
+
+    let json = io::serialize(&document).expect("serialize");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+    let tree = &value["document"]["surfaces"][0]["tree"];
+
+    assert!(tree.get("widgets").is_some());
+    assert!(
+        tree.get("app_props").is_none(),
+        "schema v2 must persist canonical project/surface properties only"
+    );
+}
+
+#[test]
 fn active_document_switch_flushes_surface_and_global_edits() {
     let mut active = ActiveDocument::default();
     let root = active.document().root_surface;
@@ -116,6 +140,43 @@ fn active_document_switch_flushes_surface_and_global_edits() {
     assert_eq!(active.app_props.title, "Renamed Main");
     assert!(!active.app_props.theme.dark_mode);
     let snapshot = active.snapshot();
-    assert_eq!(snapshot.surface(dialog).unwrap().props.title, "Settings Dialog");
+    assert_eq!(
+        snapshot.surface(dialog).unwrap().props.title,
+        "Settings Dialog"
+    );
     assert!(!snapshot.props.theme.dark_mode);
+}
+
+#[test]
+fn dialog_templates_are_real_editable_trees() {
+    let blank = dialog_template_tree(DialogTemplate::Blank);
+    let ok_cancel = dialog_template_tree(DialogTemplate::OkCancel);
+    let settings = dialog_template_tree(DialogTemplate::Settings);
+
+    assert!(blank.widgets.is_empty());
+    assert!(
+        ok_cancel
+            .widgets
+            .iter()
+            .any(|widget| widget.kind == WidgetKind::DialogButtonBox)
+    );
+    assert!(
+        settings
+            .widgets
+            .iter()
+            .any(|widget| widget.kind == WidgetKind::TextInput)
+    );
+}
+
+#[test]
+fn surface_reorder_never_moves_root_from_first_position() {
+    let mut document = ProjectDocument::default();
+    let a = document.add_modal_surface("A");
+    let b = document.add_modal_surface("B");
+
+    assert!(document.move_surface(b, 1));
+    assert!(!document.move_surface(document.root_surface, 2));
+    assert_eq!(document.surfaces[0].id, document.root_surface);
+    assert_eq!(document.surfaces[1].id, b);
+    assert_eq!(document.surfaces[2].id, a);
 }

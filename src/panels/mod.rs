@@ -18,6 +18,7 @@ pub mod project_tree;
 pub mod properties;
 pub mod rust_wiring;
 pub mod shortcuts;
+pub mod surfaces;
 pub mod svg_report;
 pub mod templates;
 pub mod widget_builder;
