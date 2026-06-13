@@ -7,6 +7,101 @@ use egui::Key;
 use std::path::PathBuf;
 use uuid::Uuid;
 
+// ---------------------------------------------------------------------------
+// Keyboard shortcut helpers
+// ---------------------------------------------------------------------------
+
+/// Map a single-key string (e.g. "N", "F5", "Escape") to an egui Key.
+fn parse_egui_key(s: &str) -> Option<Key> {
+    match s {
+        "A" => Some(Key::A),
+        "B" => Some(Key::B),
+        "C" => Some(Key::C),
+        "D" => Some(Key::D),
+        "E" => Some(Key::E),
+        "F" => Some(Key::F),
+        "G" => Some(Key::G),
+        "H" => Some(Key::H),
+        "I" => Some(Key::I),
+        "J" => Some(Key::J),
+        "K" => Some(Key::K),
+        "L" => Some(Key::L),
+        "M" => Some(Key::M),
+        "N" => Some(Key::N),
+        "O" => Some(Key::O),
+        "P" => Some(Key::P),
+        "Q" => Some(Key::Q),
+        "R" => Some(Key::R),
+        "S" => Some(Key::S),
+        "T" => Some(Key::T),
+        "U" => Some(Key::U),
+        "V" => Some(Key::V),
+        "W" => Some(Key::W),
+        "X" => Some(Key::X),
+        "Y" => Some(Key::Y),
+        "Z" => Some(Key::Z),
+        "0" => Some(Key::Num0),
+        "1" => Some(Key::Num1),
+        "2" => Some(Key::Num2),
+        "3" => Some(Key::Num3),
+        "4" => Some(Key::Num4),
+        "5" => Some(Key::Num5),
+        "6" => Some(Key::Num6),
+        "7" => Some(Key::Num7),
+        "8" => Some(Key::Num8),
+        "9" => Some(Key::Num9),
+        "F1" => Some(Key::F1),
+        "F2" => Some(Key::F2),
+        "F3" => Some(Key::F3),
+        "F4" => Some(Key::F4),
+        "F5" => Some(Key::F5),
+        "F6" => Some(Key::F6),
+        "F7" => Some(Key::F7),
+        "F8" => Some(Key::F8),
+        "F9" => Some(Key::F9),
+        "F10" => Some(Key::F10),
+        "F11" => Some(Key::F11),
+        "F12" => Some(Key::F12),
+        "Escape" => Some(Key::Escape),
+        "Enter" => Some(Key::Enter),
+        "Tab" => Some(Key::Tab),
+        "Delete" => Some(Key::Delete),
+        "Backspace" => Some(Key::Backspace),
+        "Space" => Some(Key::Space),
+        _ => None,
+    }
+}
+
+/// Return true when the egui context sees the key combo defined for `action`
+/// in `settings.user_shortcuts`, falling back to `default_combo` if no
+/// override is set.  Combo syntax: "Ctrl+Shift+S", "F5", "Escape".
+fn effective_shortcut(
+    ctx: &egui::Context,
+    action: &str,
+    settings: &UserSettings,
+    default_combo: &str,
+) -> bool {
+    let combo = settings
+        .user_shortcuts
+        .get(action)
+        .map(|s| s.as_str())
+        .unwrap_or(default_combo);
+    let parts: Vec<&str> = combo.split('+').collect();
+    let want_ctrl = parts.contains(&"Ctrl");
+    let want_shift = parts.contains(&"Shift");
+    let want_alt = parts.contains(&"Alt");
+    let key_part = parts.last().copied().unwrap_or("");
+    let Some(key) = parse_egui_key(key_part) else {
+        return false;
+    };
+    ctx.input(|i| {
+        i.modifiers.ctrl == want_ctrl
+            && i.modifiers.shift == want_shift
+            && i.modifiers.alt == want_alt
+            && i.key_pressed(key)
+    })
+}
+
 #[derive(Clone, Copy)]
 enum PendingCommand {
     New,
@@ -201,15 +296,13 @@ pub struct RohKaiApp {
     /// Visual Widget Maker window state.
     pub widget_maker_doc: crate::canvas::widget_maker::WidgetMakerDoc,
     pub widget_maker_open: bool,
-    /// Per-kind widget drop counter for auto-generating meaningful labels.
-    /// Key = `format!("{:?}", kind)` (debug name), value = last counter used.
-    /// Resets to empty when the project is cleared (New command).
     pub name_counter: std::collections::HashMap<String, u32>,
+    timer_rx: Option<std::sync::mpsc::Receiver<String>>,
+    timers_need_respawn: bool,
+    pub db_engine: Option<Box<dyn crate::project::db_engine::DatabaseEngine>>,
+    pub db_panel: crate::panels::db_panel::DbPanelState,
 }
 
-/// Produce a snake_case slug from a widget's default label text for use in
-/// auto-generated names. Lowercases, replaces non-alphanumeric runs with `_`,
-/// strips leading/trailing underscores. Returns empty string for blank input.
 fn slugify_widget_hint(text: &str) -> String {
     let raw: String = text
         .to_lowercase()
@@ -272,13 +365,13 @@ impl RohKaiApp {
             widget_maker_doc: crate::canvas::widget_maker::WidgetMakerDoc::new_with_defaults(),
             widget_maker_open: false,
             name_counter: std::collections::HashMap::new(),
+            timer_rx: None,
+            timers_need_respawn: true,
+            db_engine: None,
+            db_panel: crate::panels::db_panel::DbPanelState::default(),
         }
     }
 
-    /// Auto-generate a human-readable label for a newly dropped widget.
-    /// Returns `"button_1_submit"` — kind + counter + semantic slug from the
-    /// widget's default label text. Falls back to `"button_1"` when the slug
-    /// would be empty or identical to the kind key.
     fn next_widget_label(&mut self, kind: &WidgetKind, default_text: &str) -> String {
         let key = format!("{kind:?}").to_lowercase();
         let count = self.name_counter.entry(key.clone()).or_insert(0);
@@ -289,6 +382,56 @@ impl RohKaiApp {
         } else {
             format!("{key}_{count}_{slug}")
         }
+    }
+
+    /// Spawn background threads for every `ComponentKind::Timer` in the
+    /// current project.  Each thread sleeps for `interval_ms` milliseconds and
+    /// then sends the component name on a shared `mpsc` channel.
+    ///
+    /// This replaces any previously spawned timer threads (old `Sender` clones
+    /// are dropped when the old `Receiver` is replaced).  Call this after
+    /// opening or creating a project so timers always match the tree.
+    pub fn spawn_timers(&mut self, ctx: &egui::Context) {
+        use crate::project::schema::ComponentKind;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let timers: Vec<(String, u64)> = self
+            .project
+            .ui_tree
+            .app_props
+            .components
+            .iter()
+            .filter(|c| c.kind == ComponentKind::Timer)
+            .map(|c| {
+                let ms = c.interval_ms.unwrap_or(1000) as u64;
+                (c.name.clone(), ms)
+            })
+            .collect();
+
+        if timers.is_empty() {
+            self.timer_rx = None;
+            return;
+        }
+
+        let (tx, rx) = mpsc::channel::<String>();
+        for (name, interval_ms) in timers {
+            let tx2 = tx.clone();
+            let ctx2 = ctx.clone();
+            std::thread::Builder::new()
+                .name(format!("rohkai-timer-{name}"))
+                .spawn(move || {
+                    loop {
+                        std::thread::sleep(Duration::from_millis(interval_ms));
+                        if tx2.send(name.clone()).is_err() {
+                            break; // receiver dropped — stop the thread
+                        }
+                        ctx2.request_repaint_after(Duration::from_millis(interval_ms));
+                    }
+                })
+                .ok();
+        }
+        self.timer_rx = Some(rx);
     }
 
     fn compute_dirty_exact(&self) -> bool {
@@ -373,6 +516,7 @@ impl RohKaiApp {
         self.name_counter.clear();
         self.reset_undo_baseline();
         self.refresh_preview_state();
+        self.timers_need_respawn = true;
     }
 
     /// Re-seed the undo stack to the current tree, clearing history.
@@ -429,6 +573,7 @@ impl RohKaiApp {
                     self.dirty_cache_checked_at = 0.0;
                     self.reset_undo_baseline();
                     self.refresh_preview_state();
+                    self.timers_need_respawn = true;
                 }
                 Err(e) => self.messages.last_error = Some(e),
             }
@@ -968,12 +1113,12 @@ impl RohKaiApp {
         visuals.hyperlink_color = accent;
         visuals.selection.bg_fill = egui::Color32::from_rgba_premultiplied(r, g, b, 90);
         if let Some(rounding) = theme.global_corner_radius {
-            let r = egui::Rounding::same(rounding);
-            visuals.widgets.noninteractive.rounding = r;
-            visuals.widgets.inactive.rounding = r;
-            visuals.widgets.hovered.rounding = r;
-            visuals.widgets.active.rounding = r;
-            visuals.widgets.open.rounding = r;
+            let corner_radius = egui::CornerRadius::from(rounding);
+            visuals.widgets.noninteractive.corner_radius = corner_radius;
+            visuals.widgets.inactive.corner_radius = corner_radius;
+            visuals.widgets.hovered.corner_radius = corner_radius;
+            visuals.widgets.active.corner_radius = corner_radius;
+            visuals.widgets.open.corner_radius = corner_radius;
         }
         // Rebuild the style from defaults every time (carrying the themed
         // visuals) so clearing overrides — "Reset defaults" or loading a theme
@@ -992,7 +1137,7 @@ impl RohKaiApp {
             style.spacing.item_spacing = egui::vec2(base * 2.0, base);
             style.spacing.button_padding = egui::vec2(base * 1.5, base * 0.5);
         }
-        ctx.set_style(style);
+        ctx.set_global_style(style);
     }
 
     fn save_user_settings(&mut self) {
@@ -1148,7 +1293,7 @@ impl RohKaiApp {
                             .weak(),
                     );
                     if ui.small_button("Copy all").clicked() {
-                        ui.output_mut(|o| o.copied_text = svg.clone());
+                        ui.ctx().copy_text(svg.clone());
                     }
                 });
                 ui.separator();
@@ -1558,7 +1703,7 @@ fn setup_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
         "NotoSans".to_owned(),
-        egui::FontData::from_static(include_bytes!("../assets/fonts/NotoSans-Regular.ttf")),
+        egui::FontData::from_static(include_bytes!("../assets/fonts/NotoSans-Regular.ttf")).into(),
     );
     fonts
         .families
@@ -1574,7 +1719,24 @@ fn setup_fonts(ctx: &egui::Context) {
 }
 
 impl eframe::App for RohKaiApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = root_ui.ctx().clone();
+        let ctx = &ctx;
+        // P2.5 — (re-)spawn timer threads when the project changes.
+        if self.timers_need_respawn {
+            self.timers_need_respawn = false;
+            self.spawn_timers(ctx);
+        }
+
+        // Drain timer ticks (non-blocking); each tick is a component name
+        // string.  We discard the value here — callers care only about the
+        // repaint that `spawn_timers` already scheduled via
+        // `ctx.request_repaint_after`.  The drain prevents the channel buffer
+        // from growing unboundedly if a frame is delayed.
+        if let Some(rx) = &self.timer_rx {
+            while rx.try_recv().is_ok() {}
+        }
+
         self.apply_theme(ctx);
         self.apply_ui_scale(ctx);
         let now = ctx.input(|i| i.time);
@@ -1592,30 +1754,29 @@ impl eframe::App for RohKaiApp {
         }
 
         // ---------------------------------------------------------------
-        // Global keyboard shortcuts
+        // Global keyboard shortcuts — user-customizable via user_shortcuts.
+        // Canvas-owned shortcuts (G=snap, Ctrl+0=zoom-reset, Escape=deselect)
+        // remain hardcoded in canvas/interaction.rs for now.
         // ---------------------------------------------------------------
-        let ctrl_n = ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::N));
-        let ctrl_o = ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::O));
-        let ctrl_shift_s =
-            ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::S));
-        let ctrl_s = ctx.input(|i| i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(Key::S));
-        let ctrl_shift_g =
-            ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::G));
-        let ctrl_g = ctx.input(|i| i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(Key::G));
-        let ctrl_r = ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::R));
-        let ctrl_l = ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::L));
-        let f5 = ctx.input(|i| i.key_pressed(Key::F5));
-        let f1 = ctx.input(|i| i.key_pressed(Key::F1));
-        // Undo: Ctrl+Z. Redo: Ctrl+Y or Ctrl+Shift+Z.
-        let ctrl_z = ctx.input(|i| i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(Key::Z));
-        let ctrl_redo = ctx.input(|i| {
-            i.modifiers.ctrl
-                && (i.key_pressed(Key::Y) || (i.modifiers.shift && i.key_pressed(Key::Z)))
-        });
+        let us = &self.prefs.user_settings;
+        let ctrl_n = effective_shortcut(ctx, "new_project", us, "Ctrl+N");
+        let ctrl_o = effective_shortcut(ctx, "open_project", us, "Ctrl+O");
+        let ctrl_shift_s = effective_shortcut(ctx, "save_as", us, "Ctrl+Shift+S");
+        let ctrl_s = effective_shortcut(ctx, "save", us, "Ctrl+S");
+        let ctrl_shift_g = effective_shortcut(ctx, "ungroup", us, "Ctrl+Shift+G");
+        let ctrl_g = effective_shortcut(ctx, "group", us, "Ctrl+G");
+        let ctrl_r = effective_shortcut(ctx, "toggle_rulers", us, "Ctrl+R");
+        let ctrl_l = effective_shortcut(ctx, "toggle_outline", us, "Ctrl+L");
+        let f5 = effective_shortcut(ctx, "toggle_preview", us, "F5");
+        let f1 = effective_shortcut(ctx, "shortcuts_help", us, "F1");
+        // Undo: customizable primary + hardcoded Ctrl+Shift+Z alternative.
+        let ctrl_z = effective_shortcut(ctx, "undo", us, "Ctrl+Z");
+        let ctrl_redo = effective_shortcut(ctx, "redo", us, "Ctrl+Y")
+            || ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::Z));
         // Don't hijack Ctrl+Z/Y while a TextEdit (code editor, property fields,
         // etc.) owns the keyboard — that would roll the UiTree instead of the
         // text-edit's own undo.
-        let text_input_focused = ctx.wants_keyboard_input();
+        let text_input_focused = ctx.egui_wants_keyboard_input();
         if ctrl_z && !text_input_focused {
             self.cmd_undo();
         } else if ctrl_redo && !text_input_focused {
@@ -1702,8 +1863,8 @@ impl eframe::App for RohKaiApp {
         // ---------------------------------------------------------------
         // Menu bar ribbon
         // ---------------------------------------------------------------
-        egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
+        egui::Panel::top("menu_bar").show_inside(root_ui, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| {
                 // File menu
                 ui.menu_button("File", |ui| {
                     if ui
@@ -1711,14 +1872,14 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.request_destructive_command(PendingCommand::New);
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .add(egui::Button::new("Open…").shortcut_text("Ctrl+O"))
                         .clicked()
                     {
                         self.request_destructive_command(PendingCommand::Open);
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui
@@ -1726,19 +1887,19 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.cmd_save();
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .add(egui::Button::new("Save As…").shortcut_text("Ctrl+Shift+S"))
                         .clicked()
                     {
                         self.cmd_save_as();
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui.button("Export Project…").clicked() {
                         self.cmd_export();
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .button("Export WASM Project…")
@@ -1748,7 +1909,7 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.cmd_export_wasm();
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .button("Preview in Browser…")
@@ -1758,7 +1919,7 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.cmd_preview_wasm();
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .button("Project Files…")
@@ -1766,7 +1927,7 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.session.project_tree_open = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui
@@ -1778,7 +1939,7 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.cmd_save_template();
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .button("Import SVG as Template…")
@@ -1786,53 +1947,13 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.cmd_import_svg_template();
-                        ui.close_menu();
-                    }
-                    if ui
-                        .button("Import Widget Definition…")
-                        .on_hover_text("Copy a .rkwd file into widgets/ and reload")
-                        .clicked()
-                    {
-                        self.cmd_import_widget_definition();
-                        ui.close_menu();
-                    }
-                    if ui
-                        .button("Reload Widget Descriptors")
-                        .on_hover_text("Rescan widgets/ folder for .rkwd files — no restart needed")
-                        .clicked()
-                    {
-                        self.cmd_reload_descriptors();
-                        ui.close_menu();
-                    }
-                    if ui
-                        .button("Create Custom Widget…")
-                        .on_hover_text("Guided builder for new custom widgets")
-                        .clicked()
-                    {
-                        self.cmd_new_widget_builder();
-                        ui.close_menu();
-                    }
-                    if ui
-                        .button("Visual Widget Maker…")
-                        .on_hover_text("Draw primitives and export as a custom widget descriptor")
-                        .clicked()
-                    {
-                        self.widget_maker_open = true;
-                        ui.close_menu();
-                    }
-                    if ui
-                        .button("New Widget Descriptor…")
-                        .on_hover_text("Open the in-app .rkwd editor to create a new widget type")
-                        .clicked()
-                    {
-                        self.cmd_new_descriptor();
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui.button("Preferences…").clicked() {
                         self.prefs.draft = self.prefs.user_settings.clone();
                         self.prefs.open = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
 
@@ -1846,7 +1967,7 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.cmd_undo();
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .add_enabled(
@@ -1856,36 +1977,44 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.cmd_redo();
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
 
                 // Widgets menu
                 ui.menu_button("Widgets", |ui| {
                     if ui
-                        .button("Create Custom Widget…")
-                        .on_hover_text("Guided builder for new custom widgets")
+                        .button("Create New Widget…")
+                        .on_hover_text("Compose a reusable widget visually from primitives")
+                        .clicked()
+                    {
+                        self.widget_maker_open = true;
+                        ui.close();
+                    }
+                    if ui
+                        .button("Guided Descriptor Builder…")
+                        .on_hover_text("Create a descriptor from simple label/button controls")
                         .clicked()
                     {
                         self.cmd_new_widget_builder();
-                        ui.close_menu();
+                        ui.close();
                     }
-                    ui.separator();
                     if ui
-                        .button("New Descriptor…")
-                        .on_hover_text("Open the in-app .rkwd editor to create a new widget type")
+                        .button("Advanced Descriptor Editor…")
+                        .on_hover_text("Edit every .rkwd schema and code-generation field")
                         .clicked()
                     {
                         self.cmd_new_descriptor();
-                        ui.close_menu();
+                        ui.close();
                     }
+                    ui.separator();
                     if ui
                         .button("Import Definition…")
                         .on_hover_text("Copy a .rkwd file into widgets/ and reload")
                         .clicked()
                     {
                         self.cmd_import_widget_definition();
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .button("Reload Descriptors")
@@ -1893,7 +2022,7 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.cmd_reload_descriptors();
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui
@@ -1902,7 +2031,7 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.cmd_export_widget_bundle();
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .button("Import Bundle…")
@@ -1910,7 +2039,7 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.cmd_import_widget_bundle();
-                        ui.close_menu();
+                        ui.close();
                     }
                     if !self.descriptors.widgets.is_empty() {
                         ui.separator();
@@ -1923,7 +2052,7 @@ impl eframe::App for RohKaiApp {
                         for (id, name) in ids {
                             if ui.button(format!("Edit \"{name}\"")).clicked() {
                                 self.cmd_edit_descriptor(&id);
-                                ui.close_menu();
+                                ui.close();
                             }
                         }
                     }
@@ -1938,7 +2067,7 @@ impl eframe::App for RohKaiApp {
                     };
                     if ui.button(preview_label).clicked() {
                         self.set_preview_mode(!self.session.preview_mode);
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     let ruler_label = if self.session.canvas_settings.show_rulers {
@@ -1949,11 +2078,11 @@ impl eframe::App for RohKaiApp {
                     if ui.button(ruler_label).clicked() {
                         self.session.canvas_settings.show_rulers =
                             !self.session.canvas_settings.show_rulers;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Clear All Guides").clicked() {
                         self.project.ui_tree.app_props.guides.clear();
-                        ui.close_menu();
+                        ui.close();
                     }
                     let bezel_label = if self.project.ui_tree.app_props.show_bezel {
                         "Hide Canvas Bezel"
@@ -1963,7 +2092,7 @@ impl eframe::App for RohKaiApp {
                     if ui.button(bezel_label).clicked() {
                         self.project.ui_tree.app_props.show_bezel =
                             !self.project.ui_tree.app_props.show_bezel;
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     // Stage 11 — Rust-centric views
@@ -1974,7 +2103,7 @@ impl eframe::App for RohKaiApp {
                     };
                     if ui.button(own_label).clicked() {
                         self.session.show_ownership = !self.session.show_ownership;
-                        ui.close_menu();
+                        ui.close();
                     }
                     let err_label = if self.session.show_error_flow {
                         "Hide Error-Flow Overlay"
@@ -1983,7 +2112,7 @@ impl eframe::App for RohKaiApp {
                     };
                     if ui.button(err_label).clicked() {
                         self.session.show_error_flow = !self.session.show_error_flow;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .button("Rust Wiring…")
@@ -1991,7 +2120,7 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.session.rust_wiring_open = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .button("Macro Palette…")
@@ -1999,12 +2128,20 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.session.macro_palette_open = true;
-                        ui.close_menu();
+                        ui.close();
+                    }
+                    if ui
+                        .button("Database…")
+                        .on_hover_text("Connect to SQLite, browse schema, preview rows (Stage 13)")
+                        .clicked()
+                    {
+                        self.db_panel.open = true;
+                        ui.close();
                     }
                     ui.separator();
                     if ui.button("Theme…").clicked() {
                         self.session.theme_open = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
 
@@ -2075,7 +2212,7 @@ impl eframe::App for RohKaiApp {
         // Presets set both dimensions explicitly, so they must bypass the
         // aspect-ratio correction below (which assumes a single DragValue edit).
         let mut preset_applied = false;
-        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
+        egui::Panel::bottom("status_bar").show_inside(root_ui, |ui| {
             if self.session.preview_mode {
                 ui.centered_and_justified(|ui| {
                     ui.label(
@@ -2129,7 +2266,7 @@ impl eframe::App for RohKaiApp {
                             self.project.ui_tree.app_props.win_w = *w;
                             self.project.ui_tree.app_props.win_h = *h;
                             preset_applied = true;
-                            ui.close_menu();
+                            ui.close();
                         }
                     }
                 });
@@ -2217,7 +2354,7 @@ impl eframe::App for RohKaiApp {
         // ---------------------------------------------------------------
         if !self.session.preview_mode {
             crate::panels::code_preview::show(
-                ctx,
+                root_ui,
                 &mut self.project.ui_tree,
                 CodePreviewArgs {
                     selected_ids: &mut self.session.selected,
@@ -2240,7 +2377,7 @@ impl eframe::App for RohKaiApp {
         // ---------------------------------------------------------------
         // Left panel — returns (palette_drag, template_action) to process outside
         // ---------------------------------------------------------------
-        let window_w = ctx.screen_rect().width();
+        let window_w = ctx.content_rect().width();
         let left_full = window_w >= 580.0;
 
         let mut outline_action = crate::panels::outline::OutlineAction::None;
@@ -2249,12 +2386,12 @@ impl eframe::App for RohKaiApp {
         let selected_component = self.session.selected_component;
 
         let (palette_click, palette_drag, tmpl_action, props_action) =
-            egui::SidePanel::left("left_panel")
+            egui::Panel::left("left_panel")
                 .resizable(left_full)
-                .min_width(if left_full { 160.0 } else { 28.0 })
-                .default_width(if left_full { 280.0 } else { 28.0 })
-                .max_width(if left_full { 520.0 } else { 28.0 })
-                .show(ctx, |ui| {
+                .min_size(if left_full { 160.0 } else { 28.0 })
+                .default_size(if left_full { 280.0 } else { 28.0 })
+                .max_size(if left_full { 520.0 } else { 28.0 })
+                .show_inside(root_ui, |ui| {
                     if !left_full {
                         ui.centered_and_justified(|ui| {
                             ui.label(egui::RichText::new("«").weak());
@@ -2364,6 +2501,11 @@ impl eframe::App for RohKaiApp {
                                     .default_open(!self.session.selected.is_empty())
                                     .show(ui, |ui| {
                                         let shift_held = ui.input(|i| i.modifiers.shift);
+                                        crate::panels::behaviors::show_selected(
+                                            ui,
+                                            &mut self.project.ui_tree,
+                                            &mut self.session.interaction.selected_behavior,
+                                        );
                                         props_action = crate::panels::properties::show_content(
                                             ui,
                                             &mut self.project.ui_tree,
@@ -2371,6 +2513,14 @@ impl eframe::App for RohKaiApp {
                                             shift_held,
                                             &self.descriptors.widgets,
                                         );
+                                        if let Some(wid) = self.session.selected.last().copied() {
+                                            crate::panels::behaviors::show_for_widget(
+                                                ui,
+                                                &self.project.ui_tree,
+                                                wid,
+                                                &mut self.session.interaction.selected_behavior,
+                                            );
+                                        }
                                     });
                                 egui::CollapsingHeader::new("Layers / Outline")
                                     .default_open(true)
@@ -2405,8 +2555,8 @@ impl eframe::App for RohKaiApp {
                                             &self.project.ui_tree.app_props.components,
                                             selected_component,
                                         );
-                                        if let Some(sel) = selected_component {
-                                            if let Some(comp) = self
+                                        if let Some(sel) = selected_component
+                                            && let Some(comp) = self
                                                 .project
                                                 .ui_tree
                                                 .app_props
@@ -2419,7 +2569,6 @@ impl eframe::App for RohKaiApp {
                                                     ui, comp,
                                                 );
                                             }
-                                        }
                                     });
                                 egui::CollapsingHeader::new("Templates")
                                     .default_open(false)
@@ -2451,6 +2600,11 @@ impl eframe::App for RohKaiApp {
                                             );
                                             ui.separator();
                                         }
+                                        crate::panels::behaviors::show_selected(
+                                            ui,
+                                            &mut self.project.ui_tree,
+                                            &mut self.session.interaction.selected_behavior,
+                                        );
                                         props_action = crate::panels::properties::show_content(
                                             ui,
                                             &mut self.project.ui_tree,
@@ -2458,6 +2612,14 @@ impl eframe::App for RohKaiApp {
                                             shift_held,
                                             &self.descriptors.widgets,
                                         );
+                                        if let Some(wid) = self.session.selected.last().copied() {
+                                            crate::panels::behaviors::show_for_widget(
+                                                ui,
+                                                &self.project.ui_tree,
+                                                wid,
+                                                &mut self.session.interaction.selected_behavior,
+                                            );
+                                        }
                                     }
                                     LeftPanelTab::Layers => {
                                         ui.label(egui::RichText::new("Layers / Outline").strong());
@@ -2491,8 +2653,8 @@ impl eframe::App for RohKaiApp {
                                             &self.project.ui_tree.app_props.components,
                                             selected_component,
                                         );
-                                        if let Some(sel) = selected_component {
-                                            if let Some(comp) = self
+                                        if let Some(sel) = selected_component
+                                            && let Some(comp) = self
                                                 .project
                                                 .ui_tree
                                                 .app_props
@@ -2505,7 +2667,6 @@ impl eframe::App for RohKaiApp {
                                                     ui, comp,
                                                 );
                                             }
-                                        }
                                     }
                                     LeftPanelTab::Templates => {
                                         ui.label(egui::RichText::new("Templates").strong());
@@ -2597,6 +2758,7 @@ impl eframe::App for RohKaiApp {
                         name: format!("{name}_{count}"),
                         interval_ms,
                         handler: String::new(),
+                        state_machine: crate::project::schema::StateMachineProps::default(),
                     },
                 );
                 self.session.selected_component = Some(new_id);
@@ -2688,11 +2850,11 @@ impl eframe::App for RohKaiApp {
         let canvas_modal_blocked = self.canvas_modal_blocked();
         let canvas_keyboard_owned = !canvas_modal_blocked
             && self.session.interaction.canvas_focused
-            && !ctx.wants_keyboard_input();
+            && !ctx.egui_wants_keyboard_input();
         let delete_pressed =
             canvas_keyboard_owned && ctx.input(|i| i.key_pressed(egui::Key::Delete));
         let has_hovered_guide = self.session.hovered_guide.is_some();
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show_inside(root_ui, |ui| {
             self.session.last_canvas_rect = ui.max_rect();
             let panel_rect = ui.max_rect();
 
@@ -2743,6 +2905,10 @@ impl eframe::App for RohKaiApp {
 
             self.session.canvas_settings.guide_drag_active = self.session.dragging_guide.is_some();
             self.session.canvas_settings.input_blocked = canvas_modal_blocked;
+
+            // P2.3 — apply layout constraints once per frame before canvas renders.
+            crate::project::constraint_solver::apply_constraints(&mut self.project.ui_tree);
+
             crate::canvas::interaction::handle(
                 ui,
                 &mut self.project.ui_tree,
@@ -2837,7 +3003,21 @@ impl eframe::App for RohKaiApp {
         self.show_widget_maker_window(ctx);
         self.show_theme_window(ctx);
         self.show_project_tree_window(ctx);
-        crate::panels::shortcuts::show(ctx, &mut self.session.shortcuts_open);
+        {
+            let mut shortcuts_dirty = false;
+            crate::panels::shortcuts::show(
+                ctx,
+                &mut self.session.shortcuts_open,
+                &mut self.prefs.user_settings,
+                &mut shortcuts_dirty,
+            );
+            if shortcuts_dirty {
+                let _ = crate::settings::save(&self.prefs.settings_path, &self.prefs.user_settings);
+            }
+        }
+
+        // Stage 13 — Database panel.
+        crate::panels::db_panel::show_window(ctx, &mut self.db_panel, &mut self.db_engine);
 
         // Stage 11 — Rust wiring editor + macro palette.
         crate::panels::rust_wiring::show(

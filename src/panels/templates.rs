@@ -318,8 +318,13 @@ pub fn show(ui: &mut egui::Ui, template_message: &mut Option<(bool, String)>) ->
         let desired = egui::vec2(ui.available_width(), 20.0);
         let (rect, resp) = ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
         let vis = ui.style().interact(&resp);
-        ui.painter()
-            .rect(rect, vis.rounding, vis.bg_fill, vis.bg_stroke);
+        ui.painter().rect(
+            rect,
+            vis.corner_radius,
+            vis.bg_fill,
+            vis.bg_stroke,
+            egui::StrokeKind::Inside,
+        );
         ui.painter().text(
             rect.left_center() + egui::vec2(4.0, 0.0),
             egui::Align2::LEFT_CENTER,
@@ -355,8 +360,13 @@ pub fn show(ui: &mut egui::Ui, template_message: &mut Option<(bool, String)>) ->
                         ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
 
                     let vis = ui.style().interact(&resp);
-                    ui.painter()
-                        .rect(rect, vis.rounding, vis.bg_fill, vis.bg_stroke);
+                    ui.painter().rect(
+                        rect,
+                        vis.corner_radius,
+                        vis.bg_fill,
+                        vis.bg_stroke,
+                        egui::StrokeKind::Inside,
+                    );
                     ui.painter().text(
                         rect.left_center() + egui::vec2(4.0, 0.0),
                         egui::Align2::LEFT_CENTER,

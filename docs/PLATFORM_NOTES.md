@@ -6,7 +6,30 @@ Cargo:
 ```text
 cargo run
 cargo test
-cargo clippy -- -D warnings
+cargo clippy --all-targets -- -D warnings
+```
+
+## Rust And Dependency Contract
+
+- RohKai source uses Rust edition 2024.
+- `rust-version = "1.92"` is the minimum supported Rust version.
+- `rust-toolchain.toml` and CI pin Rust 1.96.0 with Clippy and rustfmt.
+- Generated projects intentionally use edition 2021 for downstream
+  compatibility, declare Rust 1.92, and share RohKai's egui/eframe/rfd
+  versions.
+- Direct dependency versions are explicit in `Cargo.toml`; `Cargo.lock` is the
+  reproducible transitive dependency source of truth.
+
+Check the offline version invariants after changing Cargo, CI, or export:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-toolchain-alignment.ps1
+```
+
+Audit crates.io and rustup for newer releases:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\audit-dependency-updates.ps1
 ```
 
 ## Windows

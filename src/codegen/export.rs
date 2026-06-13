@@ -1,4 +1,4 @@
-use crate::codegen::formula::{collect_variables, emit_formula_rust, parse_formula};
+use crate::codegen::formula::{emit_formula_rust_with, parse_formula};
 use crate::codegen::{
     field_collector,
     rust::{field_binding, string_literal},
@@ -16,6 +16,10 @@ use uuid::Uuid;
 const SVG_RASTERIZER_SOURCE: &str = include_str!("../canvas/svg_rasterizer.rs");
 const SVG_CORE_SOURCE: &str = include_str!("../svg_core.rs");
 const MAX_GRID_COLUMNS: usize = 12;
+const EXPORTED_EFRAME_VERSION: &str = "0.34.3";
+const EXPORTED_EGUI_VERSION: &str = "0.34.3";
+const EXPORTED_RFD_VERSION: &str = "0.17.2";
+const EXPORTED_RUST_VERSION: &str = "1.92";
 
 /// Write a complete compilable Rust project to `dest` folder.
 pub fn write_project(tree: &UiTree, dest: &Path) -> Result<(), String> {
@@ -64,7 +68,13 @@ pub fn project_files(tree: &UiTree) -> Vec<(String, String)> {
         .iter()
         .any(|w| w.kind == WidgetKind::FilePicker)
     {
-        let dep_line = String::from("rfd = \"0.14\"");
+        let dep_line = format!("rfd = \"{EXPORTED_RFD_VERSION}\"");
+        if seen_deps.insert(dep_line.clone()) {
+            extra_deps.push(dep_line);
+        }
+    }
+    if tree.widgets.iter().any(|w| w.db_binding.is_some()) {
+        let dep_line = String::from("rusqlite = { version = \"0.40\", features = [\"bundled\"] }");
         if seen_deps.insert(dep_line.clone()) {
             extra_deps.push(dep_line);
         }
@@ -159,23 +169,25 @@ pub fn project_files_wasm(tree: &UiTree, gen_index_html: bool) -> Vec<(String, S
 }
 
 fn gen_cargo_toml_wasm() -> String {
-    r#"[package]
+    format!(
+        r#"[package]
 name = "exported_app"
 version = "0.1.0"
 edition = "2021"
+rust-version = "{EXPORTED_RUST_VERSION}"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-eframe = { version = "0.29", default-features = false, features = ["glow", "wasm-bindgen"] }
-egui   = "0.29"
+eframe = {{ version = "{EXPORTED_EFRAME_VERSION}", default-features = false, features = ["default_fonts", "glow", "web_screen_reader"] }}
+egui   = "{EXPORTED_EGUI_VERSION}"
 wasm-bindgen-futures = "0.4"
 
 [profile.release]
 opt-level = "s"
 "#
-    .to_owned()
+    )
 }
 
 fn gen_lib_rs_wasm(tree: &UiTree) -> String {
@@ -279,16 +291,18 @@ fn gen_asset_manifest(tree: &UiTree) -> String {
 // ---------------------------------------------------------------------------
 
 fn gen_cargo_toml(extra_deps: &[String]) -> String {
-    let mut s = r#"[package]
+    let mut s = format!(
+        r#"[package]
 name = "exported_app"
 version = "0.1.0"
 edition = "2021"
+rust-version = "{EXPORTED_RUST_VERSION}"
 
 [dependencies]
-eframe = "0.29"
-egui   = "0.29"
+eframe = {{ version = "{EXPORTED_EFRAME_VERSION}", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "web_screen_reader", "x11"] }}
+egui   = "{EXPORTED_EGUI_VERSION}"
 "#
-    .to_owned();
+    );
     for dep in extra_deps {
         s.push_str(dep);
         s.push('\n');
@@ -358,8 +372,11 @@ fn gen_app_rs_wasm(tree: &UiTree) -> String {
 
 fn gen_app_rs(tree: &UiTree) -> String {
     let has_images = tree.widgets.iter().any(|w| w.kind == WidgetKind::Image);
+    let has_db = crate::codegen::state_emitter::has_db_bindings(tree);
     let collected = field_collector::collect(tree);
     let fields = &collected.fields;
+    let component_pairs =
+        crate::codegen::component_state::component_state_field_pairs(&tree.app_props.components);
 
     // Collect unique handler names; detect conflicts where the same name is used
     // with different async/result modes across widgets.  First definition wins.
@@ -391,6 +408,20 @@ fn gen_app_rs(tree: &UiTree) -> String {
                     false,
                 ));
             }
+        }
+    }
+    // Behavior-graph `CallHandler` actions also invoke `self.{h}()`; register
+    // them (Plain, sync) so every behavior call site has a generated stub.
+    for h in crate::codegen::behavior::call_handler_names(tree) {
+        if crate::codegen::rust::is_valid_identifier(h) && !handler_index.contains_key(h) {
+            let idx = handler_names.len();
+            handler_index.insert(h.to_owned(), idx);
+            handler_names.push((
+                h.to_owned(),
+                crate::project::schema::HandlerResult::Plain,
+                false,
+                false,
+            ));
         }
     }
     // Call-site registry: maps each handler to its first-registered (result, async) mode.
@@ -430,9 +461,17 @@ fn gen_app_rs(tree: &UiTree) -> String {
     }
     s.push('\n');
     // AppState struct
-    s.push_str("pub struct AppState {\n");
+    s.push_str("#[allow(dead_code)]\npub struct AppState {\n");
     for f in fields {
         s.push_str(&format!("    pub {}: {},\n", f.name, f.ty));
+    }
+    for (declaration, _) in &component_pairs {
+        s.push_str("    pub ");
+        s.push_str(declaration.trim());
+        s.push('\n');
+    }
+    if has_db {
+        s.push_str("    pub db_conn: Option<rusqlite::Connection>,\n");
     }
     s.push_str("}\n\n");
 
@@ -441,7 +480,18 @@ fn gen_app_rs(tree: &UiTree) -> String {
     for f in fields {
         s.push_str(&format!("            {}: {},\n", f.name, f.default_expr));
     }
+    for (_, default_line) in &component_pairs {
+        s.push_str(default_line);
+        s.push('\n');
+    }
+    if has_db {
+        s.push_str("            db_conn: None,\n");
+    }
     s.push_str("        }\n    }\n}\n\n");
+    if has_db {
+        s.push_str(&crate::codegen::state_emitter::emit_db_impl(tree));
+        s.push('\n');
+    }
 
     // ExportedApp
     let channel_pairs =
@@ -501,7 +551,12 @@ fn gen_app_rs(tree: &UiTree) -> String {
     }
 
     // eframe::App impl
-    s.push_str("impl eframe::App for ExportedApp {\n    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {\n");
+    s.push_str(
+        "impl eframe::App for ExportedApp {\n\
+             fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {\n\
+                 let ctx = root_ui.ctx().clone();\n\
+                 let ctx = &ctx;\n",
+    );
     // Drain completed async tasks first so UI reflects fresh status this frame.
     for (h, result) in &async_handlers {
         s.push_str(&crate::codegen::rust_wiring::async_drain_block(h, result));
@@ -514,8 +569,13 @@ fn gen_app_rs(tree: &UiTree) -> String {
             "        ",
         ));
     }
+    for line in crate::codegen::component_state::component_update_lines(&tree.app_props.components)
+    {
+        s.push_str(&line);
+        s.push('\n');
+    }
     s.push_str(&gen_theme_setup(&tree.app_props.theme));
-    s.push_str("        egui::CentralPanel::default().show(ctx, |_ui| {});\n");
+    s.push_str("        egui::CentralPanel::default().show_inside(root_ui, |_ui| {});\n");
 
     let child_ids: HashSet<Uuid> = tree
         .widgets
@@ -554,7 +614,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 let rounding_chain = w
                     .corner_radius
                     .filter(|&r| r > 0.0)
-                    .map(|r| format!(".rounding(egui::Rounding::same({r:.1}))"))
+                    .map(|r| format!(".corner_radius(egui::CornerRadius::from({r:.1}))"))
                     .unwrap_or_default();
                 let fill_chain = w
                     .bg_color
@@ -575,7 +635,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                     w.rect.w, w.rect.h
                 );
                 let with_tip = export_tip(base, tip.as_deref());
-                event_dispatch_block(w, &with_tip, &handler_registry)
+                event_dispatch_block(w, &with_tip, &handler_registry, tree)
             }
             WidgetKind::Label => {
                 let expr = match binding {
@@ -597,7 +657,16 @@ fn gen_app_rs(tree: &UiTree) -> String {
                         format!("ui.add({lbl})")
                     }
                 };
-                format!("                {};\n", export_tip(expr, tip.as_deref()))
+                let stmt = export_tip(expr, tip.as_deref());
+                match &w.text_align {
+                    Some(crate::project::schema::TextAlign::Center) => format!(
+                        "                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {{ {stmt}; }});\n"
+                    ),
+                    Some(crate::project::schema::TextAlign::Right) => format!(
+                        "                ui.with_layout(egui::Layout::top_down(egui::Align::RIGHT), |ui| {{ {stmt}; }});\n"
+                    ),
+                    _ => format!("                {stmt};\n"),
+                }
             }
             WidgetKind::TextInput => match binding {
                 Some(b) => {
@@ -613,7 +682,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                     }
                     let base = format!("ui.add_sized([{:.1}, {:.1}], {te})", w.rect.w, w.rect.h);
                     let with_tip = export_tip(base, tip.as_deref());
-                    event_dispatch_block(w, &with_tip, &handler_registry)
+                    event_dispatch_block(w, &with_tip, &handler_registry, tree)
                 }
                 None => format!("                // TextInput {label}: set a valid Binding\n"),
             },
@@ -635,7 +704,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                     let base =
                         format!("ui.add_sized([{:.1}, {:.1}], {slider})", w.rect.w, w.rect.h);
                     let with_tip = export_tip(base, tip.as_deref());
-                    event_dispatch_block(w, &with_tip, &handler_registry)
+                    event_dispatch_block(w, &with_tip, &handler_registry, tree)
                 }
                 None => format!("                // Slider {label}: set a valid Binding\n"),
             },
@@ -646,7 +715,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                         w.rect.w, w.rect.h
                     );
                     let with_tip = export_tip(base, tip.as_deref());
-                    event_dispatch_block(w, &with_tip, &handler_registry)
+                    event_dispatch_block(w, &with_tip, &handler_registry, tree)
                 }
                 None => format!("                // Checkbox {label}: set a valid Binding\n"),
             },
@@ -659,7 +728,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                     .map(|c| format!("egui::Color32::from_rgb({}, {}, {})", c[0], c[1], c[2]))
                     .unwrap_or_else(|| "egui::Color32::from_gray(100)".to_owned());
                 let mut frame_expr = format!(
-                    "egui::Frame::none()\n                    .inner_margin({inner_m:.1})\n                    .stroke(egui::Stroke::new({stroke_w:.1}, {stroke_col}))"
+                    "egui::Frame::NONE\n                    .inner_margin({inner_m:.1})\n                    .stroke(egui::Stroke::new({stroke_w:.1}, {stroke_col}))"
                 );
                 if let Some(c) = w.bg_color {
                     frame_expr.push_str(&format!(
@@ -669,7 +738,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 }
                 if let Some(r) = w.corner_radius.filter(|&r| r > 0.0) {
                     frame_expr.push_str(&format!(
-                        "\n                    .rounding(egui::Rounding::same({r:.1}))"
+                        "\n                    .corner_radius(egui::CornerRadius::from({r:.1}))"
                     ));
                 }
                 let mut code = format!(
@@ -692,6 +761,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                             &child_label,
                             child_binding,
                             &handler_registry,
+                            tree,
                         ));
                     }
                 }
@@ -765,7 +835,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                     let with_tip = export_tip(base, tip.as_deref());
                     // radio_value marks the response changed on selection, so the
                     // shared dispatch's `.changed()` gate is correct here.
-                    event_dispatch_block(w, &with_tip, &handler_registry)
+                    event_dispatch_block(w, &with_tip, &handler_registry, tree)
                 }
                 None => format!("                // RadioButton {label}: set a valid Binding\n"),
             },
@@ -799,10 +869,9 @@ fn gen_app_rs(tree: &UiTree) -> String {
                             string_literal(&w.props.placeholder)
                         ));
                     }
-                    let sized =
-                        format!("ui.add_sized([{:.1}, {:.1}], {te})", w.rect.w, w.rect.h);
+                    let sized = format!("ui.add_sized([{:.1}, {:.1}], {te})", w.rect.w, w.rect.h);
                     let with_tip = export_tip(sized, tip.as_deref());
-                    event_dispatch_block(w, &with_tip, &handler_registry)
+                    event_dispatch_block(w, &with_tip, &handler_registry, tree)
                 }
                 None => format!("                // TextArea {label}: set a valid Binding\n"),
             },
@@ -813,7 +882,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                         w.props.min, w.props.max
                     );
                     let with_tip = export_tip(format!("ui.add({dv})"), tip.as_deref());
-                    event_dispatch_block(w, &with_tip, &handler_registry)
+                    event_dispatch_block(w, &with_tip, &handler_registry, tree)
                 }
                 None => format!("                // SpinBox {label}: set a valid Binding\n"),
             },
@@ -875,15 +944,28 @@ fn gen_app_rs(tree: &UiTree) -> String {
             }
             WidgetKind::VLayout => {
                 use crate::project::schema::LayoutCrossAlign;
+                let ui_name = if w.children.is_empty() { "_ui" } else { "ui" };
                 let open = match w.props.layout_cross_align {
-                    LayoutCrossAlign::Start => "                ui.vertical(|ui| {\n".to_owned(),
-                    LayoutCrossAlign::Center => "                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {\n".to_owned(),
-                    LayoutCrossAlign::End => "                ui.with_layout(egui::Layout::top_down(egui::Align::RIGHT), |ui| {\n".to_owned(),
+                    LayoutCrossAlign::Start => {
+                        format!("                ui.vertical(|{ui_name}| {{\n")
+                    }
+                    LayoutCrossAlign::Center => format!(
+                        "                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |{ui_name}| {{\n"
+                    ),
+                    LayoutCrossAlign::End => format!(
+                        "                ui.with_layout(egui::Layout::top_down(egui::Align::RIGHT), |{ui_name}| {{\n"
+                    ),
                 };
                 let mut code = open;
                 for &child_id in &w.children {
                     if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
-                        code.push_str(&export_layout_child_line(child, &handler_registry));
+                        code.push_str(&export_layout_child_line(
+                            child,
+                            tree,
+                            &handler_registry,
+                            true,
+                            0,
+                        ));
                     }
                 }
                 code.push_str("                });\n");
@@ -891,15 +973,28 @@ fn gen_app_rs(tree: &UiTree) -> String {
             }
             WidgetKind::HLayout => {
                 use crate::project::schema::LayoutCrossAlign;
+                let ui_name = if w.children.is_empty() { "_ui" } else { "ui" };
                 let open = match w.props.layout_cross_align {
-                    LayoutCrossAlign::Start => "                ui.horizontal(|ui| {\n".to_owned(),
-                    LayoutCrossAlign::Center => "                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {\n".to_owned(),
-                    LayoutCrossAlign::End => "                ui.with_layout(egui::Layout::left_to_right(egui::Align::BOTTOM), |ui| {\n".to_owned(),
+                    LayoutCrossAlign::Start => {
+                        format!("                ui.horizontal(|{ui_name}| {{\n")
+                    }
+                    LayoutCrossAlign::Center => format!(
+                        "                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |{ui_name}| {{\n"
+                    ),
+                    LayoutCrossAlign::End => format!(
+                        "                ui.with_layout(egui::Layout::left_to_right(egui::Align::BOTTOM), |{ui_name}| {{\n"
+                    ),
                 };
                 let mut code = open;
                 for &child_id in &w.children {
                     if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
-                        code.push_str(&export_layout_child_line(child, &handler_registry));
+                        code.push_str(&export_layout_child_line(
+                            child,
+                            tree,
+                            &handler_registry,
+                            false,
+                            0,
+                        ));
                     }
                 }
                 code.push_str("                });\n");
@@ -910,18 +1005,36 @@ fn gen_app_rs(tree: &UiTree) -> String {
             }
             WidgetKind::GridLayout => {
                 let columns = w.props.grid_columns.clamp(1, MAX_GRID_COLUMNS);
+                let ui_name = if w.children.is_empty() { "_ui" } else { "ui" };
                 let row_height_chain = w
                     .props
                     .grid_row_height
                     .map(|h| format!(".min_row_height({h:.1})"))
                     .unwrap_or_default();
                 let mut code = format!(
-                    "                egui::Grid::new(\"{}\"){row_height_chain}.show(ui, |ui| {{\n",
-                    w.id.as_simple()
+                    "                egui::Grid::new(\"{}\"){row_height_chain}.show(ui, |{ui_name}| {{\n",
+                    w.id.as_simple(),
                 );
                 for (idx, &child_id) in w.children.iter().enumerate() {
                     if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
-                        code.push_str(&export_layout_child_line(child, &handler_registry));
+                        if let Some(slot_name) = w
+                            .props
+                            .grid_slot_names
+                            .get(idx)
+                            .filter(|name| !name.trim().is_empty())
+                        {
+                            code.push_str(&format!(
+                                "                    // grid slot: {}\n",
+                                slot_name.trim()
+                            ));
+                        }
+                        code.push_str(&export_layout_child_line(
+                            child,
+                            tree,
+                            &handler_registry,
+                            false,
+                            0,
+                        ));
                         if (idx + 1) % columns == 0 {
                             code.push_str("                    ui.end_row();\n");
                         }
@@ -935,12 +1048,12 @@ fn gen_app_rs(tree: &UiTree) -> String {
             }
             WidgetKind::TabWidget => {
                 let mut s = format!(
-                    "                egui::TopBottomPanel::top(\"{}_tabs\").show_inside(ui, |ui| {{\n",
+                    "                egui::Panel::top(\"{}_tabs\").show_inside(ui, |ui| {{\n",
                     w.id.as_simple()
                 );
                 for tab in &w.props.options {
                     s.push_str(&format!(
-                        "                    ui.selectable_label(false, {});\n",
+                        "                    let _ = ui.selectable_label(false, {});\n",
                         string_literal(tab)
                     ));
                 }
@@ -979,14 +1092,14 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 if !w.props.formula_expr.is_empty() {
                     match parse_formula(&w.props.formula_expr) {
                         Ok(node) => {
-                            let vars = collect_variables(&node);
-                            let rust_expr = emit_formula_rust(&node);
-                            let binds: String = vars
-                                .iter()
-                                .map(|v| format!("                    let {v} = self.state.{v} as f64;\n"))
-                                .collect();
+                            let rust_expr = emit_formula_rust_with(&node, &|name| {
+                                format!(
+                                    "self.state.{}",
+                                    crate::codegen::rust::effective_binding(name)
+                                )
+                            });
                             format!(
-                                "                ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, {{\n{binds}                    {rust_expr}\n                }}));\n"
+                                "                ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, {rust_expr}));\n"
                             )
                         }
                         Err(e) => format!("                // Formula parse error: {e}\n"),
@@ -996,7 +1109,9 @@ fn gen_app_rs(tree: &UiTree) -> String {
                         Some(b) => format!(
                             "                ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, self.state.{b}));\n"
                         ),
-                        None => format!("                // MathLabel {label}: set a valid Binding\n"),
+                        None => {
+                            format!("                // MathLabel {label}: set a valid Binding\n")
+                        }
                     }
                 }
             }
@@ -1044,7 +1159,12 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 s
             }
             WidgetKind::TreeView => {
-                let root = w.props.options.first().cloned().unwrap_or_else(|| "Root".into());
+                let root = w
+                    .props
+                    .options
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "Root".into());
                 let mut s = format!(
                     "                egui::CollapsingHeader::new({}).default_open(true).show(ui, |ui| {{\n",
                     string_literal(&root)
@@ -1245,27 +1365,45 @@ fn event_dispatch_block(
     w: &crate::project::schema::WidgetInstance,
     resp_expr: &str,
     registry: &HashMap<String, (crate::project::schema::HandlerResult, bool)>,
+    tree: &UiTree,
 ) -> String {
-    let mut arms: Vec<(&'static str, &str)> = Vec::new();
+    let mut arms: Vec<(&'static str, Option<&str>, String)> = Vec::new();
     for &ev in w.kind.supported_events() {
-        if let Some(h) = event_field_handler(w, ev) {
-            arms.push((event_egui_method(ev), h));
+        let handler = event_field_handler(w, ev);
+        // Behavior-graph mutations fire on the same event, before the handler.
+        let behavior_stmts = crate::codegen::behavior::statements_for_event(
+            tree,
+            w.id,
+            ev,
+            "state.",
+            "                    ",
+        );
+        if handler.is_some() || !behavior_stmts.is_empty() {
+            arms.push((event_egui_method(ev), handler, behavior_stmts));
         }
     }
     if arms.is_empty() {
         return format!("                {resp_expr};\n");
     }
     let mut code = format!("                let evt_response = {resp_expr};\n");
-    for (method, h) in arms {
-        let (result, is_async) = registry
-            .get(h)
-            .cloned()
-            .unwrap_or((w.handler_result.clone(), w.async_handler));
-        let call =
-            crate::codegen::rust_wiring::handler_call(h, is_async, &result, "                    ");
+    for (method, handler, behavior_stmts) in arms {
         code.push_str(&format!(
-            "                if evt_response.{method}() {{\n{call}\n                }}\n"
+            "                if evt_response.{method}() {{\n{behavior_stmts}"
         ));
+        if let Some(h) = handler {
+            let (result, is_async) = registry
+                .get(h)
+                .cloned()
+                .unwrap_or((w.handler_result.clone(), w.async_handler));
+            let call = crate::codegen::rust_wiring::handler_call(
+                h,
+                is_async,
+                &result,
+                "                    ",
+            );
+            code.push_str(&format!("{call}\n"));
+        }
+        code.push_str("                }\n");
     }
     code
 }
@@ -1292,7 +1430,7 @@ fn chart_export_block(binding_expr: &str, width: f32, height: f32, indent: usize
         "{pad}let chart_size = egui::vec2({width:.1}, {height:.1});\n\
 {pad}let (chart_rect, _) = ui.allocate_exact_size(chart_size, egui::Sense::hover());\n\
 {pad}let chart_painter = ui.painter_at(chart_rect);\n\
-{pad}chart_painter.rect_stroke(chart_rect, 2.0, egui::Stroke::new(1.0, egui::Color32::from_gray(120)));\n\
+{pad}chart_painter.rect_stroke(chart_rect, 2.0, egui::Stroke::new(1.0, egui::Color32::from_gray(120)), egui::StrokeKind::Inside);\n\
 {pad}let chart_values = &{binding_expr};\n\
 {pad}if !chart_values.is_empty() {{\n\
 {pad}    let chart_max = chart_values.iter().copied().fold(0.0_f32, f32::max).max(1.0);\n\
@@ -1322,31 +1460,44 @@ fn export_child_event_dispatch(
     child: &crate::project::schema::WidgetInstance,
     resp_expr: &str,
     registry: &HashMap<String, (crate::project::schema::HandlerResult, bool)>,
+    tree: &UiTree,
 ) -> String {
-    let mut arms: Vec<(&'static str, &str)> = Vec::new();
+    let mut arms: Vec<(&'static str, Option<&str>, String)> = Vec::new();
     for &ev in child.kind.supported_events() {
-        if let Some(h) = event_field_handler(child, ev) {
-            arms.push((event_egui_method(ev), h));
+        let handler = event_field_handler(child, ev);
+        let behavior_stmts = crate::codegen::behavior::statements_for_event(
+            tree,
+            child.id,
+            ev,
+            "state.",
+            "                            ",
+        );
+        if handler.is_some() || !behavior_stmts.is_empty() {
+            arms.push((event_egui_method(ev), handler, behavior_stmts));
         }
     }
     if arms.is_empty() {
         return format!("                        {resp_expr};\n");
     }
     let mut code = format!("                        let child_response = {resp_expr};\n");
-    for (method, h) in arms {
-        let (result, is_async) = registry
-            .get(h)
-            .cloned()
-            .unwrap_or((child.handler_result.clone(), child.async_handler));
-        let call = crate::codegen::rust_wiring::handler_call(
-            h,
-            is_async,
-            &result,
-            "                            ",
-        );
+    for (method, handler, behavior_stmts) in arms {
         code.push_str(&format!(
-            "                        if child_response.{method}() {{\n{call}\n                        }}\n"
+            "                        if child_response.{method}() {{\n{behavior_stmts}"
         ));
+        if let Some(h) = handler {
+            let (result, is_async) = registry
+                .get(h)
+                .cloned()
+                .unwrap_or((child.handler_result.clone(), child.async_handler));
+            let call = crate::codegen::rust_wiring::handler_call(
+                h,
+                is_async,
+                &result,
+                "                            ",
+            );
+            code.push_str(&format!("{call}\n"));
+        }
+        code.push_str("                        }\n");
     }
     code
 }
@@ -1361,18 +1512,23 @@ fn export_child_combo(
     binding: &str,
     options: &[String],
     registry: &HashMap<String, (crate::project::schema::HandlerResult, bool)>,
+    tree: &UiTree,
 ) -> String {
     use crate::project::schema::WidgetEvent;
     let id = child.id.as_simple();
     let selected_expr = combo_selected_text_expr(&format!("self.state.{binding}"), options);
     let handler = event_field_handler(child, WidgetEvent::Change);
-    let combo_assign = if handler.is_some() {
-        "let child_combo = "
-    } else {
-        ""
-    };
+    let behavior_stmts = crate::codegen::behavior::statements_for_event(
+        tree,
+        child.id,
+        WidgetEvent::Change,
+        "state.",
+        "                                ",
+    );
+    let dispatches = handler.is_some() || !behavior_stmts.is_empty();
+    let combo_assign = if dispatches { "let child_combo = " } else { "" };
     let mut code = format!(
-        "                        ui.allocate_ui_at_rect({rect_expr}, |ui| {{\n\
+        "                        ui.scope_builder(egui::UiBuilder::new().max_rect({rect_expr}), |ui| {{\n\
          \x20                           {combo_assign}egui::ComboBox::from_id_salt(\"child_combo_{id}\")\n\
          \x20                               .selected_text({selected_expr})\n\
          \x20                               .show_ui(ui, |ui| {{\n\
@@ -1386,20 +1542,24 @@ fn export_child_combo(
     }
     code.push_str("                                    changed\n");
     code.push_str("                                });\n");
-    if let Some(h) = handler {
-        let (result, is_async) = registry
-            .get(h)
-            .cloned()
-            .unwrap_or((child.handler_result.clone(), child.async_handler));
-        let call = crate::codegen::rust_wiring::handler_call(
-            h,
-            is_async,
-            &result,
-            "                                ",
-        );
+    if dispatches {
         code.push_str(&format!(
-            "                            if child_combo.inner == Some(true) {{\n{call}\n                            }}\n"
+            "                            if child_combo.inner == Some(true) {{\n{behavior_stmts}"
         ));
+        if let Some(h) = handler {
+            let (result, is_async) = registry
+                .get(h)
+                .cloned()
+                .unwrap_or((child.handler_result.clone(), child.async_handler));
+            let call = crate::codegen::rust_wiring::handler_call(
+                h,
+                is_async,
+                &result,
+                "                                ",
+            );
+            code.push_str(&format!("{call}\n"));
+        }
+        code.push_str("                            }\n");
     }
     code.push_str("                        });\n");
     code
@@ -1411,24 +1571,30 @@ fn export_child_line(
     child_label: &str,
     child_binding: Option<&str>,
     registry: &HashMap<String, (crate::project::schema::HandlerResult, bool)>,
+    tree: &UiTree,
 ) -> String {
     match &child.kind {
         WidgetKind::Button => {
             let resp = format!("ui.put({rect_expr}, egui::Button::new({child_label}))");
-            export_child_event_dispatch(child, &resp, registry)
+            export_child_event_dispatch(child, &resp, registry, tree)
         }
         WidgetKind::Label => match child_binding {
-            Some(b) => format!("                        ui.put({rect_expr}, egui::Label::new(&self.state.{b}));\n"),
-            None => format!("                        ui.put({rect_expr}, egui::Label::new({child_label}));\n"),
+            Some(b) => format!(
+                "                        ui.put({rect_expr}, egui::Label::new(&self.state.{b}));\n"
+            ),
+            None => format!(
+                "                        ui.put({rect_expr}, egui::Label::new({child_label}));\n"
+            ),
         },
         WidgetKind::TextInput => match child_binding {
             Some(b) => {
-                let resp = format!(
-                    "ui.put({rect_expr}, egui::TextEdit::singleline(&mut self.state.{b}))"
-                );
-                export_child_event_dispatch(child, &resp, registry)
+                let resp =
+                    format!("ui.put({rect_expr}, egui::TextEdit::singleline(&mut self.state.{b}))");
+                export_child_event_dispatch(child, &resp, registry, tree)
             }
-            None => format!("                        // TextInput {child_label}: set a valid Binding\n"),
+            None => {
+                format!("                        // TextInput {child_label}: set a valid Binding\n")
+            }
         },
         WidgetKind::Slider => match child_binding {
             Some(b) => {
@@ -1436,22 +1602,35 @@ fn export_child_line(
                     "ui.put({rect_expr}, egui::Slider::new(&mut self.state.{b}, {:.1}..={:.1}).text({child_label}))",
                     child.props.min, child.props.max
                 );
-                export_child_event_dispatch(child, &resp, registry)
+                export_child_event_dispatch(child, &resp, registry, tree)
             }
-            None => format!("                        // Slider {child_label}: set a valid Binding\n"),
+            None => {
+                format!("                        // Slider {child_label}: set a valid Binding\n")
+            }
         },
         WidgetKind::Checkbox => match child_binding {
             Some(b) => {
                 let resp = format!(
                     "ui.put({rect_expr}, egui::Checkbox::new(&mut self.state.{b}, {child_label}))"
                 );
-                export_child_event_dispatch(child, &resp, registry)
+                export_child_event_dispatch(child, &resp, registry, tree)
             }
-            None => format!("                        // Checkbox {child_label}: set a valid Binding\n"),
+            None => {
+                format!("                        // Checkbox {child_label}: set a valid Binding\n")
+            }
         },
         WidgetKind::ComboBox => match child_binding {
-            Some(b) => export_child_combo(child, rect_expr, b, &combo_option_values(child), registry),
-            None => format!("                        // ComboBox {child_label}: set a valid Binding\n"),
+            Some(b) => export_child_combo(
+                child,
+                rect_expr,
+                b,
+                &combo_option_values(child),
+                registry,
+                tree,
+            ),
+            None => {
+                format!("                        // ComboBox {child_label}: set a valid Binding\n")
+            }
         },
         WidgetKind::RadioButton => match child_binding {
             Some(b) => {
@@ -1463,9 +1642,11 @@ fn export_child_line(
                 let resp = format!(
                     "ui.radio_value(&mut self.state.{b}, {value_lit}.to_owned(), {child_label})"
                 );
-                export_child_event_dispatch(child, &resp, registry)
+                export_child_event_dispatch(child, &resp, registry, tree)
             }
-            None => format!("                        // RadioButton {child_label}: set a valid Binding\n"),
+            None => format!(
+                "                        // RadioButton {child_label}: set a valid Binding\n"
+            ),
         },
         WidgetKind::ProgressBar => match child_binding {
             Some(b) => {
@@ -1478,7 +1659,9 @@ fn export_child_line(
                 }
                 format!("                        ui.put({rect_expr}, {pb});\n")
             }
-            None => format!("                        // ProgressBar {child_label}: set a valid Binding\n"),
+            None => format!(
+                "                        // ProgressBar {child_label}: set a valid Binding\n"
+            ),
         },
         WidgetKind::Frame
         | WidgetKind::GroupBox
@@ -1511,14 +1694,14 @@ fn export_child_line(
             if !child.props.formula_expr.is_empty() {
                 match parse_formula(&child.props.formula_expr) {
                     Ok(node) => {
-                        let vars = collect_variables(&node);
-                        let rust_expr = emit_formula_rust(&node);
-                        let binds: String = vars
-                            .iter()
-                            .map(|v| format!("                                let {v} = self.state.{v} as f64;\n"))
-                            .collect();
+                        let rust_expr = emit_formula_rust_with(&node, &|name| {
+                            format!(
+                                "self.state.{}",
+                                crate::codegen::rust::effective_binding(name)
+                            )
+                        });
                         format!(
-                            "                        ui.put({rect_expr}, egui::Label::new(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, {{\n{binds}                                {rust_expr}\n                        }})));\n"
+                            "                        ui.put({rect_expr}, egui::Label::new(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, {rust_expr})));\n"
                         )
                     }
                     Err(e) => format!("                        // Formula parse error: {e}\n"),
@@ -1528,7 +1711,9 @@ fn export_child_line(
                     Some(b) => format!(
                         "                        ui.put({rect_expr}, egui::Label::new(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, self.state.{b})));\n"
                     ),
-                    None => format!("                        // MathLabel {child_label}: set a valid Binding\n"),
+                    None => format!(
+                        "                        // MathLabel {child_label}: set a valid Binding\n"
+                    ),
                 }
             }
         }
@@ -1536,16 +1721,19 @@ fn export_child_line(
             Some(b) => format!(
                 "                        ui.put({rect_expr}, egui::Label::new(&self.state.{b})); // FilePicker\n"
             ),
-            None => format!("                        // FilePicker {child_label}: set a valid Binding\n"),
+            None => format!(
+                "                        // FilePicker {child_label}: set a valid Binding\n"
+            ),
         },
         WidgetKind::TextArea => match child_binding {
             Some(b) => {
-                let resp = format!(
-                    "ui.put({rect_expr}, egui::TextEdit::multiline(&mut self.state.{b}))"
-                );
-                export_child_event_dispatch(child, &resp, registry)
+                let resp =
+                    format!("ui.put({rect_expr}, egui::TextEdit::multiline(&mut self.state.{b}))");
+                export_child_event_dispatch(child, &resp, registry, tree)
             }
-            None => format!("                        // TextArea {child_label}: set a valid Binding\n"),
+            None => {
+                format!("                        // TextArea {child_label}: set a valid Binding\n")
+            }
         },
         WidgetKind::SpinBox => match child_binding {
             Some(b) => {
@@ -1553,9 +1741,11 @@ fn export_child_line(
                     "ui.put({rect_expr}, egui::DragValue::new(&mut self.state.{b}).range({:.1}..={:.1}))",
                     child.props.min, child.props.max
                 );
-                export_child_event_dispatch(child, &resp, registry)
+                export_child_event_dispatch(child, &resp, registry, tree)
             }
-            None => format!("                        // SpinBox {child_label}: set a valid Binding\n"),
+            None => {
+                format!("                        // SpinBox {child_label}: set a valid Binding\n")
+            }
         },
         WidgetKind::FontComboBox => match child_binding {
             Some(b) => export_child_combo(
@@ -1564,14 +1754,23 @@ fn export_child_line(
                 b,
                 &["Proportional".to_owned(), "Monospace".to_owned()],
                 registry,
+                tree,
             ),
-            None => format!("                        // FontComboBox {child_label}: set a valid Binding\n"),
+            None => format!(
+                "                        // FontComboBox {child_label}: set a valid Binding\n"
+            ),
         },
         WidgetKind::HorizontalSpacer => {
-            format!("                        ui.add_space({:.1}); // HorizontalSpacer\n", child.rect.w)
+            format!(
+                "                        ui.add_space({:.1}); // HorizontalSpacer\n",
+                child.rect.w
+            )
         }
         WidgetKind::VerticalSpacer => {
-            format!("                        ui.add_space({:.1}); // VerticalSpacer\n", child.rect.h)
+            format!(
+                "                        ui.add_space({:.1}); // VerticalSpacer\n",
+                child.rect.h
+            )
         }
         WidgetKind::Image => image_export_child_line(child, rect_expr),
         WidgetKind::Custom(_) => {
@@ -1606,8 +1805,17 @@ fn export_child_size_str(child: &WidgetInstance) -> String {
 /// absolute-positioned with `ui.put`.
 fn export_layout_child_line(
     child: &WidgetInstance,
+    tree: &UiTree,
     registry: &HashMap<String, (crate::project::schema::HandlerResult, bool)>,
+    vertical: bool,
+    depth: usize,
 ) -> String {
+    if depth > 64 {
+        return format!(
+            "                    // widget_{}: nested layout depth limit reached\n",
+            child.id
+        );
+    }
     let child_label = string_literal(&child.props.label);
     let child_binding = field_binding(child.state_binding.as_deref());
     let mut code = format!("                    // widget_{}\n", child.id);
@@ -1615,7 +1823,7 @@ fn export_layout_child_line(
         WidgetKind::Button => {
             let sz = export_child_size_str(child);
             let resp = format!("ui.add_sized({sz}, egui::Button::new({child_label}))");
-            code.push_str(&export_child_event_dispatch(child, &resp, registry));
+            code.push_str(&export_child_event_dispatch(child, &resp, registry, tree));
         }
         WidgetKind::Label => match child_binding {
             Some(b) => code.push_str(&format!("                    ui.label(&self.state.{b});\n")),
@@ -1626,7 +1834,7 @@ fn export_layout_child_line(
                 let sz = export_child_size_str(child);
                 let resp =
                     format!("ui.add_sized({sz}, egui::TextEdit::singleline(&mut self.state.{b}))");
-                code.push_str(&export_child_event_dispatch(child, &resp, registry));
+                code.push_str(&export_child_event_dispatch(child, &resp, registry, tree));
             }
             None => code.push_str(&format!(
                 "                    // TextInput {child_label}: set a valid Binding\n"
@@ -1637,7 +1845,7 @@ fn export_layout_child_line(
                 let sz = export_child_size_str(child);
                 let resp =
                     format!("ui.add_sized({sz}, egui::TextEdit::multiline(&mut self.state.{b}))");
-                code.push_str(&export_child_event_dispatch(child, &resp, registry));
+                code.push_str(&export_child_event_dispatch(child, &resp, registry, tree));
             }
             None => code.push_str(&format!(
                 "                    // TextArea {child_label}: set a valid Binding\n"
@@ -1650,7 +1858,7 @@ fn export_layout_child_line(
                     "ui.add_sized({sz}, egui::Slider::new(&mut self.state.{b}, {:.1}..={:.1}).text({child_label}))",
                     child.props.min, child.props.max
                 );
-                code.push_str(&export_child_event_dispatch(child, &resp, registry));
+                code.push_str(&export_child_event_dispatch(child, &resp, registry, tree));
             }
             None => code.push_str(&format!(
                 "                    // Slider {child_label}: set a valid Binding\n"
@@ -1659,7 +1867,7 @@ fn export_layout_child_line(
         WidgetKind::SpinBox => match child_binding {
             Some(b) => {
                 let resp = format!("ui.add(egui::DragValue::new(&mut self.state.{b}))");
-                code.push_str(&export_child_event_dispatch(child, &resp, registry));
+                code.push_str(&export_child_event_dispatch(child, &resp, registry, tree));
             }
             None => code.push_str(&format!(
                 "                    // SpinBox {child_label}: set a valid Binding\n"
@@ -1668,7 +1876,7 @@ fn export_layout_child_line(
         WidgetKind::Checkbox => match child_binding {
             Some(b) => {
                 let resp = format!("ui.checkbox(&mut self.state.{b}, {child_label})");
-                code.push_str(&export_child_event_dispatch(child, &resp, registry));
+                code.push_str(&export_child_event_dispatch(child, &resp, registry, tree));
             }
             None => code.push_str(&format!(
                 "                    // Checkbox {child_label}: set a valid Binding\n"
@@ -1684,20 +1892,20 @@ fn export_layout_child_line(
                 let resp = format!(
                     "ui.radio_value(&mut self.state.{b}, {value_lit}.to_owned(), {child_label})"
                 );
-                code.push_str(&export_child_event_dispatch(child, &resp, registry));
+                code.push_str(&export_child_event_dispatch(child, &resp, registry, tree));
             }
             None => code.push_str(&format!(
                 "                    // RadioButton {child_label}: set a valid Binding\n"
             )),
         },
         WidgetKind::ComboBox => match child_binding {
-            Some(b) => code.push_str(&export_layout_combo(child, b, registry)),
+            Some(b) => code.push_str(&export_layout_combo(child, b, registry, tree)),
             None => code.push_str(&format!(
                 "                    // ComboBox {child_label}: set a valid Binding\n"
             )),
         },
         WidgetKind::FontComboBox => match child_binding {
-            Some(b) => code.push_str(&export_layout_combo(child, b, registry)),
+            Some(b) => code.push_str(&export_layout_combo(child, b, registry, tree)),
             None => code.push_str(&format!(
                 "                    // FontComboBox {child_label}: set a valid Binding\n"
             )),
@@ -1734,6 +1942,65 @@ fn export_layout_child_line(
                 child.rect.w, child.rect.h
             ));
         }
+        WidgetKind::VLayout | WidgetKind::HLayout | WidgetKind::GridLayout => {
+            let (open, child_vertical) = match child.kind {
+                WidgetKind::VLayout => {
+                    ("                    ui.vertical(|ui| {\n".to_owned(), true)
+                }
+                WidgetKind::HLayout => (
+                    "                    ui.horizontal(|ui| {\n".to_owned(),
+                    false,
+                ),
+                WidgetKind::GridLayout => (
+                    format!(
+                        "                    egui::Grid::new(\"{}\").show(ui, |ui| {{\n",
+                        child.id.as_simple()
+                    ),
+                    false,
+                ),
+                _ => unreachable!(),
+            };
+            code.push_str(&open);
+            let columns = child.props.grid_columns.clamp(1, MAX_GRID_COLUMNS);
+            for (idx, grandchild_id) in child.children.iter().enumerate() {
+                let Some(grandchild) = tree
+                    .widgets
+                    .iter()
+                    .find(|widget| widget.id == *grandchild_id)
+                else {
+                    continue;
+                };
+                if child.kind == WidgetKind::GridLayout
+                    && let Some(slot_name) = child
+                        .props
+                        .grid_slot_names
+                        .get(idx)
+                        .filter(|name| !name.trim().is_empty())
+                {
+                    code.push_str(&format!(
+                        "                    // grid slot: {}\n",
+                        slot_name.trim()
+                    ));
+                }
+                code.push_str(&export_layout_child_line(
+                    grandchild,
+                    tree,
+                    registry,
+                    child_vertical,
+                    depth + 1,
+                ));
+                if child.kind == WidgetKind::GridLayout && (idx + 1) % columns == 0 {
+                    code.push_str("                    ui.end_row();\n");
+                }
+            }
+            if child.kind == WidgetKind::GridLayout
+                && !child.children.is_empty()
+                && !child.children.len().is_multiple_of(columns)
+            {
+                code.push_str("                    ui.end_row();\n");
+            }
+            code.push_str("                    });\n");
+        }
         WidgetKind::Custom(_) => {
             if let Some(ref tpl) = child.descriptor_export_tpl {
                 code.push_str(&crate::codegen::widget_descriptor::apply_template(
@@ -1754,41 +2021,75 @@ fn export_layout_child_line(
             child.kind
         )),
     }
-    code
+    // Per-child cross-axis alignment override (Center/End) inside V/H layouts;
+    // Start (and the UI-hidden Stretch) fold to the container default.
+    let axis = if vertical {
+        "top_down"
+    } else {
+        "left_to_right"
+    };
+    match child.child_cross_align {
+        Some(crate::project::schema::CrossAlign::Center) => format!(
+            "                ui.with_layout(egui::Layout::{axis}(egui::Align::Center), |ui| {{\n{code}                }});\n"
+        ),
+        Some(crate::project::schema::CrossAlign::End) => {
+            let end = if vertical { "RIGHT" } else { "BOTTOM" };
+            format!(
+                "                ui.with_layout(egui::Layout::{axis}(egui::Align::{end}), |ui| {{\n{code}                }});\n"
+            )
+        }
+        _ => code,
+    }
 }
 
 fn export_layout_combo(
     child: &crate::project::schema::WidgetInstance,
     binding: &str,
     registry: &HashMap<String, (crate::project::schema::HandlerResult, bool)>,
+    tree: &UiTree,
 ) -> String {
     let options = combo_option_values(child);
     let selected_expr = combo_selected_text_expr(&format!("self.state.{binding}"), &options);
     let id = child.id.as_simple();
+    // `inner` carries whether any selectable changed this frame, mirroring
+    // export_child_combo — `Option<()>` would not type-check against Some(true).
     let mut code = format!(
-        "                    let child_combo = egui::ComboBox::from_id_salt(\"layout_combo_{id}\")\n                        .selected_text({selected_expr})\n                        .show_ui(ui, |ui| {{\n"
+        "                    let child_combo = egui::ComboBox::from_id_salt(\"layout_combo_{id}\")\n                        .selected_text({selected_expr})\n                        .show_ui(ui, |ui| {{\n                            let mut changed = false;\n"
     );
     for option in options {
         let option_lit = string_literal(&option);
         code.push_str(&format!(
-            "                            ui.selectable_value(&mut self.state.{binding}, {option_lit}.to_owned(), {option_lit});\n"
+            "                            if ui.selectable_value(&mut self.state.{binding}, {option_lit}.to_owned(), {option_lit}).changed() {{ changed = true; }}\n"
         ));
     }
+    code.push_str("                            changed\n");
     code.push_str("                        });\n");
-    if let Some(h) = event_field_handler(child, WidgetEvent::Change) {
-        let (result_mode, is_async) = registry
-            .get(h)
-            .cloned()
-            .unwrap_or((child.handler_result.clone(), child.async_handler));
-        let call = crate::codegen::rust_wiring::handler_call(
-            h,
-            is_async,
-            &result_mode,
-            "                        ",
-        );
+    let handler = event_field_handler(child, WidgetEvent::Change);
+    let behavior_stmts = crate::codegen::behavior::statements_for_event(
+        tree,
+        child.id,
+        WidgetEvent::Change,
+        "state.",
+        "                        ",
+    );
+    if handler.is_some() || !behavior_stmts.is_empty() {
         code.push_str(&format!(
-            "                    if child_combo.inner == Some(true) {{\n{call}\n                    }}\n"
+            "                    if child_combo.inner == Some(true) {{\n{behavior_stmts}"
         ));
+        if let Some(h) = handler {
+            let (result_mode, is_async) = registry
+                .get(h)
+                .cloned()
+                .unwrap_or((child.handler_result.clone(), child.async_handler));
+            let call = crate::codegen::rust_wiring::handler_call(
+                h,
+                is_async,
+                &result_mode,
+                "                        ",
+            );
+            code.push_str(&format!("{call}\n"));
+        }
+        code.push_str("                    }\n");
     }
     code
 }
@@ -1816,7 +2117,7 @@ fn image_export_child_line(
     let key = string_literal(&format!("svg_{}", child.id));
     let svg_source = raw_string_literal(child.svg_source.as_deref().unwrap_or(""));
     format!(
-        "                        ui.allocate_ui_at_rect({rect_expr}, |ui| {{\n                            self.show_svg_image(ui, ctx, {key}, {svg_source}, {rect_expr}.size());\n                        }});\n"
+        "                        ui.scope_builder(egui::UiBuilder::new().max_rect({rect_expr}), |ui| {{\n                            self.show_svg_image(ui, ctx, {key}, {svg_source}, {rect_expr}.size());\n                        }});\n"
     )
 }
 
@@ -1832,12 +2133,12 @@ fn gen_theme_setup(theme: &crate::project::schema::ThemeSettings) -> String {
         .global_corner_radius
         .map(|cr| {
             format!(
-                "        let r = egui::Rounding::same({cr:.1});\n\
-                 visuals.widgets.noninteractive.rounding = r;\n\
-                 visuals.widgets.inactive.rounding = r;\n\
-                 visuals.widgets.hovered.rounding = r;\n\
-                 visuals.widgets.active.rounding = r;\n\
-                 visuals.widgets.open.rounding = r;\n"
+                "        let r = egui::CornerRadius::from({cr:.1});\n\
+                 visuals.widgets.noninteractive.corner_radius = r;\n\
+                 visuals.widgets.inactive.corner_radius = r;\n\
+                 visuals.widgets.hovered.corner_radius = r;\n\
+                 visuals.widgets.active.corner_radius = r;\n\
+                 visuals.widgets.open.corner_radius = r;\n"
             )
         })
         .unwrap_or_default();
@@ -1847,7 +2148,7 @@ fn gen_theme_setup(theme: &crate::project::schema::ThemeSettings) -> String {
             format!(
                 "        let mut style = (*ctx.style()).clone();\n\
                  for font_id in style.text_styles.values_mut() {{ font_id.size = {fs:.1}; }}\n\
-                 ctx.set_style(style);\n"
+                 ctx.set_global_style(style);\n"
             )
         })
         .unwrap_or_default();
@@ -1915,7 +2216,7 @@ mod tests {
         assert!(generated.contains("ui.add(egui::Image::new((tex.id(), size)))"));
         assert!(generated.contains("pub fn rasterize"));
         assert!(generated.contains("r\"<svg/>\""));
-        assert!(!generated.contains("egui::Frame::none()"));
+        assert!(!generated.contains("egui::Frame::NONE"));
         assert!(!generated.contains("image_export_frame_placeholder_line"));
     }
 
@@ -2051,6 +2352,48 @@ mod tests {
         for child_id in child_ids {
             assert!(generated.contains(&format!("// widget_{child_id}")));
         }
+    }
+
+    #[test]
+    fn nested_layout_export_emits_complete_hierarchy() {
+        let outer_id = Uuid::from_u128(0x951);
+        let inner_id = Uuid::from_u128(0x952);
+        let leaf_id = Uuid::from_u128(0x953);
+        let tree = UiTree {
+            widgets: vec![
+                WidgetInstance {
+                    id: outer_id,
+                    kind: WidgetKind::VLayout,
+                    children: vec![inner_id],
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: inner_id,
+                    kind: WidgetKind::GridLayout,
+                    children: vec![leaf_id],
+                    props: crate::project::schema::WidgetProps {
+                        grid_slot_names: vec!["Main".to_owned()],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: leaf_id,
+                    kind: WidgetKind::Button,
+                    on_click: "nested_clicked".to_owned(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let generated = gen_app_rs(&tree);
+        assert_eq!(generated.matches("egui::Area::new").count(), 1);
+        assert!(generated.contains("ui.vertical(|ui| {"));
+        assert!(generated.contains("egui::Grid::new"));
+        assert!(generated.contains("// grid slot: Main"));
+        assert!(generated.contains(&format!("// widget_{leaf_id}")));
+        assert!(generated.contains("self.nested_clicked();"));
     }
 
     #[test]
@@ -2231,7 +2574,7 @@ mod tests {
     // export routing, including secondary events (DoubleClick/LostFocus/DragStopped).
     #[test]
     fn every_supported_event_is_exported_through_handler_call() {
-        use crate::project::schema::{HandlerResult, EVENT_CAPABLE_KINDS};
+        use crate::project::schema::{EVENT_CAPABLE_KINDS, HandlerResult};
         for kind in EVENT_CAPABLE_KINDS {
             for &ev in kind.supported_events() {
                 let handler = "h_evt";
@@ -2342,7 +2685,7 @@ mod tests {
     // Mirrors the top-level invariant; fails if a child kind drops any event.
     #[test]
     fn every_supported_event_is_exported_in_nested_child() {
-        use crate::project::schema::{HandlerResult, EVENT_CAPABLE_KINDS};
+        use crate::project::schema::{EVENT_CAPABLE_KINDS, HandlerResult};
         for kind in EVENT_CAPABLE_KINDS {
             for &ev in kind.supported_events() {
                 let tree = event_child_in_frame(
@@ -2910,9 +3253,65 @@ mod tests {
             .map(|(_, contents)| contents.as_str())
             .unwrap();
 
-        assert!(cargo_toml.contains("rfd = \"0.14\""));
+        assert!(cargo_toml.contains("rfd = \"0.17.2\""));
         assert!(app_rs.contains("rfd::FileDialog"));
         assert!(app_rs.contains("self.state.picked_path"));
+    }
+
+    #[test]
+    fn database_binding_export_includes_rusqlite_dependency() {
+        let tree = UiTree {
+            widgets: vec![WidgetInstance {
+                id: Uuid::nil(),
+                kind: WidgetKind::TextInput,
+                state_binding: Some("database_value".to_owned()),
+                db_binding: Some(crate::project::schema::DbBinding {
+                    table: "settings".to_owned(),
+                    column: "value".to_owned(),
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let files = project_files(&tree);
+        let cargo_toml = files
+            .iter()
+            .find(|(path, _)| path == "Cargo.toml")
+            .map(|(_, contents)| contents.as_str())
+            .unwrap();
+        let app_rs = files
+            .iter()
+            .find(|(path, _)| path == "src/app.rs")
+            .map(|(_, contents)| contents.as_str())
+            .unwrap();
+
+        assert!(cargo_toml.contains("rusqlite = { version = \"0.40\", features = [\"bundled\"] }"));
+        assert!(app_rs.contains("db_conn: Option<rusqlite::Connection>"));
+        assert!(app_rs.contains("fn load_from_db"));
+    }
+
+    #[test]
+    fn formula_export_uses_state_paths_and_declares_dependencies() {
+        let tree = UiTree {
+            widgets: vec![WidgetInstance {
+                id: Uuid::nil(),
+                kind: WidgetKind::MathLabel,
+                props: crate::project::schema::WidgetProps {
+                    formula_expr: "width * height".to_owned(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let generated = gen_app_rs(&tree);
+        assert!(generated.contains("width: f32"));
+        assert!(generated.contains("height: f32"));
+        assert!(generated.contains("self.state.width as f64"));
+        assert!(generated.contains("self.state.height as f64"));
+        assert!(!generated.contains("(self.width as f64)"));
     }
 
     #[test]
@@ -3089,7 +3488,9 @@ mod tests {
         let g = gen_app_rs(&tree);
         // All three receiver fields.
         assert!(g.contains("plain_task_rx: Option<std::sync::mpsc::Receiver<()>>"));
-        assert!(g.contains("result_task_rx: Option<std::sync::mpsc::Receiver<Result<(), String>>>"));
+        assert!(
+            g.contains("result_task_rx: Option<std::sync::mpsc::Receiver<Result<(), String>>>")
+        );
         assert!(g.contains("on_name_change_rx: Option<std::sync::mpsc::Receiver<()>>"));
         // Result error field.
         assert!(g.contains("result_task_error: Option<String>"));
@@ -3166,9 +3567,8 @@ mod tests {
     // Generated-export compile proof
     //
     // One fixture tree exercising the full event+async export surface. The smoke
-    // test (always run) proves the project is generatable and the matrix is
-    // present; the `#[ignore]`d test runs a real `cargo check` on the generated
-    // crate (compiles eframe/egui — minutes on first run, so opt-in).
+    // test proves the project is generatable and the matrix is present; normal
+    // tests also run a real warning-denied `cargo check` on the generated crate.
     // -------------------------------------------------------------------------
 
     /// A unique temp directory path (std-only; no tempfile crate).
@@ -3184,6 +3584,33 @@ mod tests {
             std::process::id()
         ));
         dir
+    }
+
+    fn cargo_check_generated_project(tree: &UiTree, tag: &str) {
+        let dir = unique_temp_dir(tag);
+        write_project(tree, &dir).expect("write_project");
+
+        let mut target = std::env::temp_dir();
+        target.push("rohkai_export_fixture_target");
+
+        let output = std::process::Command::new("cargo")
+            .args(["check", "--quiet"])
+            .current_dir(&dir)
+            .env("CARGO_TARGET_DIR", &target)
+            .env("RUSTFLAGS", "-Dwarnings")
+            .output()
+            .expect("failed to spawn cargo check");
+
+        if !output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            panic!(
+                "generated export project failed warning-denied `cargo check` \
+                 (dir: {})\nstdout:\n{stdout}\nstderr:\n{stderr}",
+                dir.display()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The compile-proof fixture: top-level Button Click + DoubleClick, two async
@@ -3410,6 +3837,38 @@ mod tests {
             ..Default::default()
         };
 
+        // Behavior graph: a plain button that mutates AppState visually (no
+        // handler), wired to a bound ProgressBar — the canonical S-feature case.
+        let behavior_btn_id = Uuid::from_u128(0x05);
+        let behavior_btn = WidgetInstance {
+            id: behavior_btn_id,
+            kind: WidgetKind::Button,
+            rect: Rect {
+                x: 0.0,
+                y: 260.0,
+                w: 100.0,
+                h: 30.0,
+            },
+            props: crate::project::schema::WidgetProps {
+                label: "More".to_owned(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let behavior_bar_id = Uuid::from_u128(0x06);
+        let behavior_bar = WidgetInstance {
+            id: behavior_bar_id,
+            kind: WidgetKind::ProgressBar,
+            rect: Rect {
+                x: 0.0,
+                y: 300.0,
+                w: 160.0,
+                h: 20.0,
+            },
+            state_binding: Some("behavior_progress".to_owned()),
+            ..Default::default()
+        };
+
         let mut tree = UiTree {
             widgets: vec![
                 btn_events,
@@ -3425,9 +3884,34 @@ mod tests {
                 grid_layout,
                 grid_layout_child,
                 file_picker,
+                behavior_btn,
+                behavior_bar,
             ],
             ..Default::default()
         };
+        tree.app_props.behaviors = vec![
+            crate::project::schema::Behavior {
+                id: Uuid::from_u128(0xB0),
+                source_widget: behavior_btn_id,
+                event: crate::project::schema::WidgetEvent::Click,
+                target_widget: Some(behavior_bar_id),
+                action: crate::project::schema::VisualAction::Add {
+                    field: "behavior_progress".to_owned(),
+                    amount: 0.1,
+                    min: Some(0.0),
+                    max: Some(1.0),
+                },
+            },
+            crate::project::schema::Behavior {
+                id: Uuid::from_u128(0xB1),
+                source_widget: behavior_btn_id,
+                event: crate::project::schema::WidgetEvent::DoubleClick,
+                target_widget: None,
+                action: crate::project::schema::VisualAction::CallHandler {
+                    handler: "behavior_bridge".to_owned(),
+                },
+            },
+        ];
         tree.app_props.rust_wiring = RustWiring {
             channels: vec![ChannelDef {
                 id: Uuid::from_u128(0xA1),
@@ -3469,6 +3953,20 @@ mod tests {
                 w
             })
             .collect();
+
+        if let Some(formula) = widgets
+            .iter_mut()
+            .find(|widget| widget.kind == WidgetKind::MathLabel)
+        {
+            formula.props.formula_expr = "width * height".to_owned();
+        }
+        if let Some(text_input) = widgets
+            .iter_mut()
+            .find(|widget| widget.kind == WidgetKind::TextInput)
+        {
+            text_input.state_binding = Some("database_value".to_owned());
+            text_input.db_binding = Some(crate::project::schema::DbBinding::default());
+        }
 
         widgets.push(WidgetInstance {
             id: Uuid::from_u128(0x1FFF),
@@ -3517,6 +4015,10 @@ mod tests {
         let embedded = SVG_RASTERIZER_SOURCE.replace(IMPORT, "use super::svg_core::{self, Rgba};");
         assert!(!embedded.contains("crate::"));
         assert!(embedded.contains("use super::svg_core::{self, Rgba};"));
+        assert!(
+            !SVG_RASTERIZER_SOURCE.contains("rayon::"),
+            "embedded SVG renderer must not leak RohKai-only dependencies"
+        );
     }
 
     /// Invariant: every SVG R4 feature that *renders* in the in-app rasterizer
@@ -3719,6 +4221,134 @@ mod tests {
         );
     }
 
+    fn behavior_tree(nest_button_in: Option<WidgetKind>) -> UiTree {
+        use crate::project::schema::{Behavior, VisualAction, WidgetEvent};
+        let btn_id = Uuid::from_u128(0xBB1);
+        let bar_id = Uuid::from_u128(0xBB2);
+        let btn = WidgetInstance {
+            id: btn_id,
+            kind: WidgetKind::Button,
+            rect: Rect {
+                x: 10.0,
+                y: 10.0,
+                w: 100.0,
+                h: 30.0,
+            },
+            props: crate::project::schema::WidgetProps {
+                label: "More".to_owned(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let bar = WidgetInstance {
+            id: bar_id,
+            kind: WidgetKind::ProgressBar,
+            rect: Rect {
+                x: 10.0,
+                y: 60.0,
+                w: 160.0,
+                h: 20.0,
+            },
+            state_binding: Some("progress".to_owned()),
+            ..Default::default()
+        };
+        let mut widgets = vec![btn, bar];
+        if let Some(container_kind) = nest_button_in {
+            widgets.push(WidgetInstance {
+                id: Uuid::from_u128(0xBB3),
+                kind: container_kind,
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 240.0,
+                    h: 120.0,
+                },
+                children: vec![btn_id],
+                ..Default::default()
+            });
+        }
+        let mut tree = UiTree {
+            widgets,
+            ..Default::default()
+        };
+        tree.app_props.behaviors = vec![Behavior {
+            id: Uuid::from_u128(0xBB4),
+            source_widget: btn_id,
+            event: WidgetEvent::Click,
+            target_widget: Some(bar_id),
+            action: VisualAction::Add {
+                field: "progress".to_owned(),
+                amount: 0.1,
+                min: Some(0.0),
+                max: Some(1.0),
+            },
+        }];
+        tree
+    }
+
+    const PROGRESS_MUTATION: &str =
+        "self.state.progress = (self.state.progress + 0.1).clamp(0.0, 1.0);";
+
+    #[test]
+    fn button_click_behavior_exports_progress_mutation() {
+        let g = gen_app_rs(&behavior_tree(None));
+        assert!(
+            g.contains("evt_response.clicked()"),
+            "behavior-only button must still dispatch click:\n{g}"
+        );
+        assert!(g.contains(PROGRESS_MUTATION), "missing mutation:\n{g}");
+        // ProgressBar reads its binding; the widget itself is never mutated.
+        assert!(g.contains("egui::ProgressBar::new(self.state.progress)"));
+    }
+
+    #[test]
+    fn nested_button_behavior_exports_in_frame_vlayout_hlayout_grid() {
+        for container in [
+            WidgetKind::Frame,
+            WidgetKind::VLayout,
+            WidgetKind::HLayout,
+            WidgetKind::GridLayout,
+        ] {
+            let g = gen_app_rs(&behavior_tree(Some(container.clone())));
+            assert!(
+                g.contains(PROGRESS_MUTATION),
+                "behavior mutation missing for button nested in {container:?}:\n{g}"
+            );
+        }
+    }
+
+    #[test]
+    fn behavior_and_handler_coexist_on_same_event() {
+        let mut tree = behavior_tree(None);
+        tree.widgets[0].on_click = "on_more".to_owned();
+        let g = gen_app_rs(&tree);
+        let mutation_pos = g.find(PROGRESS_MUTATION).expect("mutation present");
+        let call_pos = g.find("self.on_more();").expect("handler call present");
+        assert!(
+            mutation_pos < call_pos,
+            "behavior mutations run before the raw handler call"
+        );
+        assert!(g.contains("fn on_more(&mut self)"), "handler stub");
+    }
+
+    #[test]
+    fn call_handler_behavior_generates_stub_and_call() {
+        use crate::project::schema::{Behavior, VisualAction, WidgetEvent};
+        let mut tree = behavior_tree(None);
+        tree.app_props.behaviors.push(Behavior {
+            id: Uuid::from_u128(0xBB5),
+            source_widget: tree.widgets[0].id,
+            event: WidgetEvent::Click,
+            target_widget: None,
+            action: VisualAction::CallHandler {
+                handler: "bridge".to_owned(),
+            },
+        });
+        let g = gen_app_rs(&tree);
+        assert!(g.contains("self.bridge();"), "call site:\n{g}");
+        assert!(g.contains("fn bridge(&mut self)"), "stub:\n{g}");
+    }
+
     /// Always-run smoke: the fixture generates the required files and its source
     /// contains every feature-matrix marker.  Fast (no compilation).
     #[test]
@@ -3788,12 +4418,31 @@ mod tests {
         assert!(app.contains(".filter(|x| **x > 1).map(|x| *x)"));
         assert!(app.contains("trait CompileProofBehavior"));
         assert!(app.contains("impl CompileProofBehavior for ExportedApp"));
+        // Behavior graph matrix.
+        assert!(
+            app.contains(
+                "self.state.behavior_progress = (self.state.behavior_progress + 0.1).clamp(0.0, 1.0);"
+            ),
+            "behavior Add mutation"
+        );
+        assert!(
+            app.contains("behavior_progress: f32"),
+            "behavior field declared in AppState"
+        );
+        assert!(
+            app.contains("fn behavior_bridge(&mut self)"),
+            "CallHandler behavior must generate a handler stub"
+        );
+        assert!(
+            app.contains("self.behavior_bridge();"),
+            "CallHandler behavior call site"
+        );
 
         let cargo = std::fs::read_to_string(dir.join("Cargo.toml"))
             .expect("exported Cargo.toml must be readable");
-        assert!(cargo.contains("eframe = \"0.29\""));
-        assert!(cargo.contains("egui   = \"0.29\""));
-        assert!(cargo.contains("rfd = \"0.14\""));
+        assert!(cargo.contains("eframe = { version = \"0.34.3\""));
+        assert!(cargo.contains("egui   = \"0.34.3\""));
+        assert!(cargo.contains("rfd = \"0.17.2\""));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3815,10 +4464,10 @@ mod tests {
         let cargo = std::fs::read_to_string(dir.join("Cargo.toml"))
             .expect("exported Cargo.toml must be readable");
 
-        assert!(cargo.contains("eframe = \"0.29\""));
-        assert!(cargo.contains("egui   = \"0.29\""));
+        assert!(cargo.contains("eframe = { version = \"0.34.3\""));
+        assert!(cargo.contains("egui   = \"0.34.3\""));
         assert!(
-            cargo.contains("rfd = \"0.14\""),
+            cargo.contains("rfd = \"0.17.2\""),
             "FilePicker in all-widget fixture must pull rfd"
         );
         assert!(
@@ -3887,65 +4536,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Opt-in compile proof: run a real `cargo check` on the generated crate.
-    /// Ignored by default because it compiles eframe/egui (minutes on first run).
-    /// Run with: `cargo test -p rohkai export_compile_fixture_cargo_check -- --ignored`
-    /// A shared `CARGO_TARGET_DIR` caches deps across runs.
+    /// Compile proof: run a warning-denied `cargo check` on the generated crate.
+    /// A shared `CARGO_TARGET_DIR` caches dependencies across normal test runs.
     #[test]
-    #[ignore = "compiles a real eframe/egui crate; slow. Run with --ignored."]
     fn export_compile_fixture_cargo_check() {
-        let tree = compile_fixture_tree();
-        let dir = unique_temp_dir("check");
-        write_project(&tree, &dir).expect("write_project");
-
-        let mut target = std::env::temp_dir();
-        target.push("rohkai_export_fixture_target");
-
-        let output = std::process::Command::new("cargo")
-            .args(["check", "--quiet"])
-            .current_dir(&dir)
-            .env("CARGO_TARGET_DIR", &target)
-            .output()
-            .expect("failed to spawn cargo check");
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            // Leave `dir` in place for debugging on failure.
-            panic!(
-                "generated export project failed `cargo check` (dir: {})\n{stderr}",
-                dir.display()
-            );
-        }
-        let _ = std::fs::remove_dir_all(&dir);
+        cargo_check_generated_project(&compile_fixture_tree(), "check");
     }
 
-    /// Opt-in compile proof for the full built-in widget catalog.
-    /// Run with: `cargo test -p rohkai all_builtin_widgets_export_cargo_check -- --ignored`
+    /// Warning-denied compile proof for the full built-in widget catalog.
     #[test]
-    #[ignore = "compiles a real eframe/egui crate with every built-in widget; slow. Run with --ignored."]
     fn all_builtin_widgets_export_cargo_check() {
-        let tree = all_builtin_widgets_tree();
-        let dir = unique_temp_dir("all_widgets_check");
-        write_project(&tree, &dir).expect("write_project");
-
-        let mut target = std::env::temp_dir();
-        target.push("rohkai_export_fixture_target");
-
-        let output = std::process::Command::new("cargo")
-            .args(["check", "--quiet"])
-            .current_dir(&dir)
-            .env("CARGO_TARGET_DIR", &target)
-            .output()
-            .expect("failed to spawn cargo check");
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            panic!(
-                "all-widget export project failed `cargo check` (dir: {})\n{stderr}",
-                dir.display()
-            );
-        }
-        let _ = std::fs::remove_dir_all(&dir);
+        cargo_check_generated_project(&all_builtin_widgets_tree(), "all_widgets_check");
     }
 
     #[test]

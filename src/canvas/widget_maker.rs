@@ -88,8 +88,11 @@ pub enum PrimState {
 
 impl PrimState {
     pub const ALL: &'static [PrimState] = &[
-        PrimState::Normal, PrimState::Hover, PrimState::Pressed,
-        PrimState::Disabled, PrimState::Checked,
+        PrimState::Normal,
+        PrimState::Hover,
+        PrimState::Pressed,
+        PrimState::Disabled,
+        PrimState::Checked,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -105,18 +108,25 @@ impl PrimState {
 /// Style overrides for a non-Normal state. `None` = inherit from Normal.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PrimStyleOverride {
-    #[serde(default)] pub fill: Option<[u8; 3]>,
-    #[serde(default)] pub text_color: Option<[u8; 3]>,
-    #[serde(default)] pub opacity: Option<u8>,
+    #[serde(default)]
+    pub fill: Option<[u8; 3]>,
+    #[serde(default)]
+    pub text_color: Option<[u8; 3]>,
+    #[serde(default)]
+    pub opacity: Option<u8>,
 }
 
 /// Per-state style override table for a primitive. All fields `#[serde(default)]`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PrimVariants {
-    #[serde(default)] pub hover: Option<PrimStyleOverride>,
-    #[serde(default)] pub pressed: Option<PrimStyleOverride>,
-    #[serde(default)] pub disabled: Option<PrimStyleOverride>,
-    #[serde(default)] pub checked: Option<PrimStyleOverride>,
+    #[serde(default)]
+    pub hover: Option<PrimStyleOverride>,
+    #[serde(default)]
+    pub pressed: Option<PrimStyleOverride>,
+    #[serde(default)]
+    pub disabled: Option<PrimStyleOverride>,
+    #[serde(default)]
+    pub checked: Option<PrimStyleOverride>,
 }
 
 impl PrimVariants {
@@ -141,14 +151,41 @@ impl PrimVariants {
     pub fn set_enabled(&mut self, state: PrimState, enabled: bool) {
         match state {
             PrimState::Normal => {}
-            PrimState::Hover => { if enabled { self.hover.get_or_insert_with(Default::default); } else { self.hover = None; } }
-            PrimState::Pressed => { if enabled { self.pressed.get_or_insert_with(Default::default); } else { self.pressed = None; } }
-            PrimState::Disabled => { if enabled { self.disabled.get_or_insert_with(Default::default); } else { self.disabled = None; } }
-            PrimState::Checked => { if enabled { self.checked.get_or_insert_with(Default::default); } else { self.checked = None; } }
+            PrimState::Hover => {
+                if enabled {
+                    self.hover.get_or_insert_with(Default::default);
+                } else {
+                    self.hover = None;
+                }
+            }
+            PrimState::Pressed => {
+                if enabled {
+                    self.pressed.get_or_insert_with(Default::default);
+                } else {
+                    self.pressed = None;
+                }
+            }
+            PrimState::Disabled => {
+                if enabled {
+                    self.disabled.get_or_insert_with(Default::default);
+                } else {
+                    self.disabled = None;
+                }
+            }
+            PrimState::Checked => {
+                if enabled {
+                    self.checked.get_or_insert_with(Default::default);
+                } else {
+                    self.checked = None;
+                }
+            }
         }
     }
     pub fn has_any(&self) -> bool {
-        self.hover.is_some() || self.pressed.is_some() || self.disabled.is_some() || self.checked.is_some()
+        self.hover.is_some()
+            || self.pressed.is_some()
+            || self.disabled.is_some()
+            || self.checked.is_some()
     }
 }
 
@@ -768,18 +805,27 @@ mod tests {
     fn group_children_finds_overlapping_prims() {
         let group = MakerPrimitive {
             kind: MakerPrimKind::HGroup,
-            x: 0.0, y: 0.0, w: 1.0, h: 1.0,
+            x: 0.0,
+            y: 0.0,
+            w: 1.0,
+            h: 1.0,
             group_gap: 4.0,
             ..Default::default()
         };
         let child = MakerPrimitive {
             kind: MakerPrimKind::Rect,
-            x: 0.2, y: 0.2, w: 0.3, h: 0.3,
+            x: 0.2,
+            y: 0.2,
+            w: 0.3,
+            h: 0.3,
             ..Default::default()
         };
         let outside = MakerPrimitive {
             kind: MakerPrimKind::Rect,
-            x: 1.2, y: 0.2, w: 0.3, h: 0.3,
+            x: 1.2,
+            y: 0.2,
+            w: 0.3,
+            h: 0.3,
             ..Default::default()
         };
         let children = group_children(&[group, child, outside], 0);

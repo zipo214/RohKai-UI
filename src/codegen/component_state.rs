@@ -52,9 +52,16 @@ pub fn component_state_field_pairs(components: &[DesignComponent]) -> Vec<(Strin
             }
             ComponentKind::StateMachine => {
                 let name = sanitize_field_name(&comp.name, &comp.id);
+                // Emit a String field for the current state name so the
+                // generated AppState carries human-readable state identity.
+                let initial = if comp.state_machine.initial_state.is_empty() {
+                    String::from("String::new()")
+                } else {
+                    format!("String::from(\"{}\")", comp.state_machine.initial_state)
+                };
                 pairs.push((
-                    format!("    {name}_state: usize,"),
-                    format!("            {name}_state: 0,"),
+                    format!("    {name}_state: String,"),
+                    format!("            {name}_state: {initial},"),
                 ));
             }
             ComponentKind::Timer | ComponentKind::Lifecycle => {}
@@ -101,7 +108,7 @@ pub fn component_update_lines(components: &[DesignComponent]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::schema::DesignComponent;
+    use crate::project::schema::{DesignComponent, StateMachineProps};
     use uuid::Uuid;
 
     fn make_timer(name: &str, handler: &str, interval_ms: u32) -> DesignComponent {
@@ -111,6 +118,7 @@ mod tests {
             name: name.to_owned(),
             interval_ms: Some(interval_ms),
             handler: handler.to_owned(),
+            state_machine: StateMachineProps::default(),
         }
     }
 
@@ -121,6 +129,7 @@ mod tests {
             name: name.to_owned(),
             interval_ms: None,
             handler: String::new(),
+            state_machine: StateMachineProps::default(),
         }
     }
 
@@ -159,6 +168,7 @@ mod tests {
             name: "1 type".to_owned(),
             interval_ms: None,
             handler: String::new(),
+            state_machine: StateMachineProps::default(),
         };
         let p = component_state_field_pairs(&[kw]);
         let ident = p[0].0.trim().split(':').next().unwrap();
@@ -184,6 +194,7 @@ mod tests {
                 name: "app".to_owned(),
                 interval_ms: None,
                 handler: "on_startup".to_owned(),
+                state_machine: StateMachineProps::default(),
             },
         ];
         let lines = component_update_lines(&components);
@@ -200,6 +211,7 @@ mod tests {
             name: "flow".to_owned(),
             interval_ms: None,
             handler: "advance".to_owned(),
+            state_machine: StateMachineProps::default(),
         };
         let lines = component_update_lines(&[comp]);
         assert_eq!(lines.len(), 1);
@@ -216,6 +228,7 @@ mod tests {
             name: "api".to_owned(),
             interval_ms: None,
             handler: "fetch_api".to_owned(),
+            state_machine: StateMachineProps::default(),
         };
         let lines = component_update_lines(&[comp]);
         assert_eq!(lines.len(), 1);

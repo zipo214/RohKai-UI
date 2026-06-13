@@ -1,331 +1,441 @@
-# RohKai Phase 2 Roadmap
+# RohKai Phase 2 → Master Execution Backlog
 
-Phase 2 starts after the v0.2.0 release. It collects every unchecked roadmap
-item, every deferred recommendation, every "Later:" note, every design gap
-surfaced in feature evaluations, and every unorganized idea — regardless of
-which document they originally lived in.
+Phase 2 starts after the v0.2.0 release. This document is the **single ordered
+backlog** for everything RohKai has not yet finished. It collects every unchecked
+roadmap item, every formerly-deferred recommendation, every "Later:" note, every
+former non-goal, every design gap surfaced in feature evaluations, and every
+loose idea — regardless of which document it originally lived in — and puts them
+in **one mandatory execution order** that ends with the in-house renderer.
 
-The **sorted** section groups items by theme so they can be staged into
-releases. The **unsorted scratchpad** at the bottom captures anything that does
-not have a home yet. Cross items from the sorted section into stage milestone
-documents as they are scheduled.
+## De-Deferral Policy (read first)
 
----
+**Deferral is no longer an option.** Every capability that ever had a chance of
+being implemented, or was parked as "deferred", "later", "future", "out of
+scope", or "non-goal", is now an ordered to-do in the sequence below. When a
+piece of work is too big to finish in one pass, the response is to **refactor it
+into smaller ordered to-dos in place** — not to defer it.
 
-## Priority Starter Lines
+Two consequences:
 
-These two threads open Phase 2. They unblock the most downstream features.
+1. There is no "Deferred" subsection anywhere in this file. If something is not
+   done, it appears in the Master Execution Order with a stage number.
+2. The order **spaces large projects intermittently**. Each ★ LARGE stage is
+   flanked by smaller consolidation stages so that no agent (or group, or future
+   session) hits two overwhelming projects back-to-back and is tempted to defer.
+   Large projects are also refactored internally into ordered sub-todos.
 
-### P2-A — Font Shaping Engine
+### The only survivors: two architecture invariants (NOT deferrals)
 
-**Goal:** Build a HarfBuzz shaping algorithm port in Rust that passes **2252
-of 2252** Unicode shaping tests.
+These are not capabilities being postponed — they are permanent constraints from
+`CLAUDE.md`. The *capabilities* they appear to block are delivered later by the
+**in-house renderer (final stage)**, not by violating the constraint:
 
-No new crates: this must be a pure-Rust, zero-C-dependency implementation living
-in `src/codegen/shaper/` or `src/canvas/shaper/`, embedded under the same
-single-`crate::` contract as the SVG rasterizer. The implementation must handle:
-- OpenType GSUB/GPOS lookup tables (single, pair, contextual, chained)
-- Arabic/Hebrew joining and right-to-left shaping
-- Indic scripts (Devanagari, Bengali, Tamil) via sequence reordering and
-  Matra/Virama handling
-- Ligature substitution (Latin: fi/fl, Arabic: lam-alef)
-- Mark-to-base and mark-to-mark attachment
-- Kerning (GPOS pair adjustment)
-- Unicode bidirectional algorithm (UAX #9) full implementation
-- CJK trivial shaping (no ligatures, no marks)
+- **No external renderer dependency.** No `resvg`, `usvg`, `tiny-skia`, Skia,
+  Cairo, librsvg, or browser embedding — ever. High-fidelity rendering parity is
+  delivered by RohKai's own renderer (S22), not by adding a renderer crate.
+- **No C FFI / no system-toolkit bindings.** "QAxWidget-style native platform
+  controls" stay rejected *as an implementation technique*. The user-visible goal
+  (native-quality controls and integrations) is delivered by the in-house
+  renderer + pure-Rust platform layer, not by binding C.
 
-Quality gate: run the full HarfBuzz Unicode shaping test suite (2252 tests,
-see `hb-shape --verify` corpus) against the port's output. The port ships only
-when `cargo test -- shaping` passes all 2252. This unlocks real font-file
-rendering in the SVG rasterizer and the code panel.
+If either invariant is ever to change, that is an explicit, separate user
+decision — it is not implied by "de-defer everything."
 
-Reference: [HarfBuzz shaping tests](https://github.com/harfbuzz/harfbuzz/tree/main/test/shaping/data/text-rendering-tests)
+### Depth legend
 
-### P2-B — Database Integration Research
+Each item is annotated with its **current** code depth, cross-referenced against
+the source on 2026-06-12:
 
-**Goal:** Research and propose a concrete DB integration design before writing
-any code (Stage 13 unblock).
-
-Deliverables:
-- Comparison matrix: `rusqlite` vs `sqlx` vs `sea-orm` — async model,
-  compile-time query checking, connection-pool overhead, WASM compatibility.
-- Decision: which crate(s) to approve for Stage 13 widget-to-DB binding.
-- Threat model: user-entered SQL in the query builder, injection surface,
-  sandboxing in the designer vs exported project.
-- Sketch of the generated AppState shape for a typical DB-backed view.
-
-No code until the crate is explicitly user-approved.
+- `[x] DONE` — real output in canvas/preview/export + tests.
+- `[~] SHALLOW` — shipped but partial; the gap is named. This is the most
+  important state: shallow surfaces are the ones that look done but are not.
+- `[ ] TODO` — not started.
 
 ---
 
-## P2.1 — Visual Widget Maker (Later Capabilities)
+## Master Execution Order
 
-Continues from the MVP (commit 4f60e72). See `docs/VISUAL_WIDGET_MAKER.md`.
+Run top to bottom. `★ LARGE` = multi-week; refactor into ordered sub-todos before
+starting. `★★ FINAL` = the renderer, last by definition.
 
-- [x] Z-order reorder of primitives — ↑/↓ buttons in the primitive list panel;
-      mini-canvas re-renders immediately in the new order.
-- [x] Primitive constraints: anchor (TL/TR/BL/BR/Center), min_w, min_h —
-      `PrimAnchor` enum + `min_w`/`min_h` fields on `MakerPrimitive`; exposed
-      in the properties panel; `apply_corner_resize` clamps to min_w/min_h.
-- [x] Codegen preview: "Code Preview" tab beside Properties shows live
-      `live_preview` and `export template` strings, updated every frame.
-- [x] Round-trip: `doc_from_descriptor` in `widget_maker.rs` reconstructs a
-      `WidgetMakerDoc` (metadata only) from any descriptor whose
-      `live_preview` starts with `"    {"` (the VWM sentinel).
-- [x] Hit regions: interactive zones that receive click/hover/drag events,
-      distinct from visual shapes (a rect can be a hit region without being visible)
-- [x] Layout groups: horizontal, vertical, grid, stack inside the maker canvas
-- [x] State variants: normal, hover, pressed, disabled, checked — each variant
-      carries independent primitive style overrides
-- [x] Slots: named child content areas that accept widget instances at canvas time
-- [x] Event zones: named interactive areas that emit click/change/custom signals
-      (implemented via HitRegion primitives; see Hit regions above)
-- [x] Style tokens: accent color, border color, corner radius, text color,
-      spacing — expose as a property group in the properties panel
+| # | Stage | Size | Theme |
+|---|---|---|---|
+| S1 | Layout & Constraint Completion | M | finish the constraint/layout slice already shipped shallow |
+| S2 | Canvas UX Depth | S | navigation, clipboard, multi-edit, state preview |
+| **S3** | **Font Shaping Engine (P2-A)** | **★ LARGE** | HarfBuzz-class shaping + BIDI; unblocks real-font text everywhere |
+| S4 | Code Panel & Codegen Depth | M | memoization, rename/dedup, diff, true command undo |
+| S5 | Responsive Layout & Design Tokens | M | breakpoints, layout preview/templates, token system |
+| **S6** | **Data-Bound Model Views** | **★ LARGE** | real model Table/List/Tree, virtual scroll, sort, filter |
+| S7 | SVG Image Format Completion | M | progressive/CMYK/12-bit/lossless JPEG, ICC, IDCT speed, fuzz |
+| **S8** | **Interactive Chart Engine** | **★ LARGE** | axes, series editor, legend, zoom/pan, data binding |
+| S9 | SVG Real-Font Text | M | .ttf/.otf glyphs + shaping/BIDI via S3; designer font loading |
+| **S10** | **Full CSS Engine** | **★ LARGE** | combinators, @media, @import, pseudo, attribute, custom props |
+| S11 | Accessibility & Internationalisation | M | ARIA, RTL, locale externalisation, keyboard-only authoring |
+| **S12** | **Database Depth** | **★ LARGE** | query builder, schema viewer, preview, multi-backend, pools |
+| S13 | Component Runtime Depth | M | HTTP runtime, full FSM/timer dispatch, inspector scripting |
+| **S14** | **SVG Animation** | **★ LARGE** | SMIL + CSS @keyframes/transition + clock/repaint loop |
+| S15 | Platform Targets & Packaging | M | WASM depth, native installers, profiling overlay, annotations |
+| **S16** | **foreignObject + External Resource Policy** | **★ LARGE** | sandboxed HTML/CSS sub-layout; opt-in external resources |
+| S17 | Sharing & Ecosystem | M | template marketplace, component-library publishing, design diff |
+| **S18** | **SVG Scripting Sandbox** | **★ LARGE** | opt-in, isolated ECMAScript execution (security-critical) |
+| **S19** | **Multi-Document & Windowing** | **★ LARGE** | model item-views, Dock, MDI, multi-window |
+| S20 | Code Intelligence | M | code-panel IntelliSense, smart layout suggestions |
+| **S21** | **Cross-Framework Export & Collaboration** | **★ LARGE** | SwiftUI/Compose/RN stubs; multiplayer CRDT (far future) |
+| **S22** | **In-House Renderer (Stage 15)** | **★★ FINAL** | replace egui; own layout+GPU rasterizer; S3 text pipeline |
 
----
+The remainder of this file is the per-stage detail. Cross items into stage
+milestone notes in `docs/DEVLOG.md` as they are scheduled.
 
-## P2.2 — Canvas UX Depth
+### Bespoke Foundation Milestones
 
-From Stage 8.5 comparative analysis and feature evaluation gaps.
+RohKai-owned, security-sensitive foundations stay above S22 in the execution
+order so the final renderer consumes proven subsystems instead of inventing
+them inside a renderer rewrite. These are review checkpoints, not permission to
+skip unfinished stages:
 
-- [x] Widget naming convention: auto-generate meaningful labels on drop
-      (`button_1`, `label_1`); per-kind counter in `RohKaiApp::name_counter`;
-      counter resets on New project. (feat(P2.2))
-- [x] Zoom to selection: `F` key fits the selected widget(s) in view with 10 %
-      padding; `F` with nothing selected fits all canvas widgets.
-      `compute_fit_rect` in `src/canvas/interaction.rs`. (feat(P2.2))
-- [x] Property reset: right-click the Label field or any geometry (x, y, w, h)
-      field in the Properties panel → "Reset to default". Label → kind name;
-      x/y → 0; w/h → widget-kind default. (feat(P2.2))
-- [x] Error highlighting: red 2 px outline on canvas widgets with duplicate ID,
-      invalid handler name, or missing binding. `compute_widget_errors` in
-      `src/canvas/interaction.rs`. (feat(P2.2))
+- **M1 after S3:** review the owned font shaping/BIDI API and whether its
+  renderer-facing contracts are stable.
+- **M2 after S7/S9/S10:** review image decoding, real-font SVG text, CSS, and
+  bounded document parsing as one secure rendering-input stack.
+- **M3 after S14/S16/S18:** review animation, external-resource sandboxing,
+  foreignObject, and scripting threat models before any general renderer accepts
+  active content.
+- **M4 after S19:** review layout, model/view, docking, and multi-window
+  requirements against the proposed renderer architecture.
 
-**Deferred from this batch (not implemented):**
-- [ ] Search in canvas: Ctrl+F to find widgets by name, kind, or property value
-      (separate from the code panel search) — deferred: architecturally complex,
-      overlaps with Lazare search.
-- [ ] Clipboard enhancements: cross-session clipboard is risky; paste-multiple
-      and paste-at-cursor are scoped separately — deferred.
-- [ ] Minimap: small overview of the entire canvas in a corner panel — deferred:
-      requires retained off-screen render pass, too complex for this batch.
-- [ ] Multi-select property editing: edit the same property across all selected
-      widgets simultaneously — deferred: architecturally complex.
-- [ ] Context tooltips: hover any designer UI element to see its purpose —
-      deferred: broad scope, incremental addition.
+At each milestone the user may direct a new architecture study or reorder later
+work. S22 implementation still requires an explicit user go-ahead and a
+ratified architecture decision.
 
 ---
 
-## P2.3 — Constraint-Based Layout
+## Priority Starter Threads (context)
 
-From Stage 9.5 comparative analysis (Qt Auto Layout / iOS Auto Layout class).
+### P2-A — Font Shaping Engine → scheduled as **S3**
 
-- [ ] Horizontal and vertical constraint rules (leading/trailing/top/bottom)
-- [ ] Center-alignment constraints (horizontal center, vertical center)
-- [ ] Equal-size constraints between two widgets
-- [ ] Aspect-ratio constraints (lock w:h ratio)
-- [ ] Min/max size constraints per widget
-- [ ] Margin and padding visual editor (inset handles)
-- [ ] Anchor system with visual handle drag
-- [ ] Constraint validation: detect conflicting or unsatisfiable constraints
-- [ ] Responsive size class breakpoints (e.g., compact vs. regular)
-- [ ] Layout preview: scrub canvas size to see layout reflow live
-- [ ] Layout templates: save and reuse constraint presets
-- [ ] Nested layout hierarchy round-trip in Lazare
+Pure-Rust, zero-C HarfBuzz-class shaper in `src/canvas/shaper/` under the
+single-`crate::` embedded contract. Trait scaffolding (`ShaperEngine` +
+`RustyBuzzShaper` + `HersheyShaper`) already exists; `rustybuzz` is the approved
+interim engine for the **main-app canvas only** and must never enter the
+export-embedded `svg_rasterizer.rs` (std-only). Full detail in S3.
 
----
+### P2-B — Database Integration Research → **[x] DONE**
 
-## P2.4 — Stage 9 Layout Deferred Items
-
-From ROADMAP.md Stage 9 remaining `[ ]` items.
-
-- [ ] Properties panel exposes per-child alignment, grid row height policies,
-      and per-child stretch/fixed-size behavior
-- [ ] Hit testing and rubber-band selection are layout-aware (select only
-      children of a clicked layout container, not a flat z-order hit)
-- [ ] Richer drag-reorder: drag a layout child to reorder within its container
-      with animated placeholder feedback
-- [ ] Richer cell/slot editor for Grid: named slots, drag-to-slot behavior,
-      and multi-level layout hierarchy tests
+`rusqlite = { version = "0.40", features = ["bundled"] }` approved (2026-06-11)
+and in `Cargo.toml`. The threat model (no `format!()` SQL, `params![]` only) is
+Invariant 10. Remaining DB *implementation* depth is S12.
 
 ---
 
-## P2.5 — Widget & Component Depth
+## S1 — Layout & Constraint Completion ✅
 
-From Stage 10 and feature evaluation remaining gaps.
+Closed 2026-06-12. The constraint and layout slice now has parent-relative,
+idempotent solving, visual authoring, recursive canvas/code/export behavior, and
+Lazare hierarchy round-trip.
 
-- [ ] Formula Widget full depth: dependency tracking, multi-input fields,
-      validation, formatting decimals/prefix/suffix, live expression diagnostics
-- [ ] Timer component: runtime tick scheduling via mpsc channel; wired to
-      eframe's `request_repaint_after`
-- [ ] State machine component: visual transition graph editor, guard conditions,
-      entry/exit actions
-- [ ] HTTP request component: runtime execution using user-approved crate
-      (reqwest / ureq); response parsing; error UI; requires Stage 13 crate approval
-- [ ] Data-bound Table/ListView/TreeView: real model with `data_source_binding`,
-      virtual scroll, sort, filter
-- [ ] Interactive chart: axes, series editor, legend, zoom/pan, data model
-      binding; requires user-approved charting crate
-- [ ] `.rkwb` descriptor bundle: zip of multiple `.rkwd` + preview SVGs +
-      assets + manifest; installer UI with conflict resolution
-- [ ] Keyboard shortcut customization: user-configurable shortcuts in preferences
+- [x] DONE — Constraint solving is idempotent and ordered parents-before-
+      descendants; nested widgets resolve against their actual parent frame.
+- [x] DONE — `validate_constraints` errors render in Properties.
+- [x] DONE — Four draggable canvas anchor handles target parent
+      leading/center/trailing and top/center/bottom anchors, preserve current
+      geometry by deriving margins, and render persistent connector lines.
+- [x] DONE — Per-child alignment/flex/size policy and grid row/span controls are
+      exposed and drive live reflow/codegen.
+- [x] DONE — Grid slots have persistent row-major names, Properties editing,
+      canvas labels, generated-code/export comments, arrow reorder, and direct
+      canvas drag-to-slot with cell feedback.
+- [x] DONE — Nested V/H/Grid layouts reflow in ownership-depth order, render
+      recursively on canvas, emit recursively in live/export code, and round-
+      trip through Lazare using explicit parent markers. Empty layout closures
+      intentionally clear prior child ownership.
 
----
+## S2 — Canvas UX Depth
 
-## P2.6 — Stage 13 — Data & Database Integration
+From the Stage 8.5 comparative analysis. All small, all independent.
 
-Blocked until crate is user-approved (P2-B research must complete first).
+- [ ] TODO — Search in canvas: Ctrl+F to find widgets by name, kind, or property
+      value (distinct from the code-panel search).
+- [ ] TODO — Clipboard enhancements: paste-at-cursor and paste-multiple with full
+      property preservation.
+- [ ] TODO — Multi-select property editing: edit one property across all selected
+      widgets at once.
+- [ ] TODO — Context tooltips: hover any designer UI element to see its purpose.
+- [ ] TODO — Minimap: corner overview of the whole canvas (retained off-screen
+      render pass).
+- [ ] TODO — Visual state preview: click into hover/pressed/disabled/checked in
+      the designer without running the app.
+- [ ] TODO — Canvas ruler-guide persistence across save/load (named guides exist;
+      persist them in the project file).
+- [ ] TODO — Dark/light canvas background independent of the app theme.
 
-- [ ] DB connection configurator — SQLite / PostgreSQL / MySQL / Supabase
-- [ ] Visual query builder — select table, columns, WHERE filter
-- [ ] Widget-to-query-result binding (field name → widget binding)
-- [ ] Schema viewer: see tables and columns visually in a side panel
-- [ ] Generates `AppState` with a connection pool field and async query calls
-- [ ] Generated code uses correct Rust DB crate with documented dependency line
-- [ ] Design-time data preview: show sample rows without runtime execution
+## S3 — ★ LARGE — Font Shaping Engine (P2-A)
 
----
+**Goal:** a pure-Rust, zero-C HarfBuzz-class shaper passing **2252 of 2252**
+Unicode shaping tests, living in `src/canvas/shaper/` behind `ShaperEngine`.
+Unblocks real-font SVG text (S9) and the renderer text pipeline (S22).
 
-## P2.7 — SVG Renderer Remaining Lanes
+Refactored into ordered sub-todos:
 
-From `docs/SVG_RENDERER_ROADMAP.md` deferred items.
+- [~] SHALLOW — `ShaperEngine` trait + `RustyBuzzShaper` (main-app canvas) +
+      `HersheyShaper` fallback exist. Interim only; not the owned port.
+- [ ] TODO — OpenType GSUB (single, multiple, alternate, ligature, contextual,
+      chained-context substitution).
+- [ ] TODO — OpenType GPOS (single, pair/kerning, cursive, mark-to-base,
+      mark-to-ligature, mark-to-mark, contextual positioning).
+- [ ] TODO — Arabic/Syriac joining + right-to-left shaping.
+- [ ] TODO — Indic reordering (Devanagari, Bengali, Tamil): matra/virama,
+      reph, syllable clustering.
+- [ ] TODO — Latin/Arabic ligatures (fi/fl, lam-alef) and required ligatures.
+- [ ] TODO — Unicode bidirectional algorithm (UAX #9), full.
+- [ ] TODO — CJK trivial shaping.
+- [ ] TODO — Quality gate: `cargo test -- shaping` passes all 2252
+      ([HarfBuzz corpus](https://github.com/harfbuzz/harfbuzz/tree/main/test/shaping/data/text-rendering-tests)).
+- [ ] TODO — A std-only outline/metrics path usable by the export-embedded
+      rasterizer (must not pull `rustybuzz` into `svg_rasterizer.rs`).
 
-- [ ] **Filter tier-3** (identity passthrough + diagnostic currently):
-      `feTile`, `feImage`, `feTurbulence`, `feDisplacementMap`,
-      `feConvolveMatrix`, `feDiffuseLighting`, `feSpecularLighting`
-- [ ] **Progressive JPEG** (SOF2): currently diagnosed; implement
-      progressive scan decoding
-- [ ] **Real font-file glyph rendering**: parse TrueType/OpenType `.ttf`/`.otf`
-      within the zero-dependency profile (no fontdue/rusttype); or gate on the
-      P2-A shaping engine completing first
-- [ ] **Full shaping and BIDI** in SVG rasterizer: Arabic, Hebrew, Indic scripts;
-      depends on P2-A shaping engine
-- [ ] **ICC colour management**: parse embedded ICC profiles; map to sRGB
-- [ ] **`foreignObject`**: render embedded HTML content as a rasterized blob or
-      diagnosed stub
-- [ ] **`SvgRenderOptions` struct**: add only if scene split needs caller-controlled
-      rendering options
-- [ ] **R8.2 deep-fuzz hardening** (optional): 50k+ iteration fuzz pass with
-      structured mutation over the full W3C corpus
-- [ ] **SMIL animation** (long range): `animate`, `animateTransform`,
-      `animateMotion` — requires a clock/repaint loop
-- [ ] **CSS animation / transitions** (long range): `@keyframes`, `transition`
-- [ ] **Scripting** (deliberately out of scope / security): JavaScript/ECMAScript
-      execution is not planned; document explicitly as unsupported
+## S4 — Code Panel & Codegen Depth
 
----
+Consolidation after S3. Mostly self-contained codegen work.
 
-## P2.8 — High-Risk / Long-Range Widgets
+- [ ] TODO — Codegen memoization: `CodegenCache` keyed on `UiTree` hash; skip
+      re-emit on unchanged frames. **Must not** suppress updates that reflect
+      canvas mutations (Lazare sync).
+- [ ] TODO — Handler rename: rename in the code panel and propagate to every
+      widget that references the handler.
+- [ ] TODO — Handler deduplication warning: two widgets sharing a handler name
+      with different event kinds.
+- [ ] TODO — Diff view: current generated code vs last saved/committed state.
+- [ ] TODO — Undo/redo command pattern: replace snapshot undo with true
+      `AppCommand` objects for granular steps and lower memory (design recorded
+      in ROADMAP Cline Rec 9).
+- [ ] TODO — Custom error types: manual `Display` impls now; `thiserror` only if
+      a feature later justifies the dependency (explicit approval required).
 
-Requires feasibility decision before implementation.
+## S5 — Responsive Layout & Design Tokens
 
-- [ ] Model-based item views (MVC tree, virtual list with 100k+ items)
-- [ ] Dock Widget (dockable panels, split views, tab groups)
-- [ ] MDI Area (multiple document interface with floating sub-windows)
-- [ ] Multi-window support (secondary eframe windows)
-- [ ] QAxWidget-style platform integrations (native controls via platform APIs)
+- [ ] TODO — Responsive size-class breakpoints (compact / regular / custom).
+- [ ] TODO — Layout preview: scrub the canvas size to watch the layout reflow.
+- [ ] TODO — Layout templates: save and reuse constraint/layout presets.
+- [ ] TODO — Design token system: named color/spacing/radius variables replacing
+      hard-coded values across the tree; export as Rust constants.
+- [ ] TODO — Color theme editor: visual `.rktheme` editor with live preview
+      across all palette widgets.
 
----
+## S6 — ★ LARGE — Data-Bound Model Views
 
-## P2.9 — Code Panel & Codegen Depth
+`Table`/`ListView`/`TreeView` are static option-backed today. Make them
+model-bound. Refactored:
 
-- [ ] Codegen memoization: `CodegenCache` keyed on `UiTree` hash; skip
-      re-emit when tree did not change (Cline Rec 3)
-- [ ] Dirty rectangle rendering: only re-rasterize changed regions of the canvas
-      (Cline Rec 7 — complex, deferred)
-- [ ] Handler rename: rename a handler in the code panel and propagate the
-      rename to all widgets that reference it
-- [ ] Handler deduplication: warn when two widgets share the same handler name
-      but have different event kinds
-- [ ] Diff view: show a diff between the current generated code and the last
-      committed/saved state
-- [ ] Custom error types with `thiserror` (Cline Rec 4 — requires crate approval)
-- [ ] VSCode-style IntelliSense for the code panel: Rust keyword completion,
-      local binding suggestions, handler autocomplete
+- [~] SHALLOW — `DataColumn`/`DataColumnType` schema + `data_source_binding`
+      exist; bound views emit iteration code. Backing model is static options.
+- [ ] TODO — Real row model with typed columns and a `Vec<Row>` source binding.
+- [ ] TODO — Virtual scroll for large datasets (100k+ rows).
+- [ ] TODO — Column sort (stable, typed).
+- [ ] TODO — Row filter / search predicate.
+- [ ] TODO — Selection model + change events wired through codegen/export.
+- [ ] TODO — Tree model: lazy child expansion, depth-bounded.
 
----
+## S7 — SVG Image Format Completion
 
-## P2.10 — Platform Targets
+Baseline JPEG + PNG render. Finish the format matrix. (Formerly the JPEG
+roadmap's "Defer Initially" list — now ordered.)
 
-From Stage 12 remaining gaps and WASM depth.
+- [x] DONE — Baseline/extended-sequential JPEG (SOF0/SOF1), PNG types 0/2/3/4/6.
+- [ ] TODO — Progressive JPEG (SOF2): spectral-selection + successive-approximation
+      scan decode.
+- [ ] TODO — Arithmetic-coded JPEG.
+- [ ] TODO — CMYK / YCCK (4-component) JPEG → RGB.
+- [ ] TODO — 12-bit and lossless JPEG.
+- [ ] TODO — Integer/AAN IDCT replacing the float IDCT (speed).
+- [ ] TODO — ICC colour-profile parse + map to sRGB (PNG `iCCP`, JPEG `APP2`).
+- [ ] TODO — Sub-byte / interlaced (Adam7) PNG.
+- [ ] TODO — `SvgRenderOptions` struct: caller-controlled budgets/options once the
+      scene split needs them.
+- [ ] TODO — R8.2 deep-fuzz hardening: structure-aware mutators over
+      XML/path/PNG/JPEG/inflate; nightly + coverage workflow (still zero-dep).
+      Prompt: `docs/svg-goal-plan-prompts/R8.2-deep-fuzz-ci-coverage.goal.md`.
 
-- [ ] WASM: unsupported-widget diagnostic report (list widgets that have no
-      WASM-safe codegen path)
-- [ ] WASM: in-app build status panel showing trunk build output
-- [ ] WASM: size budget report (`.wasm` binary size estimate)
-- [ ] Native desktop packaging: `.deb` / `.rpm` / `.msi` / `.dmg` generation
-- [ ] iOS/Android research (WASM + WebView bridge or pure egui mobile support)
+## S8 — ★ LARGE — Interactive Chart Engine
 
----
+`Chart` is a `Vec<f32>` bar painter. Build a real chart widget. Refactored:
 
-## P2.11 — Accessibility & Internationalisation
+- [~] SHALLOW — Bar `Chart` from a `Vec<f32>` binding (canvas + codegen).
+- [ ] TODO — Chart kinds: line, bar, scatter, area, pie.
+- [ ] TODO — Axes: ticks, labels, gridlines, auto/custom ranges.
+- [ ] TODO — Series editor: multiple series, colors, legend.
+- [ ] TODO — Interaction: zoom, pan, hover tooltips.
+- [ ] TODO — Data-model binding to `Vec<Point>` / table source.
+- [ ] TODO — Pure-Rust rendering only (no plotting crate unless user-approved).
 
-- [ ] ARIA role annotations on exported egui widgets (screen reader support)
-- [ ] RTL canvas mode: flip canvas origin for right-to-left UI authoring
-- [ ] Locale-aware string externalisation: export strings to a `strings.toml`
-      and generate `t!("key")` calls
-- [ ] Keyboard-only authoring: every canvas action achievable without a mouse
+## S9 — SVG Real-Font Text
 
----
+Depends on S3. Replaces the Hershey-snapshot approximation with real glyphs.
 
-## P2.12 — Stage 15 — Own Renderer
+- [x] DONE — Editable chunked text import (R6) + Hershey vector-outline snapshot
+      with textPath (R11) + honest `text.raster_snapshot` diagnostics.
+- [ ] TODO — Real font-file glyph rendering: parse `.ttf`/`.otf` (`glyf`/`CFF`
+      outlines, `cmap`, `hmtx`) in the zero-dependency std-only profile.
+- [ ] TODO — Full shaping + BIDI in the rasterizer via the S3 `ShaperEngine`
+      (std-only outline path, no `rustybuzz` in the embedded source).
+- [ ] TODO — Per-glyph position lists (x/y/dx/dy/rotate), textLength,
+      lengthAdjust.
+- [ ] TODO — Custom font loading in the designer: load a `.ttf`/`.otf` and preview
+      text widgets immediately.
 
-Final ordered stage. Starts only when P2.1–P2.11 are complete and a separate
-architecture decision is ratified. "Final" means last in this list, not last
-in the project's lifetime — the list grows as new stages are added above it.
+## S10 — ★ LARGE — Full CSS Engine
 
-- [ ] Replace egui rendering layer with RohKai-owned pure Rust renderer
-- [ ] Widget descriptor format drives renderer widget model directly
-- [ ] Zero transient C dependencies in the rendering stack
-- [ ] Custom layout engine with constraint and flex support
-- [ ] GPU-accelerated rasterizer (wgpu-based or own path rasterizer)
-- [ ] All previously constrained visual properties become available:
-      arbitrary shapes, gradients, shadows, blend modes per widget
-- [ ] Text pipeline uses P2-A shaping engine end-to-end
+Today only tier-1 selectors (element/class/id/grouped) are supported. (Formerly
+"Complete CSS" non-goal.) Refactored:
 
----
+- [~] SHALLOW — Tier-1 selectors + inline/presentation cascade + currentColor.
+- [ ] TODO — Combinators: descendant, child (`>`), sibling (`+`, `~`).
+- [ ] TODO — Attribute selectors `[attr]`, `[attr=val]`, `[attr~=val]`, …
+- [ ] TODO — Pseudo-classes/elements justified by real fixtures.
+- [ ] TODO — `@media` (and bounded `@import` of `data:` stylesheets).
+- [ ] TODO — CSS custom properties (`--var` / `var()`), `inherit`/`initial`/
+      `unset`.
+- [ ] TODO — Specificity/cascade parity proven against a curated fixture corpus.
 
-## Unsorted Scratchpad
+## S11 — Accessibility & Internationalisation
 
-Everything below is captured verbatim and has not been assigned to a section
-yet. Pull items up into a sorted section as soon as they have a concrete plan.
+- [ ] TODO — ARIA role annotations on exported egui widgets (screen-reader).
+- [ ] TODO — RTL canvas mode: flip origin for right-to-left authoring.
+- [ ] TODO — Locale string externalisation: export to `strings.toml` and generate
+      `t!("key")` calls.
+- [ ] TODO — Keyboard-only authoring: every canvas action without a mouse.
+- [ ] TODO — Localization workflow: `.po` / `.ftl` / `.arb` export.
 
-- Design token system: named color/spacing/radius variables that replace
-  hard-coded values throughout the widget tree; export as CSS custom properties
-  or Rust constants
-- Color theme editor: visual editor for the `.rktheme` format; live preview
-  across all palette widgets; export as Figma-compatible token JSON
-- Template marketplace: upload/download `.rktp` template packs from a URL;
-  import validation + conflict resolution
-- Component library sharing: publish a set of `.rkwd` descriptors as a named
-  library; version pinning
-- Multiplayer / collaboration: two designers on the same `.rohkai.json`
-  simultaneously; CRDT-based merge (very far future)
-- Design-to-code diff: given a Figma/Sketch import and a live canvas, highlight
-  which widgets diverge from the design
-- Visual state preview: click into hover/pressed/disabled state in the designer
-  without running the app
-- Pixel-perfect grid snapping modes: isometric, 8pt grid, 4pt grid, custom
-- Canvas annotations: sticky notes, margin comments, redline measurements
-- Performance profiling overlay: show per-widget repaint cost in designer mode
-- Export to SwiftUI / Compose / React Native stubs (long range)
-- Localization workflow: mark strings as translatable in the designer; generate
-  `.po` / `.ftl` / `.arb` files
-- Custom font loading in designer: load a `.ttf`/`.otf` and preview text widgets
-  with that font immediately
-- Widget property inspector scripting: run a user Lua/Rhai script over the
-  selected widget's props for batch editing
-- Smart layout suggestions: AI-assisted layout reflow proposals when widgets
-  overlap or overflow
-- Undo/redo command pattern (full): replace snapshot undo with true command
-  objects for granular undo steps and better memory efficiency
-- Canvas ruler guides: drag from ruler to create named guide lines that snap
-  all widgets; save guides in the project file (partially done — named guides;
-  persist guides across save/load TBD)
-- Pressure-sensitive canvas input: support stylus/tablet pressure for
-  future freehand drawing tools
-- Dark mode canvas: separate dark/light canvas background from app theme
+## S12 — ★ LARGE — Database Depth
+
+SQLite slice ships; build out the rest. Multi-backend crates require explicit
+user approval at stage start (Invariant 10 holds throughout: `params![]` only,
+never `format!()` SQL). Refactored:
+
+- [x] DONE — `DatabaseEngine` trait + `SqliteEngine`; `DbBinding`; `DbPanelState`
+      window; `load_from_db()` codegen.
+- [ ] TODO — Visual query builder: pick table, columns, WHERE filter.
+- [ ] TODO — Schema viewer: tables and columns in a side panel.
+- [ ] TODO — Design-time data preview: sample rows without runtime execution.
+- [ ] TODO — Multi-backend behind `DatabaseEngine`: PostgreSQL, MySQL, Supabase
+      (approved crate(s) only).
+- [ ] TODO — Async query codegen + connection-pool AppState field.
+
+## S13 — Component Runtime Depth
+
+- [x] DONE — Timer (mpsc tick scheduler) + StateMachine (FSM schema + editor)
+      runtime slice.
+- [ ] TODO — HTTP request component: real runtime via an approved crate
+      (`ureq`/`reqwest`); response parse; error UI.
+- [ ] TODO — Full runtime component dispatch (timers fire FSM transitions; data
+      sources push to bound widgets).
+- [ ] TODO — Widget property-inspector scripting: a user `rhai`/`lua` script over
+      the selected widget's props for batch edits (approved crate only).
+- [ ] TODO — Smart layout suggestions: reflow proposals when widgets
+      overlap/overflow.
+
+## S14 — ★ LARGE — SVG Animation
+
+Formerly the "Animation / SMIL / CSS animation" non-goals. Requires a clock +
+repaint loop the static profile never had. Refactored:
+
+- [x] DONE — `<animate>`/`animateTransform`/`animateMotion`/`set`/`mpath` and CSS
+      at-rules are **diagnosed** (not silently dropped).
+- [ ] TODO — Animation clock + bounded repaint loop in the renderer host.
+- [ ] TODO — SMIL: `animate`, `animateTransform`, `animateMotion` (+ `mpath`),
+      `set`; begin/end/dur/repeat timing.
+- [ ] TODO — CSS `@keyframes` + `transition` execution.
+- [ ] TODO — Determinism + bound tests (no unbounded animation work).
+
+## S15 — Platform Targets & Packaging
+
+- [x] DONE — WASM export, browser preview, Trunk config.
+- [ ] TODO — WASM unsupported-widget diagnostic report.
+- [ ] TODO — WASM in-app build status panel (Trunk output) + `.wasm` size budget.
+- [ ] TODO — Native desktop packaging: `.deb` / `.rpm` / `.msi` / `.dmg`.
+- [ ] TODO — Pixel-perfect grid snapping modes (isometric, 8pt, 4pt, custom).
+- [ ] TODO — Canvas annotations: sticky notes, redline measurements.
+- [ ] TODO — Performance profiling overlay: per-widget repaint cost in designer.
+
+## S16 — ★ LARGE — foreignObject + External Resource Policy
+
+Formerly "`foreignObject` content rendering" and "external network/file loading"
+non-goals. Both need new infrastructure and a security model. Refactored:
+
+- [x] DONE — `foreignObject` and external refs are **diagnosed / fail-closed**.
+- [ ] TODO — Minimal HTML/CSS sub-layout engine to rasterize `foreignObject`
+      content (bounded, deterministic, zero-dep).
+- [ ] TODO — Opt-in external-resource policy: a sandbox that can load `file:`/
+      `https:` images/fonts/stylesheets **only** under explicit, per-document
+      user consent, with allowlist + size/time caps. Default stays fail-closed.
+
+## S17 — Sharing & Ecosystem
+
+- [ ] TODO — Template marketplace: upload/download `.rktp` packs with import
+      validation + conflict resolution.
+- [ ] TODO — Component-library sharing: publish a set of `.rkwd` descriptors as a
+      named, version-pinned library.
+- [ ] TODO — Design-to-code diff: import a Figma/Sketch design and highlight
+      which canvas widgets diverge.
+
+## S18 — ★ LARGE — SVG Scripting Sandbox
+
+Formerly "Scripting (deliberately out of scope / security)". De-deferred but
+placed late and behind a hard opt-in because executing untrusted SVG script is
+the single most dangerous lane. Refactored:
+
+- [x] DONE — `<script>` is **hard-rejected** by the security gate (default stays
+      this way unless the user opts a document in).
+- [ ] TODO — Isolated, capability-free pure-Rust ECMAScript interpreter
+      (no DOM, no network, no FS) behind explicit per-document opt-in.
+- [ ] TODO — A minimal scriptable DOM surface gated by the S16 resource policy.
+- [ ] TODO — Execution budgets (instruction/time/memory caps) + determinism
+      tests + a fuzz lane.
+
+## S19 — ★ LARGE — Multi-Document & Windowing
+
+- [ ] TODO — Model-based item views (MVC tree, virtual list 100k+) — generalises
+      S6 into a reusable model/view framework.
+- [ ] TODO — Dock Widget: dockable panels, split views, tab groups.
+- [ ] TODO — MDI Area: floating sub-windows inside the document.
+- [ ] TODO — Multi-window support: secondary eframe viewports.
+
+## S20 — Code Intelligence
+
+- [ ] TODO — Code-panel IntelliSense: Rust keyword completion, local-binding
+      suggestions, handler autocomplete.
+- [ ] TODO — Smart layout suggestions promoted to AI-assisted reflow (if S13's
+      heuristic version proves valuable).
+
+## S21 — ★ LARGE — Cross-Framework Export & Collaboration
+
+The far-future cluster. Each is independently large; grouped because they are the
+last non-renderer work.
+
+- [ ] TODO — Export to SwiftUI / Jetpack Compose / React Native stubs.
+- [ ] TODO — Multiplayer / collaboration: two designers on one `.rohkai.json`,
+      CRDT-based merge.
+
+## S22 — ★★ FINAL — In-House Renderer (Stage 15)
+
+Final implementation stage by default. It starts only when the user explicitly
+directs execution, the applicable bespoke-foundation milestones above have been
+reviewed, and a separate architecture decision is ratified. This is where the
+two architecture invariants pay off: RohKai stops depending on egui's render
+layer and gains full visual control **without** any external renderer dependency
+or C FFI.
+
+- [ ] TODO — Replace the egui rendering layer with a RohKai-owned pure-Rust
+      renderer.
+- [ ] TODO — The widget descriptor format drives the renderer's widget model
+      directly.
+- [ ] TODO — Zero transient C dependencies in the rendering stack.
+- [ ] TODO — Custom layout engine with constraint + flex support (absorbs S1/S5).
+- [ ] TODO — GPU-accelerated rasterizer (wgpu-based or an own path rasterizer).
+- [ ] TODO — All previously constrained visual properties become available:
+      arbitrary shapes, gradients, shadows, blend modes per widget.
+- [ ] TODO — Text pipeline uses the S3 shaping engine end-to-end.
+- [ ] TODO — Native-quality controls + platform integrations delivered here
+      (the capability formerly mislabelled "QAxWidget"), in pure Rust.
 
 ---
 
@@ -337,10 +447,12 @@ Cross-referenced for context. Full history in `docs/DEVLOG.md` and git log.
 |---|---|
 | Canvas: drag, select, resize, rubber-band, z-order, snap, smart guides, rulers | ✅ |
 | Widgets: Button, Label, TextInput, Slider, Checkbox, Frame, ComboBox, RadioButton, ProgressBar, TextArea, SpinBox, FontComboBox, GroupBox, VLayout, HLayout, ScrollArea, GridLayout, TabWidget, ToolButton, CommandLinkButton, DialogButtonBox, MathLabel, FilePicker, Chart, Table, ListView, TreeView, StackedWidget, ToolBox, Image | ✅ |
-| Custom widgets: `.rkwd` descriptor format, Advanced Editor, Guided Builder, Visual Maker MVP | ✅ |
+| Custom widgets: `.rkwd` descriptor format, Advanced Editor, Guided Builder, Visual Maker MVP, `.rkwb` bundle | ✅ |
 | Codegen: live egui Rust output, Lazare bidirectional sync, Ctrl+F search, symbol list, clickable diagnostics | ✅ |
 | Export: complete compilable Rust project, WASM export, browser preview | ✅ |
-| SVG renderer: R0–R12 complete (geometry, gradients, clip, masks, filters tier-1+2, patterns, markers, text, namespace recovery) | ✅ |
+| SVG renderer: R0–R12 complete + filter tier-3 (geometry, gradients, clip, masks, filters 1/2/3, patterns, markers, text, namespace recovery) | ✅ |
 | Stage 14: snapshot undo/redo | ✅ |
 | Stage 11: async task wiring, Rust wiring panel, iterator/trait snippets, Object Inspector | ✅ |
-| Engineering invariants: 9 bug-class guards, 412 tests, zero clippy warnings | ✅ |
+| P2.3 constraints, P2.4 layout UX, P2.5 formula/timer/FSM/shortcuts/.rkwb, P2.6 SQLite DB | ✅ (depth gaps tracked in S1/S6/S12) |
+| Crate promoted to lib+bin; `fidelity_audit.rs` cross-surface parity harness | ✅ |
+| Engineering invariants + 495 lib / 11 integration / 1 doctest, zero clippy warnings | ✅ |

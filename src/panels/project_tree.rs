@@ -35,13 +35,13 @@ pub fn show(
     }
 
     // Default selection: first file.
-    if selected_file.is_none() {
-        if let Some((p, _)) = files.first() {
-            *selected_file = Some(p.clone());
-        }
+    if selected_file.is_none()
+        && let Some((p, _)) = files.first()
+    {
+        *selected_file = Some(p.clone());
     }
 
-    let screen = ctx.screen_rect();
+    let screen = ctx.content_rect();
     let default_pos = egui::pos2(
         (screen.center().x - 360.0).max(screen.min.x + 20.0),
         (screen.center().y - 260.0).max(screen.min.y + 20.0),

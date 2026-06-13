@@ -13,8 +13,8 @@ fn main() -> eframe::Result<()> {
 struct HelloApp;
 
 impl eframe::App for HelloApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        egui::CentralPanel::default().show_inside(root_ui, |ui| {
             if ui.button("Hello").clicked() {
                 println!("clicked!");
             }

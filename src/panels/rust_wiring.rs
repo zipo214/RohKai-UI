@@ -14,7 +14,7 @@ pub fn show(ctx: &egui::Context, open: &mut bool, wiring: &mut RustWiring) -> bo
     }
     let mut keep_open = true;
 
-    let screen = ctx.screen_rect();
+    let screen = ctx.content_rect();
     let default_pos = egui::pos2(
         (screen.center().x - 320.0).max(screen.min.x + 20.0),
         (screen.center().y - 260.0).max(screen.min.y + 20.0),

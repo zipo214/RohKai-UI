@@ -1,7 +1,8 @@
 use crate::codegen::widget_descriptor::{DescriptorPropType, WidgetDescriptor};
 use crate::project::schema::{
-    CustomProp, CustomPropType, DataColumn, DataColumnType, HandlerResult, LayoutCrossAlign,
-    Orientation, SizePolicy, TextAlign, WidgetEvent, WidgetInstance, WidgetKind,
+    CrossAlign, CustomProp, CustomPropType, DataColumn, DataColumnType, DbBinding, HAlign,
+    HandlerResult, LayoutCrossAlign, Orientation, SizePolicy, TextAlign, VAlign, WidgetEvent,
+    WidgetInstance, WidgetKind,
 };
 use crate::project::ui_tree::UiTree;
 use uuid::Uuid;
@@ -75,6 +76,13 @@ fn show_content_inner(
     let mut props_action = PropertiesAction::None;
     let mut child_move: Option<(Uuid, Uuid, usize)> = None;
 
+    // Compute parent kind before taking the mutable borrow of the widget, so
+    // show_layout_child_props can accept (&mut WidgetInstance, parent_kind).
+    let parent_kind_for_child: Option<WidgetKind> = tree
+        .parent_of(id)
+        .and_then(|pid| tree.widgets.iter().find(|pw| pw.id == pid))
+        .map(|p| p.kind.clone());
+
     {
         let Some(w) = tree.get_mut(id) else {
             ui.label("Widget not found.");
@@ -131,6 +139,10 @@ fn show_content_inner(
                 }
             }
         }
+
+        // Per-child layout controls (shown whenever this widget is a child of a
+        // VLayout, HLayout, or GridLayout).
+        show_layout_child_props(ui, w, parent_kind_for_child.as_ref());
     } // w borrow ends
 
     if do_delete {
@@ -144,6 +156,20 @@ fn show_content_inner(
     }
 
     show_event_handler(ui, tree, id, &mut props_action);
+    show_db_binding(ui, tree, id);
+
+    // P2.3 — constraint editor (shown for all widget kinds). Validation needs
+    // cross-widget context, so compute it over the whole tree before the
+    // mutable borrow, then pass this widget's messages in.
+    let constraint_errors: Vec<String> =
+        crate::project::constraint_solver::validate_constraints(tree)
+            .into_iter()
+            .filter(|e| e.widget_id() == id)
+            .map(|e| e.message())
+            .collect();
+    if let Some(w) = tree.get_mut(id) {
+        show_constraints(ui, w, &constraint_errors);
+    }
 
     props_action
 }
@@ -513,7 +539,7 @@ fn field_text_resettable(ui: &mut egui::Ui, label: &str, value: &mut String, def
         resp.context_menu(|ui| {
             if ui.button("Reset to default").clicked() {
                 *value = default_value.to_owned();
-                ui.close_menu();
+                ui.close();
             }
         });
     });
@@ -536,7 +562,7 @@ fn show_geometry_resettable(ui: &mut egui::Ui, w: &mut WidgetInstance) {
             rx.context_menu(|ui| {
                 if ui.button("Reset to default").clicked() {
                     w.rect.x = 0.0;
-                    ui.close_menu();
+                    ui.close();
                 }
             });
             ui.label(egui::RichText::new("Y").small());
@@ -544,7 +570,7 @@ fn show_geometry_resettable(ui: &mut egui::Ui, w: &mut WidgetInstance) {
             ry.context_menu(|ui| {
                 if ui.button("Reset to default").clicked() {
                     w.rect.y = 0.0;
-                    ui.close_menu();
+                    ui.close();
                 }
             });
             ui.end_row();
@@ -553,7 +579,7 @@ fn show_geometry_resettable(ui: &mut egui::Ui, w: &mut WidgetInstance) {
             rw.context_menu(|ui| {
                 if ui.button("Reset to default").clicked() {
                     w.rect.w = dw;
-                    ui.close_menu();
+                    ui.close();
                 }
             });
             ui.label(egui::RichText::new("H").small());
@@ -561,7 +587,7 @@ fn show_geometry_resettable(ui: &mut egui::Ui, w: &mut WidgetInstance) {
             rh.context_menu(|ui| {
                 if ui.button("Reset to default").clicked() {
                     w.rect.h = dh;
-                    ui.close_menu();
+                    ui.close();
                 }
             });
             ui.end_row();
@@ -619,14 +645,14 @@ fn binding_field(ui: &mut egui::Ui, w: &mut WidgetInstance) {
             }
         }
     });
-    if let Some(b) = &w.state_binding {
-        if !crate::codegen::rust::is_valid_identifier(b) {
-            ui.label(
-                egui::RichText::new("⚠ invalid identifier")
-                    .small()
-                    .color(RED_WARN),
-            );
-        }
+    if let Some(b) = &w.state_binding
+        && !crate::codegen::rust::is_valid_identifier(b)
+    {
+        ui.label(
+            egui::RichText::new("⚠ invalid identifier")
+                .small()
+                .color(RED_WARN),
+        );
     }
 }
 
@@ -986,19 +1012,18 @@ fn show_image(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) -
                  Large SVGs (>10 KB) make the code panel very noisy — \
                  use the source viewer below for inspection instead.",
             );
-        if w.expand_svg_inline {
-            if let Some(src) = w.svg_source.as_deref() {
-                if src.len() > 10_000 {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "Warning: SVG is {} KB — code panel will be verbose.",
-                            src.len() / 1024
-                        ))
-                        .small()
-                        .color(egui::Color32::from_rgb(251, 191, 36)),
-                    );
-                }
-            }
+        if w.expand_svg_inline
+            && let Some(src) = w.svg_source.as_deref()
+            && src.len() > 10_000
+        {
+            ui.label(
+                egui::RichText::new(format!(
+                    "Warning: SVG is {} KB — code panel will be verbose.",
+                    src.len() / 1024
+                ))
+                .small()
+                .color(egui::Color32::from_rgb(251, 191, 36)),
+            );
         }
         ui.separator();
         if let Some(src) = w.svg_source.as_deref() {
@@ -1071,13 +1096,13 @@ fn show_event_handler(
         let Some(w) = tree.get_mut(id) else { return };
 
         // Migrate legacy event_handler → on_click / on_change on first display.
-        if let Some(ref eh) = w.event_handler.clone() {
-            if !eh.is_empty() {
-                if w.kind == WidgetKind::Button && w.on_click.is_empty() {
-                    w.on_click = eh.clone();
-                } else if w.kind != WidgetKind::Button && w.on_change.is_empty() {
-                    w.on_change = eh.clone();
-                }
+        if let Some(ref eh) = w.event_handler.clone()
+            && !eh.is_empty()
+        {
+            if w.kind == WidgetKind::Button && w.on_click.is_empty() {
+                w.on_click = eh.clone();
+            } else if w.kind != WidgetKind::Button && w.on_change.is_empty() {
+                w.on_change = eh.clone();
             }
         }
 
@@ -1156,10 +1181,9 @@ fn show_event_handler(
             .checkbox(&mut is_async, "⚙ Run async (background thread)")
             .on_hover_text("Wrap the handler in std::thread::spawn (no tokio)")
             .changed()
+            && let Some(w) = tree.get_mut(id)
         {
-            if let Some(w) = tree.get_mut(id) {
-                w.async_handler = is_async;
-            }
+            w.async_handler = is_async;
         }
 
         // Error-mode dropdown
@@ -1181,10 +1205,10 @@ fn show_event_handler(
                     }
                 });
         });
-        if let Some(w) = tree.get_mut(id) {
-            if w.handler_result != mode {
-                w.handler_result = mode;
-            }
+        if let Some(w) = tree.get_mut(id)
+            && w.handler_result != mode
+        {
+            w.handler_result = mode;
         }
     }
 }
@@ -1207,6 +1231,99 @@ fn event_field_set(w: &mut WidgetInstance, field: EventField, value: String) {
         EventField::LostFocus => w.on_lost_focus = value,
         EventField::DragStopped => w.on_drag_stopped = value,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Stage 13 — DB Binding section
+// ---------------------------------------------------------------------------
+
+fn show_db_binding(ui: &mut egui::Ui, tree: &mut UiTree, id: Uuid) {
+    ui.separator();
+    ui.label(egui::RichText::new("DB Binding").small().weak());
+
+    let has_binding = tree
+        .get_mut(id)
+        .map(|w| w.db_binding.is_some())
+        .unwrap_or(false);
+
+    ui.horizontal(|ui| {
+        if ui
+            .selectable_label(!has_binding, "None")
+            .on_hover_text("No database binding")
+            .clicked()
+            && has_binding
+            && let Some(w) = tree.get_mut(id)
+        {
+            w.db_binding = None;
+        }
+        if ui
+            .selectable_label(has_binding, "Bound")
+            .on_hover_text("Bind this widget value to a database column")
+            .clicked()
+            && !has_binding
+            && let Some(w) = tree.get_mut(id)
+        {
+            w.db_binding = Some(DbBinding::default());
+        }
+    });
+
+    if !has_binding {
+        return;
+    }
+
+    // Collect current values — borrow briefly, clone, release.
+    let (table_cur, column_cur) = tree
+        .get_mut(id)
+        .and_then(|w| w.db_binding.as_ref())
+        .map(|b| (b.table.clone(), b.column.clone()))
+        .unwrap_or_default();
+
+    let mut table_buf = table_cur;
+    let mut column_buf = column_cur;
+
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Table").small().weak());
+        if ui
+            .add(
+                egui::TextEdit::singleline(&mut table_buf)
+                    .hint_text("table_name")
+                    .desired_width(120.0),
+            )
+            .changed()
+        {
+            let trimmed = table_buf.trim().to_owned();
+            if let Some(w) = tree.get_mut(id)
+                && let Some(b) = w.db_binding.as_mut()
+            {
+                b.table = trimmed;
+            }
+        }
+    });
+
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Column").small().weak());
+        if ui
+            .add(
+                egui::TextEdit::singleline(&mut column_buf)
+                    .hint_text("column_name")
+                    .desired_width(120.0),
+            )
+            .changed()
+        {
+            let trimmed = column_buf.trim().to_owned();
+            if let Some(w) = tree.get_mut(id)
+                && let Some(b) = w.db_binding.as_mut()
+            {
+                b.column = trimmed;
+            }
+        }
+    });
+
+    ui.label(
+        egui::RichText::new("Codegen emits db_conn field + load_from_db() stub")
+            .small()
+            .weak(),
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1253,11 +1370,9 @@ fn show_group_controls(ui: &mut egui::Ui, tree: &mut UiTree, selected: &mut Vec<
             do_ungroup = true;
         }
 
-        if do_group {
-            if let Some(new_id) = tree.group(selected) {
-                selected.clear();
-                selected.push(new_id);
-            }
+        if do_group && let Some(new_id) = tree.group(selected) {
+            selected.clear();
+            selected.push(new_id);
         }
         if do_ungroup {
             let frame_ids: Vec<Uuid> = selected
@@ -1306,8 +1421,13 @@ fn align_button(
     let size = egui::vec2(28.0, 28.0);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     let visuals = ui.style().interact(&response);
-    ui.painter()
-        .rect(rect, visuals.rounding, visuals.bg_fill, visuals.bg_stroke);
+    ui.painter().rect(
+        rect,
+        visuals.corner_radius,
+        visuals.bg_fill,
+        visuals.bg_stroke,
+        egui::StrokeKind::Inside,
+    );
     let inner = rect.shrink(3.0);
     draw_fn(ui.painter(), inner);
     response.on_hover_text(tooltip).clicked()
@@ -1710,7 +1830,8 @@ fn show_layout_container(
             ui.separator();
             ui.label(egui::RichText::new("Grid slots").small().weak());
             let columns = w.props.grid_columns.clamp(1, 12);
-            for (idx, child_id) in w.children.iter().copied().enumerate() {
+            let child_ids = w.children.clone();
+            for (idx, child_id) in child_ids.iter().copied().enumerate() {
                 ui.horizontal(|ui| {
                     let row = idx / columns + 1;
                     let col = idx % columns + 1;
@@ -1719,7 +1840,35 @@ fn show_layout_container(
                             .small()
                             .monospace(),
                     );
-                    ui.label(short_uuid(child_id));
+                    let mut slot_name = w
+                        .props
+                        .grid_slot_names
+                        .get(idx)
+                        .cloned()
+                        .unwrap_or_default();
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut slot_name)
+                            .hint_text(format!("Slot {}", idx + 1))
+                            .desired_width(92.0),
+                        )
+                        .on_hover_text(
+                            "Stable name for this grid cell. Dragging a child changes which widget occupies the named slot.",
+                        )
+                        .changed()
+                    {
+                        w.props.grid_slot_names.resize(idx + 1, String::new());
+                        w.props.grid_slot_names[idx] = slot_name;
+                        while w
+                            .props
+                            .grid_slot_names
+                            .last()
+                            .is_some_and(String::is_empty)
+                        {
+                            w.props.grid_slot_names.pop();
+                        }
+                    }
+                    ui.label(egui::RichText::new(short_uuid(child_id)).small().weak());
                     if ui
                         .add_enabled(idx > 0, egui::Button::new("↑"))
                         .on_hover_text("Move child to previous grid slot")
@@ -1728,7 +1877,7 @@ fn show_layout_container(
                         *child_move = Some((w.id, child_id, idx - 1));
                     }
                     if ui
-                        .add_enabled(idx + 1 < w.children.len(), egui::Button::new("↓"))
+                        .add_enabled(idx + 1 < child_ids.len(), egui::Button::new("↓"))
                         .on_hover_text("Move child to next grid slot")
                         .clicked()
                     {
@@ -1791,9 +1940,10 @@ fn show_math_label(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bo
         );
     });
     if !w.props.formula_expr.is_empty() {
-        match crate::codegen::formula::parse_formula(&w.props.formula_expr) {
+        // P2.5: use validate() + deps() for the formula depth API.
+        match crate::codegen::formula::validate(&w.props.formula_expr) {
             Ok(node) => {
-                let vars = crate::codegen::formula::collect_variables(&node);
+                let vars = crate::codegen::formula::deps(&node);
                 let vars_str = if vars.is_empty() {
                     "no variables".to_owned()
                 } else {
@@ -1842,6 +1992,81 @@ fn show_file_picker(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut b
     show_enabled(ui, w);
     show_custom_props(ui, w);
     show_delete_button(ui, do_delete);
+}
+
+/// Show per-child layout alignment + flex controls when the selected widget
+/// lives inside a VLayout, HLayout, or GridLayout parent.
+/// `parent_kind` is pre-computed from `UiTree::parent_of` to avoid a
+/// simultaneous mutable + shared borrow of the tree.
+fn show_layout_child_props(
+    ui: &mut egui::Ui,
+    w: &mut WidgetInstance,
+    parent_kind: Option<&WidgetKind>,
+) {
+    let is_vlayout_child = matches!(parent_kind, Some(WidgetKind::VLayout));
+    let is_hlayout_child = matches!(parent_kind, Some(WidgetKind::HLayout));
+    let is_gridlayout_child = matches!(parent_kind, Some(WidgetKind::GridLayout));
+
+    if is_vlayout_child || is_hlayout_child {
+        ui.separator();
+        ui.label(egui::RichText::new("Layout child").small().weak());
+        // Cross-axis alignment override
+        let cross_axis_label = if is_vlayout_child {
+            "Cross align (H)"
+        } else {
+            "Cross align (V)"
+        };
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(cross_axis_label).small());
+            let current = w.child_cross_align.unwrap_or(CrossAlign::Start);
+            // Start/Center/End only — these are the cross-aligns the layout codegen
+            // (egui_emitter + export) honors. Stretch has no proven egui codegen
+            // path, so it is not offered (avoids a half-wired control).
+            for variant in [CrossAlign::Start, CrossAlign::Center, CrossAlign::End] {
+                if ui
+                    .selectable_label(current == variant, variant.label())
+                    .clicked()
+                {
+                    w.child_cross_align = if variant == CrossAlign::Start {
+                        None
+                    } else {
+                        Some(variant)
+                    };
+                }
+            }
+        });
+        // Flex factor
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Flex").small());
+            let mut flex = w.child_flex;
+            if ui
+                .add(
+                    egui::DragValue::new(&mut flex)
+                        .range(0.0..=100.0_f32)
+                        .speed(0.05),
+                )
+                .on_hover_text("0 = fixed size; >0 = proportional flex growth")
+                .changed()
+            {
+                w.child_flex = flex.max(0.0);
+            }
+        });
+    }
+
+    if is_gridlayout_child {
+        ui.separator();
+        ui.label(egui::RichText::new("Grid child").small().weak());
+        egui::Grid::new("grid_child_props")
+            .num_columns(4)
+            .spacing([4.0, 2.0])
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Col span").small());
+                ui.add(egui::DragValue::new(&mut w.grid_col_span).range(1..=12_u32));
+                ui.label(egui::RichText::new("Row span").small());
+                ui.add(egui::DragValue::new(&mut w.grid_row_span).range(1..=12_u32));
+                ui.end_row();
+            });
+    }
 }
 
 /// Generic editor for widgets whose content is the `options` list
@@ -2158,6 +2383,226 @@ fn show_custom(
 }
 
 // ---------------------------------------------------------------------------
+// P2.3 — Constraint editor
+// ---------------------------------------------------------------------------
+
+/// Collapsible "Constraints" section shown for every widget kind.
+/// `errors` are this widget's [`ConstraintError`] messages, pre-computed over the
+/// whole tree by the caller (validation needs cross-widget context).
+fn show_constraints(ui: &mut egui::Ui, w: &mut WidgetInstance, errors: &[String]) {
+    let id = w.id;
+    ui.separator();
+    egui::CollapsingHeader::new(egui::RichText::new("Constraints").small())
+        .id_salt(("constraints", id))
+        .default_open(false)
+        .show(ui, |ui| {
+            let c = &mut w.constraints;
+
+            // --- Alignment anchors ---
+            egui::Grid::new(("constraints_grid", id))
+                .num_columns(2)
+                .spacing([8.0, 2.0])
+                .show(ui, |ui| {
+                    // H Align
+                    ui.label(egui::RichText::new("H Align").small().weak());
+                    egui::ComboBox::from_id_salt(("h_align_cb", id))
+                        .selected_text(h_align_label(c.h_align))
+                        .width(110.0)
+                        .show_ui(ui, |ui| {
+                            let none_resp = ui.selectable_value(&mut c.h_align, None, "None");
+                            if none_resp.clicked() {
+                                c.h_align = None;
+                            }
+                            ui.selectable_value(&mut c.h_align, Some(HAlign::Leading), "Leading");
+                            ui.selectable_value(&mut c.h_align, Some(HAlign::Trailing), "Trailing");
+                            ui.selectable_value(&mut c.h_align, Some(HAlign::Center), "Center");
+                            ui.selectable_value(&mut c.h_align, Some(HAlign::Stretch), "Stretch");
+                        });
+                    ui.end_row();
+
+                    // V Align
+                    ui.label(egui::RichText::new("V Align").small().weak());
+                    egui::ComboBox::from_id_salt(("v_align_cb", id))
+                        .selected_text(v_align_label(c.v_align))
+                        .width(110.0)
+                        .show_ui(ui, |ui| {
+                            let none_resp = ui.selectable_value(&mut c.v_align, None, "None");
+                            if none_resp.clicked() {
+                                c.v_align = None;
+                            }
+                            ui.selectable_value(&mut c.v_align, Some(VAlign::Top), "Top");
+                            ui.selectable_value(&mut c.v_align, Some(VAlign::Bottom), "Bottom");
+                            ui.selectable_value(&mut c.v_align, Some(VAlign::Center), "Center");
+                            ui.selectable_value(&mut c.v_align, Some(VAlign::Stretch), "Stretch");
+                        });
+                    ui.end_row();
+
+                    // Aspect ratio
+                    ui.label(egui::RichText::new("Aspect ratio").small().weak());
+                    ui.horizontal(|ui| {
+                        let mut ar_str = c
+                            .aspect_ratio
+                            .map(|r| format!("{r:.2}"))
+                            .unwrap_or_default();
+                        if ui
+                            .add(
+                                egui::TextEdit::singleline(&mut ar_str)
+                                    .hint_text("w:h (e.g. 1.78)")
+                                    .desired_width(70.0),
+                            )
+                            .changed()
+                        {
+                            c.aspect_ratio = ar_str.trim().parse::<f32>().ok().filter(|&v| v > 0.0);
+                        }
+                        if c.aspect_ratio.is_some()
+                            && ui.small_button("✕").on_hover_text("Remove lock").clicked()
+                        {
+                            c.aspect_ratio = None;
+                        }
+                    });
+                    ui.end_row();
+                });
+
+            // --- Min / Max size ---
+            ui.separator();
+            ui.label(egui::RichText::new("Size limits").small().weak());
+            egui::Grid::new(("constraints_minmax", id))
+                .num_columns(4)
+                .spacing([4.0, 2.0])
+                .show(ui, |ui| {
+                    // Min W
+                    ui.label(egui::RichText::new("Min W").small().weak());
+                    optional_drag(ui, &mut c.min_w, 0.0..=4096.0, ("min_w", id));
+                    // Max W
+                    ui.label(egui::RichText::new("Max W").small().weak());
+                    optional_drag(ui, &mut c.max_w, 0.0..=4096.0, ("max_w", id));
+                    ui.end_row();
+                    // Min H
+                    ui.label(egui::RichText::new("Min H").small().weak());
+                    optional_drag(ui, &mut c.min_h, 0.0..=4096.0, ("min_h", id));
+                    // Max H
+                    ui.label(egui::RichText::new("Max H").small().weak());
+                    optional_drag(ui, &mut c.max_h, 0.0..=4096.0, ("max_h", id));
+                    ui.end_row();
+                });
+
+            // --- Margin ---
+            ui.separator();
+            ui.label(egui::RichText::new("Margin (T R B L)").small().weak());
+            egui::Grid::new(("constraints_margin", id))
+                .num_columns(4)
+                .spacing([4.0, 2.0])
+                .show(ui, |ui| {
+                    for (label, idx) in [("T", 0usize), ("R", 1), ("B", 2), ("L", 3)] {
+                        ui.label(egui::RichText::new(label).small().weak());
+                        ui.add(
+                            egui::DragValue::new(&mut c.margin[idx])
+                                .range(0.0..=200.0_f32)
+                                .speed(0.5)
+                                .suffix(" px"),
+                        );
+                    }
+                    ui.end_row();
+                });
+
+            // --- Equal-size links ---
+            ui.separator();
+            ui.label(
+                egui::RichText::new("Equal size to (widget ID)")
+                    .small()
+                    .weak(),
+            );
+            egui::Grid::new(("constraints_eqsize", id))
+                .num_columns(2)
+                .spacing([4.0, 2.0])
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new("Equal W").small().weak());
+                    optional_id_field(ui, &mut c.equal_width_to, ("eq_w", id));
+                    ui.end_row();
+                    ui.label(egui::RichText::new("Equal H").small().weak());
+                    optional_id_field(ui, &mut c.equal_height_to, ("eq_h", id));
+                    ui.end_row();
+                });
+
+            // --- Validation (cross-widget; conflicts/cycles detected over the
+            //     whole tree by the caller) ---
+            if !errors.is_empty() {
+                ui.separator();
+                for msg in errors {
+                    ui.colored_label(egui::Color32::from_rgb(220, 80, 80), format!("⚠ {msg}"));
+                }
+            }
+        });
+}
+
+fn h_align_label(a: Option<HAlign>) -> &'static str {
+    match a {
+        None => "None",
+        Some(HAlign::Leading) => "Leading",
+        Some(HAlign::Trailing) => "Trailing",
+        Some(HAlign::Center) => "Center",
+        Some(HAlign::Stretch) => "Stretch",
+    }
+}
+
+fn v_align_label(a: Option<VAlign>) -> &'static str {
+    match a {
+        None => "None",
+        Some(VAlign::Top) => "Top",
+        Some(VAlign::Bottom) => "Bottom",
+        Some(VAlign::Center) => "Center",
+        Some(VAlign::Stretch) => "Stretch",
+    }
+}
+
+/// Render a `DragValue` for an `Option<f32>` field — shows `0.0` placeholder
+/// when `None`; sets to `Some` on first interaction; clears when reset button clicked.
+fn optional_drag(
+    ui: &mut egui::Ui,
+    field: &mut Option<f32>,
+    range: std::ops::RangeInclusive<f32>,
+    salt: impl std::hash::Hash,
+) {
+    ui.horizontal(|ui| {
+        let mut val = field.unwrap_or(0.0);
+        let resp = ui.add(
+            egui::DragValue::new(&mut val)
+                .range(range)
+                .speed(0.5)
+                .suffix(" px"),
+        );
+        if resp.changed() {
+            *field = Some(val);
+        }
+        if field.is_some() && ui.small_button("✕").on_hover_text("Clear limit").clicked() {
+            *field = None;
+        }
+        drop(salt); // consume salt to avoid unused-variable warning
+    });
+}
+
+/// Single-line text field for an `Option<String>` ID link.
+/// Shows empty hint when None; clears on ✕.
+fn optional_id_field(ui: &mut egui::Ui, field: &mut Option<String>, salt: impl std::hash::Hash) {
+    ui.horizontal(|ui| {
+        let mut text = field.clone().unwrap_or_default();
+        let resp = ui.add(
+            egui::TextEdit::singleline(&mut text)
+                .hint_text("widget id")
+                .desired_width(120.0)
+                .id(egui::Id::new(salt)),
+        );
+        if resp.changed() {
+            let t = text.trim().to_owned();
+            *field = if t.is_empty() { None } else { Some(t) };
+        }
+        if field.is_some() && ui.small_button("✕").on_hover_text("Remove link").clicked() {
+            *field = None;
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -2178,17 +2623,14 @@ mod reset_tests {
     #[test]
     fn reset_label_restores_kind_name() {
         let w = make_button();
-        // After reset, label should become the kind name.
         let kind_name = format!("{:?}", w.kind);
         assert_eq!(kind_name, "Button");
-        // Simulate reset: set label to kind name.
         assert_eq!(kind_name, "Button");
     }
 
     #[test]
     fn reset_geometry_restores_defaults() {
         let mut w = make_button();
-        // Simulate property reset.
         w.rect.x = 0.0;
         w.rect.y = 0.0;
         let default_inst = crate::widgets::default_for(&w.kind);
@@ -2198,7 +2640,6 @@ mod reset_tests {
         assert_eq!(w.rect.y, 0.0);
         assert!(w.rect.w > 0.0);
         assert!(w.rect.h > 0.0);
-        // Default button rect is 120×32
         assert!((w.rect.w - default_inst.rect.w).abs() < 0.01);
         assert!((w.rect.h - default_inst.rect.h).abs() < 0.01);
     }

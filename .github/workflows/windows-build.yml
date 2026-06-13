@@ -2,9 +2,9 @@ name: Windows Build
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
   workflow_dispatch:
 
 permissions:
@@ -20,7 +20,13 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          components: clippy,rustfmt
+
+      - name: Check toolchain and export version alignment
+        shell: pwsh
+        run: ./scripts/check-toolchain-alignment.ps1
 
       - name: Check formatting
         run: cargo fmt --check

@@ -142,6 +142,24 @@ foreach ($pair in $pairs) {
 Write-Host "INFO: Read the entry doc for your tool. Cross-read AGENTS.md/CLAUDE.md only for guidance drift, handoff, or multi-agent coordination work."
 
 Write-Host ""
+Write-Host "== Toolchain Alignment =="
+$ToolchainAlignment = Join-Path $ProjectRoot "scripts\check-toolchain-alignment.ps1"
+if (Test-Path $ToolchainAlignment) {
+    try {
+        $runner = Get-PwshCommand
+        if ($runner) {
+            & $runner -NoProfile -ExecutionPolicy Bypass -File $ToolchainAlignment
+        } else {
+            Write-Warning "Neither pwsh nor powershell is available for toolchain alignment check."
+        }
+    } catch {
+        Write-Warning "Toolchain alignment check failed: $_"
+    }
+} else {
+    Write-Warning "Missing scripts\check-toolchain-alignment.ps1"
+}
+
+Write-Host ""
 Write-Host "== Text Encoding Policy =="
 $TextEncodingPolicy = Join-Path $ProjectRoot "scripts\check-text-encoding.ps1"
 if (Test-Path $TextEncodingPolicy) {

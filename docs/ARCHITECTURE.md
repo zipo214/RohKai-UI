@@ -31,6 +31,29 @@ All panels read from it; the canvas mutates it in-place through `tree.get_mut(id
 `Custom(String)` holds the descriptor id (e.g. `"ply.button"`).
 `Image` holds SVG source in `WidgetInstance.svg_source`.
 
+### Behavior graph (visual event wiring)
+
+`AppProps.behaviors: Vec<Behavior>` is the beginner-facing counterpart to
+Stage 11 Rust Wiring. Each `Behavior` is one wire: `source_widget` +
+`event: WidgetEvent` + optional `target_widget` (canvas presentation only) +
+`action: VisualAction` (`Set`/`Add`/`Subtract`/`Toggle`/`CallHandler`, typed
+values via `ValueExpr`). Serde-defaulted, so pre-behavior `.rohkai.json` files
+load with an empty graph. `UiTree::remove`/`validate_and_repair` prune
+behaviors whose source widget is gone and clear dangling target refs.
+
+Canvas: `canvas::interaction` draws an open event socket (right edge) on every
+`is_event_capable()` widget and a closed state socket (left edge) on every
+bound widget with `kind_table::state_info`; left-drag between them creates a
+behavior, wires render as smooth cubic connectors, clicking a wire selects it.
+Panel: `panels::behaviors` (shown in the Properties tab) edits event, action
+type, field, amount/clamp, and deletion. Codegen: `codegen::behavior` is the
+single emitter both surfaces call — live code uses field prefix `""`
+(`self.progress`), export uses `"state."` (`self.state.progress`) — e.g.
+Button Click → Add(0.1, clamp 0..1) emits
+`self.state.progress = (self.state.progress + 0.1).clamp(0.0, 1.0);`.
+`field_collector` declares behavior-referenced fields that no widget binds;
+export registers `CallHandler` names so stubs always exist.
+
 #### WidgetProps fields
 
 | Field | Type | Used by |
@@ -157,6 +180,8 @@ src/codegen/
   widget_descriptor.rs — .rkwd descriptor types, loader, template engine, validation
   widget_bundle.rs     — .rkwb bundle (multi-descriptor JSON envelope)
   rust.rs              — Rust string/binding helpers (string_literal, field_binding)
+  behavior.rs          — Behavior graph emission: typed VisualAction → state
+                         mutation statements shared by live preview and export
   rust_wiring.rs       — Stage 11: mpsc channel fields, iterator-pipeline methods,
                          trait-impl blocks, async/Result-aware handler signatures +
                          call sites (std-only — no tokio)

@@ -1,13 +1,11 @@
 use crate::project::schema::{
-    default_combo_options, AppProps, Rect, WidgetInstance, WidgetKind, WidgetProps,
+    AppProps, Rect, WidgetInstance, WidgetKind, WidgetProps, default_combo_options,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use uuid::Uuid;
 
 pub const MIN_WIDGET_SIZE: f32 = 20.0;
-type LayoutParentSnapshot = (WidgetKind, Rect, f32, f32, bool, usize, Vec<Uuid>);
-
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct UiTree {
     pub widgets: Vec<WidgetInstance>,
@@ -66,6 +64,22 @@ impl UiTree {
         // Cascade: delete children of a removed container/layout.
         for child_id in children {
             self.remove(child_id);
+        }
+        self.prune_stale_behaviors();
+    }
+
+    /// Drop behaviors whose source widget no longer exists, and clear dangling
+    /// `target_widget` presentation refs. The action's field stays valid even
+    /// when the target widget is gone, so only the wire endpoint is cleared.
+    fn prune_stale_behaviors(&mut self) {
+        let live: HashSet<Uuid> = self.widgets.iter().map(|w| w.id).collect();
+        self.app_props
+            .behaviors
+            .retain(|b| live.contains(&b.source_widget));
+        for b in &mut self.app_props.behaviors {
+            if b.target_widget.is_some_and(|t| !live.contains(&t)) {
+                b.target_widget = None;
+            }
         }
     }
 
@@ -133,13 +147,13 @@ impl UiTree {
             .min()
             .unwrap_or(self.widgets.len());
         self.widgets.insert(earliest, frame);
-        if let Some(pid) = common_parent {
-            if let Some(parent) = self.get_mut(pid) {
-                let insert_idx = parent_insert_idx.unwrap_or(parent.children.len());
-                parent
-                    .children
-                    .insert(insert_idx.min(parent.children.len()), frame_id);
-            }
+        if let Some(pid) = common_parent
+            && let Some(parent) = self.get_mut(pid)
+        {
+            let insert_idx = parent_insert_idx.unwrap_or(parent.children.len());
+            parent
+                .children
+                .insert(insert_idx.min(parent.children.len()), frame_id);
         }
         self.reflow_layouts();
         Some(frame_id)
@@ -160,15 +174,15 @@ impl UiTree {
         if let Some(idx) = self.widgets.iter().position(|w| w.id == frame_id) {
             let children = self.widgets[idx].children.clone();
             self.widgets.remove(idx);
-            if let Some(pid) = parent_id {
-                if let Some(parent) = self.get_mut(pid) {
-                    parent.children.retain(|id| *id != frame_id);
-                    let insert_idx = parent_insert_idx.unwrap_or(parent.children.len());
-                    for (offset, child_id) in children.iter().enumerate() {
-                        parent
-                            .children
-                            .insert((insert_idx + offset).min(parent.children.len()), *child_id);
-                    }
+            if let Some(pid) = parent_id
+                && let Some(parent) = self.get_mut(pid)
+            {
+                parent.children.retain(|id| *id != frame_id);
+                let insert_idx = parent_insert_idx.unwrap_or(parent.children.len());
+                for (offset, child_id) in children.iter().enumerate() {
+                    parent
+                        .children
+                        .insert((insert_idx + offset).min(parent.children.len()), *child_id);
                 }
             }
             self.reflow_layouts();
@@ -185,17 +199,17 @@ impl UiTree {
 
     fn owned_order_or_selection_order(&self, selected: &[Uuid]) -> Vec<Uuid> {
         let selected_set: HashSet<Uuid> = selected.iter().copied().collect();
-        if let Some(parent_id) = self.common_parent_for(selected) {
-            if let Some(parent) = self.widgets.iter().find(|w| w.id == parent_id) {
-                let ordered: Vec<Uuid> = parent
-                    .children
-                    .iter()
-                    .copied()
-                    .filter(|id| selected_set.contains(id))
-                    .collect();
-                if ordered.len() == selected.len() {
-                    return ordered;
-                }
+        if let Some(parent_id) = self.common_parent_for(selected)
+            && let Some(parent) = self.widgets.iter().find(|w| w.id == parent_id)
+        {
+            let ordered: Vec<Uuid> = parent
+                .children
+                .iter()
+                .copied()
+                .filter(|id| selected_set.contains(id))
+                .collect();
+            if ordered.len() == selected.len() {
+                return ordered;
             }
         }
         selected.to_vec()
@@ -256,10 +270,10 @@ impl UiTree {
             }
         }
 
-        if let Some(pid) = parent_id {
-            if let Some(parent) = self.get_mut(pid) {
-                parent.children.push(child_id);
-            }
+        if let Some(pid) = parent_id
+            && let Some(parent) = self.get_mut(pid)
+        {
+            parent.children.push(child_id);
         }
 
         self.reflow_layouts();
@@ -271,24 +285,44 @@ impl UiTree {
     /// This intentionally keeps child `Rect`s absolute so existing hit testing,
     /// selection, save/load, and child codegen can share one coordinate model.
     pub fn reflow_layouts(&mut self) {
-        let parents: Vec<LayoutParentSnapshot> = self
+        let mut parent_ids: Vec<(usize, Uuid)> = self
             .widgets
             .iter()
             .filter(|w| is_layout_container(&w.kind))
-            .map(|w| {
-                (
-                    w.kind.clone(),
-                    w.rect.clone(),
-                    w.props.inner_margin.max(0.0),
-                    w.props.layout_spacing.max(0.0),
-                    w.props.layout_stretch,
-                    w.props.grid_columns.clamp(1, GRID_LAYOUT_MAX_COLUMNS),
-                    w.children.clone(),
-                )
+            .map(|widget| {
+                let mut depth = 0usize;
+                let mut current = widget.id;
+                while let Some(parent) = self.parent_of(current) {
+                    depth += 1;
+                    current = parent;
+                    if depth > 64 {
+                        break;
+                    }
+                }
+                (depth, widget.id)
             })
             .collect();
+        parent_ids.sort_by_key(|(depth, _)| *depth);
 
-        for (kind, parent_rect, padding, spacing, stretch, grid_columns, child_ids) in parents {
+        for (_, parent_id) in parent_ids {
+            let Some((kind, parent_rect, padding, spacing, stretch, grid_columns, child_ids)) =
+                self.widgets
+                    .iter()
+                    .find(|widget| widget.id == parent_id)
+                    .map(|widget| {
+                        (
+                            widget.kind.clone(),
+                            widget.rect.clone(),
+                            widget.props.inner_margin.max(0.0),
+                            widget.props.layout_spacing.max(0.0),
+                            widget.props.layout_stretch,
+                            widget.props.grid_columns.clamp(1, GRID_LAYOUT_MAX_COLUMNS),
+                            widget.children.clone(),
+                        )
+                    })
+            else {
+                continue;
+            };
             match kind {
                 WidgetKind::VLayout => self.reflow_vlayout_children(
                     &parent_rect,
@@ -485,6 +519,7 @@ impl UiTree {
             widget.children.retain(|id| all_ids.contains(id));
         }
 
+        self.prune_stale_behaviors();
         self.reflow_layouts();
     }
 
@@ -594,21 +629,21 @@ impl UiTree {
 
     /// Swap with next index — higher index = drawn later = more on top.
     pub fn bring_forward(&mut self, id: Uuid) {
-        if let Some(idx) = self.widgets.iter().position(|w| w.id == id) {
-            if idx + 1 < self.widgets.len() {
-                self.widgets.swap(idx, idx + 1);
-                debug_assert_eq!(self.widgets[idx + 1].id, id, "bring_forward: swap failed");
-            }
+        if let Some(idx) = self.widgets.iter().position(|w| w.id == id)
+            && idx + 1 < self.widgets.len()
+        {
+            self.widgets.swap(idx, idx + 1);
+            debug_assert_eq!(self.widgets[idx + 1].id, id, "bring_forward: swap failed");
         }
     }
 
     /// Swap with previous index — lower index = drawn earlier = more behind.
     pub fn send_back(&mut self, id: Uuid) {
-        if let Some(idx) = self.widgets.iter().position(|w| w.id == id) {
-            if idx > 0 {
-                self.widgets.swap(idx, idx - 1);
-                debug_assert_eq!(self.widgets[idx - 1].id, id, "send_back: swap failed");
-            }
+        if let Some(idx) = self.widgets.iter().position(|w| w.id == id)
+            && idx > 0
+        {
+            self.widgets.swap(idx, idx - 1);
+            debug_assert_eq!(self.widgets[idx - 1].id, id, "send_back: swap failed");
         }
     }
 }
@@ -734,6 +769,66 @@ mod tests {
         assert_eq!(child.rect.x, 108.0);
         assert_eq!(child.rect.y, 58.0);
         assert_eq!(child.rect.w, 204.0);
+    }
+
+    #[test]
+    fn nested_layouts_reflow_parent_before_child_regardless_of_storage_order() {
+        let outer_id = Uuid::from_u128(0x701);
+        let inner_id = Uuid::from_u128(0x702);
+        let leaf_id = Uuid::from_u128(0x703);
+        let mut tree = UiTree {
+            // Deliberately store the nested layout before its parent. Reflow
+            // must use ownership depth, not Vec order or stale snapshots.
+            widgets: vec![
+                WidgetInstance {
+                    id: inner_id,
+                    kind: WidgetKind::HLayout,
+                    rect: Rect {
+                        x: 500.0,
+                        y: 500.0,
+                        w: 100.0,
+                        h: 80.0,
+                    },
+                    children: vec![leaf_id],
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: leaf_id,
+                    kind: WidgetKind::Button,
+                    rect: Rect {
+                        x: 600.0,
+                        y: 600.0,
+                        w: 40.0,
+                        h: 24.0,
+                    },
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: outer_id,
+                    kind: WidgetKind::VLayout,
+                    rect: Rect {
+                        x: 100.0,
+                        y: 50.0,
+                        w: 300.0,
+                        h: 220.0,
+                    },
+                    children: vec![inner_id],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        tree.reflow_layouts();
+
+        let inner = tree.widgets.iter().find(|w| w.id == inner_id).unwrap();
+        assert_eq!(inner.rect.x, 108.0);
+        assert_eq!(inner.rect.y, 58.0);
+        assert_eq!(inner.rect.w, 284.0);
+        let leaf = tree.widgets.iter().find(|w| w.id == leaf_id).unwrap();
+        assert_eq!(leaf.rect.x, inner.rect.x + 8.0);
+        assert_eq!(leaf.rect.y, inner.rect.y + 8.0);
+        assert!(leaf.rect.x < 400.0, "leaf used stale inner-layout rect");
     }
 
     #[test]
@@ -1080,10 +1175,12 @@ mod tests {
         let frame = tree.widgets.iter().find(|w| w.id == frame_id).unwrap();
         assert_eq!(frame.kind, WidgetKind::Frame);
         assert_eq!(frame.children, vec![a, b]);
-        assert!(!tree
-            .widgets
-            .iter()
-            .any(|w| w.id != frame_id && w.children.contains(&a)));
+        assert!(
+            !tree
+                .widgets
+                .iter()
+                .any(|w| w.id != frame_id && w.children.contains(&a))
+        );
     }
 
     #[test]
@@ -1377,6 +1474,76 @@ mod tests {
         let ids: Vec<Uuid> = tree.widgets.iter().map(|w| w.id).collect();
         assert_eq!(ids[0], dup, "first keeps original id");
         assert_ne!(ids[1], dup, "second must be reassigned");
+    }
+
+    #[test]
+    fn behaviors_pruned_when_source_widget_removed() {
+        use crate::project::schema::{Behavior, ValueExpr, VisualAction, WidgetEvent};
+        let btn = Uuid::from_u128(0x200);
+        let bar = Uuid::from_u128(0x201);
+        let mut tree = UiTree {
+            widgets: vec![widget(btn), widget(bar)],
+            ..Default::default()
+        };
+        tree.app_props.behaviors = vec![
+            Behavior {
+                id: Uuid::from_u128(0x210),
+                source_widget: btn,
+                event: WidgetEvent::Click,
+                target_widget: Some(bar),
+                action: VisualAction::Add {
+                    field: "progress".to_owned(),
+                    amount: 0.1,
+                    min: Some(0.0),
+                    max: Some(1.0),
+                },
+            },
+            Behavior {
+                id: Uuid::from_u128(0x211),
+                source_widget: bar,
+                event: WidgetEvent::Click,
+                target_widget: None,
+                action: VisualAction::Set {
+                    field: "name".to_owned(),
+                    value: ValueExpr::Text(String::new()),
+                },
+            },
+        ];
+
+        // Removing the target widget keeps the behavior but clears the wire
+        // endpoint; removing the source widget drops the behavior entirely.
+        tree.remove(bar);
+        assert_eq!(tree.app_props.behaviors.len(), 1);
+        assert_eq!(tree.app_props.behaviors[0].source_widget, btn);
+        assert_eq!(tree.app_props.behaviors[0].target_widget, None);
+
+        tree.remove(btn);
+        assert!(tree.app_props.behaviors.is_empty());
+    }
+
+    #[test]
+    fn validate_and_repair_prunes_stale_behavior_sources() {
+        use crate::project::schema::{Behavior, VisualAction, WidgetEvent};
+        let live = Uuid::from_u128(0x220);
+        let ghost = Uuid::from_u128(0x221);
+        let mut tree = UiTree {
+            widgets: vec![widget(live)],
+            ..Default::default()
+        };
+        tree.app_props.behaviors = vec![Behavior {
+            id: Uuid::from_u128(0x222),
+            source_widget: ghost,
+            event: WidgetEvent::Click,
+            target_widget: Some(ghost),
+            action: VisualAction::Toggle {
+                field: "dark".to_owned(),
+            },
+        }];
+        tree.validate_and_repair();
+        assert!(
+            tree.app_props.behaviors.is_empty(),
+            "behavior with missing source widget must be pruned"
+        );
     }
 
     #[test]

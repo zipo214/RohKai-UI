@@ -1,5 +1,10 @@
 # RohKai Code Review — Comprehensive Analysis & Recommendations
 
+> Historical review snapshot from May 26, 2026. Dependency versions, test
+> counts, and current-state claims below describe that revision and are not
+> maintained. Use `Cargo.toml`, `rust-toolchain.toml`, CI, and the current
+> feature-evaluation documents for present truth.
+
 **Date:** 2026-05-26  
 **Reviewer:** Cline (Anthropic Claude Code agent)  
 **Project:** RohKai v0.1.0 — Pure Rust WYSIWYG egui UI Designer

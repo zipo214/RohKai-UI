@@ -130,6 +130,9 @@ pub struct SvgCssStyleSheet {
     pub malformed_rule_count: usize,
     pub dropped_rule_count: usize,
     pub dropped_declaration_count: usize,
+    /// Count of CSS at-rules (@keyframes, @font-face, @media, etc.) encountered
+    /// and skipped. These are not supported by the static SVG renderer.
+    pub atrule_count: usize,
 }
 
 pub fn parse_style_declarations(
@@ -182,6 +185,11 @@ pub fn parse_css_stylesheet(
         let declarations_text = &body[..close];
         if selector_text.is_empty() {
             sheet.malformed_rule_count += 1;
+            continue;
+        }
+        // CSS at-rules (@keyframes, @font-face, @media, etc.) — skip with count.
+        if selector_text.trim_start().starts_with('@') {
+            sheet.atrule_count += 1;
             continue;
         }
         let mut selectors = Vec::new();
@@ -962,11 +970,7 @@ fn scan_number_end(value: &str, mut index: usize) -> usize {
             index = exp;
         }
     }
-    if digits > 0 {
-        index
-    } else {
-        start
-    }
+    if digits > 0 { index } else { start }
 }
 
 #[cfg(test)]

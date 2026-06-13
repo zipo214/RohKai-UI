@@ -80,6 +80,7 @@ pub fn render(
         boundary,
         0.0,
         egui::Stroke::new(1.0, egui::Color32::from_gray(80)),
+        egui::StrokeKind::Inside,
     );
 
     // Render each widget in draw order.
@@ -130,14 +131,27 @@ fn render_widget(
     match &widget.kind {
         WidgetKind::Button => {
             let label = widget.props.label.clone();
-            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(w_rect), |ui| {
                 ui.add_sized(size, egui::Button::new(&label));
             });
         }
         WidgetKind::Label => {
             let label = widget.props.label.clone();
-            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
-                ui.add_sized(size, egui::Label::new(&label));
+            // Mirror the codegen text alignment (egui_emitter / export) so the
+            // preview surface does not diverge from generated output.
+            let align = match widget.text_align {
+                Some(crate::project::schema::TextAlign::Center) => Some(egui::Align::Center),
+                Some(crate::project::schema::TextAlign::Right) => Some(egui::Align::RIGHT),
+                _ => None,
+            };
+            ui.scope_builder(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+                if let Some(a) = align {
+                    ui.with_layout(egui::Layout::top_down(a), |ui| {
+                        ui.add_sized(size, egui::Label::new(&label));
+                    });
+                } else {
+                    ui.add_sized(size, egui::Label::new(&label));
+                }
             });
         }
         WidgetKind::TextInput => {
@@ -147,7 +161,7 @@ fn render_widget(
                 let te = egui::TextEdit::singleline(s)
                     .hint_text(&hint)
                     .password(password);
-                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(w_rect), |ui| {
                     ui.add_sized(size, te);
                 });
             } else {
@@ -159,7 +173,7 @@ fn render_widget(
             let max = widget.props.max;
             if let Some(PreviewValue::Float(f)) = state.values.get_mut(binding) {
                 let sl = egui::Slider::new(f, min..=max);
-                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(w_rect), |ui| {
                     ui.add_sized(size, sl);
                 });
             } else {
@@ -170,7 +184,7 @@ fn render_widget(
             let label = widget.props.label.clone();
             if let Some(PreviewValue::Bool(b)) = state.values.get_mut(binding) {
                 let cb = egui::Checkbox::new(b, &label);
-                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(w_rect), |ui| {
                     ui.add_sized(size, cb);
                 });
             } else {
@@ -181,7 +195,7 @@ fn render_widget(
             let label = widget.props.label.clone();
             if let Some(PreviewValue::Str(selected)) = state.values.get_mut(binding) {
                 let checked = *selected == label;
-                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(w_rect), |ui| {
                     // Selecting this radio sets the group binding to its label, so
                     // other radios sharing the binding deselect.
                     if ui
@@ -208,7 +222,7 @@ fn render_widget(
                 })
                 .unwrap_or(widget.props.default_value);
             let animated = widget.props.animated;
-            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(w_rect), |ui| {
                 ui.add_sized(size, egui::ProgressBar::new(progress).animate(animated));
             });
         }
@@ -227,7 +241,7 @@ fn render_widget(
                 .unwrap_or_else(|| widget.props.label.clone());
             let cid = egui::Id::new(("preview_combo", widget.id));
             let mut dummy = label.clone();
-            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(w_rect), |ui| {
                 egui::ComboBox::from_id_salt(cid)
                     .selected_text(&dummy)
                     .width(size.x)
@@ -254,9 +268,9 @@ fn render_widget(
                     egui::Color32::from_rgb(r, g, b)
                 });
             let style = ui.style().clone();
-            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(w_rect), |ui| {
                 egui::Frame::group(&style)
-                    .inner_margin(egui::Margin::same(margin))
+                    .inner_margin(egui::Margin::from(margin))
                     .stroke(egui::Stroke::new(stroke_w, stroke_col))
                     .show(ui, |_ui| {});
             });
@@ -265,7 +279,7 @@ fn render_widget(
             let hint = widget.props.placeholder.clone();
             if let Some(PreviewValue::Str(s)) = state.values.get_mut(binding) {
                 let te = egui::TextEdit::multiline(s).hint_text(&hint);
-                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(w_rect), |ui| {
                     ui.add_sized(size, te);
                 });
             } else {
@@ -277,7 +291,7 @@ fn render_widget(
             let max = widget.props.max;
             if let Some(PreviewValue::Float(f)) = state.values.get_mut(binding) {
                 let dv = egui::DragValue::new(f).range(min..=max);
-                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(w_rect), |ui| {
                     ui.add_sized(size, dv);
                 });
             } else {
@@ -299,7 +313,7 @@ fn render_widget(
                 .unwrap_or_else(|| "Proportional".to_owned());
             let mut sel = selected.clone();
             let cid = egui::Id::new(("preview_font_combo", widget.id));
-            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(w_rect), |ui| {
                 egui::ComboBox::from_id_salt(cid)
                     .selected_text(&sel)
                     .width(size.x)
@@ -316,19 +330,19 @@ fn render_widget(
             }
         }
         WidgetKind::HorizontalSpacer => {
-            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(w_rect), |ui| {
                 ui.add_space(w_rect.width());
             });
         }
         WidgetKind::VerticalSpacer => {
-            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(w_rect), |ui| {
                 ui.add_space(w_rect.height());
             });
         }
         WidgetKind::GroupBox => {
             let label = widget.props.label.clone();
             let style = ui.style().clone();
-            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(w_rect), |ui| {
                 egui::Frame::group(&style).show(ui, |ui| {
                     ui.label(&label);
                 });
@@ -350,20 +364,20 @@ fn render_widget(
         }
         WidgetKind::ToolButton => {
             let label = widget.props.label.clone();
-            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(w_rect), |ui| {
                 ui.add_sized(size, egui::Button::new(&label));
             });
         }
         WidgetKind::CommandLinkButton => {
             let title = widget.props.label.clone();
             let desc = widget.props.placeholder.clone();
-            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(w_rect), |ui| {
                 ui.add_sized(size, egui::Button::new(format!("{title}\n{desc}")));
             });
         }
         WidgetKind::DialogButtonBox => {
             let opts = widget.props.options.clone();
-            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(w_rect), |ui| {
                 ui.horizontal(|ui| {
                     for o in &opts {
                         let _ = ui.button(o);
@@ -380,12 +394,12 @@ fn render_widget(
                 }
             });
             let label = widget.props.label.clone();
-            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(w_rect), |ui| {
                 ui.label(format!("{label} = {:.2}", val.unwrap_or(0.0)));
             });
         }
         WidgetKind::FilePicker => {
-            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(w_rect), |ui| {
                 ui.horizontal(|ui| {
                     let _ = ui.button("Browse…");
                     let path = state.values.get(binding).and_then(|v| {
@@ -401,7 +415,7 @@ fn render_widget(
         }
         WidgetKind::ListView => {
             let opts = widget.props.options.clone();
-            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(w_rect), |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(w_rect), |ui| {
                 egui::ScrollArea::vertical()
                     .id_salt(("preview_list", widget.id))
                     .show(ui, |ui| {
@@ -476,6 +490,7 @@ fn placeholder_box(ui: &mut egui::Ui, rect: egui::Rect, tag: &str) {
         rect,
         2.0,
         egui::Stroke::new(1.0, egui::Color32::from_gray(70)),
+        egui::StrokeKind::Inside,
     );
     ui.painter().text(
         rect.center(),

@@ -24,11 +24,11 @@ pub fn channel_field_pairs(wiring: &RustWiring) -> Vec<(String, String)> {
         let name = dedup_name(sanitize(&ch.name), &mut used);
         let ty = ch.ty.trim();
         out.push((
-            format!("    {name}_tx: std::sync::mpsc::Sender<{ty}>,"),
+            format!("    #[allow(dead_code)]\n    {name}_tx: std::sync::mpsc::Sender<{ty}>,"),
             format!("        let ({name}_tx, {name}_rx) = std::sync::mpsc::channel::<{ty}>();"),
         ));
         out.push((
-            format!("    {name}_rx: std::sync::mpsc::Receiver<{ty}>,"),
+            format!("    #[allow(dead_code)]\n    {name}_rx: std::sync::mpsc::Receiver<{ty}>,"),
             String::new(),
         ));
     }
@@ -76,7 +76,9 @@ pub fn trait_impl_blocks(wiring: &RustWiring) -> String {
             continue;
         }
         if is_simple_ident(tr) {
-            s.push_str(&format!("\ntrait {tr} {{\n    {method};\n}}\n"));
+            s.push_str(&format!(
+                "\n#[allow(dead_code)]\ntrait {tr} {{\n    {method};\n}}\n"
+            ));
         }
         s.push_str(&format!(
             "\nimpl {tr} for ExportedApp {{\n    {method} {{\n        {body}\n    }}\n}}\n"
@@ -129,7 +131,9 @@ pub fn handler_call(
     match result {
         HandlerResult::Plain => format!("{indent}self.{handler}();"),
         HandlerResult::Result => {
-            format!("{indent}if let Err(e) = self.{handler}() {{\n{indent}    eprintln!(\"{handler}: {{e}}\");\n{indent}}}")
+            format!(
+                "{indent}if let Err(e) = self.{handler}() {{\n{indent}    eprintln!(\"{handler}: {{e}}\");\n{indent}}}"
+            )
         }
         HandlerResult::Option => format!("{indent}let _ = self.{handler}();"),
     }
@@ -355,12 +359,16 @@ mod tests {
     fn channel_fields_emit_sender_receiver() {
         let pairs = channel_field_pairs(&wiring());
         let decls: Vec<&str> = pairs.iter().map(|(d, _)| d.as_str()).collect();
-        assert!(decls
-            .iter()
-            .any(|d| d.contains("progress_tx: std::sync::mpsc::Sender<f32>")));
-        assert!(decls
-            .iter()
-            .any(|d| d.contains("progress_rx: std::sync::mpsc::Receiver<f32>")));
+        assert!(
+            decls
+                .iter()
+                .any(|d| d.contains("progress_tx: std::sync::mpsc::Sender<f32>"))
+        );
+        assert!(
+            decls
+                .iter()
+                .any(|d| d.contains("progress_rx: std::sync::mpsc::Receiver<f32>"))
+        );
         let inits: Vec<&str> = pairs.iter().map(|(_, i)| i.as_str()).collect();
         assert!(inits.iter().any(|i| i.contains("mpsc::channel::<f32>()")));
     }
@@ -407,8 +415,10 @@ mod tests {
             handler_call("h", false, &HandlerResult::Plain, ""),
             "self.h();"
         );
-        assert!(handler_call("h", false, &HandlerResult::Result, "")
-            .contains("if let Err(e) = self.h()"));
+        assert!(
+            handler_call("h", false, &HandlerResult::Result, "")
+                .contains("if let Err(e) = self.h()")
+        );
         // Async call site invokes the launcher (which does the spawning).
         assert_eq!(
             handler_call("h", true, &HandlerResult::Plain, ""),
@@ -434,9 +444,11 @@ mod tests {
     #[test]
     fn async_struct_fields_include_error_only_for_result() {
         let plain = async_struct_fields("h", &HandlerResult::Plain);
-        assert!(plain
-            .iter()
-            .any(|f| f.contains("h_rx: Option<std::sync::mpsc::Receiver<()>>")));
+        assert!(
+            plain
+                .iter()
+                .any(|f| f.contains("h_rx: Option<std::sync::mpsc::Receiver<()>>"))
+        );
         assert!(plain.iter().any(|f| f.contains("h_running: bool")));
         assert!(!plain.iter().any(|f| f.contains("h_error")));
 
@@ -459,8 +471,10 @@ mod tests {
     #[test]
     fn async_worker_returns_msg_type() {
         assert!(async_worker_fn("h", &HandlerResult::Plain).contains("fn h_worker() {"));
-        assert!(async_worker_fn("h", &HandlerResult::Result)
-            .contains("fn h_worker() -> Result<(), String>"));
+        assert!(
+            async_worker_fn("h", &HandlerResult::Result)
+                .contains("fn h_worker() -> Result<(), String>")
+        );
         assert!(
             async_worker_fn("h", &HandlerResult::Option).contains("fn h_worker() -> Option<()>")
         );

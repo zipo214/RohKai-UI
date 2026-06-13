@@ -303,7 +303,63 @@ pub fn parse_formula(expr: &str) -> Result<FormulaNode, FormulaError> {
     if !matches!(p.peek(), Tok::Eof) {
         return Err(FormulaError("unexpected token after expression".into()));
     }
+    validate_semantics(&node)?;
     Ok(node)
+}
+
+fn validate_semantics(node: &FormulaNode) -> Result<(), FormulaError> {
+    match node {
+        FormulaNode::Num(_) | FormulaNode::Var(_) => Ok(()),
+        FormulaNode::Neg(inner) => validate_semantics(inner),
+        FormulaNode::Binary { lhs, rhs, .. } => {
+            validate_semantics(lhs)?;
+            validate_semantics(rhs)
+        }
+        FormulaNode::Call { name, args } => {
+            let expected = match name.as_str() {
+                "abs" | "sqrt" | "cbrt" | "floor" | "ceil" | "round" | "sin" | "cos" | "tan"
+                | "asin" | "acos" | "atan" | "ln" | "log2" | "log10" | "exp" | "signum" => 1,
+                "atan2" | "min" | "max" | "hypot" | "pow" => 2,
+                "clamp" => 3,
+                _ => {
+                    return Err(FormulaError(format!(
+                        "unsupported formula function '{name}'"
+                    )));
+                }
+            };
+            if args.len() != expected {
+                return Err(FormulaError(format!(
+                    "function '{name}' expects {expected} argument(s), got {}",
+                    args.len()
+                )));
+            }
+            for arg in args {
+                validate_semantics(arg)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Public depth API (P2.5)
+// ---------------------------------------------------------------------------
+
+/// Collect the direct-dependency variable names from a parsed formula node.
+///
+/// Alias for [`collect_variables`] with the shorter name specified by P2.5.
+pub fn deps(node: &FormulaNode) -> Vec<String> {
+    collect_variables(node)
+}
+
+/// Parse and validate a formula expression string.
+///
+/// Returns `Ok(FormulaNode)` when the expression is syntactically valid, or
+/// `Err(FormulaError)` describing the first problem found.  Distinct from
+/// [`parse_formula`] only in name — both invoke the same parser.  Use
+/// `validate` when the intent is checking validity rather than code emission.
+pub fn validate(expr: &str) -> Result<FormulaNode, FormulaError> {
+    parse_formula(expr)
 }
 
 // ---------------------------------------------------------------------------
@@ -352,6 +408,18 @@ fn collect_vars_inner(node: &FormulaNode, out: &mut HashSet<String>) {
 /// asin, acos, atan, atan2, ln, log2, log10, exp, min, max, clamp, signum,
 /// hypot, pow.
 pub fn emit_formula_rust(node: &FormulaNode) -> String {
+    emit_formula_rust_with(node, &|name| {
+        format!("self.{}", crate::codegen::rust::effective_binding(name))
+    })
+}
+
+/// Emit a Rust expression with a caller-provided variable path.
+///
+/// Live code uses `self.field`; exported applications use `self.state.field`.
+pub fn emit_formula_rust_with<F>(node: &FormulaNode, variable_path: &F) -> String
+where
+    F: Fn(&str) -> String,
+{
     match node {
         FormulaNode::Num(v) => {
             if *v == v.floor() && v.abs() < 1e15_f64 {
@@ -360,11 +428,11 @@ pub fn emit_formula_rust(node: &FormulaNode) -> String {
                 format!("{:?}_f64", v)
             }
         }
-        FormulaNode::Var(name) => format!("(self.{name} as f64)"),
-        FormulaNode::Call { name, args } => emit_call(name, args),
+        FormulaNode::Var(name) => format!("({} as f64)", variable_path(name)),
+        FormulaNode::Call { name, args } => emit_call(name, args, variable_path),
         FormulaNode::Binary { op, lhs, rhs } => {
-            let l = emit_formula_rust(lhs);
-            let r = emit_formula_rust(rhs);
+            let l = emit_formula_rust_with(lhs, variable_path);
+            let r = emit_formula_rust_with(rhs, variable_path);
             match op {
                 BinOp::Add => format!("({l} + {r})"),
                 BinOp::Sub => format!("({l} - {r})"),
@@ -374,14 +442,17 @@ pub fn emit_formula_rust(node: &FormulaNode) -> String {
                 BinOp::Pow => format!("({l}).powf({r})"),
             }
         }
-        FormulaNode::Neg(inner) => format!("(-{})", emit_formula_rust(inner)),
+        FormulaNode::Neg(inner) => format!("(-{})", emit_formula_rust_with(inner, variable_path)),
     }
 }
 
-fn emit_call(name: &str, args: &[FormulaNode]) -> String {
+fn emit_call<F>(name: &str, args: &[FormulaNode], variable_path: &F) -> String
+where
+    F: Fn(&str) -> String,
+{
     let a = |i: usize| {
         args.get(i)
-            .map(emit_formula_rust)
+            .map(|arg| emit_formula_rust_with(arg, variable_path))
             .unwrap_or_else(|| "0_f64".to_owned())
     };
     match name {
@@ -408,14 +479,7 @@ fn emit_call(name: &str, args: &[FormulaNode]) -> String {
         "signum" => format!("{}.signum()", a(0)),
         "hypot" => format!("{}.hypot({})", a(0), a(1)),
         "pow" => format!("{}.powf({})", a(0), a(1)),
-        other => {
-            let arg_list = args
-                .iter()
-                .map(emit_formula_rust)
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("{other}({arg_list})")
-        }
+        _ => unreachable!("formula functions are validated before emission"),
     }
 }
 
@@ -521,5 +585,53 @@ mod tests {
         let node = parse_formula("clamp(x, 0, 100)").unwrap();
         let rust = emit_formula_rust(&node);
         assert_eq!(rust, "(self.x as f64).clamp(0_f64, 100_f64)");
+    }
+
+    #[test]
+    fn emits_with_export_state_path() {
+        let node = parse_formula("width * height").unwrap();
+        let rust = emit_formula_rust_with(&node, &|name| format!("self.state.{name}"));
+        assert_eq!(
+            rust,
+            "((self.state.width as f64) * (self.state.height as f64))"
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_functions_and_wrong_arity() {
+        assert_eq!(
+            parse_formula("mystery(x)").unwrap_err().0,
+            "unsupported formula function 'mystery'"
+        );
+        assert_eq!(
+            parse_formula("clamp(x, 0)").unwrap_err().0,
+            "function 'clamp' expects 3 argument(s), got 2"
+        );
+    }
+
+    // P2.5 depth tests -------------------------------------------------------
+
+    #[test]
+    fn formula_validate_catches_syntax_error() {
+        // Unmatched parenthesis must return an error.
+        assert!(validate("(a + b").is_err());
+        // Empty expression must return an error.
+        assert!(validate("").is_err());
+        // Invalid character must return an error.
+        assert!(validate("a @ b").is_err());
+    }
+
+    #[test]
+    fn formula_deps_finds_bindings() {
+        let node = validate("sqrt(a^2 + b^2) * scale").unwrap();
+        let found = deps(&node);
+        assert!(found.contains(&"a".to_owned()), "must find 'a'");
+        assert!(found.contains(&"b".to_owned()), "must find 'b'");
+        assert!(found.contains(&"scale".to_owned()), "must find 'scale'");
+        // sqrt is a built-in call, not a variable.
+        assert!(
+            !found.contains(&"sqrt".to_owned()),
+            "must not list 'sqrt' as a dep"
+        );
     }
 }
