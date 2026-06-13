@@ -970,11 +970,7 @@ fn scan_number_end(value: &str, mut index: usize) -> usize {
             index = exp;
         }
     }
-    if digits > 0 {
-        index
-    } else {
-        start
-    }
+    if digits > 0 { index } else { start }
 }
 
 #[cfg(test)]

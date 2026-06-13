@@ -856,8 +856,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                             string_literal(&w.props.placeholder)
                         ));
                     }
-                    let sized =
-                        format!("ui.add_sized([{:.1}, {:.1}], {te})", w.rect.w, w.rect.h);
+                    let sized = format!("ui.add_sized([{:.1}, {:.1}], {te})", w.rect.w, w.rect.h);
                     let with_tip = export_tip(sized, tip.as_deref());
                     event_dispatch_block(w, &with_tip, &handler_registry, tree)
                 }
@@ -1097,7 +1096,9 @@ fn gen_app_rs(tree: &UiTree) -> String {
                         Some(b) => format!(
                             "                ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, self.state.{b}));\n"
                         ),
-                        None => format!("                // MathLabel {label}: set a valid Binding\n"),
+                        None => {
+                            format!("                // MathLabel {label}: set a valid Binding\n")
+                        }
                     }
                 }
             }
@@ -1145,7 +1146,12 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 s
             }
             WidgetKind::TreeView => {
-                let root = w.props.options.first().cloned().unwrap_or_else(|| "Root".into());
+                let root = w
+                    .props
+                    .options
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "Root".into());
                 let mut s = format!(
                     "                egui::CollapsingHeader::new({}).default_open(true).show(ui, |ui| {{\n",
                     string_literal(&root)
@@ -1560,17 +1566,22 @@ fn export_child_line(
             export_child_event_dispatch(child, &resp, registry, tree)
         }
         WidgetKind::Label => match child_binding {
-            Some(b) => format!("                        ui.put({rect_expr}, egui::Label::new(&self.state.{b}));\n"),
-            None => format!("                        ui.put({rect_expr}, egui::Label::new({child_label}));\n"),
+            Some(b) => format!(
+                "                        ui.put({rect_expr}, egui::Label::new(&self.state.{b}));\n"
+            ),
+            None => format!(
+                "                        ui.put({rect_expr}, egui::Label::new({child_label}));\n"
+            ),
         },
         WidgetKind::TextInput => match child_binding {
             Some(b) => {
-                let resp = format!(
-                    "ui.put({rect_expr}, egui::TextEdit::singleline(&mut self.state.{b}))"
-                );
+                let resp =
+                    format!("ui.put({rect_expr}, egui::TextEdit::singleline(&mut self.state.{b}))");
                 export_child_event_dispatch(child, &resp, registry, tree)
             }
-            None => format!("                        // TextInput {child_label}: set a valid Binding\n"),
+            None => {
+                format!("                        // TextInput {child_label}: set a valid Binding\n")
+            }
         },
         WidgetKind::Slider => match child_binding {
             Some(b) => {
@@ -1580,7 +1591,9 @@ fn export_child_line(
                 );
                 export_child_event_dispatch(child, &resp, registry, tree)
             }
-            None => format!("                        // Slider {child_label}: set a valid Binding\n"),
+            None => {
+                format!("                        // Slider {child_label}: set a valid Binding\n")
+            }
         },
         WidgetKind::Checkbox => match child_binding {
             Some(b) => {
@@ -1589,11 +1602,22 @@ fn export_child_line(
                 );
                 export_child_event_dispatch(child, &resp, registry, tree)
             }
-            None => format!("                        // Checkbox {child_label}: set a valid Binding\n"),
+            None => {
+                format!("                        // Checkbox {child_label}: set a valid Binding\n")
+            }
         },
         WidgetKind::ComboBox => match child_binding {
-            Some(b) => export_child_combo(child, rect_expr, b, &combo_option_values(child), registry, tree),
-            None => format!("                        // ComboBox {child_label}: set a valid Binding\n"),
+            Some(b) => export_child_combo(
+                child,
+                rect_expr,
+                b,
+                &combo_option_values(child),
+                registry,
+                tree,
+            ),
+            None => {
+                format!("                        // ComboBox {child_label}: set a valid Binding\n")
+            }
         },
         WidgetKind::RadioButton => match child_binding {
             Some(b) => {
@@ -1607,7 +1631,9 @@ fn export_child_line(
                 );
                 export_child_event_dispatch(child, &resp, registry, tree)
             }
-            None => format!("                        // RadioButton {child_label}: set a valid Binding\n"),
+            None => format!(
+                "                        // RadioButton {child_label}: set a valid Binding\n"
+            ),
         },
         WidgetKind::ProgressBar => match child_binding {
             Some(b) => {
@@ -1620,7 +1646,9 @@ fn export_child_line(
                 }
                 format!("                        ui.put({rect_expr}, {pb});\n")
             }
-            None => format!("                        // ProgressBar {child_label}: set a valid Binding\n"),
+            None => format!(
+                "                        // ProgressBar {child_label}: set a valid Binding\n"
+            ),
         },
         WidgetKind::Frame
         | WidgetKind::GroupBox
@@ -1670,7 +1698,9 @@ fn export_child_line(
                     Some(b) => format!(
                         "                        ui.put({rect_expr}, egui::Label::new(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, self.state.{b})));\n"
                     ),
-                    None => format!("                        // MathLabel {child_label}: set a valid Binding\n"),
+                    None => format!(
+                        "                        // MathLabel {child_label}: set a valid Binding\n"
+                    ),
                 }
             }
         }
@@ -1678,16 +1708,19 @@ fn export_child_line(
             Some(b) => format!(
                 "                        ui.put({rect_expr}, egui::Label::new(&self.state.{b})); // FilePicker\n"
             ),
-            None => format!("                        // FilePicker {child_label}: set a valid Binding\n"),
+            None => format!(
+                "                        // FilePicker {child_label}: set a valid Binding\n"
+            ),
         },
         WidgetKind::TextArea => match child_binding {
             Some(b) => {
-                let resp = format!(
-                    "ui.put({rect_expr}, egui::TextEdit::multiline(&mut self.state.{b}))"
-                );
+                let resp =
+                    format!("ui.put({rect_expr}, egui::TextEdit::multiline(&mut self.state.{b}))");
                 export_child_event_dispatch(child, &resp, registry, tree)
             }
-            None => format!("                        // TextArea {child_label}: set a valid Binding\n"),
+            None => {
+                format!("                        // TextArea {child_label}: set a valid Binding\n")
+            }
         },
         WidgetKind::SpinBox => match child_binding {
             Some(b) => {
@@ -1697,7 +1730,9 @@ fn export_child_line(
                 );
                 export_child_event_dispatch(child, &resp, registry, tree)
             }
-            None => format!("                        // SpinBox {child_label}: set a valid Binding\n"),
+            None => {
+                format!("                        // SpinBox {child_label}: set a valid Binding\n")
+            }
         },
         WidgetKind::FontComboBox => match child_binding {
             Some(b) => export_child_combo(
@@ -1708,13 +1743,21 @@ fn export_child_line(
                 registry,
                 tree,
             ),
-            None => format!("                        // FontComboBox {child_label}: set a valid Binding\n"),
+            None => format!(
+                "                        // FontComboBox {child_label}: set a valid Binding\n"
+            ),
         },
         WidgetKind::HorizontalSpacer => {
-            format!("                        ui.add_space({:.1}); // HorizontalSpacer\n", child.rect.w)
+            format!(
+                "                        ui.add_space({:.1}); // HorizontalSpacer\n",
+                child.rect.w
+            )
         }
         WidgetKind::VerticalSpacer => {
-            format!("                        ui.add_space({:.1}); // VerticalSpacer\n", child.rect.h)
+            format!(
+                "                        ui.add_space({:.1}); // VerticalSpacer\n",
+                child.rect.h
+            )
         }
         WidgetKind::Image => image_export_child_line(child, rect_expr),
         WidgetKind::Custom(_) => {
@@ -1914,18 +1957,17 @@ fn export_layout_child_line(
                 else {
                     continue;
                 };
-                if child.kind == WidgetKind::GridLayout {
-                    if let Some(slot_name) = child
+                if child.kind == WidgetKind::GridLayout
+                    && let Some(slot_name) = child
                         .props
                         .grid_slot_names
                         .get(idx)
                         .filter(|name| !name.trim().is_empty())
-                    {
-                        code.push_str(&format!(
-                            "                    // grid slot: {}\n",
-                            slot_name.trim()
-                        ));
-                    }
+                {
+                    code.push_str(&format!(
+                        "                    // grid slot: {}\n",
+                        slot_name.trim()
+                    ));
                 }
                 code.push_str(&export_layout_child_line(
                     grandchild,
@@ -2519,7 +2561,7 @@ mod tests {
     // export routing, including secondary events (DoubleClick/LostFocus/DragStopped).
     #[test]
     fn every_supported_event_is_exported_through_handler_call() {
-        use crate::project::schema::{HandlerResult, EVENT_CAPABLE_KINDS};
+        use crate::project::schema::{EVENT_CAPABLE_KINDS, HandlerResult};
         for kind in EVENT_CAPABLE_KINDS {
             for &ev in kind.supported_events() {
                 let handler = "h_evt";
@@ -2630,7 +2672,7 @@ mod tests {
     // Mirrors the top-level invariant; fails if a child kind drops any event.
     #[test]
     fn every_supported_event_is_exported_in_nested_child() {
-        use crate::project::schema::{HandlerResult, EVENT_CAPABLE_KINDS};
+        use crate::project::schema::{EVENT_CAPABLE_KINDS, HandlerResult};
         for kind in EVENT_CAPABLE_KINDS {
             for &ev in kind.supported_events() {
                 let tree = event_child_in_frame(
@@ -3433,7 +3475,9 @@ mod tests {
         let g = gen_app_rs(&tree);
         // All three receiver fields.
         assert!(g.contains("plain_task_rx: Option<std::sync::mpsc::Receiver<()>>"));
-        assert!(g.contains("result_task_rx: Option<std::sync::mpsc::Receiver<Result<(), String>>>"));
+        assert!(
+            g.contains("result_task_rx: Option<std::sync::mpsc::Receiver<Result<(), String>>>")
+        );
         assert!(g.contains("on_name_change_rx: Option<std::sync::mpsc::Receiver<()>>"));
         // Result error field.
         assert!(g.contains("result_task_error: Option<String>"));

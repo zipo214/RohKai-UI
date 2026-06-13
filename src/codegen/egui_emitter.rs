@@ -122,8 +122,8 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                 .map(|c| format!("egui::Color32::from_rgb({}, {}, {})", c[0], c[1], c[2]))
                 .unwrap_or_else(|| "egui::Color32::from_gray(100)".to_owned());
             let mut frame_expr = format!(
-                    "egui::Frame::none()\n            .inner_margin({inner_m:.1})\n            .stroke(egui::Stroke::new({stroke_w:.1}, {stroke_col}))"
-                );
+                "egui::Frame::none()\n            .inner_margin({inner_m:.1})\n            .stroke(egui::Stroke::new({stroke_w:.1}, {stroke_col}))"
+            );
             if let Some(c) = w.bg_color {
                 frame_expr.push_str(&format!(
                     "\n            .fill(egui::Color32::from_rgb({}, {}, {}))",
@@ -167,9 +167,9 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                 .unwrap_or_default();
             let label_expr = rich_text_expr(&label_lit, w.font_size, fg_color_expr.as_deref());
             let base = format!(
-                    "ui.add_sized([{:.1}, {:.1}], egui::Button::new({label_expr}){rounding_chain}{fill_chain})",
-                    w.rect.w, w.rect.h
-                );
+                "ui.add_sized([{:.1}, {:.1}], egui::Button::new({label_expr}){rounding_chain}{fill_chain})",
+                w.rect.w, w.rect.h
+            );
             let with_tip = append_tip(base, tip.as_deref());
             let id = w.id.as_simple();
             let mut line = format!("        let _btn_{id} = {with_tip};");
@@ -322,9 +322,9 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
             let line = match binding {
                 Some(b) => {
                     let base = format!(
-                            "ui.add_sized([{:.1}, {:.1}], egui::Checkbox::new(&mut self.{b}, {label_lit}))",
-                            w.rect.w, w.rect.h
-                        );
+                        "ui.add_sized([{:.1}, {:.1}], egui::Checkbox::new(&mut self.{b}, {label_lit}))",
+                        w.rect.w, w.rect.h
+                    );
                     let with_tip = append_tip(base, tip.as_deref());
                     let change_beh =
                         live_behavior_stmts(tree, w, WidgetEvent::Change, "            ");
@@ -351,9 +351,9 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                     let options = combo_option_values(w);
                     let selected_expr = combo_selected_text_expr(&format!("self.{b}"), &options);
                     let mut base = format!(
-                            "let combo_resp = egui::ComboBox::from_label({label_lit})\n            .selected_text({selected_expr})\n            .width({:.1})\n            .show_ui(ui, |ui| {{\n",
-                            w.rect.w
-                        );
+                        "let combo_resp = egui::ComboBox::from_label({label_lit})\n            .selected_text({selected_expr})\n            .width({:.1})\n            .show_ui(ui, |ui| {{\n",
+                        w.rect.w
+                    );
                     for option in options {
                         let option_lit = string_literal(&option);
                         base.push_str(&format!(
@@ -498,13 +498,13 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
             let line = match binding {
                 Some(b) => {
                     let line = format!(
-                            "        egui::ComboBox::from_id_salt(\"{b}\")\n            \
+                        "        egui::ComboBox::from_id_salt(\"{b}\")\n            \
                             .selected_text(&self.{b})\n            \
                             .show_ui(ui, |ui| {{\n                \
                             for font in [\"Proportional\", \"Monospace\"] {{\n                    \
                             ui.selectable_value(&mut self.{b}, font.to_owned(), font);\n                \
                             }}\n            }});"
-                        );
+                    );
                     line
                 }
                 None => format!("        // FontComboBox {label_lit}: set a valid Binding"),
@@ -715,9 +715,9 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
             let title = string_literal(&w.props.label);
             let desc = string_literal(&w.props.placeholder);
             let base = format!(
-                    "ui.add_sized([{:.1}, {:.1}], egui::Button::new(format!(\"{{}}\\n{{}}\", {title}, {desc})))",
-                    w.rect.w, w.rect.h
-                );
+                "ui.add_sized([{:.1}, {:.1}], egui::Button::new(format!(\"{{}}\\n{{}}\", {title}, {desc})))",
+                w.rect.w, w.rect.h
+            );
             let with_tip = append_tip(base, tip.as_deref());
             let line = if let Some(h) = resolve_handler_click(w) {
                 format!("        if {with_tip}.clicked() {{\n            self.{h}();\n        }}")
@@ -751,8 +751,8 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                             .map(|v| format!("            let {v} = self.{v} as f64;\n"))
                             .collect();
                         format!(
-                                "        ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, {{\n{bindings}            {rust_expr}\n        }}));"
-                            )
+                            "        ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, {{\n{bindings}            {rust_expr}\n        }}));"
+                        )
                     }
                     Err(e) => {
                         format!("        // Formula parse error: {e}")
@@ -764,8 +764,8 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                         let label_lit = string_literal(&w.props.label);
                         let decimals = w.props.formula_decimals;
                         format!(
-                                "        ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, self.{b}));"
-                            )
+                            "        ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, self.{b}));"
+                        )
                     }
                     None => format!("        // MathLabel {label_lit}: set a valid Binding"),
                 }
@@ -858,12 +858,12 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
             let s = if let Some(ref src) = w.props.data_source_binding {
                 let label_lit = string_literal(&w.props.label);
                 format!(
-                        "        egui::CollapsingHeader::new({label_lit}).default_open(true).show(ui, |ui| {{\n\
+                    "        egui::CollapsingHeader::new({label_lit}).default_open(true).show(ui, |ui| {{\n\
                              for node in &self.{src} {{\n\
                                  ui.label(node.as_str());\n\
                              }}\n\
                          }});"
-                    )
+                )
             } else {
                 let root = w
                     .props
@@ -1120,9 +1120,9 @@ fn emit_child_lines(
             None => format!("{indent}ui.put({rect_expr}, egui::Label::new({label}));"),
         },
         WidgetKind::TextInput => match binding {
-            Some(b) => format!(
-                "{indent}ui.put({rect_expr}, egui::TextEdit::singleline(&mut self.{b}));"
-            ),
+            Some(b) => {
+                format!("{indent}ui.put({rect_expr}, egui::TextEdit::singleline(&mut self.{b}));")
+            }
             None => format!("{indent}// TextInput {label}: set a valid Binding"),
         },
         WidgetKind::Slider => match binding {
@@ -1133,14 +1133,14 @@ fn emit_child_lines(
             None => format!("{indent}// Slider {label}: set a valid Binding"),
         },
         WidgetKind::Checkbox => match binding {
-            Some(b) => format!(
-                "{indent}ui.put({rect_expr}, egui::Checkbox::new(&mut self.{b}, {label}));"
-            ),
+            Some(b) => {
+                format!("{indent}ui.put({rect_expr}, egui::Checkbox::new(&mut self.{b}, {label}));")
+            }
             None => format!("{indent}// Checkbox {label}: set a valid Binding"),
         },
-        WidgetKind::Frame => format!(
-            "{indent}// Nested Frame {label} — grouping not recursive in codegen"
-        ),
+        WidgetKind::Frame => {
+            format!("{indent}// Nested Frame {label} — grouping not recursive in codegen")
+        }
         WidgetKind::ComboBox => match binding {
             Some(b) => format!(
                 "{indent}ui.put({rect_expr}, egui::Label::new(self.{b}.as_str())); // ComboBox"
@@ -1154,9 +1154,7 @@ fn emit_child_lines(
                 } else {
                     string_literal(&child.props.radio_value)
                 };
-                format!(
-                    "{indent}ui.radio_value(&mut self.{b}, {value_lit}.to_owned(), {label});"
-                )
+                format!("{indent}ui.radio_value(&mut self.{b}, {value_lit}.to_owned(), {label});")
             }
             None => format!("{indent}// RadioButton {label}: set a valid Binding"),
         },
@@ -1171,9 +1169,9 @@ fn emit_child_lines(
             None => format!("{indent}// ProgressBar {label}: set a valid Binding"),
         },
         WidgetKind::TextArea => match binding {
-            Some(b) => format!(
-                "{indent}ui.put({rect_expr}, egui::TextEdit::multiline(&mut self.{b}));"
-            ),
+            Some(b) => {
+                format!("{indent}ui.put({rect_expr}, egui::TextEdit::multiline(&mut self.{b}));")
+            }
             None => format!("{indent}// TextArea {label}: set a valid Binding"),
         },
         WidgetKind::SpinBox => match binding {
@@ -1190,10 +1188,16 @@ fn emit_child_lines(
             None => format!("{indent}// FontComboBox {label}: set a valid Binding"),
         },
         WidgetKind::HorizontalSpacer => {
-            format!("{indent}ui.add_space({:.1}); // HorizontalSpacer", child.rect.w)
+            format!(
+                "{indent}ui.add_space({:.1}); // HorizontalSpacer",
+                child.rect.w
+            )
         }
         WidgetKind::VerticalSpacer => {
-            format!("{indent}ui.add_space({:.1}); // VerticalSpacer", child.rect.h)
+            format!(
+                "{indent}ui.add_space({:.1}); // VerticalSpacer",
+                child.rect.h
+            )
         }
         WidgetKind::GroupBox
         | WidgetKind::VLayout
@@ -1207,10 +1211,15 @@ fn emit_child_lines(
         | WidgetKind::ListView
         | WidgetKind::TreeView
         | WidgetKind::Chart => {
-            format!("{indent}// Nested container {:?} — not expanded in child codegen", child.kind)
+            format!(
+                "{indent}// Nested container {:?} — not expanded in child codegen",
+                child.kind
+            )
         }
         WidgetKind::ToolButton => {
-            format!("{indent}if ui.put({rect_expr}, egui::Button::new({label}).small()).clicked() {{}}")
+            format!(
+                "{indent}if ui.put({rect_expr}, egui::Button::new({label}).small()).clicked() {{}}"
+            )
         }
         WidgetKind::CommandLinkButton => {
             format!("{indent}if ui.put({rect_expr}, egui::Button::new({label})).clicked() {{}}")
@@ -1225,9 +1234,9 @@ fn emit_child_lines(
             None => format!("{indent}// MathLabel {label}: set a valid Binding"),
         },
         WidgetKind::FilePicker => match binding {
-            Some(b) => format!(
-                "{indent}ui.put({rect_expr}, egui::Label::new(&self.{b})); // FilePicker"
-            ),
+            Some(b) => {
+                format!("{indent}ui.put({rect_expr}, egui::Label::new(&self.{b})); // FilePicker")
+            }
             None => format!("{indent}// FilePicker {label}: set a valid Binding"),
         },
         WidgetKind::Image => image_child_preview_line(child, &rect_expr),
@@ -1239,7 +1248,10 @@ fn emit_child_lines(
                     child.descriptor_name.as_deref().unwrap_or("Custom"),
                 )
             } else {
-                format!("{indent}// Custom child {:?}: descriptor not loaded", child.kind)
+                format!(
+                    "{indent}// Custom child {:?}: descriptor not loaded",
+                    child.kind
+                )
             }
         }
     };
@@ -1382,15 +1394,15 @@ fn emit_layout_child_lines(
             Some(b) => format!("            ui.label(&self.{b});"),
             None => format!("            ui.label({label});"),
         },
-        WidgetKind::TextInput => {
-            match binding {
-                Some(b) => {
-                    let sz = child_size_str(child);
-                    format!("            ui.add_sized({sz}, egui::TextEdit::singleline(&mut self.{b}));")
-                }
-                None => format!("            // TextInput {label}: set a valid Binding"),
+        WidgetKind::TextInput => match binding {
+            Some(b) => {
+                let sz = child_size_str(child);
+                format!(
+                    "            ui.add_sized({sz}, egui::TextEdit::singleline(&mut self.{b}));"
+                )
             }
-        }
+            None => format!("            // TextInput {label}: set a valid Binding"),
+        },
         WidgetKind::TextArea => match binding {
             Some(b) => {
                 let sz = child_size_str(child);
@@ -1401,8 +1413,10 @@ fn emit_layout_child_lines(
         WidgetKind::Slider => match binding {
             Some(b) => {
                 let sz = child_size_str(child);
-                format!("            ui.add_sized({sz}, egui::Slider::new(&mut self.{b}, {:.1}..={:.1}).text({label}));",
-                    child.props.min, child.props.max)
+                format!(
+                    "            ui.add_sized({sz}, egui::Slider::new(&mut self.{b}, {:.1}..={:.1}).text({label}));",
+                    child.props.min, child.props.max
+                )
             }
             None => format!("            // Slider {label}: set a valid Binding"),
         },
@@ -1460,7 +1474,9 @@ fn emit_layout_child_lines(
                             .iter()
                             .map(|v| format!("                let {v} = self.{v} as f64;\n"))
                             .collect();
-                        format!("            ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label}, {{\n{binds}                {rust_expr}\n            }}));")
+                        format!(
+                            "            ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label}, {{\n{binds}                {rust_expr}\n            }}));"
+                        )
                     }
                     Err(e) => format!("            // Formula parse error: {e}"),
                 }
@@ -1468,7 +1484,9 @@ fn emit_layout_child_lines(
                 match binding {
                     Some(b) => {
                         let decimals = child.props.formula_decimals;
-                        format!("            ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label}, self.{b}));")
+                        format!(
+                            "            ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label}, self.{b}));"
+                        )
                     }
                     None => format!("            // MathLabel {label}: set a valid Binding"),
                 }
@@ -1526,18 +1544,17 @@ fn emit_nested_layout_child(
         else {
             continue;
         };
-        if child.kind == WidgetKind::GridLayout {
-            if let Some(slot_name) = child
+        if child.kind == WidgetKind::GridLayout
+            && let Some(slot_name) = child
                 .props
                 .grid_slot_names
                 .get(slot_idx)
                 .filter(|name| !name.trim().is_empty())
-            {
-                lines.push((
-                    Some(child.id),
-                    format!("            // grid slot: {}", slot_name.trim()),
-                ));
-            }
+        {
+            lines.push((
+                Some(child.id),
+                format!("            // grid slot: {}", slot_name.trim()),
+            ));
         }
         emit_layout_child_lines(grandchild, child.id, tree, lines, depth + 1);
         if child.kind == WidgetKind::GridLayout {

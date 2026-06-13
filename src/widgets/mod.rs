@@ -76,7 +76,7 @@ pub fn default_for(kind: &WidgetKind) -> WidgetInstance {
             },
             ..Default::default()
         },
-        WidgetKind::Custom(ref id) => {
+        WidgetKind::Custom(id) => {
             // Fallback for Custom without a descriptor — should not normally be
             // called via default_for; use default_for_descriptor instead.
             crate::project::schema::WidgetInstance {

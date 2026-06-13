@@ -118,39 +118,39 @@ fn collect_one(
     }
 
     // ---- Bound label field ----
-    if let Some(ref lb) = w.label_binding {
-        if let Some(b) = field_binding(Some(lb.as_str())) {
-            push_field(
-                AppStateField {
-                    name: b.to_owned(),
-                    ty: "String".to_owned(),
-                    default_expr: "String::new()".to_owned(),
-                },
-                fields,
-                seen,
-                warnings,
-            );
-        }
+    if let Some(ref lb) = w.label_binding
+        && let Some(b) = field_binding(Some(lb.as_str()))
+    {
+        push_field(
+            AppStateField {
+                name: b.to_owned(),
+                ty: "String".to_owned(),
+                default_expr: "String::new()".to_owned(),
+            },
+            fields,
+            seen,
+            warnings,
+        );
     }
 
     // ---- Data source binding (Table / ListView / TreeView model) ----
-    if let Some(ref src) = w.props.data_source_binding {
-        if let Some(b) = field_binding(Some(src.as_str())) {
-            let (ty, default_expr) = match &w.kind {
-                WidgetKind::Table => ("Vec<Vec<String>>".to_owned(), "Vec::new()".to_owned()),
-                _ => ("Vec<String>".to_owned(), "Vec::new()".to_owned()),
-            };
-            push_field(
-                AppStateField {
-                    name: b.to_owned(),
-                    ty,
-                    default_expr,
-                },
-                fields,
-                seen,
-                warnings,
-            );
-        }
+    if let Some(ref src) = w.props.data_source_binding
+        && let Some(b) = field_binding(Some(src.as_str()))
+    {
+        let (ty, default_expr) = match &w.kind {
+            WidgetKind::Table => ("Vec<Vec<String>>".to_owned(), "Vec::new()".to_owned()),
+            _ => ("Vec<String>".to_owned(), "Vec::new()".to_owned()),
+        };
+        push_field(
+            AppStateField {
+                name: b.to_owned(),
+                ty,
+                default_expr,
+            },
+            fields,
+            seen,
+            warnings,
+        );
     }
 
     // ---- Formula dependencies (MathLabel expression variables) ----

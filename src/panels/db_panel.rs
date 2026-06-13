@@ -253,10 +253,9 @@ fn show_query_builder(
                     .hint_text("10"),
             )
             .changed()
+            && let Ok(n) = limit_str.trim().parse::<usize>()
         {
-            if let Ok(n) = limit_str.trim().parse::<usize>() {
-                state.preview_limit = n.clamp(1, 1000);
-            }
+            state.preview_limit = n.clamp(1, 1000);
         }
 
         if ui.button("Preview").clicked() {

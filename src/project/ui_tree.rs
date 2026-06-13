@@ -1,5 +1,5 @@
 use crate::project::schema::{
-    default_combo_options, AppProps, Rect, WidgetInstance, WidgetKind, WidgetProps,
+    AppProps, Rect, WidgetInstance, WidgetKind, WidgetProps, default_combo_options,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -147,13 +147,13 @@ impl UiTree {
             .min()
             .unwrap_or(self.widgets.len());
         self.widgets.insert(earliest, frame);
-        if let Some(pid) = common_parent {
-            if let Some(parent) = self.get_mut(pid) {
-                let insert_idx = parent_insert_idx.unwrap_or(parent.children.len());
-                parent
-                    .children
-                    .insert(insert_idx.min(parent.children.len()), frame_id);
-            }
+        if let Some(pid) = common_parent
+            && let Some(parent) = self.get_mut(pid)
+        {
+            let insert_idx = parent_insert_idx.unwrap_or(parent.children.len());
+            parent
+                .children
+                .insert(insert_idx.min(parent.children.len()), frame_id);
         }
         self.reflow_layouts();
         Some(frame_id)
@@ -174,15 +174,15 @@ impl UiTree {
         if let Some(idx) = self.widgets.iter().position(|w| w.id == frame_id) {
             let children = self.widgets[idx].children.clone();
             self.widgets.remove(idx);
-            if let Some(pid) = parent_id {
-                if let Some(parent) = self.get_mut(pid) {
-                    parent.children.retain(|id| *id != frame_id);
-                    let insert_idx = parent_insert_idx.unwrap_or(parent.children.len());
-                    for (offset, child_id) in children.iter().enumerate() {
-                        parent
-                            .children
-                            .insert((insert_idx + offset).min(parent.children.len()), *child_id);
-                    }
+            if let Some(pid) = parent_id
+                && let Some(parent) = self.get_mut(pid)
+            {
+                parent.children.retain(|id| *id != frame_id);
+                let insert_idx = parent_insert_idx.unwrap_or(parent.children.len());
+                for (offset, child_id) in children.iter().enumerate() {
+                    parent
+                        .children
+                        .insert((insert_idx + offset).min(parent.children.len()), *child_id);
                 }
             }
             self.reflow_layouts();
@@ -199,17 +199,17 @@ impl UiTree {
 
     fn owned_order_or_selection_order(&self, selected: &[Uuid]) -> Vec<Uuid> {
         let selected_set: HashSet<Uuid> = selected.iter().copied().collect();
-        if let Some(parent_id) = self.common_parent_for(selected) {
-            if let Some(parent) = self.widgets.iter().find(|w| w.id == parent_id) {
-                let ordered: Vec<Uuid> = parent
-                    .children
-                    .iter()
-                    .copied()
-                    .filter(|id| selected_set.contains(id))
-                    .collect();
-                if ordered.len() == selected.len() {
-                    return ordered;
-                }
+        if let Some(parent_id) = self.common_parent_for(selected)
+            && let Some(parent) = self.widgets.iter().find(|w| w.id == parent_id)
+        {
+            let ordered: Vec<Uuid> = parent
+                .children
+                .iter()
+                .copied()
+                .filter(|id| selected_set.contains(id))
+                .collect();
+            if ordered.len() == selected.len() {
+                return ordered;
             }
         }
         selected.to_vec()
@@ -270,10 +270,10 @@ impl UiTree {
             }
         }
 
-        if let Some(pid) = parent_id {
-            if let Some(parent) = self.get_mut(pid) {
-                parent.children.push(child_id);
-            }
+        if let Some(pid) = parent_id
+            && let Some(parent) = self.get_mut(pid)
+        {
+            parent.children.push(child_id);
         }
 
         self.reflow_layouts();
@@ -629,21 +629,21 @@ impl UiTree {
 
     /// Swap with next index — higher index = drawn later = more on top.
     pub fn bring_forward(&mut self, id: Uuid) {
-        if let Some(idx) = self.widgets.iter().position(|w| w.id == id) {
-            if idx + 1 < self.widgets.len() {
-                self.widgets.swap(idx, idx + 1);
-                debug_assert_eq!(self.widgets[idx + 1].id, id, "bring_forward: swap failed");
-            }
+        if let Some(idx) = self.widgets.iter().position(|w| w.id == id)
+            && idx + 1 < self.widgets.len()
+        {
+            self.widgets.swap(idx, idx + 1);
+            debug_assert_eq!(self.widgets[idx + 1].id, id, "bring_forward: swap failed");
         }
     }
 
     /// Swap with previous index — lower index = drawn earlier = more behind.
     pub fn send_back(&mut self, id: Uuid) {
-        if let Some(idx) = self.widgets.iter().position(|w| w.id == id) {
-            if idx > 0 {
-                self.widgets.swap(idx, idx - 1);
-                debug_assert_eq!(self.widgets[idx - 1].id, id, "send_back: swap failed");
-            }
+        if let Some(idx) = self.widgets.iter().position(|w| w.id == id)
+            && idx > 0
+        {
+            self.widgets.swap(idx, idx - 1);
+            debug_assert_eq!(self.widgets[idx - 1].id, id, "send_back: swap failed");
         }
     }
 }
@@ -1175,10 +1175,12 @@ mod tests {
         let frame = tree.widgets.iter().find(|w| w.id == frame_id).unwrap();
         assert_eq!(frame.kind, WidgetKind::Frame);
         assert_eq!(frame.children, vec![a, b]);
-        assert!(!tree
-            .widgets
-            .iter()
-            .any(|w| w.id != frame_id && w.children.contains(&a)));
+        assert!(
+            !tree
+                .widgets
+                .iter()
+                .any(|w| w.id != frame_id && w.children.contains(&a))
+        );
     }
 
     #[test]

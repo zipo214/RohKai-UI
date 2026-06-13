@@ -165,13 +165,13 @@ pub fn validate_constraints(tree: &UiTree) -> Vec<ConstraintError> {
         }
 
         // Check aspect_ratio validity
-        if let Some(ar) = c.aspect_ratio {
-            if !ar.is_finite() || ar <= 0.0 {
-                errors.push(ConstraintError::InvalidAspectRatio {
-                    widget_id: w.id,
-                    value: ar,
-                });
-            }
+        if let Some(ar) = c.aspect_ratio
+            && (!ar.is_finite() || ar <= 0.0)
+        {
+            errors.push(ConstraintError::InvalidAspectRatio {
+                widget_id: w.id,
+                value: ar,
+            });
         }
     }
 
@@ -217,22 +217,23 @@ fn solve_one(
     frame: Rect,
 ) {
     // 1. Equal-size links — copy authored w/h from the target's snapshot.
-    if let Some(ref target_id) = c.equal_width_to {
-        if let Some(&(target_w, _)) = snapshot.get(target_id) {
-            r.w = target_w;
-        }
+    if let Some(ref target_id) = c.equal_width_to
+        && let Some(&(target_w, _)) = snapshot.get(target_id)
+    {
+        r.w = target_w;
     }
-    if let Some(ref target_id) = c.equal_height_to {
-        if let Some(&(_, target_h)) = snapshot.get(target_id) {
-            r.h = target_h;
-        }
+    if let Some(ref target_id) = c.equal_height_to
+        && let Some(&(_, target_h)) = snapshot.get(target_id)
+    {
+        r.h = target_h;
     }
 
     // 2. Aspect-ratio lock — preserve width, derive height.
-    if let Some(ratio) = c.aspect_ratio {
-        if ratio.is_finite() && ratio > 0.0 {
-            r.h = r.w / ratio;
-        }
+    if let Some(ratio) = c.aspect_ratio
+        && ratio.is_finite()
+        && ratio > 0.0
+    {
+        r.h = r.w / ratio;
     }
 
     // 3. Min/max clamps.
@@ -319,22 +320,23 @@ fn detect_equal_size_cycles(tree: &UiTree, errors: &mut Vec<ConstraintError>) {
 
     // Check mutual cycles in height map.
     for (a, b) in &height_map {
-        if height_map.get(b) == Some(a) && a < b {
-            if let (Some(wa), Some(wb)) = (
+        if height_map.get(b) == Some(a)
+            && a < b
+            && let (Some(wa), Some(wb)) = (
                 uuid_from_str_in_tree(tree, a),
                 uuid_from_str_in_tree(tree, b),
-            ) {
-                // Only report if not already reported for width.
-                let already = errors.iter().any(|e| {
+            )
+        {
+            // Only report if not already reported for width.
+            let already = errors.iter().any(|e| {
                     matches!(e, ConstraintError::EqualSizeCycle { widget_a, widget_b }
                         if (*widget_a == wa && *widget_b == wb) || (*widget_a == wb && *widget_b == wa))
                 });
-                if !already {
-                    errors.push(ConstraintError::EqualSizeCycle {
-                        widget_a: wa,
-                        widget_b: wb,
-                    });
-                }
+            if !already {
+                errors.push(ConstraintError::EqualSizeCycle {
+                    widget_a: wa,
+                    widget_b: wb,
+                });
             }
         }
     }

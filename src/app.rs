@@ -420,12 +420,14 @@ impl RohKaiApp {
             let ctx2 = ctx.clone();
             std::thread::Builder::new()
                 .name(format!("rohkai-timer-{name}"))
-                .spawn(move || loop {
-                    std::thread::sleep(Duration::from_millis(interval_ms));
-                    if tx2.send(name.clone()).is_err() {
-                        break; // receiver dropped — stop the thread
+                .spawn(move || {
+                    loop {
+                        std::thread::sleep(Duration::from_millis(interval_ms));
+                        if tx2.send(name.clone()).is_err() {
+                            break; // receiver dropped — stop the thread
+                        }
+                        ctx2.request_repaint_after(Duration::from_millis(interval_ms));
                     }
-                    ctx2.request_repaint_after(Duration::from_millis(interval_ms));
                 })
                 .ok();
         }
@@ -2551,8 +2553,8 @@ impl eframe::App for RohKaiApp {
                                             &self.project.ui_tree.app_props.components,
                                             selected_component,
                                         );
-                                        if let Some(sel) = selected_component {
-                                            if let Some(comp) = self
+                                        if let Some(sel) = selected_component
+                                            && let Some(comp) = self
                                                 .project
                                                 .ui_tree
                                                 .app_props
@@ -2565,7 +2567,6 @@ impl eframe::App for RohKaiApp {
                                                     ui, comp,
                                                 );
                                             }
-                                        }
                                     });
                                 egui::CollapsingHeader::new("Templates")
                                     .default_open(false)
@@ -2650,8 +2651,8 @@ impl eframe::App for RohKaiApp {
                                             &self.project.ui_tree.app_props.components,
                                             selected_component,
                                         );
-                                        if let Some(sel) = selected_component {
-                                            if let Some(comp) = self
+                                        if let Some(sel) = selected_component
+                                            && let Some(comp) = self
                                                 .project
                                                 .ui_tree
                                                 .app_props
@@ -2664,7 +2665,6 @@ impl eframe::App for RohKaiApp {
                                                     ui, comp,
                                                 );
                                             }
-                                        }
                                     }
                                     LeftPanelTab::Templates => {
                                         ui.label(egui::RichText::new("Templates").strong());

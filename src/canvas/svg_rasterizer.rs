@@ -3712,7 +3712,10 @@ fn unsupported_tag_feature(tag: &str) -> Option<(&'static str, &'static str)> {
             "clipPath",
             "clip paths are diagnosed but not applied in raster output yet",
         )),
-        "mask" => Some(("mask", "masks are diagnosed but not applied in raster output yet")),
+        "mask" => Some((
+            "mask",
+            "masks are diagnosed but not applied in raster output yet",
+        )),
         "filter" => Some((
             "filter",
             "filters are diagnosed but not evaluated in raster output yet",
@@ -3726,14 +3729,18 @@ fn unsupported_tag_feature(tag: &str) -> Option<(&'static str, &'static str)> {
             "image",
             "PNG data: images are decoded; JPEG and other formats or external sources are diagnosed",
         )),
-        "textpath" => Some(("textPath", "textPath is preserved in source but not rasterized yet")),
+        "textpath" => Some((
+            "textPath",
+            "textPath is preserved in source but not rasterized yet",
+        )),
         "foreignobject" => Some((
             "foreignObject",
             "foreignObject content is rejected from the secure static renderer profile",
         )),
-        "animate" | "animatetransform" | "animatemotion" | "set" | "mpath" => {
-            Some(("animation", "animation elements are ignored by the static renderer"))
-        }
+        "animate" | "animatetransform" | "animatemotion" | "set" | "mpath" => Some((
+            "animation",
+            "animation elements are ignored by the static renderer",
+        )),
         "switch" => Some((
             "switch",
             "switch conditional processing is not implemented in raster mode yet",
@@ -10672,9 +10679,7 @@ impl ImageDecodeError {
     fn message(self) -> &'static str {
         match self {
             Self::Empty => "embedded image had no data; placeholder kept",
-            Self::NotDataUri => {
-                "image href is not a supported inline data: URI; placeholder kept"
-            }
+            Self::NotDataUri => "image href is not a supported inline data: URI; placeholder kept",
             Self::ExternalRejected => {
                 "external image references are blocked for security; placeholder kept"
             }
@@ -10682,9 +10687,7 @@ impl ImageDecodeError {
                 "only base64-encoded data: images are decoded; placeholder kept"
             }
             Self::BadBase64 => "image data: payload was not valid base64; placeholder kept",
-            Self::NotImage => {
-                "embedded image is not a supported PNG or JPEG; placeholder kept"
-            }
+            Self::NotImage => "embedded image is not a supported PNG or JPEG; placeholder kept",
             Self::MalformedPng => "embedded PNG was malformed or truncated; placeholder kept",
             Self::UnsupportedPng => {
                 "embedded PNG uses an unsupported feature (interlace, bit depth, or color type); placeholder kept"
@@ -10965,11 +10968,7 @@ fn single_color_trns(color_type: u8, bit_depth: u8, trns: &[u8]) -> Option<[u16;
         let hi = *trns.get(i * 2).unwrap_or(&0) as u16;
         let lo = *trns.get(i * 2 + 1).unwrap_or(&0) as u16;
         let v = (hi << 8) | lo;
-        if bit_depth == 16 {
-            v
-        } else {
-            v & 0xff
-        }
+        if bit_depth == 16 { v } else { v & 0xff }
     };
     match color_type {
         0 if trns.len() >= 2 => {
@@ -12604,11 +12603,13 @@ mod tests {
         assert!(!features.contains(&"filter attribute"));
         assert!(!features.contains(&"pattern"));
         // No `paint.unresolved_server` warning for a resolvable pattern.
-        assert!(!output
-            .report
-            .warnings
-            .iter()
-            .any(|w| w.code == "paint.unresolved_server"));
+        assert!(
+            !output
+                .report
+                .warnings
+                .iter()
+                .any(|w| w.code == "paint.unresolved_server")
+        );
         assert!(output.report.rendered_element_count >= 1);
     }
 
@@ -12700,11 +12701,13 @@ mod tests {
         assert!(scene.references.uses[1].resolved.is_none());
 
         let output = rasterize_with_report(svg, 10, 10).unwrap();
-        assert!(output
-            .report
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "reference.duplicate_id"));
+        assert!(
+            output
+                .report
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "reference.duplicate_id")
+        );
         let unresolved = output
             .report
             .warnings
@@ -12901,11 +12904,13 @@ mod tests {
 </svg>"##;
         let image = rasterize(svg, 16, 16).unwrap();
 
-        assert!(image
-            .pixels
-            .iter()
-            .map(|color| color.a())
-            .any(|alpha| alpha > 0 && alpha < 255));
+        assert!(
+            image
+                .pixels
+                .iter()
+                .map(|color| color.a())
+                .any(|alpha| alpha > 0 && alpha < 255)
+        );
     }
 
     #[test]
@@ -13141,10 +13146,12 @@ mod tests {
         assert_eq!(runs.len(), 5);
         let seam_run = &runs[0];
         assert!(seam_run.points.len() >= 3);
-        assert!(seam_run
-            .points
-            .windows(2)
-            .any(|pair| distance(pair[0], pair[1]) > 0.0));
+        assert!(
+            seam_run
+                .points
+                .windows(2)
+                .any(|pair| distance(pair[0], pair[1]) > 0.0)
+        );
     }
 
     #[test]
@@ -13182,11 +13189,13 @@ mod tests {
 </svg>"##;
         let output = rasterize_with_report(svg, 2, 2).unwrap();
 
-        assert!(output
-            .report
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "limit.stroke_complexity"));
+        assert!(
+            output
+                .report
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "limit.stroke_complexity")
+        );
     }
 
     #[test]
@@ -13254,11 +13263,13 @@ mod tests {
             .find(|warning| warning.code == "style.invalid_fill_rule")
             .expect("invalid fill-rule warning");
         assert!(warning.source.is_some());
-        assert!(!output
-            .report
-            .unsupported_features
-            .iter()
-            .any(|feature| feature.feature == "fill-rule"));
+        assert!(
+            !output
+                .report
+                .unsupported_features
+                .iter()
+                .any(|feature| feature.feature == "fill-rule")
+        );
     }
 
     #[test]
@@ -13266,11 +13277,12 @@ mod tests {
         let path = parse_path_d("M1 1 R5 5 L8 1 L8 8 Z");
 
         assert!(!path.subpaths.is_empty());
-        assert!(path
-            .subpaths
-            .iter()
-            .flat_map(|subpath| &subpath.segments)
-            .any(|segment| segment.end() == (8.0, 8.0)));
+        assert!(
+            path.subpaths
+                .iter()
+                .flat_map(|subpath| &subpath.segments)
+                .any(|segment| segment.end() == (8.0, 8.0))
+        );
     }
 
     #[test]
@@ -13398,23 +13410,29 @@ mod tests {
 </svg>"##;
         let output = rasterize_with_report(svg, 10, 10).unwrap();
 
-        assert!(output
-            .report
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "reference.gradient_cycle"));
+        assert!(
+            output
+                .report
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "reference.gradient_cycle")
+        );
         // Pattern is resolved: not an unsupported feature, no unresolved-server.
-        assert!(!output
-            .report
-            .unsupported_features
-            .iter()
-            .any(|feature| feature.feature == "pattern"));
-        assert!(!output
-            .report
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "paint.unresolved_server"
-                && warning.message.contains("#p")));
+        assert!(
+            !output
+                .report
+                .unsupported_features
+                .iter()
+                .any(|feature| feature.feature == "pattern")
+        );
+        assert!(
+            !output
+                .report
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "paint.unresolved_server"
+                    && warning.message.contains("#p"))
+        );
     }
 
     #[test]
@@ -13472,16 +13490,20 @@ mod tests {
         let pfirst = rasterize_with_report(pattern, 12, 4).unwrap();
         let psecond = rasterize_with_report(pattern, 12, 4).unwrap();
         assert_eq!(pfirst.image.pixels, psecond.image.pixels);
-        assert!(!pfirst
-            .report
-            .unsupported_features
-            .iter()
-            .any(|feature| feature.feature == "pattern"));
-        assert!(!pfirst
-            .report
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "paint.unresolved_server"));
+        assert!(
+            !pfirst
+                .report
+                .unsupported_features
+                .iter()
+                .any(|feature| feature.feature == "pattern")
+        );
+        assert!(
+            !pfirst
+                .report
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "paint.unresolved_server")
+        );
         // The tile (a red square in the top-left of each 2x2 cell) actually paints.
         assert_eq!(pixel(&pfirst.image, 0, 0), [255, 0, 0, 255]);
         assert_eq!(pixel(&pfirst.image, 1, 0), [0, 0, 0, 0]);
@@ -13504,11 +13526,13 @@ mod tests {
         assert_eq!(pixel(&output.image, 5, 5), [255, 0, 0, 255]);
         assert_eq!(pixel(&output.image, 15, 5), [0, 255, 0, 255]);
         assert_eq!(pixel(&output.image, 25, 5), [17, 34, 51, 255]);
-        assert!(!output
-            .report
-            .unsupported_features
-            .iter()
-            .any(|feature| feature.feature == "style"));
+        assert!(
+            !output
+                .report
+                .unsupported_features
+                .iter()
+                .any(|feature| feature.feature == "style")
+        );
     }
 
     #[test]
@@ -13520,11 +13544,13 @@ mod tests {
         let output = rasterize_with_report(svg, 10, 10).unwrap();
 
         assert_eq!(pixel(&output.image, 5, 5), [0, 255, 0, 255]);
-        assert!(output
-            .report
-            .unsupported_features
-            .iter()
-            .any(|feature| feature.feature == "complex CSS selector"));
+        assert!(
+            output
+                .report
+                .unsupported_features
+                .iter()
+                .any(|feature| feature.feature == "complex CSS selector")
+        );
     }
 
     #[test]
@@ -13541,11 +13567,13 @@ mod tests {
 
         assert_eq!(pixel(&output.image, 4, 4), [0, 255, 0, 255]);
         assert_eq!(pixel(&output.image, 20, 5), [0, 0, 255, 255]);
-        assert!(!output
-            .report
-            .unsupported_features
-            .iter()
-            .any(|feature| matches!(feature.feature.as_str(), "use" | "symbol" | "defs")));
+        assert!(
+            !output
+                .report
+                .unsupported_features
+                .iter()
+                .any(|feature| matches!(feature.feature.as_str(), "use" | "symbol" | "defs"))
+        );
     }
 
     #[test]
@@ -13674,11 +13702,13 @@ mod tests {
         assert_eq!(pixel(&output.image, 3, 0), [0, 0, 0, 0]);
         assert_eq!(output.report.rendered_element_count, 1);
         // Clip is rendered, not approximated: no clip/clip-path unsupported buckets.
-        assert!(!output
-            .report
-            .unsupported_features
-            .iter()
-            .any(|f| f.feature.contains("clip")));
+        assert!(
+            !output
+                .report
+                .unsupported_features
+                .iter()
+                .any(|f| f.feature.contains("clip"))
+        );
         assert_eq!(output.report.fidelity, SvgRenderFidelity::High);
     }
 
@@ -13765,11 +13795,13 @@ mod tests {
 </svg>"##;
         let output = rasterize_with_report(svg, 4, 4).unwrap();
 
-        assert!(output
-            .report
-            .warnings
-            .iter()
-            .any(|w| w.code == "clip.object_bounding_box"));
+        assert!(
+            output
+                .report
+                .warnings
+                .iter()
+                .any(|w| w.code == "clip.object_bounding_box")
+        );
         // With clip skipped the group still renders fully.
         assert_eq!(pixel(&output.image, 3, 3), [255, 0, 0, 255]);
     }
@@ -13779,11 +13811,13 @@ mod tests {
         let svg = r##"<svg viewBox="0 0 4 4"><rect width="4" height="4" fill="#ff0000" clip-path="url(#nope)"/></svg>"##;
         let output = rasterize_with_report(svg, 4, 4).unwrap();
 
-        assert!(output
-            .report
-            .warnings
-            .iter()
-            .any(|w| w.code == "clip.unresolved"));
+        assert!(
+            output
+                .report
+                .warnings
+                .iter()
+                .any(|w| w.code == "clip.unresolved")
+        );
         assert_eq!(pixel(&output.image, 2, 2), [255, 0, 0, 255]);
     }
 
@@ -13796,11 +13830,13 @@ mod tests {
 </svg>"##;
         let output = rasterize_with_report(svg, 4, 4).unwrap();
 
-        assert!(output
-            .report
-            .warnings
-            .iter()
-            .any(|w| w.code == "reference.clip_cycle"));
+        assert!(
+            output
+                .report
+                .warnings
+                .iter()
+                .any(|w| w.code == "reference.clip_cycle")
+        );
     }
 
     #[test]
@@ -13819,11 +13855,13 @@ mod tests {
         svg.push_str(r##"<rect width="4" height="4" fill="#ff0000" clip-path="url(#c0)"/></svg>"##);
         let output = rasterize_with_report(&svg, 4, 4).unwrap();
 
-        assert!(output
-            .report
-            .warnings
-            .iter()
-            .any(|w| w.code == "limit.clip_depth"));
+        assert!(
+            output
+                .report
+                .warnings
+                .iter()
+                .any(|w| w.code == "limit.clip_depth")
+        );
     }
 
     #[test]
@@ -13840,11 +13878,13 @@ mod tests {
         svg.push_str("</svg>");
         let output = rasterize_with_report(&svg, 4, 4).unwrap();
 
-        assert!(output
-            .report
-            .warnings
-            .iter()
-            .any(|w| w.code == "limit.offscreen_buffer"));
+        assert!(
+            output
+                .report
+                .warnings
+                .iter()
+                .any(|w| w.code == "limit.offscreen_buffer")
+        );
         // Despite truncation the render still produces visible pixels.
         assert!(output.image.pixels.iter().any(|c| c.a() > 0));
     }
@@ -13884,11 +13924,12 @@ mod tests {
         assert_eq!(pixel(&out.image, 1, 1)[3], 0);
         assert_eq!(out.report.fidelity, SvgRenderFidelity::High);
         assert_eq!(out.report.unsupported_feature_count, 0);
-        assert!(!out
-            .report
-            .warnings
-            .iter()
-            .any(|w| w.code.starts_with("image.")));
+        assert!(
+            !out.report
+                .warnings
+                .iter()
+                .any(|w| w.code.starts_with("image."))
+        );
     }
 
     #[test]
@@ -14028,7 +14069,7 @@ mod tests {
     fn make_progressive_gray_jpeg() -> Vec<u8> {
         let mut v: Vec<u8> = Vec::new();
         v.extend_from_slice(&[0xFF, 0xD8]); // SOI
-                                            // DQT: 8-bit, table 0, all values = 1
+        // DQT: 8-bit, table 0, all values = 1
         v.extend_from_slice(&[0xFF, 0xDB, 0x00, 0x43, 0x00]);
         v.extend(std::iter::repeat_n(1u8, 64));
         // SOF2: precision=8, 8×8, 1 component (h1v1, qt=0)
@@ -14040,7 +14081,7 @@ mod tests {
         v.extend_from_slice(&[0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
         v.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
         v.push(0x00); // huffval: category 0
-                      // SOS: DC-only scan, Ss=0 Se=0 Ah=0 Al=0
+        // SOS: DC-only scan, Ss=0 Se=0 Ah=0 Al=0
         v.extend_from_slice(&[0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00]);
         // Entropy: 1-bit code 0b0 padded to byte → 0x7F
         v.push(0x7F);
@@ -14132,32 +14173,35 @@ mod tests {
     #[test]
     fn interlaced_png_is_diagnosed_unsupported() {
         let out = rasterize_with_report(&image_svg(PNG_INTERLACED), 2, 2).unwrap();
-        assert!(out
-            .report
-            .warnings
-            .iter()
-            .any(|w| w.code == "image.unsupported_png"));
+        assert!(
+            out.report
+                .warnings
+                .iter()
+                .any(|w| w.code == "image.unsupported_png")
+        );
     }
 
     #[test]
     fn oversized_png_dimensions_are_bounded() {
         let out = rasterize_with_report(&image_svg(PNG_OVERSIZE), 2, 2).unwrap();
-        assert!(out
-            .report
-            .warnings
-            .iter()
-            .any(|w| w.code == "limit.image_pixels"));
+        assert!(
+            out.report
+                .warnings
+                .iter()
+                .any(|w| w.code == "limit.image_pixels")
+        );
     }
 
     #[test]
     fn truncated_png_is_diagnosed_not_panicking() {
         let truncated = &PNG_RGBA_2X2[..PNG_RGBA_2X2.len() - 16];
         let out = rasterize_with_report(&image_svg(truncated), 2, 2).unwrap();
-        assert!(out
-            .report
-            .warnings
-            .iter()
-            .any(|w| w.code.starts_with("image.")));
+        assert!(
+            out.report
+                .warnings
+                .iter()
+                .any(|w| w.code.starts_with("image."))
+        );
     }
 
     #[test]
@@ -14177,22 +14221,24 @@ mod tests {
         let p = pixel(&out.image, 2, 2);
         assert!((p[3] as i32 - 128).abs() <= 4, "alpha {p:?}");
         assert!(p[0] > 0, "still red {p:?}");
-        assert!(!out
-            .report
-            .unsupported_features
-            .iter()
-            .any(|f| f.feature == "mask"));
+        assert!(
+            !out.report
+                .unsupported_features
+                .iter()
+                .any(|f| f.feature == "mask")
+        );
     }
 
     #[test]
     fn missing_mask_reference_is_diagnosed_and_element_visible() {
         let svg = r##"<svg viewBox="0 0 4 4"><rect width="4" height="4" fill="#ff0000" mask="url(#nope)"/></svg>"##;
         let out = rasterize_with_report(svg, 4, 4).unwrap();
-        assert!(out
-            .report
-            .warnings
-            .iter()
-            .any(|w| w.code == "mask.unresolved"));
+        assert!(
+            out.report
+                .warnings
+                .iter()
+                .any(|w| w.code == "mask.unresolved")
+        );
         // No mask applied → element renders fully.
         assert_eq!(pixel(&out.image, 2, 2), [255, 0, 0, 255]);
     }
@@ -14465,11 +14511,12 @@ mod tests {
                 "marker missing at vertex x={vx}"
             );
         }
-        assert!(out
-            .report
-            .warnings
-            .iter()
-            .all(|w| w.code != "marker.unresolved"));
+        assert!(
+            out.report
+                .warnings
+                .iter()
+                .all(|w| w.code != "marker.unresolved")
+        );
     }
 
     #[test]
@@ -14486,11 +14533,12 @@ mod tests {
     fn missing_marker_reference_is_diagnosed_not_fatal() {
         let svg = r##"<svg viewBox="0 0 8 8"><line x1="0" y1="4" x2="8" y2="4" stroke="#0000ff" stroke-width="2" marker-end="url(#nope)"/></svg>"##;
         let out = rasterize_with_report(svg, 8, 8).unwrap();
-        assert!(out
-            .report
-            .warnings
-            .iter()
-            .any(|w| w.code == "marker.unresolved"));
+        assert!(
+            out.report
+                .warnings
+                .iter()
+                .any(|w| w.code == "marker.unresolved")
+        );
         // The line itself still renders.
         assert!(out.report.rendered_element_count >= 1);
     }
@@ -14516,11 +14564,12 @@ mod tests {
 <pattern id="b" href="#a" width="2" height="2" patternUnits="userSpaceOnUse"><rect width="1" height="1" fill="#ff0000"/></pattern>
 </defs><rect width="8" height="8" fill="url(#a)"/></svg>"##;
         let out = rasterize_with_report(svg, 8, 8).unwrap();
-        assert!(out
-            .report
-            .warnings
-            .iter()
-            .any(|w| w.code == "reference.pattern_cycle"));
+        assert!(
+            out.report
+                .warnings
+                .iter()
+                .any(|w| w.code == "reference.pattern_cycle")
+        );
     }
 
     #[test]
@@ -14652,7 +14701,7 @@ mod tests {
         let out = rasterize(default_region, 6, 6).unwrap();
         assert_eq!(pixel(&out, 2, 2), [0, 0, 255, 255]); // inside region
         assert_eq!(pixel(&out, 0, 0), [0, 0, 0, 0]); // corner clipped out
-                                                     // userSpaceOnUse region with an explicit rect bounds the flood exactly.
+        // userSpaceOnUse region with an explicit rect bounds the flood exactly.
         let user = r##"<svg viewBox="0 0 6 6"><filter id="f" filterUnits="userSpaceOnUse" x="1" y="1" width="2" height="2"><feFlood flood-color="#0000ff"/></filter><rect width="6" height="6" fill="#ff0000" filter="url(#f)"/></svg>"##;
         let u = rasterize(user, 6, 6).unwrap();
         assert_eq!(pixel(&u, 1, 1), [0, 0, 255, 255]); // inside [1,3)
@@ -14669,29 +14718,32 @@ mod tests {
         assert_eq!(a.image.pixels, b.image.pixels, "text render deterministic");
         // Pixels actually land (H left stem near x=2).
         assert!(a.image.pixels.iter().any(|c| c.r() > 200 && c.a() > 200));
-        assert!(a
-            .report
-            .warnings
-            .iter()
-            .any(|w| w.code == "text.raster_snapshot"));
+        assert!(
+            a.report
+                .warnings
+                .iter()
+                .any(|w| w.code == "text.raster_snapshot")
+        );
         assert_eq!(a.report.rendered_element_count, 1);
         // No "text" unsupported bucket anymore.
-        assert!(!a
-            .report
-            .unsupported_features
-            .iter()
-            .any(|f| f.feature == "text"));
+        assert!(
+            !a.report
+                .unsupported_features
+                .iter()
+                .any(|f| f.feature == "text")
+        );
     }
 
     #[test]
     fn unknown_glyphs_render_tofu_with_diagnostic() {
         let svg = r##"<svg viewBox="0 0 24 24"><text x="2" y="18" font-size="16" fill="#000000">日</text></svg>"##;
         let out = rasterize_with_report(svg, 24, 24).unwrap();
-        assert!(out
-            .report
-            .warnings
-            .iter()
-            .any(|w| w.code == "text.glyph_unsupported"));
+        assert!(
+            out.report
+                .warnings
+                .iter()
+                .any(|w| w.code == "text.glyph_unsupported")
+        );
         // The tofu box paints something.
         assert!(out.image.pixels.iter().any(|c| c.a() > 200));
     }
@@ -14700,11 +14752,12 @@ mod tests {
     fn bidi_text_is_diagnosed_not_silently_wrong() {
         let svg = r##"<svg viewBox="0 0 24 24"><text x="2" y="18" font-size="16" fill="#000000">ש</text></svg>"##;
         let out = rasterize_with_report(svg, 24, 24).unwrap();
-        assert!(out
-            .report
-            .warnings
-            .iter()
-            .any(|w| w.code == "text.bidi_unsupported"));
+        assert!(
+            out.report
+                .warnings
+                .iter()
+                .any(|w| w.code == "text.bidi_unsupported")
+        );
     }
 
     #[test]
@@ -14723,11 +14776,12 @@ mod tests {
 
         let missing = r##"<svg viewBox="0 0 16 16"><text font-size="10"><textPath href="#nope">x</textPath></text></svg>"##;
         let rep = rasterize_with_report(missing, 16, 16).unwrap();
-        assert!(rep
-            .report
-            .warnings
-            .iter()
-            .any(|w| w.code == "textpath.unresolved"));
+        assert!(
+            rep.report
+                .warnings
+                .iter()
+                .any(|w| w.code == "textpath.unresolved")
+        );
     }
 
     #[test]
@@ -14737,11 +14791,12 @@ mod tests {
             r##"<svg viewBox="0 0 64 64"><text x="1" y="32" font-size="8">{long}</text></svg>"##
         );
         let out = rasterize_with_report(&svg, 64, 64).unwrap();
-        assert!(out
-            .report
-            .warnings
-            .iter()
-            .any(|w| w.code == "limit.text_glyphs"));
+        assert!(
+            out.report
+                .warnings
+                .iter()
+                .any(|w| w.code == "limit.text_glyphs")
+        );
     }
 
     #[test]
@@ -14773,11 +14828,12 @@ mod tests {
         assert_eq!(pixel(&out.image, 1, 1), [0, 255, 0, 255]);
         // ...but the foreign c:rect did not paint red over the rest.
         assert_eq!(pixel(&out.image, 8, 8), [0, 0, 0, 0]);
-        assert!(out
-            .report
-            .warnings
-            .iter()
-            .any(|w| w.code == "namespace.foreign_element"));
+        assert!(
+            out.report
+                .warnings
+                .iter()
+                .any(|w| w.code == "namespace.foreign_element")
+        );
     }
 
     #[test]
@@ -14795,11 +14851,12 @@ mod tests {
         let out = rasterize_with_report(svg, 4, 4).unwrap();
         assert_eq!(pixel(&out.image, 2, 2), [255, 0, 0, 255]);
         assert!(out.report.recovered_error_count > 0);
-        assert!(out
-            .report
-            .warnings
-            .iter()
-            .any(|w| w.code == "recovery.malformed_markup"));
+        assert!(
+            out.report
+                .warnings
+                .iter()
+                .any(|w| w.code == "recovery.malformed_markup")
+        );
         // Determinism.
         let again = rasterize(svg, 4, 4).unwrap();
         assert_eq!(out.image.pixels, again.pixels);

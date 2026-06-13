@@ -136,12 +136,10 @@ pub fn handle_interaction(
     }
 
     // --- Delete hovered guide ---
-    if delete_pressed {
-        if let Some(h) = *hovered {
-            guides.retain(|g| g.id != h);
-            *hovered = None;
-            return;
-        }
+    if delete_pressed && let Some(h) = *hovered {
+        guides.retain(|g| g.id != h);
+        *hovered = None;
+        return;
     }
 
     // --- Start drag or create guide ---

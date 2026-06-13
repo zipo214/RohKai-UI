@@ -1,5 +1,5 @@
 use crate::project::schema::{
-    default_combo_options, Rect, WidgetInstance, WidgetKind, WidgetProps,
+    Rect, WidgetInstance, WidgetKind, WidgetProps, default_combo_options,
 };
 use uuid::Uuid;
 

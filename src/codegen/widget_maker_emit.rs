@@ -5,8 +5,8 @@
 //! are produced only within this module tree.
 
 use crate::canvas::widget_maker::{
-    group_children, is_group_kind, MakerPrimKind, MakerPrimitive, PrimState, StyleTokens,
-    WidgetMakerDoc,
+    MakerPrimKind, MakerPrimitive, PrimState, StyleTokens, WidgetMakerDoc, group_children,
+    is_group_kind,
 };
 use crate::codegen::rust::string_literal;
 
@@ -246,15 +246,15 @@ fn prim_to_egui_lines(
             ));
             if needs_response {
                 let cr = prim.corner_radius;
-                if let Some(ov) = prim.variants.get(PrimState::Hover) {
-                    if let Some([hr, hg, hb]) = ov.fill {
-                        lines.push(format!("{indent}if {resp_var}.hovered() {{ _painter.rect_filled({sub_rect}, {cr:.1}, egui::Color32::from_rgb({hr}, {hg}, {hb})); }}"));
-                    }
+                if let Some(ov) = prim.variants.get(PrimState::Hover)
+                    && let Some([hr, hg, hb]) = ov.fill
+                {
+                    lines.push(format!("{indent}if {resp_var}.hovered() {{ _painter.rect_filled({sub_rect}, {cr:.1}, egui::Color32::from_rgb({hr}, {hg}, {hb})); }}"));
                 }
-                if let Some(ov) = prim.variants.get(PrimState::Pressed) {
-                    if let Some([pr, pg, pb]) = ov.fill {
-                        lines.push(format!("{indent}if {resp_var}.is_pointer_button_down_on() {{ _painter.rect_filled({sub_rect}, {cr:.1}, egui::Color32::from_rgb({pr}, {pg}, {pb})); }}"));
-                    }
+                if let Some(ov) = prim.variants.get(PrimState::Pressed)
+                    && let Some([pr, pg, pb]) = ov.fill
+                {
+                    lines.push(format!("{indent}if {resp_var}.is_pointer_button_down_on() {{ _painter.rect_filled({sub_rect}, {cr:.1}, egui::Color32::from_rgb({pr}, {pg}, {pb})); }}"));
                 }
             }
             lines

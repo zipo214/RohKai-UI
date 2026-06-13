@@ -7,7 +7,7 @@
 //! Entry: Widgets → Guided Descriptor Builder…
 
 use crate::codegen::widget_descriptor::{
-    validate_descriptor, DescriptorCodegen, DescriptorProp, DescriptorPropType, WidgetDescriptor,
+    DescriptorCodegen, DescriptorProp, DescriptorPropType, WidgetDescriptor, validate_descriptor,
 };
 
 // ---------------------------------------------------------------------------
@@ -373,11 +373,10 @@ fn show_inspector(
                     .add_enabled(can_save, egui::Button::new("💾 Save to widgets/"))
                     .on_hover_text("Write .rkwd file and reload palette")
                     .clicked()
+                    && let Some(ref dir) = widgets_dir
                 {
-                    if let Some(ref dir) = widgets_dir {
-                        state.save_msg =
-                            crate::panels::descriptor_editor::save_descriptor(&state.draft, dir);
-                    }
+                    state.save_msg =
+                        crate::panels::descriptor_editor::save_descriptor(&state.draft, dir);
                 }
                 if let Some((ok, ref msg)) = state.save_msg {
                     let color = if ok {

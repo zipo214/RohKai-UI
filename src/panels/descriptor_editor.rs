@@ -267,11 +267,9 @@ fn show_form(
                     .add_enabled(can_save, egui::Button::new("💾 Save to widgets/"))
                     .on_hover_text("Write .rkwd file and reload palette")
                     .clicked()
-                {
-                    if let Some(ref dir) = widgets_dir {
+                    && let Some(ref dir) = widgets_dir {
                         state.save_msg = save_descriptor(&state.draft, dir);
                     }
-                }
                 if let Some((ok, ref msg)) = state.save_msg {
                     let color = if ok {
                         egui::Color32::from_rgb(52, 211, 153)

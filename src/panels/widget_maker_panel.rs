@@ -6,8 +6,8 @@
 //! primitive.  "Save" serialises via `doc_to_descriptor` → JSON → `.rkwd` file.
 
 use crate::canvas::widget_maker::{
-    doc_to_descriptor, gen_export_template, gen_live_preview, is_group_kind, MakerPrimKind,
-    MakerPrimitive, PrimAnchor, PrimState, SlotDef, StyleTokens, WidgetMakerDoc,
+    MakerPrimKind, MakerPrimitive, PrimAnchor, PrimState, SlotDef, StyleTokens, WidgetMakerDoc,
+    doc_to_descriptor, gen_export_template, gen_live_preview, is_group_kind,
 };
 use egui::Color32;
 
@@ -358,13 +358,12 @@ fn show_mini_canvas(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
     // On drag start: check if pointer is on a corner handle → switch to resize mode
     if canvas_resp.drag_started() {
         doc.resize_corner = None;
-        if let Some(idx) = doc.selected {
-            if idx < doc.primitives.len() {
-                if let Some(pos) = canvas_resp.interact_pointer_pos() {
-                    let pr = prim_canvas_rect(&doc.primitives[idx], canvas_rect);
-                    doc.resize_corner = corner_hit(pos, pr);
-                }
-            }
+        if let Some(idx) = doc.selected
+            && idx < doc.primitives.len()
+            && let Some(pos) = canvas_resp.interact_pointer_pos()
+        {
+            let pr = prim_canvas_rect(&doc.primitives[idx], canvas_rect);
+            doc.resize_corner = corner_hit(pos, pr);
         }
     }
 
@@ -372,22 +371,22 @@ fn show_mini_canvas(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
     if canvas_resp.dragged() {
         let delta = canvas_resp.drag_delta();
         if let Some(corner) = doc.resize_corner {
-            if let Some(idx) = doc.selected {
-                if idx < doc.primitives.len() {
-                    apply_corner_resize(
-                        &mut doc.primitives[idx],
-                        corner,
-                        delta.x / CANVAS_W,
-                        delta.y / CANVAS_H,
-                    );
-                }
+            if let Some(idx) = doc.selected
+                && idx < doc.primitives.len()
+            {
+                apply_corner_resize(
+                    &mut doc.primitives[idx],
+                    corner,
+                    delta.x / CANVAS_W,
+                    delta.y / CANVAS_H,
+                );
             }
-        } else if let Some(idx) = doc.selected {
-            if idx < doc.primitives.len() {
-                let p = &mut doc.primitives[idx];
-                p.x = (p.x + delta.x / CANVAS_W).clamp(0.0, 1.0 - p.w);
-                p.y = (p.y + delta.y / CANVAS_H).clamp(0.0, 1.0 - p.h);
-            }
+        } else if let Some(idx) = doc.selected
+            && idx < doc.primitives.len()
+        {
+            let p = &mut doc.primitives[idx];
+            p.x = (p.x + delta.x / CANVAS_W).clamp(0.0, 1.0 - p.w);
+            p.y = (p.y + delta.y / CANVAS_H).clamp(0.0, 1.0 - p.h);
         }
     }
 
@@ -516,10 +515,10 @@ fn show_toolbar(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
             .map(|i| i < doc.primitives.len())
             .unwrap_or(false);
         ui.add_enabled_ui(can_remove, |ui| {
-            if ui.small_button("✕ Remove").clicked() {
-                if let Some(idx) = doc.selected.take() {
-                    doc.primitives.remove(idx);
-                }
+            if ui.small_button("✕ Remove").clicked()
+                && let Some(idx) = doc.selected.take()
+            {
+                doc.primitives.remove(idx);
             }
         });
 
@@ -925,21 +924,19 @@ fn show_primitive_props(ui: &mut egui::Ui, prim: &mut MakerPrimitive) {
                         {
                             prim.variants.set_enabled(state, is_enabled);
                         }
-                        if is_enabled {
-                            if let Some(ov) = prim.variants.get_mut(state) {
-                                let has_fill = ov.fill.is_some();
-                                let mut fill_on = has_fill;
-                                ui.checkbox(&mut fill_on, egui::RichText::new("Fill").small());
-                                if fill_on && !has_fill {
-                                    ov.fill = Some([200, 200, 200]);
-                                } else if !fill_on {
-                                    ov.fill = None;
-                                }
-                                if let Some(ref mut rgb) = ov.fill {
-                                    ui.add(egui::DragValue::new(&mut rgb[0]).range(0..=255_u8));
-                                    ui.add(egui::DragValue::new(&mut rgb[1]).range(0..=255_u8));
-                                    ui.add(egui::DragValue::new(&mut rgb[2]).range(0..=255_u8));
-                                }
+                        if is_enabled && let Some(ov) = prim.variants.get_mut(state) {
+                            let has_fill = ov.fill.is_some();
+                            let mut fill_on = has_fill;
+                            ui.checkbox(&mut fill_on, egui::RichText::new("Fill").small());
+                            if fill_on && !has_fill {
+                                ov.fill = Some([200, 200, 200]);
+                            } else if !fill_on {
+                                ov.fill = None;
+                            }
+                            if let Some(ref mut rgb) = ov.fill {
+                                ui.add(egui::DragValue::new(&mut rgb[0]).range(0..=255_u8));
+                                ui.add(egui::DragValue::new(&mut rgb[1]).range(0..=255_u8));
+                                ui.add(egui::DragValue::new(&mut rgb[2]).range(0..=255_u8));
                             }
                         }
                     });

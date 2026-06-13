@@ -1136,21 +1136,21 @@ fn update_viewport(node: &Node, state: &mut ParseState) {
     let width = width.max(0.0);
     let height = height.max(0.0);
 
-    if let Some(view_box) = attr(&node.tag, "viewBox").or_else(|| attr(&node.tag, "viewbox")) {
-        if let Some(nums) = parse_numbers(view_box).filter(|n| n.len() >= 4) {
-            let aspect_ratio = svg_core::parse_preserve_aspect_ratio(
-                attr(&node.tag, "preserveaspectratio").unwrap_or(""),
-            );
-            if let Some(view_transform) = svg_core::viewbox_transform(
-                [nums[0], nums[1], nums[2], nums[3]],
-                [x, y, width, height],
-                aspect_ratio,
-            ) {
-                state.transform = state.transform.multiply(view_transform);
-                state.viewport_w = nums[2].abs();
-                state.viewport_h = nums[3].abs();
-                return;
-            }
+    if let Some(view_box) = attr(&node.tag, "viewBox").or_else(|| attr(&node.tag, "viewbox"))
+        && let Some(nums) = parse_numbers(view_box).filter(|n| n.len() >= 4)
+    {
+        let aspect_ratio = svg_core::parse_preserve_aspect_ratio(
+            attr(&node.tag, "preserveaspectratio").unwrap_or(""),
+        );
+        if let Some(view_transform) = svg_core::viewbox_transform(
+            [nums[0], nums[1], nums[2], nums[3]],
+            [x, y, width, height],
+            aspect_ratio,
+        ) {
+            state.transform = state.transform.multiply(view_transform);
+            state.viewport_w = nums[2].abs();
+            state.viewport_h = nums[3].abs();
+            return;
         }
     }
 
@@ -2359,11 +2359,13 @@ mod tests {
             colors,
             vec![Some([255, 0, 0]), Some([0, 255, 0]), Some([17, 34, 51])]
         );
-        assert!(!output
-            .report
-            .unsupported_features
-            .iter()
-            .any(|feature| feature.feature == "complex CSS selector"));
+        assert!(
+            !output
+                .report
+                .unsupported_features
+                .iter()
+                .any(|feature| feature.feature == "complex CSS selector")
+        );
     }
 
     #[test]
@@ -2408,11 +2410,13 @@ mod tests {
         let output = import_svg_template(svg, SvgImportOptions::default()).unwrap();
 
         assert_eq!(output.widgets.len(), 1);
-        assert!(output
-            .report
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "path.unsupported_command"));
+        assert!(
+            output
+                .report
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "path.unsupported_command")
+        );
     }
 
     #[test]
@@ -2462,16 +2466,20 @@ mod tests {
         "#;
         let output = import_svg_template(svg, SvgImportOptions::default()).unwrap();
         assert_eq!(output.widgets.len(), 3);
-        assert!(output
-            .report
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "id.duplicate"));
-        assert!(output
-            .report
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "xml.unknown_entity"));
+        assert!(
+            output
+                .report
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "id.duplicate")
+        );
+        assert!(
+            output
+                .report
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "xml.unknown_entity")
+        );
     }
 
     #[test]
@@ -2524,12 +2532,14 @@ mod tests {
         let widget = &output.widgets[0];
         assert_eq!(widget.bg_color, Some([128, 0, 0]));
         assert_eq!(widget.fg_color, Some([0, 128, 0]));
-        assert!(widget
-            .import_metadata
-            .as_ref()
-            .unwrap()
-            .warning_flags
-            .contains(&"opacity-approx".to_owned()));
+        assert!(
+            widget
+                .import_metadata
+                .as_ref()
+                .unwrap()
+                .warning_flags
+                .contains(&"opacity-approx".to_owned())
+        );
     }
 
     #[test]
@@ -2614,11 +2624,12 @@ mod tests {
     fn unsupported_baseline_is_diagnosed() {
         let svg = r#"<svg><text x="0" y="20" dominant-baseline="text-top" font-family="Noto">B</text></svg>"#;
         let out = import_svg_template(svg, SvgImportOptions::default()).unwrap();
-        assert!(out
-            .report
-            .warnings
-            .iter()
-            .any(|w| w.code == "text.baseline"));
+        assert!(
+            out.report
+                .warnings
+                .iter()
+                .any(|w| w.code == "text.baseline")
+        );
     }
 
     #[test]
@@ -2639,11 +2650,12 @@ mod tests {
         // A rect keeps the import non-empty; the textPath stays diagnosed.
         let svg = r##"<svg><rect width="10" height="10"/><text x="0" y="20"><textPath href="#p">curved</textPath></text></svg>"##;
         let out = import_svg_template(svg, SvgImportOptions::default()).unwrap();
-        assert!(out
-            .report
-            .unsupported_features
-            .iter()
-            .any(|f| f.feature == "textPath"));
+        assert!(
+            out.report
+                .unsupported_features
+                .iter()
+                .any(|f| f.feature == "textPath")
+        );
     }
 
     #[test]
@@ -2659,16 +2671,20 @@ mod tests {
         let second = import_svg_template(svg, SvgImportOptions::default()).unwrap();
         assert_eq!(first.widgets.len(), 2);
         assert_eq!(first.widgets[0].id, second.widgets[0].id);
-        assert!(first
-            .report
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "geometry.missing_bounds"));
-        assert!(first
-            .report
-            .warnings
-            .iter()
-            .any(|warning| warning.code == "transform.extreme"));
+        assert!(
+            first
+                .report
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "geometry.missing_bounds")
+        );
+        assert!(
+            first
+                .report
+                .warnings
+                .iter()
+                .any(|warning| warning.code == "transform.extreme")
+        );
     }
 
     #[test]

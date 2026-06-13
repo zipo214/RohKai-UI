@@ -645,14 +645,14 @@ fn binding_field(ui: &mut egui::Ui, w: &mut WidgetInstance) {
             }
         }
     });
-    if let Some(b) = &w.state_binding {
-        if !crate::codegen::rust::is_valid_identifier(b) {
-            ui.label(
-                egui::RichText::new("⚠ invalid identifier")
-                    .small()
-                    .color(RED_WARN),
-            );
-        }
+    if let Some(b) = &w.state_binding
+        && !crate::codegen::rust::is_valid_identifier(b)
+    {
+        ui.label(
+            egui::RichText::new("⚠ invalid identifier")
+                .small()
+                .color(RED_WARN),
+        );
     }
 }
 
@@ -1012,19 +1012,18 @@ fn show_image(ui: &mut egui::Ui, w: &mut WidgetInstance, do_delete: &mut bool) -
                  Large SVGs (>10 KB) make the code panel very noisy — \
                  use the source viewer below for inspection instead.",
             );
-        if w.expand_svg_inline {
-            if let Some(src) = w.svg_source.as_deref() {
-                if src.len() > 10_000 {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "Warning: SVG is {} KB — code panel will be verbose.",
-                            src.len() / 1024
-                        ))
-                        .small()
-                        .color(egui::Color32::from_rgb(251, 191, 36)),
-                    );
-                }
-            }
+        if w.expand_svg_inline
+            && let Some(src) = w.svg_source.as_deref()
+            && src.len() > 10_000
+        {
+            ui.label(
+                egui::RichText::new(format!(
+                    "Warning: SVG is {} KB — code panel will be verbose.",
+                    src.len() / 1024
+                ))
+                .small()
+                .color(egui::Color32::from_rgb(251, 191, 36)),
+            );
         }
         ui.separator();
         if let Some(src) = w.svg_source.as_deref() {
@@ -1097,13 +1096,13 @@ fn show_event_handler(
         let Some(w) = tree.get_mut(id) else { return };
 
         // Migrate legacy event_handler → on_click / on_change on first display.
-        if let Some(ref eh) = w.event_handler.clone() {
-            if !eh.is_empty() {
-                if w.kind == WidgetKind::Button && w.on_click.is_empty() {
-                    w.on_click = eh.clone();
-                } else if w.kind != WidgetKind::Button && w.on_change.is_empty() {
-                    w.on_change = eh.clone();
-                }
+        if let Some(ref eh) = w.event_handler.clone()
+            && !eh.is_empty()
+        {
+            if w.kind == WidgetKind::Button && w.on_click.is_empty() {
+                w.on_click = eh.clone();
+            } else if w.kind != WidgetKind::Button && w.on_change.is_empty() {
+                w.on_change = eh.clone();
             }
         }
 
@@ -1182,10 +1181,9 @@ fn show_event_handler(
             .checkbox(&mut is_async, "⚙ Run async (background thread)")
             .on_hover_text("Wrap the handler in std::thread::spawn (no tokio)")
             .changed()
+            && let Some(w) = tree.get_mut(id)
         {
-            if let Some(w) = tree.get_mut(id) {
-                w.async_handler = is_async;
-            }
+            w.async_handler = is_async;
         }
 
         // Error-mode dropdown
@@ -1207,10 +1205,10 @@ fn show_event_handler(
                     }
                 });
         });
-        if let Some(w) = tree.get_mut(id) {
-            if w.handler_result != mode {
-                w.handler_result = mode;
-            }
+        if let Some(w) = tree.get_mut(id)
+            && w.handler_result != mode
+        {
+            w.handler_result = mode;
         }
     }
 }
@@ -1254,20 +1252,18 @@ fn show_db_binding(ui: &mut egui::Ui, tree: &mut UiTree, id: Uuid) {
             .on_hover_text("No database binding")
             .clicked()
             && has_binding
+            && let Some(w) = tree.get_mut(id)
         {
-            if let Some(w) = tree.get_mut(id) {
-                w.db_binding = None;
-            }
+            w.db_binding = None;
         }
         if ui
             .selectable_label(has_binding, "Bound")
             .on_hover_text("Bind this widget value to a database column")
             .clicked()
             && !has_binding
+            && let Some(w) = tree.get_mut(id)
         {
-            if let Some(w) = tree.get_mut(id) {
-                w.db_binding = Some(DbBinding::default());
-            }
+            w.db_binding = Some(DbBinding::default());
         }
     });
 
@@ -1296,10 +1292,10 @@ fn show_db_binding(ui: &mut egui::Ui, tree: &mut UiTree, id: Uuid) {
             .changed()
         {
             let trimmed = table_buf.trim().to_owned();
-            if let Some(w) = tree.get_mut(id) {
-                if let Some(b) = w.db_binding.as_mut() {
-                    b.table = trimmed;
-                }
+            if let Some(w) = tree.get_mut(id)
+                && let Some(b) = w.db_binding.as_mut()
+            {
+                b.table = trimmed;
             }
         }
     });
@@ -1315,10 +1311,10 @@ fn show_db_binding(ui: &mut egui::Ui, tree: &mut UiTree, id: Uuid) {
             .changed()
         {
             let trimmed = column_buf.trim().to_owned();
-            if let Some(w) = tree.get_mut(id) {
-                if let Some(b) = w.db_binding.as_mut() {
-                    b.column = trimmed;
-                }
+            if let Some(w) = tree.get_mut(id)
+                && let Some(b) = w.db_binding.as_mut()
+            {
+                b.column = trimmed;
             }
         }
     });
@@ -1374,11 +1370,9 @@ fn show_group_controls(ui: &mut egui::Ui, tree: &mut UiTree, selected: &mut Vec<
             do_ungroup = true;
         }
 
-        if do_group {
-            if let Some(new_id) = tree.group(selected) {
-                selected.clear();
-                selected.push(new_id);
-            }
+        if do_group && let Some(new_id) = tree.group(selected) {
+            selected.clear();
+            selected.push(new_id);
         }
         if do_ungroup {
             let frame_ids: Vec<Uuid> = selected

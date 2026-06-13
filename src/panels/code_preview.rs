@@ -100,18 +100,17 @@ impl CodeEditorSurface<'_> {
                     .filter_map(|span| source_span_rect(&output, self.text, span))
                     .collect();
 
-                if let Some(navigation) = self.navigation {
-                    if let Some(rect) = source_span_rect(&output, self.text, navigation) {
-                        let viewport = ui.clip_rect();
-                        let align = if rect.width() <= viewport.width()
-                            && rect.height() <= viewport.height()
-                        {
+                if let Some(navigation) = self.navigation
+                    && let Some(rect) = source_span_rect(&output, self.text, navigation)
+                {
+                    let viewport = ui.clip_rect();
+                    let align =
+                        if rect.width() <= viewport.width() && rect.height() <= viewport.height() {
                             egui::Align::Center
                         } else {
                             egui::Align::Min
                         };
-                        ui.scroll_to_rect(rect.expand(2.0), Some(align));
-                    }
+                    ui.scroll_to_rect(rect.expand(2.0), Some(align));
                 }
 
                 (output.response.clone(), block_rects)
@@ -266,10 +265,10 @@ fn parse_diag_line(msg: &str) -> Option<usize> {
     }
     // "N:M" column:line pattern at start
     let first_word: &str = msg.split_whitespace().next().unwrap_or("");
-    if let Some((n, _)) = first_word.split_once(':') {
-        if let Ok(v) = n.parse::<usize>() {
-            return Some(v);
-        }
+    if let Some((n, _)) = first_word.split_once(':')
+        && let Ok(v) = n.parse::<usize>()
+    {
+        return Some(v);
     }
     None
 }
@@ -508,8 +507,8 @@ pub fn show(ctx: &egui::Context, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
                     } else {
                         "Parse error"
                     });
-                if diag_resp.clicked() {
-                    if let Some(line) = diag_line {
+                if diag_resp.clicked()
+                    && let Some(line) = diag_line {
                         // Compute byte offset for the target line start
                         let byte_start: usize = code_buffer
                             .lines()
@@ -543,7 +542,6 @@ pub fn show(ctx: &egui::Context, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
                             }
                         }
                     }
-                }
                 if tree_changed_while_invalid {
                     ui.label(
                         egui::RichText::new(

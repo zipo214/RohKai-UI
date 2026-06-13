@@ -7,7 +7,7 @@
 //! SQL string is ever assembled with `format!()`. Every query that filters by
 //! a run-time value uses a prepared statement with positional parameters.
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::fmt;
 
 // ---------------------------------------------------------------------------

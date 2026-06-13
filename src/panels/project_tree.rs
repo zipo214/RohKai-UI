@@ -35,10 +35,10 @@ pub fn show(
     }
 
     // Default selection: first file.
-    if selected_file.is_none() {
-        if let Some((p, _)) = files.first() {
-            *selected_file = Some(p.clone());
-        }
+    if selected_file.is_none()
+        && let Some((p, _)) = files.first()
+    {
+        *selected_file = Some(p.clone());
     }
 
     let screen = ctx.screen_rect();

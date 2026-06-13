@@ -1,4 +1,4 @@
-use crate::codegen::source_map::{line_byte_spans, SourceSpan, WidgetSourceSpan};
+use crate::codegen::source_map::{SourceSpan, WidgetSourceSpan, line_byte_spans};
 use crate::project::schema::WidgetKind;
 use crate::project::ui_tree::UiTree;
 use std::collections::HashSet;
@@ -625,11 +625,9 @@ pub fn apply_parsed(tree: &mut UiTree, widgets: &[ParsedWidget]) -> ApplyOutcome
     let mut seen = HashSet::new();
     for pw in widgets {
         let duplicate_block = !seen.insert(pw.id);
-        if !duplicate_block {
-            if let Some(w) = tree.get_mut(pw.id) {
-                apply_fields(w, pw, false);
-                continue;
-            }
+        if !duplicate_block && let Some(w) = tree.get_mut(pw.id) {
+            apply_fields(w, pw, false);
+            continue;
         }
 
         if let Some(mut widget) = tree.widgets.iter().find(|w| w.id == pw.id).cloned() {
@@ -1107,13 +1105,14 @@ mod tests {
             ..Default::default()
         };
         apply_parsed(&mut tree, &report.widgets);
-        assert!(tree
-            .widgets
-            .iter()
-            .find(|w| w.id == parent_id)
-            .unwrap()
-            .children
-            .is_empty());
+        assert!(
+            tree.widgets
+                .iter()
+                .find(|w| w.id == parent_id)
+                .unwrap()
+                .children
+                .is_empty()
+        );
     }
 
     #[test]
