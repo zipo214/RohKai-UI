@@ -7,6 +7,21 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-12 — Migrated to Rust edition 2024 (exports stay 2021)
+
+Branch `dev`, commit `3329961`. `Cargo.toml` edition 2021 → 2024 (rustc 1.95).
+`cargo fix` + `clippy --fix` (nested ifs → let-chains in designer-only sources) +
+`cargo fmt` 2024 style across the tree. **Gotcha for future agents:**
+`src/canvas/svg_rasterizer.rs` is embedded VERBATIM into edition-2021 exported
+projects, so it must NOT use edition-2024 `if let` let-chains — they are a
+compile error under 2021. It is kept as nested `if let` with
+`#[allow(clippy::collapsible_if)]` on the module (`canvas/mod.rs`); the
+`all_builtin_widgets_export_cargo_check` test is the guard (it caught the
+regression when clippy --fix collapsed them). Same applies to any future
+export-embedded source. Exports stay edition 2021 for portability — bumping them
+to 2024 (raising user MSRV to 1.85) is a separate, unmade decision. Gate green:
+clippy 0, 551 + 17 + 1 tests, fmt clean.
+
 ## 2026-06-12 — Behavior graph: visual event→state wiring shipped
 
 Branch `dev`. Implemented the beginner-facing Behavior Graph: persisted
