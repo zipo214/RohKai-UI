@@ -538,7 +538,7 @@ gap.
 
 ### Feature Depth Status
 - **Full enough for current export:** `FilePicker` now emits `rfd::FileDialog`,
-      generated AppState path storage, and the required exported `rfd = "0.14"`
+      generated AppState path storage, and the required exported `rfd = "0.17.2"`
       Cargo dependency.
 - **Functional MVP:** `MathLabel` is a computed `f32` label, not a formula
       editor; `Chart` is a minimal `Vec<f32>` bar painter, not a charting
@@ -568,7 +568,7 @@ gap.
 - [x] Data table widget MVP — `Table` (egui::Grid, columns from static options)
       — merged with Table View; model/data binding remains future work
 - [x] File picker widget — `FilePicker`; emits `rfd::FileDialog`, path field,
-      and generated `rfd = "0.14"` dependency
+      and generated `rfd = "0.17.2"` dependency
 - [x] Chart widget MVP — `Chart`; canvas bar preview and generated egui painter
       bar output from a `Vec<f32>` binding
 

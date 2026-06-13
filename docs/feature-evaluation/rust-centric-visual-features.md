@@ -154,7 +154,7 @@ Current Implementation Contract:
   - ComboBox: Change → inner `combo_changed` flag
   - FontComboBox: Change → inner `font_combo.inner == Some(true)` flag
   No event row visible in Properties is ignored by export. `drag_stopped()`,
-  `double_clicked()`, and `lost_focus()` are the exact egui 0.29 `Response`
+  `double_clicked()`, and `lost_focus()` are the exact egui 0.34 `Response`
   methods used (verified against the live `egui_emitter` preview path).
 - **Parity holds in the nested/frame-child export path too.** `export_child_line`
   now binds a `child_response` (or `child_combo` for combos) and emits the same

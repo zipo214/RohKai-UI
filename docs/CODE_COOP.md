@@ -7,6 +7,16 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-12 - Rust 1.96 and dependency alignment audit
+
+Branch `codex/toolchain-dependency-refresh`, isolated from `dev`. RohKai now
+separates edition (2024), dependency-driven MSRV (1.92), and pinned/tested Rust
+(1.96.0); every direct dependency is at its current crates.io release. Generated
+projects remain edition 2021 for portability but share the 1.92 MSRV and
+egui/eframe/rfd versions; alignment and networked freshness scripts guard drift.
+Full tests, all-target Clippy, SVG validation, export Cargo fixtures, and native
+launch smoke passed before the local commit.
+
 ## 2026-06-12 — Migrated to Rust edition 2024 (exports stay 2021)
 
 Branch `dev`, commit `3329961`. `Cargo.toml` edition 2021 → 2024 (rustc 1.95).

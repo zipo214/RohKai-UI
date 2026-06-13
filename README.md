@@ -37,8 +37,12 @@ Build and run locally:
 ```powershell
 git clone https://github.com/zipo214/RohKai-UI.git
 cd RohKai-UI
+rustup show active-toolchain
 cargo run
 ```
+
+`rust-toolchain.toml` installs/selects the tested Rust 1.96.0 toolchain with
+Clippy and rustfmt. RohKai uses edition 2024 and supports Rust 1.92 or newer.
 
 Or download the current Windows executable from
 [Releases](https://github.com/zipo214/RohKai-UI/releases).

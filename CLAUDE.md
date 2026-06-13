@@ -108,6 +108,15 @@ Core features implemented:
 ## Running
     cargo run
 
+## Rust Version Contract
+- RohKai source edition: Rust 2024.
+- Minimum supported Rust version (MSRV): 1.92.
+- Pinned and CI-tested toolchain: 1.96.0 via `rust-toolchain.toml`.
+- Generated projects intentionally use edition 2021, but share the 1.92 MSRV
+  and the designer's egui/eframe/rfd versions.
+- Run `scripts/check-toolchain-alignment.ps1` after version changes and
+  `scripts/audit-dependency-updates.ps1` when checking for newer releases.
+
 ## Testing
     cargo test
     cargo clippy --all-targets -- -D warnings

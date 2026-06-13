@@ -539,7 +539,7 @@ fn field_text_resettable(ui: &mut egui::Ui, label: &str, value: &mut String, def
         resp.context_menu(|ui| {
             if ui.button("Reset to default").clicked() {
                 *value = default_value.to_owned();
-                ui.close_menu();
+                ui.close();
             }
         });
     });
@@ -562,7 +562,7 @@ fn show_geometry_resettable(ui: &mut egui::Ui, w: &mut WidgetInstance) {
             rx.context_menu(|ui| {
                 if ui.button("Reset to default").clicked() {
                     w.rect.x = 0.0;
-                    ui.close_menu();
+                    ui.close();
                 }
             });
             ui.label(egui::RichText::new("Y").small());
@@ -570,7 +570,7 @@ fn show_geometry_resettable(ui: &mut egui::Ui, w: &mut WidgetInstance) {
             ry.context_menu(|ui| {
                 if ui.button("Reset to default").clicked() {
                     w.rect.y = 0.0;
-                    ui.close_menu();
+                    ui.close();
                 }
             });
             ui.end_row();
@@ -579,7 +579,7 @@ fn show_geometry_resettable(ui: &mut egui::Ui, w: &mut WidgetInstance) {
             rw.context_menu(|ui| {
                 if ui.button("Reset to default").clicked() {
                     w.rect.w = dw;
-                    ui.close_menu();
+                    ui.close();
                 }
             });
             ui.label(egui::RichText::new("H").small());
@@ -587,7 +587,7 @@ fn show_geometry_resettable(ui: &mut egui::Ui, w: &mut WidgetInstance) {
             rh.context_menu(|ui| {
                 if ui.button("Reset to default").clicked() {
                     w.rect.h = dh;
-                    ui.close_menu();
+                    ui.close();
                 }
             });
             ui.end_row();
@@ -1421,8 +1421,13 @@ fn align_button(
     let size = egui::vec2(28.0, 28.0);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     let visuals = ui.style().interact(&response);
-    ui.painter()
-        .rect(rect, visuals.rounding, visuals.bg_fill, visuals.bg_stroke);
+    ui.painter().rect(
+        rect,
+        visuals.corner_radius,
+        visuals.bg_fill,
+        visuals.bg_stroke,
+        egui::StrokeKind::Inside,
+    );
     let inner = rect.shrink(3.0);
     draw_fn(ui.painter(), inner);
     response.on_hover_text(tooltip).clicked()

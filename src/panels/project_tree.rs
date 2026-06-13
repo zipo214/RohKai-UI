@@ -41,7 +41,7 @@ pub fn show(
         *selected_file = Some(p.clone());
     }
 
-    let screen = ctx.screen_rect();
+    let screen = ctx.content_rect();
     let default_pos = egui::pos2(
         (screen.center().x - 360.0).max(screen.min.x + 20.0),
         (screen.center().y - 260.0).max(screen.min.y + 20.0),

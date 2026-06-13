@@ -319,8 +319,12 @@ fn render_row(
 
     // Drag outline for the row being dragged.
     if is_dragged {
-        ui.painter()
-            .rect_stroke(row_rect, 2.0, egui::Stroke::new(1.5, accent));
+        ui.painter().rect_stroke(
+            row_rect,
+            2.0,
+            egui::Stroke::new(1.5, accent),
+            egui::StrokeKind::Inside,
+        );
     }
 
     (

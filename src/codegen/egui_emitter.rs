@@ -22,7 +22,7 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
 
     lines.push((
         None,
-        "egui::CentralPanel::default().show(ctx, |_ui| {});".to_owned(),
+        "egui::CentralPanel::default().show_inside(ui, |_ui| {});".to_owned(),
     ));
 
     // Children are emitted inside their parent Frame — skip them in the top-level loop.
@@ -122,7 +122,7 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                 .map(|c| format!("egui::Color32::from_rgb({}, {}, {})", c[0], c[1], c[2]))
                 .unwrap_or_else(|| "egui::Color32::from_gray(100)".to_owned());
             let mut frame_expr = format!(
-                "egui::Frame::none()\n            .inner_margin({inner_m:.1})\n            .stroke(egui::Stroke::new({stroke_w:.1}, {stroke_col}))"
+                "egui::Frame::NONE\n            .inner_margin({inner_m:.1})\n            .stroke(egui::Stroke::new({stroke_w:.1}, {stroke_col}))"
             );
             if let Some(c) = w.bg_color {
                 frame_expr.push_str(&format!(
@@ -132,7 +132,7 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
             }
             if let Some(r) = w.corner_radius.filter(|&r| r > 0.0) {
                 frame_expr.push_str(&format!(
-                    "\n            .rounding(egui::Rounding::same({r:.1}))"
+                    "\n            .corner_radius(egui::CornerRadius::from({r:.1}))"
                 ));
             }
             lines.push((Some(w.id), format!("        {frame_expr}.show(ui, |ui| {{")));
@@ -154,7 +154,7 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
             let rounding_chain = w
                 .corner_radius
                 .filter(|&r| r > 0.0)
-                .map(|r| format!(".rounding(egui::Rounding::same({r:.1}))"))
+                .map(|r| format!(".corner_radius(egui::CornerRadius::from({r:.1}))"))
                 .unwrap_or_default();
             let fill_chain = w
                 .bg_color
@@ -688,7 +688,7 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
         WidgetKind::TabWidget => {
             let tabs = w.props.options.to_vec();
             let mut tab_lines = format!(
-                "        egui::TopBottomPanel::top(\"{}_tabs\").show_inside(ui, |ui| {{\n",
+                "        egui::Panel::top(\"{}_tabs\").show_inside(ui, |ui| {{\n",
                 w.id.as_simple()
             );
             for tab in &tabs {
@@ -1022,7 +1022,7 @@ fn chart_preview_block(binding_expr: &str, width: f32, height: f32, indent: usiz
         "{pad}let chart_size = egui::vec2({width:.1}, {height:.1});\n\
 {pad}let (chart_rect, _) = ui.allocate_exact_size(chart_size, egui::Sense::hover());\n\
 {pad}let chart_painter = ui.painter_at(chart_rect);\n\
-{pad}chart_painter.rect_stroke(chart_rect, 2.0, egui::Stroke::new(1.0, egui::Color32::from_gray(120)));\n\
+{pad}chart_painter.rect_stroke(chart_rect, 2.0, egui::Stroke::new(1.0, egui::Color32::from_gray(120)), egui::StrokeKind::Inside);\n\
 {pad}let chart_values = &{binding_expr};\n\
 {pad}if !chart_values.is_empty() {{\n\
 {pad}    let chart_max = chart_values.iter().copied().fold(0.0_f32, f32::max).max(1.0);\n\
@@ -1718,7 +1718,7 @@ mod tests {
         );
         assert!(generated.contains("120.0"));
         assert!(generated.contains("80.0"));
-        assert!(!generated.contains("egui::Frame::none()"));
+        assert!(!generated.contains("egui::Frame::NONE"));
     }
 
     #[test]

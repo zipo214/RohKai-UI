@@ -903,7 +903,7 @@ fn draw_insertion_placeholder(
                 2.0,
                 egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 30),
             );
-            painter.rect_stroke(slot_rect, 2.0, stroke);
+            painter.rect_stroke(slot_rect, 2.0, stroke, egui::StrokeKind::Inside);
         }
         _ => {}
     }
@@ -1098,6 +1098,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             let fill_w = rect.width() * 0.6;
             let fill_rect = egui::Rect::from_min_size(rect.min, egui::vec2(fill_w, rect.height()));
@@ -1128,6 +1129,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             let r = (rect.height() * 0.28).clamp(4.0, 9.0);
             let center = egui::pos2(rect.min.x + r + 4.0, rect.center().y);
@@ -1166,6 +1168,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             painter.text(
                 egui::pos2(rect.min.x + 6.0, rect.center().y),
@@ -1190,6 +1193,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
 
             let margin_x = rect.width() * 0.1;
@@ -1245,6 +1249,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             painter.text(
                 rect.center(),
@@ -1268,6 +1273,7 @@ fn draw_widget(
                         egui::Color32::from_gray(55)
                     },
                 ),
+                egui::StrokeKind::Inside,
             );
             painter.text(
                 rect.left_center() + egui::vec2(2.0, 0.0),
@@ -1285,6 +1291,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             // Show placeholder if set, otherwise fall back to label
             let hint = if widget.props.placeholder.is_empty() {
@@ -1314,6 +1321,7 @@ fn draw_widget(
                         egui::Color32::from_gray(55)
                     },
                 ),
+                egui::StrokeKind::Inside,
             );
             let box_size = (rect.height() * 0.52).clamp(12.0, 20.0);
             let box_rect = egui::Rect::from_center_size(
@@ -1321,7 +1329,12 @@ fn draw_widget(
                 egui::vec2(box_size, box_size),
             );
             painter.rect_filled(box_rect, 2.0, egui::Color32::from_gray(30));
-            painter.rect_stroke(box_rect, 2.0, egui::Stroke::new(1.2, accent));
+            painter.rect_stroke(
+                box_rect,
+                2.0,
+                egui::Stroke::new(1.2, accent),
+                egui::StrokeKind::Inside,
+            );
             painter.text(
                 egui::pos2(box_rect.max.x + 7.0, rect.center().y),
                 egui::Align2::LEFT_CENTER,
@@ -1338,6 +1351,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             let hint = if widget.props.placeholder.is_empty() {
                 widget.props.label.as_str()
@@ -1373,6 +1387,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             let val_str = format!("{:.1}", widget.props.default_value);
             painter.text(
@@ -1406,6 +1421,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             painter.text(
                 egui::pos2(rect.min.x + 6.0, rect.center().y),
@@ -1445,7 +1461,12 @@ fn draw_widget(
                 x += dash_len + gap;
             }
             if flags.is_selected {
-                painter.rect_stroke(rect, 1.0, egui::Stroke::new(1.0, accent));
+                painter.rect_stroke(
+                    rect,
+                    1.0,
+                    egui::Stroke::new(1.0, accent),
+                    egui::StrokeKind::Inside,
+                );
             }
         }
 
@@ -1464,7 +1485,12 @@ fn draw_widget(
                 y += dash_len + gap;
             }
             if flags.is_selected {
-                painter.rect_stroke(rect, 1.0, egui::Stroke::new(1.0, accent));
+                painter.rect_stroke(
+                    rect,
+                    1.0,
+                    egui::Stroke::new(1.0, accent),
+                    egui::StrokeKind::Inside,
+                );
             }
         }
 
@@ -1477,6 +1503,7 @@ fn draw_widget(
                     if flags.is_selected { stroke_width } else { 1.0 },
                     stroke_color,
                 ),
+                egui::StrokeKind::Inside,
             );
             let label_bg_rect = egui::Rect::from_min_size(
                 egui::pos2(rect.min.x + 8.0, rect.min.y - label_size * 0.6),
@@ -1504,6 +1531,7 @@ fn draw_widget(
                     if flags.is_selected { stroke_width } else { 1.0 },
                     stroke_color,
                 ),
+                egui::StrokeKind::Inside,
             );
             painter.text(
                 rect.center(),
@@ -1530,6 +1558,7 @@ fn draw_widget(
                     if flags.is_selected { stroke_width } else { 1.0 },
                     stroke_color,
                 ),
+                egui::StrokeKind::Inside,
             );
             painter.text(
                 rect.center(),
@@ -1556,6 +1585,7 @@ fn draw_widget(
                     if flags.is_selected { stroke_width } else { 1.0 },
                     stroke_color,
                 ),
+                egui::StrokeKind::Inside,
             );
             // Simulated scrollbar on right edge
             let sb_w = 6.0_f32;
@@ -1585,6 +1615,7 @@ fn draw_widget(
                     if flags.is_selected { stroke_width } else { 1.0 },
                     stroke_color,
                 ),
+                egui::StrokeKind::Inside,
             );
             let cols = widget.props.grid_columns.clamp(1, 12);
             let rows = widget.children.len().div_ceil(cols).max(1);
@@ -1649,7 +1680,7 @@ fn draw_widget(
                 egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.min.y + tab_h));
             painter.rect_filled(
                 tab_bar_rect,
-                egui::Rounding::same(rounding),
+                egui::CornerRadius::from(rounding),
                 kind_fill(accent),
             );
             painter.rect_stroke(
@@ -1659,6 +1690,7 @@ fn draw_widget(
                     if flags.is_selected { stroke_width } else { 1.0 },
                     stroke_color,
                 ),
+                egui::StrokeKind::Inside,
             );
             // Draw tab labels from options
             let tabs: Vec<&str> = widget.props.options.iter().map(String::as_str).collect();
@@ -1675,7 +1707,7 @@ fn draw_widget(
                 if is_first {
                     painter.rect_filled(
                         tab_rect,
-                        egui::Rounding::same(2.0),
+                        egui::CornerRadius::from(2.0),
                         egui::Color32::from_gray(45),
                     );
                 }
@@ -1700,6 +1732,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             painter.text(
                 rect.center(),
@@ -1721,6 +1754,7 @@ fn draw_widget(
                 rect,
                 rounding.max(4.0),
                 egui::Stroke::new(stroke_width, accent),
+                egui::StrokeKind::Inside,
             );
             painter.text(
                 rect.left_top() + egui::vec2(10.0, 8.0),
@@ -1752,7 +1786,12 @@ fn draw_widget(
                     egui::pos2(x, rect.center().y + 12.0),
                 );
                 painter.rect_filled(b_rect, 3.0, egui::Color32::from_gray(58));
-                painter.rect_stroke(b_rect, 3.0, egui::Stroke::new(1.0, accent));
+                painter.rect_stroke(
+                    b_rect,
+                    3.0,
+                    egui::Stroke::new(1.0, accent),
+                    egui::StrokeKind::Inside,
+                );
                 painter.text(
                     b_rect.center(),
                     egui::Align2::CENTER_CENTER,
@@ -1771,6 +1810,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             painter.text(
                 rect.left_center() + egui::vec2(6.0, 0.0),
@@ -1794,7 +1834,12 @@ fn draw_widget(
             let btn_rect =
                 egui::Rect::from_min_max(rect.min, egui::pos2(rect.min.x + btn_w, rect.max.y));
             painter.rect_filled(btn_rect, rounding, egui::Color32::from_gray(58));
-            painter.rect_stroke(btn_rect, rounding, egui::Stroke::new(1.0, accent));
+            painter.rect_stroke(
+                btn_rect,
+                rounding,
+                egui::Stroke::new(1.0, accent),
+                egui::StrokeKind::Inside,
+            );
             painter.text(
                 btn_rect.center(),
                 egui::Align2::CENTER_CENTER,
@@ -1821,6 +1866,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             // axes
             let pad = 8.0;
@@ -1863,6 +1909,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             let cols = widget.props.options.len().max(1);
             let col_w = rect.width() / cols as f32;
@@ -1905,6 +1952,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             let row_h = label_size + 6.0;
             let mut y = rect.min.y + 2.0;
@@ -1941,6 +1989,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             let row_h = label_size + 6.0;
             let mut y = rect.min.y + 2.0;
@@ -1970,6 +2019,7 @@ fn draw_widget(
                     if flags.is_selected { stroke_width } else { 1.0 },
                     stroke_color,
                 ),
+                egui::StrokeKind::Inside,
             );
             let label = widget
                 .props
@@ -2002,6 +2052,7 @@ fn draw_widget(
                     if flags.is_selected { stroke_width } else { 1.0 },
                     stroke_color,
                 ),
+                egui::StrokeKind::Inside,
             );
             let sec_h = label_size + 8.0;
             let mut y = rect.min.y;
@@ -2042,6 +2093,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             let display = widget
                 .descriptor_name
@@ -2055,7 +2107,12 @@ fn draw_widget(
                 fg.unwrap_or(egui::Color32::WHITE),
             );
             if flags.is_selected {
-                painter.rect_stroke(rect, rounding, egui::Stroke::new(2.0, custom_accent));
+                painter.rect_stroke(
+                    rect,
+                    rounding,
+                    egui::Stroke::new(2.0, custom_accent),
+                    egui::StrokeKind::Inside,
+                );
             }
         }
 
@@ -2116,7 +2173,12 @@ fn draw_widget(
                 draw_svg_placeholder(painter, rect, rounding, label_size, "SVG");
             }
             if flags.is_selected {
-                painter.rect_stroke(rect, rounding, egui::Stroke::new(2.0, accent));
+                painter.rect_stroke(
+                    rect,
+                    rounding,
+                    egui::Stroke::new(2.0, accent),
+                    egui::StrokeKind::Inside,
+                );
             }
         }
     }
@@ -2205,6 +2267,7 @@ fn draw_svg_placeholder(
         rect,
         rounding,
         egui::Stroke::new(1.0, egui::Color32::from_gray(90)),
+        egui::StrokeKind::Inside,
     );
     painter.text(
         rect.center(),
@@ -2390,7 +2453,7 @@ pub fn handle(
     let keyboard_owned = canvas_owns_keyboard(
         modal_blocked,
         state.canvas_focused,
-        ui.ctx().wants_keyboard_input(),
+        ui.ctx().egui_wants_keyboard_input(),
     );
     let pointer = pointer_owned.then_some(raw_pointer).flatten();
     let just_pressed = pointer_owned && ui.input(|i| i.pointer.primary_pressed());
@@ -2407,7 +2470,7 @@ pub fn handle(
         egui::Vec2::ZERO
     };
     let scroll_y = if pointer_owned {
-        ui.input(|i| i.raw_scroll_delta.y)
+        ui.input(|i| i.smooth_scroll_delta.y)
     } else {
         0.0
     };
@@ -2615,7 +2678,7 @@ pub fn handle(
             for widget in &tree.widgets {
                 if widget_errors.contains_key(&widget.id) {
                     let rect = crect(widget, origin, zoom);
-                    painter.rect_stroke(rect, 3.0, error_stroke);
+                    painter.rect_stroke(rect, 3.0, error_stroke, egui::StrokeKind::Inside);
                 }
             }
         }
@@ -2704,7 +2767,12 @@ pub fn handle(
                 3.0,
                 egui::Color32::from_rgba_unmultiplied(20, 20, 20, 220),
             );
-            painter.rect_stroke(rect, 3.0, egui::Stroke::new(1.5, accent));
+            painter.rect_stroke(
+                rect,
+                3.0,
+                egui::Stroke::new(1.5, accent),
+                egui::StrokeKind::Inside,
+            );
 
             // Place a TextEdit widget at the widget rect
             let te_resp = ui.put(
@@ -2713,7 +2781,7 @@ pub fn handle(
                     .font(egui::FontId::proportional(
                         (12.0 * zoom * text_settings.label_scale).clamp(8.0, 24.0),
                     ))
-                    .frame(false)
+                    .frame(egui::Frame::NONE)
                     .text_color(egui::Color32::WHITE),
             );
             te_resp.request_focus();
@@ -2820,7 +2888,12 @@ pub fn handle(
         for &h in &ResizeHandle::ALL {
             let hr = h.hit_rect(rect);
             painter.rect_filled(hr, 1.0, egui::Color32::from_gray(230));
-            painter.rect_stroke(hr, 1.0, egui::Stroke::new(1.0, accent));
+            painter.rect_stroke(
+                hr,
+                1.0,
+                egui::Stroke::new(1.0, accent),
+                egui::StrokeKind::Inside,
+            );
             if let Some(pos) = pointer
                 && hr.contains(pos)
             {
@@ -3713,6 +3786,7 @@ pub fn handle(
             band_rect,
             0.0,
             egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 180, 255)),
+            egui::StrokeKind::Inside,
         );
     }
 

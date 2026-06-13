@@ -16,6 +16,10 @@ use uuid::Uuid;
 const SVG_RASTERIZER_SOURCE: &str = include_str!("../canvas/svg_rasterizer.rs");
 const SVG_CORE_SOURCE: &str = include_str!("../svg_core.rs");
 const MAX_GRID_COLUMNS: usize = 12;
+const EXPORTED_EFRAME_VERSION: &str = "0.34.3";
+const EXPORTED_EGUI_VERSION: &str = "0.34.3";
+const EXPORTED_RFD_VERSION: &str = "0.17.2";
+const EXPORTED_RUST_VERSION: &str = "1.92";
 
 /// Write a complete compilable Rust project to `dest` folder.
 pub fn write_project(tree: &UiTree, dest: &Path) -> Result<(), String> {
@@ -64,7 +68,7 @@ pub fn project_files(tree: &UiTree) -> Vec<(String, String)> {
         .iter()
         .any(|w| w.kind == WidgetKind::FilePicker)
     {
-        let dep_line = String::from("rfd = \"0.14\"");
+        let dep_line = format!("rfd = \"{EXPORTED_RFD_VERSION}\"");
         if seen_deps.insert(dep_line.clone()) {
             extra_deps.push(dep_line);
         }
@@ -165,23 +169,25 @@ pub fn project_files_wasm(tree: &UiTree, gen_index_html: bool) -> Vec<(String, S
 }
 
 fn gen_cargo_toml_wasm() -> String {
-    r#"[package]
+    format!(
+        r#"[package]
 name = "exported_app"
 version = "0.1.0"
 edition = "2021"
+rust-version = "{EXPORTED_RUST_VERSION}"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-eframe = { version = "0.29", default-features = false, features = ["glow", "wasm-bindgen"] }
-egui   = "0.29"
+eframe = {{ version = "{EXPORTED_EFRAME_VERSION}", default-features = false, features = ["default_fonts", "glow", "web_screen_reader"] }}
+egui   = "{EXPORTED_EGUI_VERSION}"
 wasm-bindgen-futures = "0.4"
 
 [profile.release]
 opt-level = "s"
 "#
-    .to_owned()
+    )
 }
 
 fn gen_lib_rs_wasm(tree: &UiTree) -> String {
@@ -285,16 +291,18 @@ fn gen_asset_manifest(tree: &UiTree) -> String {
 // ---------------------------------------------------------------------------
 
 fn gen_cargo_toml(extra_deps: &[String]) -> String {
-    let mut s = r#"[package]
+    let mut s = format!(
+        r#"[package]
 name = "exported_app"
 version = "0.1.0"
 edition = "2021"
+rust-version = "{EXPORTED_RUST_VERSION}"
 
 [dependencies]
-eframe = "0.29"
-egui   = "0.29"
+eframe = {{ version = "{EXPORTED_EFRAME_VERSION}", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "web_screen_reader", "x11"] }}
+egui   = "{EXPORTED_EGUI_VERSION}"
 "#
-    .to_owned();
+    );
     for dep in extra_deps {
         s.push_str(dep);
         s.push('\n');
@@ -543,7 +551,12 @@ fn gen_app_rs(tree: &UiTree) -> String {
     }
 
     // eframe::App impl
-    s.push_str("impl eframe::App for ExportedApp {\n    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {\n");
+    s.push_str(
+        "impl eframe::App for ExportedApp {\n\
+             fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {\n\
+                 let ctx = root_ui.ctx().clone();\n\
+                 let ctx = &ctx;\n",
+    );
     // Drain completed async tasks first so UI reflects fresh status this frame.
     for (h, result) in &async_handlers {
         s.push_str(&crate::codegen::rust_wiring::async_drain_block(h, result));
@@ -562,7 +575,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
         s.push('\n');
     }
     s.push_str(&gen_theme_setup(&tree.app_props.theme));
-    s.push_str("        egui::CentralPanel::default().show(ctx, |_ui| {});\n");
+    s.push_str("        egui::CentralPanel::default().show_inside(root_ui, |_ui| {});\n");
 
     let child_ids: HashSet<Uuid> = tree
         .widgets
@@ -601,7 +614,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 let rounding_chain = w
                     .corner_radius
                     .filter(|&r| r > 0.0)
-                    .map(|r| format!(".rounding(egui::Rounding::same({r:.1}))"))
+                    .map(|r| format!(".corner_radius(egui::CornerRadius::from({r:.1}))"))
                     .unwrap_or_default();
                 let fill_chain = w
                     .bg_color
@@ -715,7 +728,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                     .map(|c| format!("egui::Color32::from_rgb({}, {}, {})", c[0], c[1], c[2]))
                     .unwrap_or_else(|| "egui::Color32::from_gray(100)".to_owned());
                 let mut frame_expr = format!(
-                    "egui::Frame::none()\n                    .inner_margin({inner_m:.1})\n                    .stroke(egui::Stroke::new({stroke_w:.1}, {stroke_col}))"
+                    "egui::Frame::NONE\n                    .inner_margin({inner_m:.1})\n                    .stroke(egui::Stroke::new({stroke_w:.1}, {stroke_col}))"
                 );
                 if let Some(c) = w.bg_color {
                     frame_expr.push_str(&format!(
@@ -725,7 +738,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                 }
                 if let Some(r) = w.corner_radius.filter(|&r| r > 0.0) {
                     frame_expr.push_str(&format!(
-                        "\n                    .rounding(egui::Rounding::same({r:.1}))"
+                        "\n                    .corner_radius(egui::CornerRadius::from({r:.1}))"
                     ));
                 }
                 let mut code = format!(
@@ -1035,7 +1048,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
             }
             WidgetKind::TabWidget => {
                 let mut s = format!(
-                    "                egui::TopBottomPanel::top(\"{}_tabs\").show_inside(ui, |ui| {{\n",
+                    "                egui::Panel::top(\"{}_tabs\").show_inside(ui, |ui| {{\n",
                     w.id.as_simple()
                 );
                 for tab in &w.props.options {
@@ -1417,7 +1430,7 @@ fn chart_export_block(binding_expr: &str, width: f32, height: f32, indent: usize
         "{pad}let chart_size = egui::vec2({width:.1}, {height:.1});\n\
 {pad}let (chart_rect, _) = ui.allocate_exact_size(chart_size, egui::Sense::hover());\n\
 {pad}let chart_painter = ui.painter_at(chart_rect);\n\
-{pad}chart_painter.rect_stroke(chart_rect, 2.0, egui::Stroke::new(1.0, egui::Color32::from_gray(120)));\n\
+{pad}chart_painter.rect_stroke(chart_rect, 2.0, egui::Stroke::new(1.0, egui::Color32::from_gray(120)), egui::StrokeKind::Inside);\n\
 {pad}let chart_values = &{binding_expr};\n\
 {pad}if !chart_values.is_empty() {{\n\
 {pad}    let chart_max = chart_values.iter().copied().fold(0.0_f32, f32::max).max(1.0);\n\
@@ -1515,7 +1528,7 @@ fn export_child_combo(
     let dispatches = handler.is_some() || !behavior_stmts.is_empty();
     let combo_assign = if dispatches { "let child_combo = " } else { "" };
     let mut code = format!(
-        "                        ui.allocate_ui_at_rect({rect_expr}, |ui| {{\n\
+        "                        ui.scope_builder(egui::UiBuilder::new().max_rect({rect_expr}), |ui| {{\n\
          \x20                           {combo_assign}egui::ComboBox::from_id_salt(\"child_combo_{id}\")\n\
          \x20                               .selected_text({selected_expr})\n\
          \x20                               .show_ui(ui, |ui| {{\n\
@@ -2104,7 +2117,7 @@ fn image_export_child_line(
     let key = string_literal(&format!("svg_{}", child.id));
     let svg_source = raw_string_literal(child.svg_source.as_deref().unwrap_or(""));
     format!(
-        "                        ui.allocate_ui_at_rect({rect_expr}, |ui| {{\n                            self.show_svg_image(ui, ctx, {key}, {svg_source}, {rect_expr}.size());\n                        }});\n"
+        "                        ui.scope_builder(egui::UiBuilder::new().max_rect({rect_expr}), |ui| {{\n                            self.show_svg_image(ui, ctx, {key}, {svg_source}, {rect_expr}.size());\n                        }});\n"
     )
 }
 
@@ -2120,12 +2133,12 @@ fn gen_theme_setup(theme: &crate::project::schema::ThemeSettings) -> String {
         .global_corner_radius
         .map(|cr| {
             format!(
-                "        let r = egui::Rounding::same({cr:.1});\n\
-                 visuals.widgets.noninteractive.rounding = r;\n\
-                 visuals.widgets.inactive.rounding = r;\n\
-                 visuals.widgets.hovered.rounding = r;\n\
-                 visuals.widgets.active.rounding = r;\n\
-                 visuals.widgets.open.rounding = r;\n"
+                "        let r = egui::CornerRadius::from({cr:.1});\n\
+                 visuals.widgets.noninteractive.corner_radius = r;\n\
+                 visuals.widgets.inactive.corner_radius = r;\n\
+                 visuals.widgets.hovered.corner_radius = r;\n\
+                 visuals.widgets.active.corner_radius = r;\n\
+                 visuals.widgets.open.corner_radius = r;\n"
             )
         })
         .unwrap_or_default();
@@ -2135,7 +2148,7 @@ fn gen_theme_setup(theme: &crate::project::schema::ThemeSettings) -> String {
             format!(
                 "        let mut style = (*ctx.style()).clone();\n\
                  for font_id in style.text_styles.values_mut() {{ font_id.size = {fs:.1}; }}\n\
-                 ctx.set_style(style);\n"
+                 ctx.set_global_style(style);\n"
             )
         })
         .unwrap_or_default();
@@ -2203,7 +2216,7 @@ mod tests {
         assert!(generated.contains("ui.add(egui::Image::new((tex.id(), size)))"));
         assert!(generated.contains("pub fn rasterize"));
         assert!(generated.contains("r\"<svg/>\""));
-        assert!(!generated.contains("egui::Frame::none()"));
+        assert!(!generated.contains("egui::Frame::NONE"));
         assert!(!generated.contains("image_export_frame_placeholder_line"));
     }
 
@@ -3240,7 +3253,7 @@ mod tests {
             .map(|(_, contents)| contents.as_str())
             .unwrap();
 
-        assert!(cargo_toml.contains("rfd = \"0.14\""));
+        assert!(cargo_toml.contains("rfd = \"0.17.2\""));
         assert!(app_rs.contains("rfd::FileDialog"));
         assert!(app_rs.contains("self.state.picked_path"));
     }
@@ -4427,9 +4440,9 @@ mod tests {
 
         let cargo = std::fs::read_to_string(dir.join("Cargo.toml"))
             .expect("exported Cargo.toml must be readable");
-        assert!(cargo.contains("eframe = \"0.29\""));
-        assert!(cargo.contains("egui   = \"0.29\""));
-        assert!(cargo.contains("rfd = \"0.14\""));
+        assert!(cargo.contains("eframe = { version = \"0.34.3\""));
+        assert!(cargo.contains("egui   = \"0.34.3\""));
+        assert!(cargo.contains("rfd = \"0.17.2\""));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -4451,10 +4464,10 @@ mod tests {
         let cargo = std::fs::read_to_string(dir.join("Cargo.toml"))
             .expect("exported Cargo.toml must be readable");
 
-        assert!(cargo.contains("eframe = \"0.29\""));
-        assert!(cargo.contains("egui   = \"0.29\""));
+        assert!(cargo.contains("eframe = { version = \"0.34.3\""));
+        assert!(cargo.contains("egui   = \"0.34.3\""));
         assert!(
-            cargo.contains("rfd = \"0.14\""),
+            cargo.contains("rfd = \"0.17.2\""),
             "FilePicker in all-widget fixture must pull rfd"
         );
         assert!(

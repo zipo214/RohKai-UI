@@ -2,6 +2,7 @@
 name = "rohkai"
 version = "0.2.0"
 edition = "2024"
+rust-version = "1.92"
 description = "RohKai — Rocaille-inspired pure Rust WYSIWYG egui UI designer"
 
 [[bin]]
@@ -13,16 +14,16 @@ name = "hello_button"
 path = "examples/hello_button/main.rs"
 
 [dependencies]
-ab_glyph   = "0.2"
-eframe = "0.29"
-egui   = "0.29"
-rayon      = "1"
-rustybuzz  = "0.20"
-rfd        = "0.14"
-rusqlite   = { version = "0.40", features = ["bundled"] }
-serde      = { version = "1", features = ["derive"] }
-serde_json = "1"
-uuid       = { version = "1", features = ["v4", "serde"] }
+ab_glyph   = "0.2.32"
+eframe     = { version = "0.34.3", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "web_screen_reader", "x11"] }
+egui       = "0.34.3"
+rayon      = "1.12.0"
+rustybuzz  = "0.20.1"
+rfd        = "0.17.2"
+rusqlite   = { version = "0.40.1", features = ["bundled"] }
+serde      = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+uuid       = { version = "1.23.3", features = ["v4", "serde"] }
 
 [profile.release]
 opt-level = 2

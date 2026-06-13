@@ -36,7 +36,7 @@ pub fn show_widget_maker_window(
 
     let mut keep_open = *open;
     let bounds = crate::panels::window_bounds::authoring_window_bounds(
-        ctx.screen_rect(),
+        ctx.content_rect(),
         egui::vec2(960.0, 620.0),
         egui::vec2(700.0, 460.0),
     );
@@ -323,6 +323,7 @@ fn show_mini_canvas(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
         canvas_rect,
         2.0,
         egui::Stroke::new(1.0, Color32::from_gray(80)),
+        egui::StrokeKind::Inside,
     );
 
     // Draw primitives (bottom to top)
@@ -336,6 +337,7 @@ fn show_mini_canvas(ui: &mut egui::Ui, doc: &mut WidgetMakerDoc) {
                 pr,
                 2.0,
                 egui::Stroke::new(1.5, Color32::from_rgb(52, 211, 153)),
+                egui::StrokeKind::Inside,
             );
             draw_resize_handles(&painter, pr);
         }
@@ -975,6 +977,7 @@ fn draw_primitive(
                 rect,
                 2.0,
                 egui::Stroke::new(1.5, Color32::from_rgb(255, 165, 0)),
+                egui::StrokeKind::Inside,
             );
         }
         _ => {
@@ -989,7 +992,12 @@ fn draw_primitive(
                     painter.rect_filled(rect, prim.corner_radius, color);
                 }
                 MakerPrimKind::Outline => {
-                    painter.rect_stroke(rect, prim.corner_radius, egui::Stroke::new(1.5, color));
+                    painter.rect_stroke(
+                        rect,
+                        prim.corner_radius,
+                        egui::Stroke::new(1.5, color),
+                        egui::StrokeKind::Inside,
+                    );
                 }
                 MakerPrimKind::Ellipse => {
                     let cx = rect.center();
@@ -1044,6 +1052,7 @@ fn draw_primitive(
                         rect,
                         2.0,
                         egui::Stroke::new(1.0, Color32::from_rgb(100, 180, 100)),
+                        egui::StrokeKind::Inside,
                     );
                 }
             }

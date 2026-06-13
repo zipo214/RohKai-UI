@@ -81,6 +81,7 @@ pub fn draw_ownership(
             legend,
             4.0,
             egui::Stroke::new(1.0, egui::Color32::from_gray(70)),
+            egui::StrokeKind::Inside,
         );
         for (i, (text, color)) in lines.iter().enumerate() {
             painter.text(

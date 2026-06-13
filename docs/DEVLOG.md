@@ -2,6 +2,61 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-12 - Rust 1.96 And Current Dependency Alignment
+
+### Context Reviewed
+- Preflight, `AGENTS.md`, `CLAUDE.md`, current CoOp note, branch/worktree state,
+  Cargo/lock/toolchain/CI configuration, generated-project dependency emission,
+  and active version-bearing docs.
+- Local and remote branches plus GitHub history were compared. Claude's edition
+  2024 migration existed only on local `dev`; remote branches still reflected
+  edition 2021, and no migration PR had been published.
+- Official/current release data was checked before editing: Rust 1.96.0,
+  egui/eframe 0.34.3, rfd 0.17.2, and the latest releases of every other direct
+  dependency.
+
+### Changes
+- Worked on isolated branch `codex/toolchain-dependency-refresh`; main `dev`
+  remained untouched and no merge was attempted.
+- Declared edition 2024, MSRV 1.92, and pinned/tested Rust 1.96.0. CI now uses
+  the same exact toolchain with Clippy and rustfmt.
+- Updated every direct dependency to its current release and migrated RohKai,
+  examples, live codegen, native export, WASM export, and generated Cargo files
+  to egui/eframe 0.34.3 and rfd 0.17.2.
+- Preserved the existing glow rendering backend explicitly instead of silently
+  accepting eframe's changed default feature set.
+- Kept generated projects on edition 2021 deliberately, with MSRV 1.92 and
+  dependency versions sourced from central export constants.
+- Added offline `check-toolchain-alignment.ps1` and networked
+  `audit-dependency-updates.ps1`; preflight and Windows CI run the offline
+  invariant check.
+- Updated agent guidance, platform/release docs, roadmap dependency references,
+  README setup, and feature-evaluation version claims. Historical reviews and
+  chronological entries remain historical and are labeled where necessary.
+- Installed and verified Rust 1.96.0 GNU/MSVC toolchains. The machine rustup
+  default host is GNU because RohKai's repository-generic toolchain pin would
+  otherwise select the locally unusable MSVC linker; MSVC remains installed and
+  current.
+
+### Verification
+- `cargo fmt --check`: passed.
+- `cargo check --all-targets`: passed.
+- `cargo test`: 551 unit tests, 17 integration tests, and doc test passed.
+- `cargo clippy --all-targets -- -D warnings`: passed.
+- Generated-project Cargo checks: both native export fixtures passed with
+  warnings denied.
+- Toolchain alignment, dependency policy, text encoding, dependency freshness,
+  SVG parser/rasterizer/golden validation: passed.
+- Native `rohkai.exe` launch smoke: remained healthy for six seconds.
+
+### Risks And Follow-Ups
+- This is a broad GUI API migration; the automated and launch checks are green,
+  but a full manual release checklist remains appropriate before tagging.
+- The branch is ready for review/integration after concurrent Claude work is
+  reconciled. Do not merge it blindly over newer source edits.
+- The recurring maintenance automation should run in an isolated worktree and
+  propose major upgrades rather than applying them silently.
+
 ## 2026-06-12 — Behavior Graph: first-class visual event→state wiring
 
 ### Context Reviewed

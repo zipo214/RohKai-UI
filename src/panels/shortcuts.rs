@@ -47,7 +47,7 @@ pub fn show(ctx: &egui::Context, open: &mut bool, settings: &mut UserSettings, d
         return;
     }
 
-    let screen = ctx.screen_rect();
+    let screen = ctx.content_rect();
     let default_pos = egui::pos2(
         (screen.center().x - 220.0).max(screen.min.x + 20.0),
         (screen.center().y - 280.0).max(screen.min.y + 20.0),

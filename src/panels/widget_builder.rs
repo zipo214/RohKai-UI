@@ -179,7 +179,7 @@ pub fn show(
     let mut open = true;
 
     let bounds = crate::panels::window_bounds::authoring_window_bounds(
-        ctx.screen_rect(),
+        ctx.content_rect(),
         egui::vec2(780.0, 480.0),
         egui::vec2(560.0, 360.0),
     );
@@ -432,8 +432,12 @@ fn show_preview_pane(ui: &mut egui::Ui, state: &WidgetBuilderState, prev_w: f32)
     ui.label(egui::RichText::new("Canvas").small().weak());
     let (rect, _) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
     ui.painter().rect_filled(rect, 4.0, fill);
-    ui.painter()
-        .rect_stroke(rect, 4.0, egui::Stroke::new(1.5, accent));
+    ui.painter().rect_stroke(
+        rect,
+        4.0,
+        egui::Stroke::new(1.5, accent),
+        egui::StrokeKind::Inside,
+    );
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,

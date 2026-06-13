@@ -110,7 +110,7 @@ pub fn show(
     };
 
     let bounds = crate::panels::window_bounds::authoring_window_bounds(
-        ctx.screen_rect(),
+        ctx.content_rect(),
         egui::vec2(860.0, 560.0),
         egui::vec2(600.0, 400.0),
     );
@@ -311,8 +311,12 @@ fn show_preview(ui: &mut egui::Ui, draft: &WidgetDescriptor, prev_w: f32) {
     ui.label(egui::RichText::new("Canvas").small().weak());
     let (rect, _) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
     ui.painter().rect_filled(rect, 4.0, fill);
-    ui.painter()
-        .rect_stroke(rect, 4.0, egui::Stroke::new(1.5, accent));
+    ui.painter().rect_stroke(
+        rect,
+        4.0,
+        egui::Stroke::new(1.5, accent),
+        egui::StrokeKind::Inside,
+    );
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
@@ -380,9 +384,9 @@ fn show_preview(ui: &mut egui::Ui, draft: &WidgetDescriptor, prev_w: f32) {
                 .small()
                 .weak(),
         );
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(egui::Color32::from_gray(32))
-            .inner_margin(egui::Margin::same(6.0))
+            .inner_margin(egui::Margin::from(6.0))
             .show(ui, |ui| {
                 for prop in &draft.properties {
                     ui.horizontal(|ui| {

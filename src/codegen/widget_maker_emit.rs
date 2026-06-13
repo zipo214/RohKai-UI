@@ -154,7 +154,7 @@ fn emit_group(
     match prim.kind {
         MakerPrimKind::HGroup => {
             lines.push(format!(
-                "{indent}ui.allocate_ui_at_rect({sub_rect}, |ui| {{"
+                "{indent}ui.scope_builder(egui::UiBuilder::new().max_rect({sub_rect}), |ui| {{"
             ));
             lines.push(format!("{indent}    ui.set_min_size({sub_rect}.size());"));
             lines.push(format!(
@@ -169,7 +169,7 @@ fn emit_group(
         }
         MakerPrimKind::VGroup => {
             lines.push(format!(
-                "{indent}ui.allocate_ui_at_rect({sub_rect}, |ui| {{"
+                "{indent}ui.scope_builder(egui::UiBuilder::new().max_rect({sub_rect}), |ui| {{"
             ));
             lines.push(format!("{indent}    ui.set_min_size({sub_rect}.size());"));
             lines.push(format!(
@@ -186,7 +186,7 @@ fn emit_group(
             let cols = prim.grid_cols.max(1) as usize;
             let grid_id = format!("\"wm_grid_{:.0}_{:.0}\"", prim.x * 1000.0, prim.y * 1000.0);
             lines.push(format!(
-                "{indent}ui.allocate_ui_at_rect({sub_rect}, |ui| {{"
+                "{indent}ui.scope_builder(egui::UiBuilder::new().max_rect({sub_rect}), |ui| {{"
             ));
             lines.push(format!("{indent}    egui::Grid::new({grid_id}).spacing([{gap:.1}, {gap:.1}]).show(ui, |ui| {{"));
             for (i, (idx, child)) in children.iter().enumerate() {
@@ -261,7 +261,7 @@ fn prim_to_egui_lines(
         }
         MakerPrimKind::Outline => {
             lines.push(format!(
-                "{indent}_painter.rect_stroke({sub_rect}, {:.1}, egui::Stroke::new(1.0, {color}));",
+                "{indent}_painter.rect_stroke({sub_rect}, {:.1}, egui::Stroke::new(1.0, {color}), egui::StrokeKind::Inside);",
                 prim.corner_radius
             ));
             lines

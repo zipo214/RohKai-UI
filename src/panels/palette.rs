@@ -145,7 +145,13 @@ fn palette_button(
         (vis.bg_fill, vis.bg_stroke, vis.text_color())
     };
 
-    ui.painter().rect(rect, vis.rounding, bg, border);
+    ui.painter().rect(
+        rect,
+        vis.corner_radius,
+        bg,
+        border,
+        egui::StrokeKind::Inside,
+    );
 
     // Accent dot — left side
     let dot_center = egui::pos2(rect.min.x + 11.0, rect.center().y);
@@ -193,7 +199,13 @@ fn descriptor_palette_button(
         (vis.bg_fill, vis.bg_stroke, vis.text_color())
     };
 
-    ui.painter().rect(rect, vis.rounding, bg, border);
+    ui.painter().rect(
+        rect,
+        vis.corner_radius,
+        bg,
+        border,
+        egui::StrokeKind::Inside,
+    );
 
     // Accent dot
     let dot_center = egui::pos2(rect.min.x + 11.0, rect.center().y);
