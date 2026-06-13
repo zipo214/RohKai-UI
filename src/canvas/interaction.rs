@@ -1,7 +1,7 @@
 use crate::codegen::rust::is_valid_identifier;
 use crate::project::schema::{
-    Behavior, HAlign, Rect as SchemaRect, VAlign, ValueExpr, VisualAction, WidgetEvent,
-    WidgetInstance, WidgetKind,
+    Behavior, HAlign, Rect as SchemaRect, VAlign, VisualAction, WidgetEvent, WidgetInstance,
+    WidgetKind,
 };
 use crate::project::ui_tree::UiTree;
 use std::collections::{HashMap, HashSet};
@@ -2257,35 +2257,19 @@ fn behavior_source_event(w: &WidgetInstance) -> Option<WidgetEvent> {
     w.kind.supported_events().first().copied()
 }
 
-/// The state field a wire dropped on this widget mutates: its `state_binding`,
-/// when the kind actually carries state (per `kind_table::state_info`).
+/// True when a wire dropped on this widget can mutate state: the recipe
+/// matrix derives this from `state_binding` + `kind_table::state_info` and is
+/// the single classifier (Invariant 2).
 fn behavior_target_field(w: &WidgetInstance) -> Option<String> {
-    let binding = w.state_binding.as_deref().map(str::trim)?;
-    if binding.is_empty() || crate::codegen::kind_table::state_info(&w.kind).is_none() {
-        return None;
-    }
-    Some(binding.to_owned())
+    crate::codegen::behavior_recipes::sink_info_for(w).map(|sink| sink.field)
 }
 
-/// Default typed action for dropping a wire on `target`, derived from the
-/// canonical `kind_table::state_info` field type — never re-listed per kind.
-fn default_behavior_action(target: &WidgetInstance) -> Option<VisualAction> {
-    let field = behavior_target_field(target)?;
-    let info = crate::codegen::kind_table::state_info(&target.kind)?;
-    match info.rust_type {
-        "f32" => Some(VisualAction::Add {
-            field,
-            amount: 0.1,
-            min: Some(target.props.min.min(target.props.max)),
-            max: Some(target.props.max.max(target.props.min)),
-        }),
-        "bool" => Some(VisualAction::Toggle { field }),
-        "String" => Some(VisualAction::Set {
-            field,
-            value: ValueExpr::Text(String::new()),
-        }),
-        _ => None,
-    }
+/// Default typed action for dropping an `event` wire on `target`: the recipe
+/// matrix's default suggestion for that source/sink pair.  The Behaviors panel
+/// offers the alternates afterwards.
+fn default_behavior_action(target: &WidgetInstance, event: WidgetEvent) -> Option<VisualAction> {
+    let sink = crate::codegen::behavior_recipes::sink_info_for(target)?;
+    crate::codegen::behavior_recipes::default_suggestion(event, &sink).map(|s| s.action)
 }
 
 /// Resolve a behavior's wire endpoints in screen space.  Prefers the recorded
@@ -3657,7 +3641,8 @@ pub fn handle(
                                 || rect.contains(pos))
                     })
                     .and_then(|target| {
-                        default_behavior_action(target).map(|action| (target.id, action))
+                        default_behavior_action(target, wire.event)
+                            .map(|action| (target.id, action))
                     })
             });
             if let Some((target_id, action)) = drop {
