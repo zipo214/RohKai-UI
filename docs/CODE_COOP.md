@@ -55,6 +55,14 @@ Lazare, export, and transactional modal state through that model. The main
 hazard is accidental duplicated authority between project-global properties,
 surface properties, and the old `UiTree.app_props`; the completed migration
 must leave one canonical owner and preserve schema-v1 projects losslessly.
+The resumed pass is closing generated and preview focus semantics, warning-clean
+native/WASM fixtures, source isolation, and stress coverage before the docs
+truth pass; modal focus must target semantic default controls and restore the
+opening widget rather than merely keeping a stack of IDs.
+Final review caught and fixed nested-response naming drift, literal-unsafe modal
+state rewriting, draft-move ordering for keyboard actions, and invalid dialog
+policy targets. Full tests and generated-project parity are green; visual
+screenshot QA remains blocked only by the external Computer Use runtime.
 
 ## 2026-06-12 - Rust 1.96 and dependency alignment audit
 

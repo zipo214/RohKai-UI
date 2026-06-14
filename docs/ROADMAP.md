@@ -23,7 +23,8 @@
 - [x] `cargo check` passes, zero warnings
 
 ## Stage 1 — Core Loop ✅
-- [x] `UiTree` as single source of truth (serde-serializable)
+- [x] `UiTree` as the serde-serializable single-surface source of truth
+      (later nested under the project-authoritative `ProjectDocument`)
 - [x] Palette panel — click to add Button / Label / TextInput / Slider / Checkbox
 - [x] Canvas — click to select, drag to move, Delete key to remove
 - [x] Properties panel — live-edit label, binding, x/y/w/h, min/max
@@ -778,8 +779,55 @@ and prioritizes depth over more palette breadth.
 - [ ] All previously constrained visual properties (per-widget color, corner
       radius on all types, border widths, drop shadows, gradients, blend modes) — **S22**
 
-### Multi-document & windowing → master backlog **S19**
-- [ ] Model-based item views, Dock Widget, MDI Area, Multi-window support — **S19**
+### Project surfaces and windowing → master backlog **S19**
+
+#### S19A - Project Surfaces And Modal Dialogs - Depth 4 implemented
+- [x] Schema-v2 `ProjectDocument` owns one root `MainWindow` plus any number of
+      editable `ModalDialog` surfaces; legacy bare trees and schema-v1 projects
+      migrate losslessly.
+- [x] Surfaces panel and canvas tabs support create, activate, rename, duplicate,
+      reorder, isolated preview, guarded delete, and Blank/OK-Cancel/Settings
+      templates.
+- [x] Per-surface selection, pan, zoom, Lazare buffer, and valid/invalid edit
+      state remain isolated while switching tabs.
+- [x] Typed surface lifecycle triggers (`Opened`, `Accepted`, `Rejected`,
+      `Closed`) and modal actions (`OpenModal`, `AcceptDialog`, `RejectDialog`)
+      work in F5 preview and generated native/WASM source.
+- [x] Transactional dialog drafts copy supported scalar, `Vec<String>`, and
+      `Vec<f32>` state; Accept commits, Apply commits without closing, Reset
+      reloads state, and Reject/Escape discards.
+- [x] Nested distinct dialogs use a bounded top-only stack; duplicate opens are
+      idempotent diagnostics. Default controls receive initial focus and opener
+      focus is restored after close.
+- [x] `DialogButtonBox` stores semantic Accept/Reject/Apply/Reset/Help/Action
+      roles while preserving legacy option strings through migration.
+- [x] Multi-surface export emits `src/surfaces/*.rs`, aggregate AppState,
+      handlers/dependencies, modal runtime, and warning-clean native/WASM
+      fixtures.
+- [x] Validation reports invalid main counts, duplicate surface IDs/names, missing or
+      recursive modal targets, dangling button policies, and unsupported draft
+      fields.
+- [x] Hardening fixtures cover migration, duplication/remapping, lifecycle
+      ordering, nested dialogs, source isolation, generated-project Clippy, and
+      50 surfaces / 10,000 widgets (1.29 s debug run on the development machine).
+- [~] Manual screenshot/accessibility matrix remains to be rerun when the
+      Windows UI automation runtime is healthy; automated behavior and export
+      gates are green.
+
+#### S19B - Modeless Secondary Windows - planned
+- [ ] Secondary eframe deferred viewports with synchronized shared state.
+- [ ] Multiple instances, ownership/lifecycle, geometry persistence,
+      multi-monitor/DPI behavior, and explicit web fallback diagnostics.
+
+#### S19C - Main-Window Framework - planned
+- [ ] Toolbars, menus/actions, status areas, docks, tab groups, and persisted
+      workspace layouts.
+
+#### S19D - MDI And Advanced Windowing - planned
+- [ ] MDI subwindows, application/window modality, typed surface
+      parameters/results, and advanced instance management.
+- [ ] Model-based item views and Dock Widget remain separate depth work inside
+      S19; modal surfaces do not satisfy those gaps.
 - [ ] Native-quality platform integrations (the capability formerly framed as
       "QAxWidget") are delivered by the in-house renderer + pure-Rust platform
       layer in **S22** — **never** via C FFI. C FFI / system-toolkit bindings

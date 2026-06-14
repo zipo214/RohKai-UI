@@ -7,11 +7,30 @@ description: Use when reading or writing UiTree, WidgetInstance, settings, or pr
 
 ## Rule
 
-`UiTree` is the single project source of truth. The canvas renders it, the code panel emits from it, the parser writes back into it, and project save/load serializes it. User preferences live separately in `UserSettings` and must not dirty `.rohkai.json` files.
+`ProjectDocument` is the project source of truth. Each `UiSurface.tree` is the
+single source of truth for that surface: the canvas renders it, the code panel
+emits from it, and the parser writes back into it. `ActiveDocument` exposes the
+active tree without creating another owner. Project save/load serializes the
+whole document. User preferences live separately in `UserSettings` and must not
+dirty `.rohkai.json` files.
+
+## ProjectDocument (`src/project/document.rs`)
+
+```rust
+props: ProjectProps
+root_surface: Uuid
+surfaces: Vec<UiSurface>
+```
+
+Use `add_modal_surface`, `duplicate_surface`, `rename_surface`,
+`remove_surface`, `move_surface`, and `validate_and_repair` rather than editing
+`surfaces` directly. The root surface cannot be deleted. Global behaviors,
+components, assets, theme, and Rust wiring belong to `ProjectProps`; title,
+size, guides, constraints, and modal policy belong to each surface.
 
 ## UiTree (`src/project/ui_tree.rs`)
 
-The project root:
+The surface-local widget tree:
 
 ```rust
 widgets: Vec<WidgetInstance>
@@ -116,4 +135,7 @@ docs, or it must be explicitly marked unavailable.
 
 ## Serialization
 
-Project files are `.rohkai.json` and use the versioned `ProjectFile` envelope. Legacy bare `UiTree` files still load. Dirty checks, save, and open must all use `src/project/io.rs` serialization paths.
+Project files are `.rohkai.json` and use schema-v2 `ProjectDocument` envelopes.
+Legacy bare `UiTree` and schema-v1 files still load into one root surface. Dirty
+checks, save, open, and undo must all use `src/project/io.rs` document
+serialization paths.

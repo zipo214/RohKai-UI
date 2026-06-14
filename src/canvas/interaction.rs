@@ -1,7 +1,7 @@
 use crate::codegen::rust::is_valid_identifier;
 use crate::project::schema::{
-    Behavior, HAlign, Rect as SchemaRect, VAlign, VisualAction, WidgetEvent, WidgetInstance,
-    WidgetKind,
+    Behavior, BehaviorTrigger, HAlign, Rect as SchemaRect, VAlign, VisualAction, WidgetEvent,
+    WidgetEventRef, WidgetInstance, WidgetKind,
 };
 use crate::project::ui_tree::UiTree;
 use std::collections::{HashMap, HashSet};
@@ -2344,10 +2344,8 @@ fn behavior_wire_endpoints(
     origin: egui::Pos2,
     zoom: f32,
 ) -> Option<(egui::Pos2, egui::Pos2)> {
-    let source = tree
-        .widgets
-        .iter()
-        .find(|w| w.id == behavior.source_widget)?;
+    let source_id = behavior.source_widget()?;
+    let source = tree.widgets.iter().find(|w| w.id == source_id)?;
     let target = behavior
         .target_widget
         .and_then(|tid| tree.widgets.iter().find(|w| w.id == tid))
@@ -3694,8 +3692,10 @@ pub fn handle(
             if let Some((target_id, action)) = drop {
                 let behavior = Behavior {
                     id: Uuid::new_v4(),
-                    source_widget: wire.source_widget,
-                    event: wire.event,
+                    trigger: BehaviorTrigger::Widget(WidgetEventRef {
+                        source_widget: wire.source_widget,
+                        event: wire.event,
+                    }),
                     target_widget: Some(target_id),
                     action,
                 };

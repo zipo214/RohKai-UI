@@ -130,8 +130,9 @@ impl Default for AppProps {
 //
 // This is the beginner-facing counterpart to Stage 11 Global Rust Wiring: instead of
 // naming a handler function, the user drags a wire from a widget's event
-// socket to a state target and picks a typed `VisualAction`.  Persisted on
-// `AppProps` so the graph lives inside the UiTree single source of truth.
+// socket to a state target and picks a typed `VisualAction`. Project-wide
+// behaviors are persisted by `ProjectDocument::props`; `AppProps.behaviors`
+// remains the compatibility representation materialized into surface trees.
 // Codegen for these lives in `codegen::behavior`.
 // ---------------------------------------------------------------------------
 
@@ -176,6 +177,13 @@ pub enum VisualAction {
     Toggle { field: String },
     /// `self.handler();` — bridges into a named handler stub.
     CallHandler { handler: String },
+    /// Open a saved modal surface. Reopening an already-open surface is
+    /// intentionally idempotent at runtime.
+    OpenModal { surface: Uuid },
+    /// Commit a modal surface's transactional draft and close it.
+    AcceptDialog { surface: Uuid },
+    /// Discard a modal surface's transactional draft and close it.
+    RejectDialog { surface: Uuid },
 }
 
 impl VisualAction {
@@ -186,7 +194,10 @@ impl VisualAction {
             | VisualAction::Add { field, .. }
             | VisualAction::Subtract { field, .. }
             | VisualAction::Toggle { field } => Some(field.as_str()),
-            VisualAction::CallHandler { .. } => None,
+            VisualAction::CallHandler { .. }
+            | VisualAction::OpenModal { .. }
+            | VisualAction::AcceptDialog { .. }
+            | VisualAction::RejectDialog { .. } => None,
         }
     }
 
@@ -197,23 +208,145 @@ impl VisualAction {
             VisualAction::Subtract { .. } => "Subtract",
             VisualAction::Toggle { .. } => "Toggle",
             VisualAction::CallHandler { .. } => "Call handler",
+            VisualAction::OpenModal { .. } => "Open modal",
+            VisualAction::AcceptDialog { .. } => "Accept dialog",
+            VisualAction::RejectDialog { .. } => "Reject dialog",
         }
     }
 }
 
-/// One wire in the behavior graph: source widget event → typed action.
+/// A widget event source in the behavior graph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WidgetEventRef {
+    pub source_widget: Uuid,
+    pub event: WidgetEvent,
+}
+
+/// A lifecycle event emitted by a project surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SurfaceEvent {
+    Opened,
+    Accepted,
+    Rejected,
+    Closed,
+}
+
+impl SurfaceEvent {
+    pub const ALL: [Self; 4] = [Self::Opened, Self::Accepted, Self::Rejected, Self::Closed];
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Opened => "On Opened",
+            Self::Accepted => "On Accepted",
+            Self::Rejected => "On Rejected",
+            Self::Closed => "On Closed",
+        }
+    }
+}
+
+/// A surface lifecycle source in the behavior graph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SurfaceEventRef {
+    pub source_surface: Uuid,
+    #[serde(rename = "surface_event")]
+    pub event: SurfaceEvent,
+}
+
+/// Typed trigger for a visual behavior.
+///
+/// The untagged flattened representation intentionally preserves the legacy
+/// `{source_widget, event}` JSON shape while adding the distinct
+/// `{source_surface, surface_event}` shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum BehaviorTrigger {
+    Widget(WidgetEventRef),
+    Surface(SurfaceEventRef),
+}
+
+/// One wire in the behavior graph: typed trigger → typed action.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Behavior {
     pub id: Uuid,
-    /// Widget whose event fires this behavior.
-    pub source_widget: Uuid,
-    /// Which of the source widget's `supported_events()` triggers the action.
-    pub event: WidgetEvent,
+    #[serde(flatten)]
+    pub trigger: BehaviorTrigger,
     /// Widget the wire visually lands on (for canvas drawing). The action's
     /// `field` is authoritative for codegen; this is presentation metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_widget: Option<Uuid>,
     pub action: VisualAction,
+}
+
+impl Behavior {
+    #[must_use]
+    pub const fn widget(
+        id: Uuid,
+        source_widget: Uuid,
+        event: WidgetEvent,
+        target_widget: Option<Uuid>,
+        action: VisualAction,
+    ) -> Self {
+        Self {
+            id,
+            trigger: BehaviorTrigger::Widget(WidgetEventRef {
+                source_widget,
+                event,
+            }),
+            target_widget,
+            action,
+        }
+    }
+
+    #[must_use]
+    pub const fn surface(
+        id: Uuid,
+        source_surface: Uuid,
+        event: SurfaceEvent,
+        action: VisualAction,
+    ) -> Self {
+        Self {
+            id,
+            trigger: BehaviorTrigger::Surface(SurfaceEventRef {
+                source_surface,
+                event,
+            }),
+            target_widget: None,
+            action,
+        }
+    }
+
+    #[must_use]
+    pub const fn source_widget(&self) -> Option<Uuid> {
+        match self.trigger {
+            BehaviorTrigger::Widget(source) => Some(source.source_widget),
+            BehaviorTrigger::Surface(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn widget_event(&self) -> Option<WidgetEvent> {
+        match self.trigger {
+            BehaviorTrigger::Widget(source) => Some(source.event),
+            BehaviorTrigger::Surface(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn source_surface(&self) -> Option<Uuid> {
+        match self.trigger {
+            BehaviorTrigger::Widget(_) => None,
+            BehaviorTrigger::Surface(source) => Some(source.source_surface),
+        }
+    }
+
+    #[must_use]
+    pub const fn surface_event(&self) -> Option<SurfaceEvent> {
+        match self.trigger {
+            BehaviorTrigger::Widget(_) => None,
+            BehaviorTrigger::Surface(source) => Some(source.event),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -533,7 +666,7 @@ pub const EVENT_CAPABLE_KINDS: [WidgetKind; 9] = [
 impl WidgetEvent {
     /// Human-readable name shared by the Properties events UI and the
     /// Behaviors panel.
-    pub fn label(&self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             WidgetEvent::Click => "On Click",
             WidgetEvent::DoubleClick => "On Double-Click",
@@ -739,6 +872,10 @@ pub struct WidgetProps {
         skip_serializing_if = "is_default_combo_options"
     )]
     pub options: Vec<String>,
+    /// Structured roles for DialogButtonBox. Legacy projects with only
+    /// `options` are interpreted through [`effective_dialog_buttons`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dialog_buttons: Vec<DialogButtonSpec>,
 
     // Slider specific
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -919,6 +1056,7 @@ impl Default for WidgetProps {
             max: 1.0,
             default_value: 0.0,
             options: default_combo_options(),
+            dialog_buttons: Vec::new(),
             step: None,
             show_value: true,
             orientation: Orientation::Horizontal,
@@ -946,6 +1084,170 @@ impl Default for WidgetProps {
             text_wrap: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DialogButtonRole {
+    Accept,
+    Reject,
+    Apply,
+    Reset,
+    Help,
+    Action,
+}
+
+impl DialogButtonRole {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Accept => "Accept",
+            Self::Reject => "Reject",
+            Self::Apply => "Apply",
+            Self::Reset => "Reset",
+            Self::Help => "Help",
+            Self::Action => "Action",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DialogButtonSpec {
+    pub label: String,
+    pub role: DialogButtonRole,
+}
+
+/// Resolved keyboard/policy target for a modal button action.
+///
+/// Standalone buttons dispatch their normal click event. A
+/// [`WidgetKind::DialogButtonBox`] resolves to one of its structured roles so
+/// Enter and Escape activate the same semantic operation as a pointer click.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DialogButtonTarget {
+    Widget(Uuid),
+    Role {
+        widget: Uuid,
+        role: DialogButtonRole,
+    },
+}
+
+#[must_use]
+pub fn is_dialog_action_widget(kind: &WidgetKind) -> bool {
+    matches!(
+        kind,
+        WidgetKind::Button
+            | WidgetKind::ToolButton
+            | WidgetKind::CommandLinkButton
+            | WidgetKind::DialogButtonBox
+    )
+}
+
+/// Resolve structured dialog buttons, migrating legacy string options without
+/// mutating the saved widget.
+#[must_use]
+pub fn effective_dialog_buttons(props: &WidgetProps) -> Vec<DialogButtonSpec> {
+    if !props.dialog_buttons.is_empty() {
+        return props.dialog_buttons.clone();
+    }
+    props
+        .options
+        .iter()
+        .map(|label| {
+            let normalized = label.trim().to_ascii_lowercase();
+            let role = match normalized.as_str() {
+                "ok" | "accept" | "save" | "yes" => DialogButtonRole::Accept,
+                "cancel" | "reject" | "close" | "no" => DialogButtonRole::Reject,
+                "apply" => DialogButtonRole::Apply,
+                "reset" | "restore defaults" => DialogButtonRole::Reset,
+                "help" => DialogButtonRole::Help,
+                _ => DialogButtonRole::Action,
+            };
+            DialogButtonSpec {
+                label: label.clone(),
+                role,
+            }
+        })
+        .collect()
+}
+
+/// Resolve an explicit modal-policy widget or the first semantic fallback.
+#[must_use]
+pub fn resolve_dialog_button_target(
+    widgets: &[WidgetInstance],
+    configured_widget: Option<Uuid>,
+    fallback_role: DialogButtonRole,
+) -> Option<DialogButtonTarget> {
+    if let Some(widget_id) = configured_widget
+        && let Some(widget) = widgets.iter().find(|widget| widget.id == widget_id)
+    {
+        if !is_dialog_action_widget(&widget.kind) {
+            // Invalid persisted policy: ignore it and continue to the semantic
+            // fallback instead of pretending an inert widget is activatable.
+        } else if widget.kind != WidgetKind::DialogButtonBox {
+            return Some(DialogButtonTarget::Widget(widget_id));
+        } else if effective_dialog_buttons(&widget.props)
+            .iter()
+            .any(|button| button.role == fallback_role)
+        {
+            return Some(DialogButtonTarget::Role {
+                widget: widget_id,
+                role: fallback_role,
+            });
+        }
+    }
+
+    widgets
+        .iter()
+        .filter(|widget| widget.kind == WidgetKind::DialogButtonBox)
+        .find(|widget| {
+            effective_dialog_buttons(&widget.props)
+                .iter()
+                .any(|button| button.role == fallback_role)
+        })
+        .map(|widget| DialogButtonTarget::Role {
+            widget: widget.id,
+            role: fallback_role,
+        })
+}
+
+/// Resolve the control that should receive focus when a modal first opens.
+///
+/// A configured/default Accept control wins. If the dialog has no Accept
+/// action, the first focusable widget is used so keyboard users still enter
+/// the dialog at a real control rather than at the modal container.
+#[must_use]
+pub fn resolve_dialog_initial_focus_target(
+    widgets: &[WidgetInstance],
+    configured_widget: Option<Uuid>,
+) -> Option<DialogButtonTarget> {
+    resolve_dialog_button_target(widgets, configured_widget, DialogButtonRole::Accept).or_else(
+        || {
+            widgets.iter().find_map(|widget| {
+                if widget.kind == WidgetKind::DialogButtonBox {
+                    return effective_dialog_buttons(&widget.props)
+                        .first()
+                        .map(|button| DialogButtonTarget::Role {
+                            widget: widget.id,
+                            role: button.role,
+                        });
+                }
+                matches!(
+                    widget.kind,
+                    WidgetKind::Button
+                        | WidgetKind::TextInput
+                        | WidgetKind::TextArea
+                        | WidgetKind::Slider
+                        | WidgetKind::SpinBox
+                        | WidgetKind::Checkbox
+                        | WidgetKind::RadioButton
+                        | WidgetKind::ComboBox
+                        | WidgetKind::FontComboBox
+                        | WidgetKind::ToolButton
+                        | WidgetKind::CommandLinkButton
+                )
+                .then_some(DialogButtonTarget::Widget(widget.id))
+            })
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1508,23 +1810,122 @@ mod tests {
 
     #[test]
     fn behavior_button_click_add_round_trips() {
-        let b = Behavior {
-            id: Uuid::from_u128(0xBE1),
-            source_widget: Uuid::from_u128(0x01),
-            event: WidgetEvent::Click,
-            target_widget: Some(Uuid::from_u128(0x02)),
-            action: VisualAction::Add {
+        let b = Behavior::widget(
+            Uuid::from_u128(0xBE1),
+            Uuid::from_u128(0x01),
+            WidgetEvent::Click,
+            Some(Uuid::from_u128(0x02)),
+            VisualAction::Add {
                 field: "progress".to_owned(),
                 amount: 0.1,
                 min: Some(0.0),
                 max: Some(1.0),
             },
-        };
+        );
         let json = serde_json::to_string(&b).expect("serialize");
         let back: Behavior = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, b);
-        assert_eq!(back.event, WidgetEvent::Click);
+        assert_eq!(back.widget_event(), Some(WidgetEvent::Click));
         assert_eq!(back.action.field(), Some("progress"));
+    }
+
+    #[test]
+    fn legacy_dialog_button_options_resolve_to_semantic_roles() {
+        let props = WidgetProps {
+            options: vec![
+                "OK".to_owned(),
+                "Cancel".to_owned(),
+                "Apply".to_owned(),
+                "Help".to_owned(),
+                "Later".to_owned(),
+            ],
+            dialog_buttons: Vec::new(),
+            ..Default::default()
+        };
+
+        let buttons = effective_dialog_buttons(&props);
+
+        assert_eq!(
+            buttons.iter().map(|button| button.role).collect::<Vec<_>>(),
+            vec![
+                DialogButtonRole::Accept,
+                DialogButtonRole::Reject,
+                DialogButtonRole::Apply,
+                DialogButtonRole::Help,
+                DialogButtonRole::Action,
+            ]
+        );
+    }
+
+    #[test]
+    fn structured_dialog_buttons_override_legacy_options() {
+        let props = WidgetProps {
+            options: vec!["OK".to_owned(), "Cancel".to_owned()],
+            dialog_buttons: vec![DialogButtonSpec {
+                label: "Commit".to_owned(),
+                role: DialogButtonRole::Accept,
+            }],
+            ..Default::default()
+        };
+
+        assert_eq!(effective_dialog_buttons(&props), props.dialog_buttons);
+    }
+
+    #[test]
+    fn dialog_keyboard_target_finds_semantic_button_box_role() {
+        let widget_id = Uuid::from_u128(0xDB01);
+        let widgets = vec![WidgetInstance {
+            id: widget_id,
+            kind: WidgetKind::DialogButtonBox,
+            props: WidgetProps {
+                dialog_buttons: vec![
+                    DialogButtonSpec {
+                        label: "Save".to_owned(),
+                        role: DialogButtonRole::Accept,
+                    },
+                    DialogButtonSpec {
+                        label: "Cancel".to_owned(),
+                        role: DialogButtonRole::Reject,
+                    },
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        }];
+
+        assert_eq!(
+            resolve_dialog_button_target(&widgets, None, DialogButtonRole::Accept),
+            Some(DialogButtonTarget::Role {
+                widget: widget_id,
+                role: DialogButtonRole::Accept,
+            })
+        );
+        assert_eq!(
+            resolve_dialog_button_target(&widgets, Some(widget_id), DialogButtonRole::Reject),
+            Some(DialogButtonTarget::Role {
+                widget: widget_id,
+                role: DialogButtonRole::Reject,
+            })
+        );
+    }
+
+    #[test]
+    fn dialog_initial_focus_falls_back_to_first_focusable_control() {
+        let label = WidgetInstance {
+            id: Uuid::from_u128(0xDB10),
+            kind: WidgetKind::Label,
+            ..Default::default()
+        };
+        let input = WidgetInstance {
+            id: Uuid::from_u128(0xDB11),
+            kind: WidgetKind::TextInput,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            resolve_dialog_initial_focus_target(&[label, input.clone()], None),
+            Some(DialogButtonTarget::Widget(input.id))
+        );
     }
 
     #[test]

@@ -7,10 +7,15 @@ being comfortable.
 ## Source Of Truth
 
 - `src/project/schema.rs` - serializable project types: `WidgetInstance`,
-  `WidgetProps`, `WidgetKind`, `AppProps`, SVG import metadata.
+  `WidgetProps`, `WidgetKind`, typed widget/surface behavior triggers, semantic
+  dialog button roles, `AppProps`, SVG import metadata.
+- `src/project/document.rs` - schema-v2 project root: `ProjectDocument`,
+  `ProjectProps`, `UiSurface`, `SurfaceKind`, modal policy, diagnostics,
+  duplication/remapping, and the `ActiveDocument` current-surface adapter.
 - `src/project/ui_tree.rs` - mutation API for the widget tree. Prefer this over
   direct `Vec` edits.
-- `src/project/io.rs` - save/load and versioned `.rohkai.json` envelope.
+- `src/project/io.rs` - save/load and versioned `.rohkai.json` envelope,
+  including bare-tree/schema-v1 migration to one main surface.
 - `src/project/constraint_solver.rs` - P2.3 layout constraints: `apply_constraints`
   (equal-size/aspect/min-max + margin folded into absolute alignment) — idempotent
   (safe every frame) and parent-relative (frame = parent's solved rect). Canvas
@@ -53,7 +58,9 @@ being comfortable.
   importer and rasterizer; currently owns color, numeric-list, affine
   transform, path token, length/unit, and preserveAspectRatio/viewBox mapping.
 - `src/canvas/widget_instance.rs` - canvas rect conversion helpers.
-- `src/canvas/preview.rs` - F5 preview mode: renders the canvas as live egui widgets.
+- `src/canvas/preview.rs` - F5 preview mode: shared project state, typed behavior
+  dispatch, transactional modal drafts, bounded nested modal stack, semantic
+  Accept/Reject/Apply/Reset, and focus entry/restoration.
 - `src/canvas/overlays.rs` - Stage 11 read-only overlays: ownership (widget→field)
   and error-flow (handler Result/Option) badges. Toggled from the View menu.
 - `src/widgets/` - palette/default constructors for each `WidgetKind`.
@@ -62,6 +69,8 @@ being comfortable.
 
 - `src/panels/palette.rs` - widget palette interactions.
 - `src/panels/properties.rs` - selected widget inspector.
+- `src/panels/surfaces.rs` - project surface tabs/panel, modal CRUD/templates,
+  lifecycle behavior entry, active-surface properties, and diagnostics.
 - `src/panels/code_preview.rs` - live/editable generated code panel. Owns the
   no-wrap/wrap editor viewport, decoration gutter, source-span outlines,
   navigation scrolling, and generated/valid/invalid edit states.
@@ -127,7 +136,9 @@ being comfortable.
   future handler blocks; shared line-span utility used by Lazare parsing.
 - `src/codegen/export.rs` - generated standalone eframe project output.
   Normal tests compile both a focused fixture and the complete built-in catalog
-  as separate warning-denied Cargo projects.
+  as separate warning-denied Cargo projects. Multi-surface exports add
+  `src/surfaces/*.rs`, aggregate state/handlers/dependencies, and generated
+  `egui::Modal` runtime/draft structs for native and WASM source.
 - `src/codegen/field_collector.rs` - shared AppState field collection for live
   preview, export, and descriptor state fields.
 - `src/codegen/state_emitter.rs` - generated `AppState`.
@@ -194,8 +205,10 @@ being comfortable.
 - `scripts/check-dependency-policy.ps1` - blocks forbidden SVG dependency crates.
 - `scripts/check-surface-parity.ps1` - caveman-review cross-surface drift auditor:
   flags schema fields with no codegen, roadmap `[x]`/`[ ]` claims that disagree
-  with code, and `#[allow(dead_code)]` public APIs. Advisory companion to
-  `tests/fidelity_audit.rs`. See `docs/RCA-2026-06-12-surface-parity-drift.md`.
+  with code, and `#[allow(dead_code)]` public APIs. It also materializes native
+  and WASM multi-surface export fixtures and runs warning-denied Cargo checks.
+  Advisory static findings remain non-fatal unless `-Strict` is used. See
+  `docs/RCA-2026-06-12-surface-parity-drift.md`.
 - `scripts/check-text-encoding.ps1` - blocks mojibake/replacement-character text
   from entering tracked repo files.
 - `scripts/validate-svg-import.ps1` - SVG importer validation suite.

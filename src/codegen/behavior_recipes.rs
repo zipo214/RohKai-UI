@@ -323,13 +323,13 @@ mod tests {
             widgets: vec![btn, bar.clone()],
             ..Default::default()
         };
-        tree.app_props.behaviors.push(Behavior {
-            id: Uuid::from_u128(0xC3),
-            source_widget: btn_id,
-            event: WidgetEvent::Click,
-            target_widget: Some(bar.id),
-            action: suggestion.action,
-        });
+        tree.app_props.behaviors.push(Behavior::widget(
+            Uuid::from_u128(0xC3),
+            btn_id,
+            WidgetEvent::Click,
+            Some(bar.id),
+            suggestion.action,
+        ));
 
         let app_rs = crate::codegen::export::project_files(&tree)
             .into_iter()

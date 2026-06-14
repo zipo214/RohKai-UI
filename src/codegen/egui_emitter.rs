@@ -1608,18 +1608,18 @@ mod tests {
             widgets: vec![btn, bar],
             ..Default::default()
         };
-        tree.app_props.behaviors = vec![Behavior {
-            id: Uuid::from_u128(0xB3),
-            source_widget: btn_id,
-            event: WidgetEvent::Click,
-            target_widget: Some(bar_id),
-            action: VisualAction::Add {
+        tree.app_props.behaviors = vec![Behavior::widget(
+            Uuid::from_u128(0xB3),
+            btn_id,
+            WidgetEvent::Click,
+            Some(bar_id),
+            VisualAction::Add {
                 field: "progress".to_owned(),
                 amount: 0.1,
                 min: Some(0.0),
                 max: Some(1.0),
             },
-        }];
+        )];
 
         let text = emit_document(&tree).text;
         assert!(

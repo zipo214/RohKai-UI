@@ -6,8 +6,9 @@
 //! and SVG core — instead of only inline `#[cfg(test)]` modules. The `rohkai`
 //! binary (`src/main.rs`) is a thin shell that constructs [`app::RohKaiApp`].
 //!
-//! `UiTree` (in [`project::ui_tree`]) remains the single source of truth: the
-//! canvas renders it and the codegen modules emit Rust from it.
+//! [`project::document::ProjectDocument`] is the project source of truth.
+//! Each surface owns one [`project::ui_tree::UiTree`], which remains the sole
+//! canvas/codegen authority for that surface.
 
 pub mod app;
 pub mod canvas;

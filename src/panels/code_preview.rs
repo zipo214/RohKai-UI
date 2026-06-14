@@ -8,7 +8,7 @@ const CODE_EDITOR_GUTTER_Y: f32 = 8.0;
 const CODE_HIGHLIGHT_PADDING: f32 = 4.0;
 const CODE_HIGHLIGHT_STROKE_WIDTH: f32 = 1.25;
 
-#[derive(Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub enum CodeStatus {
     #[default]
     Generated,
@@ -17,6 +17,9 @@ pub enum CodeStatus {
 }
 
 pub struct CodePreviewArgs<'a> {
+    /// Project-wide field collection tree. Code editing still targets `tree`,
+    /// while the AppState view includes bindings from every saved surface.
+    pub app_state_tree: &'a UiTree,
     pub selected_ids: &'a mut Vec<Uuid>,
     pub navigation_target: &'a mut Option<Uuid>,
     /// Tracé: if Some(name), insert handler stub and clear after consuming.
@@ -361,6 +364,7 @@ pub fn show(root_ui: &mut egui::Ui, tree: &mut UiTree, args: CodePreviewArgs<'_>
         search_query,
         search_open,
         search_match_idx,
+        app_state_tree,
     } = args;
 
     let generated = egui_emitter::emit_document(tree);
@@ -689,7 +693,7 @@ pub fn show(root_ui: &mut egui::Ui, tree: &mut UiTree, args: CodePreviewArgs<'_>
 
             // ---- AppState (always read-only) ----
             ui.label(egui::RichText::new("AppState").strong());
-            let state = state_emitter::emit(tree);
+            let state = state_emitter::emit(app_state_tree);
             egui::ScrollArea::vertical()
                 .id_salt("state_scroll")
                 .max_height(state_h)

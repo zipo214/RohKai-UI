@@ -4,7 +4,7 @@
 //! `tree.app_props.behaviors` directly: the UiTree stays the single source of
 //! truth and the live code panel / export pick the change up on the next emit.
 
-use crate::project::schema::{ValueExpr, VisualAction, WidgetEvent};
+use crate::project::schema::{BehaviorTrigger, SurfaceEvent, ValueExpr, VisualAction, WidgetEvent};
 use crate::project::ui_tree::UiTree;
 use uuid::Uuid;
 
@@ -20,6 +20,8 @@ pub fn show_selected(
     ui: &mut egui::Ui,
     tree: &mut UiTree,
     selected_behavior: &mut Option<Uuid>,
+    surfaces: &[(Uuid, String)],
+    active_surface: Uuid,
 ) -> bool {
     let Some(bid) = *selected_behavior else {
         return false;
@@ -31,60 +33,107 @@ pub fn show_selected(
 
     ui.label(egui::RichText::new("Behavior").strong().color(TEAL));
 
-    // Source line + event picker (events derive from the source widget's
-    // canonical supported_events — never re-listed).
-    let source_id = tree.app_props.behaviors[idx].source_widget;
-    let source_desc = tree
-        .widgets
-        .iter()
-        .find(|w| w.id == source_id)
-        .map(|w| format!("{:?} \u{201c}{}\u{201d}", w.kind, w.props.label))
-        .unwrap_or_else(|| "(missing widget)".to_owned());
-    ui.horizontal(|ui| {
-        ui.label("Source:");
-        ui.label(egui::RichText::new(source_desc).weak());
-    });
-    let source_events: Vec<WidgetEvent> = tree
-        .widgets
-        .iter()
-        .find(|w| w.id == source_id)
-        .map(|w| w.kind.supported_events().to_vec())
-        .unwrap_or_default();
-
-    // Recipe suggestions for this source→sink pair (the smart constructor).
-    // Derived live from the recorded target widget's sink type via the
-    // interaction matrix; the default was already applied on drop, alternates
-    // are one click, and params stay editable below.  Event does not narrow the
-    // set today, so computing it from the pre-frame event is exact.
-    let target_id = tree.app_props.behaviors[idx].target_widget;
-    let event_now = tree.app_props.behaviors[idx].event;
-    let suggestions: Vec<crate::codegen::behavior_recipes::RecipeSuggestion> = target_id
-        .and_then(|tid| tree.widgets.iter().find(|w| w.id == tid))
-        .and_then(crate::codegen::behavior_recipes::sink_info_for)
-        .map(|sink| crate::codegen::behavior_recipes::suggestions_for(event_now, &sink))
-        .unwrap_or_default();
+    let mut suggestions: Vec<crate::codegen::behavior_recipes::RecipeSuggestion> = Vec::new();
+    let trigger = tree.app_props.behaviors[idx].trigger;
+    match trigger {
+        BehaviorTrigger::Widget(source) => {
+            let source_desc = tree
+                .widgets
+                .iter()
+                .find(|widget| widget.id == source.source_widget)
+                .map(|widget| format!("{:?} \u{201c}{}\u{201d}", widget.kind, widget.props.label))
+                .unwrap_or_else(|| "(missing widget)".to_owned());
+            ui.horizontal(|ui| {
+                ui.label("Source:");
+                ui.label(egui::RichText::new(source_desc).weak());
+            });
+            let source_events: Vec<WidgetEvent> = tree
+                .widgets
+                .iter()
+                .find(|widget| widget.id == source.source_widget)
+                .map(|widget| widget.kind.supported_events().to_vec())
+                .unwrap_or_default();
+            suggestions = tree.app_props.behaviors[idx]
+                .target_widget
+                .and_then(|target_id| tree.widgets.iter().find(|widget| widget.id == target_id))
+                .and_then(crate::codegen::behavior_recipes::sink_info_for)
+                .map(|sink| crate::codegen::behavior_recipes::suggestions_for(source.event, &sink))
+                .unwrap_or_default();
+            let behavior = &mut tree.app_props.behaviors[idx];
+            ui.horizontal(|ui| {
+                ui.label("Event:");
+                egui::ComboBox::from_id_salt(("behavior_event", bid))
+                    .selected_text(
+                        behavior
+                            .widget_event()
+                            .map_or("Missing event", WidgetEvent::label),
+                    )
+                    .show_ui(ui, |ui| {
+                        for event in &source_events {
+                            if ui
+                                .selectable_label(
+                                    behavior.widget_event() == Some(*event),
+                                    event.label(),
+                                )
+                                .clicked()
+                                && let BehaviorTrigger::Widget(source) = &mut behavior.trigger
+                            {
+                                source.event = *event;
+                            }
+                        }
+                    });
+            });
+        }
+        BehaviorTrigger::Surface(source) => {
+            let source_desc = surfaces
+                .iter()
+                .find(|(surface, _)| *surface == source.source_surface)
+                .map(|(_, name)| name.as_str())
+                .unwrap_or("(missing surface)");
+            ui.horizontal(|ui| {
+                ui.label("Source:");
+                ui.label(egui::RichText::new(source_desc).weak());
+            });
+            let behavior = &mut tree.app_props.behaviors[idx];
+            ui.horizontal(|ui| {
+                ui.label("Event:");
+                egui::ComboBox::from_id_salt(("surface_behavior_event", bid))
+                    .selected_text(
+                        behavior
+                            .surface_event()
+                            .map_or("Missing event", SurfaceEvent::label),
+                    )
+                    .show_ui(ui, |ui| {
+                        for event in SurfaceEvent::ALL {
+                            if ui
+                                .selectable_label(
+                                    behavior.surface_event() == Some(event),
+                                    event.label(),
+                                )
+                                .clicked()
+                                && let BehaviorTrigger::Surface(source) = &mut behavior.trigger
+                            {
+                                source.event = event;
+                            }
+                        }
+                    });
+            });
+        }
+    }
 
     {
         let b = &mut tree.app_props.behaviors[idx];
-        ui.horizontal(|ui| {
-            ui.label("Event:");
-            egui::ComboBox::from_id_salt(("behavior_event", bid))
-                .selected_text(b.event.label())
-                .show_ui(ui, |ui| {
-                    for ev in &source_events {
-                        ui.selectable_value(&mut b.event, *ev, ev.label());
-                    }
-                });
-        });
-
         // Suggested recipes (beginner-facing): one click swaps in a typed
-        // action.  The raw Action picker below stays as the advanced escape.
+        // action.  Surface lifecycle behaviors use the modal actions below.
         if !suggestions.is_empty() {
             ui.horizontal_wrapped(|ui| {
                 ui.label("Suggested:");
-                for s in &suggestions {
-                    if ui.selectable_label(b.action == s.action, s.label).clicked() {
-                        b.action = s.action.clone();
+                for suggestion in &suggestions {
+                    if ui
+                        .selectable_label(b.action == suggestion.action, suggestion.label)
+                        .clicked()
+                    {
+                        b.action = suggestion.action.clone();
                     }
                 }
             });
@@ -127,10 +176,47 @@ pub fn show_selected(
                             b.action = make(current_field.clone());
                         }
                     }
+                    if let Some((surface, _)) = surfaces.first()
+                        && ui
+                            .selectable_label(
+                                matches!(b.action, VisualAction::OpenModal { .. }),
+                                "Open modal",
+                            )
+                            .clicked()
+                    {
+                        b.action = VisualAction::OpenModal { surface: *surface };
+                    }
+                    if surfaces
+                        .iter()
+                        .any(|(surface, _)| *surface == active_surface)
+                    {
+                        if ui
+                            .selectable_label(
+                                matches!(b.action, VisualAction::AcceptDialog { .. }),
+                                "Accept dialog",
+                            )
+                            .clicked()
+                        {
+                            b.action = VisualAction::AcceptDialog {
+                                surface: active_surface,
+                            };
+                        }
+                        if ui
+                            .selectable_label(
+                                matches!(b.action, VisualAction::RejectDialog { .. }),
+                                "Reject dialog",
+                            )
+                            .clicked()
+                        {
+                            b.action = VisualAction::RejectDialog {
+                                surface: active_surface,
+                            };
+                        }
+                    }
                 });
         });
 
-        show_action_editor(ui, &mut b.action);
+        show_action_editor(ui, &mut b.action, surfaces);
     }
 
     if ui
@@ -158,7 +244,7 @@ pub fn show_for_widget(
         .app_props
         .behaviors
         .iter()
-        .filter(|b| b.source_widget == widget_id)
+        .filter(|b| b.source_widget() == Some(widget_id))
         .map(|b| {
             let target = b
                 .action
@@ -171,7 +257,12 @@ pub fn show_for_widget(
                 .unwrap_or_default();
             (
                 b.id,
-                format!("{} → {} {}", b.event.label(), b.action.label(), target),
+                format!(
+                    "{} → {} {}",
+                    b.widget_event().map_or("Missing event", WidgetEvent::label),
+                    b.action.label(),
+                    target
+                ),
             )
         })
         .collect();
@@ -195,7 +286,7 @@ pub fn show_for_widget(
     }
 }
 
-fn show_action_editor(ui: &mut egui::Ui, action: &mut VisualAction) {
+fn show_action_editor(ui: &mut egui::Ui, action: &mut VisualAction, surfaces: &[(Uuid, String)]) {
     match action {
         VisualAction::Set { field, value } => {
             field_row(ui, field);
@@ -276,7 +367,49 @@ fn show_action_editor(ui: &mut egui::Ui, action: &mut VisualAction) {
                 ui.text_edit_singleline(handler);
             });
         }
+        VisualAction::OpenModal { surface } => {
+            surface_picker(ui, "Dialog:", surface, surfaces);
+        }
+        VisualAction::AcceptDialog { surface } => {
+            surface_picker(ui, "Dialog:", surface, surfaces);
+            ui.label(
+                egui::RichText::new("Commits the dialog draft.")
+                    .small()
+                    .weak(),
+            );
+        }
+        VisualAction::RejectDialog { surface } => {
+            surface_picker(ui, "Dialog:", surface, surfaces);
+            ui.label(
+                egui::RichText::new("Discards the dialog draft.")
+                    .small()
+                    .weak(),
+            );
+        }
     }
+}
+
+fn surface_picker(
+    ui: &mut egui::Ui,
+    label: &str,
+    selected: &mut Uuid,
+    surfaces: &[(Uuid, String)],
+) {
+    let selected_name = surfaces
+        .iter()
+        .find(|(surface, _)| surface == selected)
+        .map(|(_, name)| name.as_str())
+        .unwrap_or("Missing surface");
+    ui.horizontal(|ui| {
+        ui.label(label);
+        egui::ComboBox::from_id_salt(("behavior_surface", label, *selected))
+            .selected_text(selected_name)
+            .show_ui(ui, |ui| {
+                for (surface, name) in surfaces {
+                    ui.selectable_value(selected, *surface, name);
+                }
+            });
+    });
 }
 
 fn field_row(ui: &mut egui::Ui, field: &mut String) {

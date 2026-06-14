@@ -73,7 +73,10 @@ fn collect_behavior_fields(
                 ValueExpr::Text(_) => ("String", "String::new()"),
                 ValueExpr::Flag(_) => ("bool", "false"),
             },
-            VisualAction::CallHandler { .. } => continue,
+            VisualAction::CallHandler { .. }
+            | VisualAction::OpenModal { .. }
+            | VisualAction::AcceptDialog { .. }
+            | VisualAction::RejectDialog { .. } => continue,
         };
         push_field(
             AppStateField {
@@ -438,18 +441,18 @@ mod tests {
         let btn = simple_widget(WidgetKind::Button, "ignored");
         let source_id = btn.id;
         let mut tree = make_tree(vec![btn]);
-        tree.app_props.behaviors = vec![Behavior {
-            id: uuid::Uuid::from_u128(0x30),
-            source_widget: source_id,
-            event: WidgetEvent::Click,
-            target_widget: None,
-            action: VisualAction::Add {
+        tree.app_props.behaviors = vec![Behavior::widget(
+            uuid::Uuid::from_u128(0x30),
+            source_id,
+            WidgetEvent::Click,
+            None,
+            VisualAction::Add {
                 field: "progress".to_owned(),
                 amount: 0.1,
                 min: Some(0.0),
                 max: Some(1.0),
             },
-        }];
+        )];
         let r = collect(&tree);
         let f = r
             .fields
@@ -466,18 +469,18 @@ mod tests {
         let bar = simple_widget(WidgetKind::ProgressBar, "progress");
         let source_id = bar.id;
         let mut tree = make_tree(vec![bar]);
-        tree.app_props.behaviors = vec![Behavior {
-            id: uuid::Uuid::from_u128(0x31),
-            source_widget: source_id,
-            event: WidgetEvent::Click,
-            target_widget: None,
-            action: VisualAction::Add {
+        tree.app_props.behaviors = vec![Behavior::widget(
+            uuid::Uuid::from_u128(0x31),
+            source_id,
+            WidgetEvent::Click,
+            None,
+            VisualAction::Add {
                 field: "progress".to_owned(),
                 amount: 0.1,
                 min: None,
                 max: None,
             },
-        }];
+        )];
         let r = collect(&tree);
         assert_eq!(
             r.fields.iter().filter(|f| f.name == "progress").count(),

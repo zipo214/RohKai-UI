@@ -292,6 +292,24 @@ struct SurfaceWorkspaceState {
     code: CodePanelState,
 }
 
+impl SurfaceWorkspaceState {
+    fn capture(session: &mut SessionState, code: &mut CodePanelState) -> Self {
+        Self {
+            selected: std::mem::take(&mut session.selected),
+            zoom: session.canvas_settings.zoom,
+            pan: session.canvas_settings.pan,
+            code: std::mem::take(code),
+        }
+    }
+
+    fn restore(self, session: &mut SessionState, code: &mut CodePanelState) {
+        session.selected = self.selected;
+        session.canvas_settings.zoom = self.zoom;
+        session.canvas_settings.pan = self.pan;
+        *code = self.code;
+    }
+}
+
 impl Default for SurfaceWorkspaceState {
     fn default() -> Self {
         Self {
@@ -423,28 +441,21 @@ impl RohKaiApp {
 
         self.surface_workspaces.insert(
             current,
-            SurfaceWorkspaceState {
-                selected: std::mem::take(&mut self.session.selected),
-                zoom: self.session.canvas_settings.zoom,
-                pan: self.session.canvas_settings.pan,
-                code: std::mem::take(&mut self.code),
-            },
+            SurfaceWorkspaceState::capture(&mut self.session, &mut self.code),
         );
         if !self.project.ui_tree.set_active_surface(target) {
             return false;
         }
         let restored = self.surface_workspaces.remove(&target).unwrap_or_default();
-        self.session.selected = restored.selected;
-        self.session.canvas_settings.zoom = restored.zoom;
-        self.session.canvas_settings.pan = restored.pan;
-        self.code = restored.code;
+        restored.restore(&mut self.session, &mut self.code);
         self.session.interaction = InteractionState::default();
         self.session.code_navigation_target = None;
         self.session.scroll_to_handler = None;
         self.session.hovered_guide = None;
         self.session.dragging_guide = None;
-        self.session.preview_state =
-            crate::canvas::preview::PreviewState::init_from_tree(&self.project.ui_tree);
+        self.session.preview_state = crate::canvas::preview::PreviewState::init_from_document(
+            &self.project.ui_tree.snapshot(),
+        );
         true
     }
 
@@ -490,6 +501,59 @@ impl RohKaiApp {
                 };
                 let _ = self.project.ui_tree.move_surface(id, target);
             }
+            SurfaceAction::Preview(surface) => {
+                self.session.preview_state = crate::canvas::preview::PreviewState::init_for_surface(
+                    &self.project.ui_tree.snapshot(),
+                    surface,
+                );
+                self.session.preview_mode = true;
+            }
+            SurfaceAction::WireSelectedToOpen(surface) => {
+                let Some(source_widget) = self.session.selected.last().copied() else {
+                    self.messages.last_error =
+                        Some("Select an event-capable widget before wiring a dialog.".to_owned());
+                    return;
+                };
+                let Some(event) = self
+                    .project
+                    .ui_tree
+                    .widgets
+                    .iter()
+                    .find(|widget| widget.id == source_widget)
+                    .and_then(|widget| widget.kind.supported_events().first().copied())
+                else {
+                    self.messages.last_error =
+                        Some("The selected widget does not expose an event.".to_owned());
+                    return;
+                };
+                let already_wired =
+                    self.project
+                        .ui_tree
+                        .app_props
+                        .behaviors
+                        .iter()
+                        .any(|behavior| {
+                            behavior.source_widget() == Some(source_widget)
+                                && behavior.widget_event() == Some(event)
+                                && matches!(
+                                    behavior.action,
+                                    crate::project::schema::VisualAction::OpenModal {
+                                        surface: target
+                                    } if target == surface
+                                )
+                        });
+                if !already_wired {
+                    self.project.ui_tree.app_props.behaviors.push(
+                        crate::project::schema::Behavior::widget(
+                            Uuid::new_v4(),
+                            source_widget,
+                            event,
+                            None,
+                            crate::project::schema::VisualAction::OpenModal { surface },
+                        ),
+                    );
+                }
+            }
         }
     }
 
@@ -503,6 +567,11 @@ impl RohKaiApp {
         };
         let surface_name = surface.name.clone();
         let widget_count = surface.tree.widgets.len();
+        let incoming_references = self
+            .project
+            .ui_tree
+            .document()
+            .incoming_surface_references(surface_id);
         let mut confirm = false;
         let mut cancel = false;
         let response =
@@ -513,7 +582,10 @@ impl RohKaiApp {
                     "\"{surface_name}\" contains {widget_count} widget{}.",
                     if widget_count == 1 { "" } else { "s" }
                 ));
-                ui.label("Incoming behavior references will be reported or removed.");
+                ui.label(format!(
+                    "{incoming_references} incoming behavior reference{} will be removed.",
+                    if incoming_references == 1 { "" } else { "s" }
+                ));
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if ui.button("Cancel").clicked() {
@@ -626,8 +698,9 @@ impl RohKaiApp {
         }
         self.session.preview_mode = enabled;
         if enabled {
-            self.session.preview_state =
-                crate::canvas::preview::PreviewState::init_from_tree(&self.project.ui_tree);
+            self.session.preview_state = crate::canvas::preview::PreviewState::init_from_document(
+                &self.project.ui_tree.snapshot(),
+            );
         }
     }
 
@@ -636,8 +709,9 @@ impl RohKaiApp {
     /// open / undo) so live preview bindings never go stale.
     fn refresh_preview_state(&mut self) {
         if self.session.preview_mode {
-            self.session.preview_state =
-                crate::canvas::preview::PreviewState::init_from_tree(&self.project.ui_tree);
+            self.session.preview_state = crate::canvas::preview::PreviewState::init_from_document(
+                &self.project.ui_tree.snapshot(),
+            );
         }
     }
 
@@ -820,7 +894,10 @@ impl RohKaiApp {
         else {
             return;
         };
-        match crate::codegen::export::write_project(&self.project.ui_tree, &folder) {
+        match crate::codegen::export::write_project_document(
+            &self.project.ui_tree.snapshot(),
+            &folder,
+        ) {
             Ok(()) => {
                 self.messages.export_message =
                     Some((true, format!("Exported → {}", folder.display())));
@@ -840,7 +917,11 @@ impl RohKaiApp {
         else {
             return;
         };
-        match crate::codegen::export::write_project_wasm(&self.project.ui_tree, &folder, true) {
+        match crate::codegen::export::write_project_document_wasm(
+            &self.project.ui_tree.snapshot(),
+            &folder,
+            true,
+        ) {
             Ok(()) => {
                 self.messages.export_message =
                     Some((true, format!("WASM project → {}", folder.display())));
@@ -873,9 +954,11 @@ impl RohKaiApp {
         // Export WASM project to a per-process temp directory to avoid
         // collisions between concurrent or repeated preview runs.
         let dest = std::env::temp_dir().join(format!("rohkai_wasm_preview_{}", std::process::id()));
-        if let Err(e) =
-            crate::codegen::export::write_project_wasm(&self.project.ui_tree, &dest, true)
-        {
+        if let Err(e) = crate::codegen::export::write_project_document_wasm(
+            &self.project.ui_tree.snapshot(),
+            &dest,
+            true,
+        ) {
             self.messages.export_message =
                 Some((false, format!("WASM preview export failed: {e}")));
             return;
@@ -1656,7 +1739,8 @@ impl RohKaiApp {
             return;
         }
         // Generate the in-memory project file list (same source as disk export).
-        let files = crate::codegen::export::project_files(&self.project.ui_tree);
+        let files =
+            crate::codegen::export::project_files_document(&self.project.ui_tree.snapshot());
         let mut open = self.session.project_tree_open;
         let action = crate::panels::project_tree::show(
             ctx,
@@ -2570,10 +2654,13 @@ impl eframe::App for RohKaiApp {
         // Right panel: generated code (hidden in preview mode)
         // ---------------------------------------------------------------
         if !self.session.preview_mode {
+            let project_state_tree =
+                crate::codegen::export::project_state_tree(&self.project.ui_tree.snapshot());
             crate::panels::code_preview::show(
                 root_ui,
                 &mut self.project.ui_tree,
                 CodePreviewArgs {
+                    app_state_tree: &project_state_tree,
                     selected_ids: &mut self.session.selected,
                     navigation_target: &mut self.session.code_navigation_target,
                     scroll_to_handler: &mut self.session.scroll_to_handler,
@@ -2694,6 +2781,21 @@ impl eframe::App for RohKaiApp {
                     let mut props_action = crate::panels::properties::PropertiesAction::None;
                     let mut tmpl_action = crate::panels::templates::TemplateAction::None;
                     let mut surface_action = crate::panels::surfaces::SurfaceAction::None;
+                    let active_surface_id = self.project.ui_tree.active_surface_id();
+                    let modal_surface_choices: Vec<(Uuid, String)> = self
+                        .project
+                        .ui_tree
+                        .document()
+                        .surfaces
+                        .iter()
+                        .filter(|surface| {
+                            matches!(
+                                surface.kind,
+                                crate::project::document::SurfaceKind::ModalDialog(_)
+                            )
+                        })
+                        .map(|surface| (surface.id, surface.name.clone()))
+                        .collect();
 
                     egui::ScrollArea::vertical()
                         .id_salt("left_panel_tab_scroll")
@@ -2736,15 +2838,25 @@ impl eframe::App for RohKaiApp {
                                     .show(ui, |ui| {
                                         let shift_held = ui.input(|i| i.modifiers.shift);
                                         if self.session.selected.is_empty() {
+                                            crate::panels::behaviors::show_selected(
+                                                ui,
+                                                &mut self.project.ui_tree,
+                                                &mut self.session.interaction.selected_behavior,
+                                                &modal_surface_choices,
+                                                active_surface_id,
+                                            );
                                             crate::panels::surfaces::show_active_surface_properties(
                                                 ui,
                                                 &mut self.project.ui_tree,
+                                                &mut self.session.interaction.selected_behavior,
                                             );
                                         } else {
                                             crate::panels::behaviors::show_selected(
                                                 ui,
                                                 &mut self.project.ui_tree,
                                                 &mut self.session.interaction.selected_behavior,
+                                                &modal_surface_choices,
+                                                active_surface_id,
                                             );
                                             props_action =
                                                 crate::panels::properties::show_content(
@@ -2850,15 +2962,25 @@ impl eframe::App for RohKaiApp {
                                             ui.separator();
                                         }
                                         if self.session.selected.is_empty() {
+                                            crate::panels::behaviors::show_selected(
+                                                ui,
+                                                &mut self.project.ui_tree,
+                                                &mut self.session.interaction.selected_behavior,
+                                                &modal_surface_choices,
+                                                active_surface_id,
+                                            );
                                             crate::panels::surfaces::show_active_surface_properties(
                                                 ui,
                                                 &mut self.project.ui_tree,
+                                                &mut self.session.interaction.selected_behavior,
                                             );
                                         } else {
                                             crate::panels::behaviors::show_selected(
                                                 ui,
                                                 &mut self.project.ui_tree,
                                                 &mut self.session.interaction.selected_behavior,
+                                                &modal_surface_choices,
+                                                active_surface_id,
                                             );
                                             props_action =
                                                 crate::panels::properties::show_content(
@@ -3140,9 +3262,8 @@ impl eframe::App for RohKaiApp {
 
             // --- Preview mode ---
             if self.session.preview_mode {
-                let exited = crate::canvas::preview::render(
+                let exited = crate::canvas::preview::render_project(
                     ui,
-                    &self.project.ui_tree,
                     &mut self.session.preview_state,
                     panel_rect,
                     &mut self.svg_texture_cache,
@@ -3347,8 +3468,11 @@ impl eframe::App for RohKaiApp {
 
 #[cfg(test)]
 mod name_counter_tests {
+    use super::{CodePanelState, SessionState, SurfaceWorkspaceState};
+    use crate::panels::code_preview::CodeStatus;
     use crate::project::schema::WidgetKind;
     use std::collections::HashMap;
+    use uuid::Uuid;
 
     fn next_label(counter: &mut HashMap<String, u32>, kind: &WidgetKind, hint: &str) -> String {
         let key = format!("{kind:?}").to_lowercase();
@@ -3405,5 +3529,37 @@ mod name_counter_tests {
         let mut counter: HashMap<String, u32> = HashMap::new();
         let l = next_label(&mut counter, &WidgetKind::Label, "");
         assert_eq!(l, "label_1");
+    }
+
+    #[test]
+    fn surface_workspace_preserves_invalid_code_selection_zoom_and_pan() {
+        let selected = Uuid::from_u128(0x5FACE);
+        let mut session = SessionState {
+            selected: vec![selected],
+            ..Default::default()
+        };
+        session.canvas_settings.zoom = 1.75;
+        session.canvas_settings.pan = egui::vec2(42.0, -17.0);
+        let mut code = CodePanelState {
+            buffer: "broken(".to_owned(),
+            status: CodeStatus::InvalidEdit("expected ')'".to_owned()),
+            ..Default::default()
+        };
+
+        let workspace = SurfaceWorkspaceState::capture(&mut session, &mut code);
+        session.canvas_settings.zoom = 0.5;
+        session.canvas_settings.pan = egui::Vec2::ZERO;
+        code.buffer = "other surface".to_owned();
+        code.status = CodeStatus::Generated;
+        workspace.restore(&mut session, &mut code);
+
+        assert_eq!(session.selected, vec![selected]);
+        assert_eq!(session.canvas_settings.zoom, 1.75);
+        assert_eq!(session.canvas_settings.pan, egui::vec2(42.0, -17.0));
+        assert_eq!(code.buffer, "broken(");
+        assert_eq!(
+            code.status,
+            CodeStatus::InvalidEdit("expected ')'".to_owned())
+        );
     }
 }

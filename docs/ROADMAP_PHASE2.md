@@ -391,13 +391,37 @@ the single most dangerous lane. Refactored:
 - [ ] TODO — Execution budgets (instruction/time/memory caps) + determinism
       tests + a fuzz lane.
 
-## S19 — ★ LARGE — Multi-Document & Windowing
+## S19 — ★ LARGE — Project Surfaces & Windowing
 
-- [ ] TODO — Model-based item views (MVC tree, virtual list 100k+) — generalises
-      S6 into a reusable model/view framework.
-- [ ] TODO — Dock Widget: dockable panels, split views, tab groups.
-- [ ] TODO — MDI Area: floating sub-windows inside the document.
-- [ ] TODO — Multi-window support: secondary eframe viewports.
+### S19A - Project Surfaces And Modal Dialogs
+- [x] DONE - Schema-v2 `ProjectDocument`, lossless legacy/v1 migration, one
+      protected root surface, multiple editable modal surfaces, CRUD/templates,
+      per-surface workspace state, and project-wide undo/dirty persistence.
+- [x] DONE - Typed surface lifecycle behaviors plus Open/Accept/Reject actions in
+      F5 preview and native/WASM export.
+- [x] DONE - Transactional modal drafts, semantic dialog button roles, nested
+      top-only stack, default/Escape behavior, focus entry/restoration,
+      diagnostics, aggregate state/handlers/dependencies, and warning-denied
+      generated fixtures.
+- [x] DONE - Migration, isolation, nested lifecycle, generated compile, and
+      50-surface/10,000-widget stress fixtures.
+- [~] VERIFY - Repeat narrow/normal/wide screenshot and accessibility review
+      after the Windows Computer Use runtime packaging error is repaired.
+
+### S19B - Modeless Secondary Windows
+- [ ] TODO - Secondary eframe deferred viewports with synchronized state,
+      geometry persistence, lifecycle/ownership, multiple instances, native
+      multi-monitor/DPI behavior, and explicit web fallback.
+
+### S19C - Main-Window Framework
+- [ ] TODO - Toolbars, menus/actions, status areas, Dock Widget, split views,
+      tab groups, and persisted workspace layouts.
+
+### S19D - MDI And Advanced Windowing
+- [ ] TODO - MDI Area, typed surface parameters/results, application/window
+      modality, advanced instance management, and platform lifecycle.
+- [ ] TODO - Model-based item views (MVC tree, virtual list 100k+) generalize S6
+      into a reusable model/view framework; modal surfaces do not close this gap.
 
 ## S20 — Code Intelligence
 

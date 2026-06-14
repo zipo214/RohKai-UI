@@ -1,8 +1,8 @@
 use crate::codegen::widget_descriptor::{DescriptorPropType, WidgetDescriptor};
 use crate::project::schema::{
-    CrossAlign, CustomProp, CustomPropType, DataColumn, DataColumnType, DbBinding, HAlign,
-    HandlerResult, LayoutCrossAlign, Orientation, SizePolicy, TextAlign, VAlign, WidgetEvent,
-    WidgetInstance, WidgetKind,
+    CrossAlign, CustomProp, CustomPropType, DataColumn, DataColumnType, DbBinding,
+    DialogButtonRole, DialogButtonSpec, HAlign, HandlerResult, LayoutCrossAlign, Orientation,
+    SizePolicy, TextAlign, VAlign, WidgetEvent, WidgetInstance, WidgetKind,
 };
 use crate::project::ui_tree::UiTree;
 use uuid::Uuid;
@@ -116,7 +116,7 @@ fn show_content_inner(
             WidgetKind::TabWidget => show_tab_widget(ui, w, &mut do_delete),
             WidgetKind::ToolButton => show_button(ui, w, &mut do_delete),
             WidgetKind::CommandLinkButton => show_command_link(ui, w, &mut do_delete),
-            WidgetKind::DialogButtonBox => show_options_widget(ui, w, &mut do_delete, "Buttons"),
+            WidgetKind::DialogButtonBox => show_dialog_button_box(ui, w, &mut do_delete),
             WidgetKind::MathLabel => show_math_label(ui, w, &mut do_delete),
             WidgetKind::FilePicker => show_file_picker(ui, w, &mut do_delete),
             WidgetKind::Chart => show_layout_container(ui, w, &mut do_delete, &mut child_move),
@@ -2103,6 +2103,61 @@ fn show_options_widget(
     show_geometry(ui, w);
     ui.separator();
     show_custom_props(ui, w);
+    show_delete_button(ui, do_delete);
+}
+
+fn show_dialog_button_box(ui: &mut egui::Ui, widget: &mut WidgetInstance, do_delete: &mut bool) {
+    field_text(ui, "Label", &mut widget.props.label);
+    if widget.props.dialog_buttons.is_empty() {
+        widget.props.dialog_buttons =
+            crate::project::schema::effective_dialog_buttons(&widget.props);
+    }
+    ui.label(egui::RichText::new("Semantic buttons").small().weak());
+    let mut remove = None;
+    for (index, button) in widget.props.dialog_buttons.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut button.label)
+                    .desired_width(100.0)
+                    .hint_text("Button label"),
+            );
+            egui::ComboBox::from_id_salt(("dialog_button_role", widget.id, index))
+                .selected_text(button.role.label())
+                .show_ui(ui, |ui| {
+                    for role in [
+                        DialogButtonRole::Accept,
+                        DialogButtonRole::Reject,
+                        DialogButtonRole::Apply,
+                        DialogButtonRole::Reset,
+                        DialogButtonRole::Help,
+                        DialogButtonRole::Action,
+                    ] {
+                        ui.selectable_value(&mut button.role, role, role.label());
+                    }
+                });
+            if ui.small_button("x").clicked() {
+                remove = Some(index);
+            }
+        });
+    }
+    if let Some(index) = remove {
+        widget.props.dialog_buttons.remove(index);
+    }
+    if ui.small_button("+ Add Button").clicked() {
+        widget.props.dialog_buttons.push(DialogButtonSpec {
+            label: "Action".to_owned(),
+            role: DialogButtonRole::Action,
+        });
+    }
+    widget.props.options = widget
+        .props
+        .dialog_buttons
+        .iter()
+        .map(|button| button.label.clone())
+        .collect();
+    show_geometry(ui, widget);
+    ui.separator();
+    show_custom_props(ui, widget);
     show_delete_button(ui, do_delete);
 }
 

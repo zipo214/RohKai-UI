@@ -5,7 +5,10 @@
 //! [`UiTree`], which remains the source of truth for that surface's widgets.
 
 use crate::project::{
-    schema::{AppProps, AssetEntry, Behavior, DesignComponent, RustWiring, ThemeSettings},
+    schema::{
+        AppProps, AssetEntry, Behavior, BehaviorTrigger, DesignComponent, RustWiring,
+        ThemeSettings, VisualAction, WidgetKind, is_dialog_action_widget,
+    },
     ui_tree::UiTree,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -186,6 +189,28 @@ pub struct ProjectDocument {
     pub surfaces: Vec<UiSurface>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectDiagnosticCode {
+    InvalidMainSurfaceCount,
+    DuplicateSurfaceId,
+    DuplicateSurfaceName,
+    MissingBehaviorSource,
+    MissingBehaviorTarget,
+    MissingModalTarget,
+    RecursiveModalOpen,
+    DanglingDialogButton,
+    UnsupportedDraftField,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectDiagnostic {
+    pub code: ProjectDiagnosticCode,
+    pub message: String,
+    pub surface: Option<Uuid>,
+    pub widget: Option<Uuid>,
+    pub behavior: Option<Uuid>,
+}
+
 impl Default for ProjectDocument {
     fn default() -> Self {
         let root_surface = Uuid::new_v4();
@@ -259,6 +284,216 @@ impl ProjectDocument {
         self.surfaces.iter_mut().find(|surface| surface.id == id)
     }
 
+    /// Clone one surface tree with its canonical project/surface properties
+    /// materialized into the legacy `UiTree.app_props` compatibility view.
+    #[must_use]
+    pub fn materialized_tree(&self, id: Uuid) -> Option<UiTree> {
+        let surface = self.surface(id)?;
+        let mut tree = surface.tree.clone();
+        let widget_ids: HashSet<Uuid> = tree.widgets.iter().map(|widget| widget.id).collect();
+        tree.app_props = AppProps {
+            title: surface.props.title.clone(),
+            win_w: surface.props.size[0],
+            win_h: surface.props.size[1],
+            icon_path: surface.props.icon_path.clone(),
+            resizable: surface.props.resizable,
+            min_size: surface.props.min_size,
+            max_size: surface.props.max_size,
+            theme: self.props.theme.clone(),
+            guides: surface.props.guides.clone(),
+            show_bezel: surface.props.show_bezel,
+            components: self.props.components.clone(),
+            assets: self.props.assets.clone(),
+            rust_wiring: self.props.rust_wiring.clone(),
+            behaviors: self
+                .props
+                .behaviors
+                .iter()
+                .filter(|behavior| {
+                    behavior.source_surface() == Some(id)
+                        || behavior
+                            .source_widget()
+                            .is_some_and(|source| widget_ids.contains(&source))
+                })
+                .cloned()
+                .collect(),
+        };
+        Some(tree)
+    }
+
+    #[must_use]
+    pub fn diagnostics(&self) -> Vec<ProjectDiagnostic> {
+        let mut diagnostics = Vec::new();
+        let main_count = self
+            .surfaces
+            .iter()
+            .filter(|surface| matches!(surface.kind, SurfaceKind::MainWindow))
+            .count();
+        if main_count != 1
+            || self
+                .surface(self.root_surface)
+                .is_none_or(|surface| !matches!(surface.kind, SurfaceKind::MainWindow))
+        {
+            diagnostics.push(ProjectDiagnostic {
+                code: ProjectDiagnosticCode::InvalidMainSurfaceCount,
+                message: format!(
+                    "Project must contain exactly one main surface matching root_surface; found {main_count}."
+                ),
+                surface: Some(self.root_surface),
+                widget: None,
+                behavior: None,
+            });
+        }
+
+        let mut surface_ids = HashSet::new();
+        let mut surface_names = HashSet::new();
+        let mut widget_owners = HashMap::new();
+        for surface in &self.surfaces {
+            if !surface_ids.insert(surface.id) {
+                diagnostics.push(ProjectDiagnostic {
+                    code: ProjectDiagnosticCode::DuplicateSurfaceId,
+                    message: format!("Surface ID {} is duplicated.", surface.id),
+                    surface: Some(surface.id),
+                    widget: None,
+                    behavior: None,
+                });
+            }
+            if !surface_names.insert(surface.name.trim().to_ascii_lowercase()) {
+                diagnostics.push(ProjectDiagnostic {
+                    code: ProjectDiagnosticCode::DuplicateSurfaceName,
+                    message: format!("Surface name {:?} is duplicated.", surface.name),
+                    surface: Some(surface.id),
+                    widget: None,
+                    behavior: None,
+                });
+            }
+            for widget in &surface.tree.widgets {
+                widget_owners.insert(widget.id, surface.id);
+            }
+
+            if let SurfaceKind::ModalDialog(policy) = &surface.kind {
+                for (label, button) in [
+                    ("default", policy.default_button),
+                    ("reject", policy.reject_button),
+                ] {
+                    if let Some(button) = button
+                        && !surface.tree.widgets.iter().any(|widget| {
+                            widget.id == button && is_dialog_action_widget(&widget.kind)
+                        })
+                    {
+                        diagnostics.push(ProjectDiagnostic {
+                            code: ProjectDiagnosticCode::DanglingDialogButton,
+                            message: format!(
+                                "Dialog {:?} references missing or non-actionable {label} button {button}.",
+                                surface.name
+                            ),
+                            surface: Some(surface.id),
+                            widget: Some(button),
+                            behavior: None,
+                        });
+                    }
+                }
+                collect_unsupported_draft_diagnostics(surface, &mut diagnostics);
+            }
+        }
+
+        let live_surfaces: HashSet<Uuid> = self.surfaces.iter().map(|surface| surface.id).collect();
+        let mut modal_edges = Vec::new();
+        for behavior in &self.props.behaviors {
+            let source_surface = match behavior.trigger {
+                BehaviorTrigger::Widget(source) => {
+                    let owner = widget_owners.get(&source.source_widget).copied();
+                    if owner.is_none() {
+                        diagnostics.push(ProjectDiagnostic {
+                            code: ProjectDiagnosticCode::MissingBehaviorSource,
+                            message: format!(
+                                "Behavior {} references missing source widget {}.",
+                                behavior.id, source.source_widget
+                            ),
+                            surface: None,
+                            widget: Some(source.source_widget),
+                            behavior: Some(behavior.id),
+                        });
+                    }
+                    owner
+                }
+                BehaviorTrigger::Surface(source) => {
+                    if !live_surfaces.contains(&source.source_surface) {
+                        diagnostics.push(ProjectDiagnostic {
+                            code: ProjectDiagnosticCode::MissingBehaviorSource,
+                            message: format!(
+                                "Behavior {} references missing source surface {}.",
+                                behavior.id, source.source_surface
+                            ),
+                            surface: Some(source.source_surface),
+                            widget: None,
+                            behavior: Some(behavior.id),
+                        });
+                        None
+                    } else {
+                        Some(source.source_surface)
+                    }
+                }
+            };
+
+            if let Some(target) = behavior.target_widget
+                && !widget_owners.contains_key(&target)
+            {
+                diagnostics.push(ProjectDiagnostic {
+                    code: ProjectDiagnosticCode::MissingBehaviorTarget,
+                    message: format!(
+                        "Behavior {} references missing target widget {target}.",
+                        behavior.id
+                    ),
+                    surface: None,
+                    widget: Some(target),
+                    behavior: Some(behavior.id),
+                });
+            }
+
+            if let VisualAction::OpenModal { surface: target }
+            | VisualAction::AcceptDialog { surface: target }
+            | VisualAction::RejectDialog { surface: target } = behavior.action
+            {
+                let target_is_modal = self
+                    .surface(target)
+                    .is_some_and(|surface| matches!(surface.kind, SurfaceKind::ModalDialog(_)));
+                if !target_is_modal {
+                    diagnostics.push(ProjectDiagnostic {
+                        code: ProjectDiagnosticCode::MissingModalTarget,
+                        message: format!(
+                            "Behavior {} references missing or non-modal surface {target}.",
+                            behavior.id
+                        ),
+                        surface: Some(target),
+                        widget: None,
+                        behavior: Some(behavior.id),
+                    });
+                } else if matches!(behavior.action, VisualAction::OpenModal { .. })
+                    && let Some(source) = source_surface
+                {
+                    modal_edges.push((behavior.id, source, target));
+                }
+            }
+        }
+
+        for (behavior, source, target) in &modal_edges {
+            if source == target || modal_path_exists(*target, *source, &modal_edges) {
+                diagnostics.push(ProjectDiagnostic {
+                    code: ProjectDiagnosticCode::RecursiveModalOpen,
+                    message: format!(
+                        "Behavior {behavior} creates a recursive modal-open path from {source} to {target}."
+                    ),
+                    surface: Some(*source),
+                    widget: None,
+                    behavior: Some(*behavior),
+                });
+            }
+        }
+
+        diagnostics
+    }
+
     pub fn add_modal_surface(&mut self, preferred_name: impl AsRef<str>) -> Uuid {
         let name = self.unique_surface_name(preferred_name.as_ref(), None);
         let id = Uuid::new_v4();
@@ -300,9 +535,13 @@ impl ProjectDocument {
             .map(|widget| widget.id)
             .collect();
         self.surfaces.remove(index);
-        self.props
-            .behaviors
-            .retain(|behavior| !removed_ids.contains(&behavior.source_widget));
+        self.props.behaviors.retain(|behavior| {
+            behavior.source_surface() != Some(id)
+                && behavior
+                    .source_widget()
+                    .is_none_or(|source| !removed_ids.contains(&source))
+                && !action_targets_surface(&behavior.action, id)
+        });
         for behavior in &mut self.props.behaviors {
             if behavior
                 .target_widget
@@ -312,6 +551,15 @@ impl ProjectDocument {
             }
         }
         true
+    }
+
+    #[must_use]
+    pub fn incoming_surface_references(&self, id: Uuid) -> usize {
+        self.props
+            .behaviors
+            .iter()
+            .filter(|behavior| action_targets_surface(&behavior.action, id))
+            .count()
     }
 
     pub fn move_surface(&mut self, id: Uuid, target_index: usize) -> bool {
@@ -341,8 +589,6 @@ impl ProjectDocument {
         duplicate.id = new_surface_id;
         duplicate.name = name.clone();
         duplicate.props.title = name;
-        duplicate.kind = SurfaceKind::ModalDialog(ModalDialogProps::default());
-
         let mut id_map = HashMap::with_capacity(duplicate.tree.widgets.len());
         for widget in &mut duplicate.tree.widgets {
             let old = widget.id;
@@ -356,22 +602,58 @@ impl ProjectDocument {
                 }
             }
         }
+        duplicate.kind = match duplicate.kind {
+            SurfaceKind::MainWindow => SurfaceKind::ModalDialog(ModalDialogProps::default()),
+            SurfaceKind::ModalDialog(mut props) => {
+                props.default_button = props
+                    .default_button
+                    .and_then(|button| id_map.get(&button).copied());
+                props.reject_button = props
+                    .reject_button
+                    .and_then(|button| id_map.get(&button).copied());
+                SurfaceKind::ModalDialog(props)
+            }
+        };
 
         let duplicated_behaviors: Vec<Behavior> = self
             .props
             .behaviors
             .iter()
-            .filter(|behavior| widget_ids.contains(&behavior.source_widget))
+            .filter(|behavior| {
+                behavior
+                    .source_widget()
+                    .is_some_and(|source| widget_ids.contains(&source))
+                    || behavior.source_surface() == Some(source)
+            })
             .map(|behavior| {
                 let mut duplicated = behavior.clone();
                 duplicated.id = Uuid::new_v4();
-                if let Some(replacement) = id_map.get(&duplicated.source_widget) {
-                    duplicated.source_widget = *replacement;
-                }
+                duplicated.trigger = match duplicated.trigger {
+                    BehaviorTrigger::Widget(mut event) => {
+                        if let Some(replacement) = id_map.get(&event.source_widget) {
+                            event.source_widget = *replacement;
+                        }
+                        BehaviorTrigger::Widget(event)
+                    }
+                    BehaviorTrigger::Surface(mut event) => {
+                        event.source_surface = new_surface_id;
+                        BehaviorTrigger::Surface(event)
+                    }
+                };
                 if let Some(target) = duplicated.target_widget
                     && let Some(replacement) = id_map.get(&target)
                 {
                     duplicated.target_widget = Some(*replacement);
+                }
+                match &mut duplicated.action {
+                    VisualAction::OpenModal { surface }
+                    | VisualAction::AcceptDialog { surface }
+                    | VisualAction::RejectDialog { surface }
+                        if *surface == source =>
+                    {
+                        *surface = new_surface_id;
+                    }
+                    _ => {}
                 }
                 duplicated
             })
@@ -396,6 +678,16 @@ impl ProjectDocument {
             }
             surface.tree.validate_and_repair();
             repair_surface_props(&mut surface.props);
+            if let SurfaceKind::ModalDialog(policy) = &mut surface.kind {
+                let widgets = &surface.tree.widgets;
+                let valid = |candidate: Uuid| {
+                    widgets.iter().any(|widget| {
+                        widget.id == candidate && is_dialog_action_widget(&widget.kind)
+                    })
+                };
+                policy.default_button = policy.default_button.filter(|candidate| valid(*candidate));
+                policy.reject_button = policy.reject_button.filter(|candidate| valid(*candidate));
+            }
         }
 
         if !surface_ids.contains(&self.root_surface) {
@@ -427,9 +719,13 @@ impl ProjectDocument {
             .iter()
             .flat_map(|surface| surface.tree.widgets.iter().map(|widget| widget.id))
             .collect();
+        let live_surfaces: HashSet<Uuid> = self.surfaces.iter().map(|surface| surface.id).collect();
         self.props
             .behaviors
-            .retain(|behavior| live_widgets.contains(&behavior.source_widget));
+            .retain(|behavior| match behavior.trigger {
+                BehaviorTrigger::Widget(source) => live_widgets.contains(&source.source_widget),
+                BehaviorTrigger::Surface(source) => live_surfaces.contains(&source.source_surface),
+            });
         for behavior in &mut self.props.behaviors {
             if behavior
                 .target_widget
@@ -460,6 +756,90 @@ impl ProjectDocument {
             suffix += 1;
         }
     }
+}
+
+fn collect_unsupported_draft_diagnostics(
+    surface: &UiSurface,
+    diagnostics: &mut Vec<ProjectDiagnostic>,
+) {
+    for widget in &surface.tree.widgets {
+        if widget.kind == WidgetKind::Table
+            && let Some(field) = widget
+                .props
+                .data_source_binding
+                .as_deref()
+                .filter(|field| !field.trim().is_empty())
+        {
+            diagnostics.push(ProjectDiagnostic {
+                code: ProjectDiagnosticCode::UnsupportedDraftField,
+                message: format!(
+                    "Dialog {:?} field {field:?} has type Vec<Vec<String>>, which is not transactional yet.",
+                    surface.name
+                ),
+                surface: Some(surface.id),
+                widget: Some(widget.id),
+                behavior: None,
+            });
+        }
+        for [field, ty, _] in &widget.descriptor_state_fields {
+            if !is_supported_dialog_field_type(ty) {
+                diagnostics.push(ProjectDiagnostic {
+                    code: ProjectDiagnosticCode::UnsupportedDraftField,
+                    message: format!(
+                        "Dialog {:?} field {field:?} has unsupported transactional type {ty:?}.",
+                        surface.name
+                    ),
+                    surface: Some(surface.id),
+                    widget: Some(widget.id),
+                    behavior: None,
+                });
+            }
+        }
+    }
+}
+
+pub(crate) fn is_supported_dialog_field_type(ty: &str) -> bool {
+    matches!(
+        ty.trim(),
+        "String"
+            | "bool"
+            | "f32"
+            | "f64"
+            | "i8"
+            | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "isize"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "usize"
+            | "Vec<String>"
+            | "Vec<f32>"
+    )
+}
+
+fn modal_path_exists(start: Uuid, goal: Uuid, edges: &[(Uuid, Uuid, Uuid)]) -> bool {
+    let mut stack = vec![start];
+    let mut visited = HashSet::new();
+    while let Some(surface) = stack.pop() {
+        if surface == goal {
+            return true;
+        }
+        if !visited.insert(surface) {
+            continue;
+        }
+        stack.extend(
+            edges
+                .iter()
+                .filter(|(_, source, _)| *source == surface)
+                .map(|(_, _, target)| *target),
+        );
+    }
+    false
 }
 
 /// Session adapter exposing the active surface's tree to legacy single-tree
@@ -622,36 +1002,46 @@ impl ActiveDocument {
             behaviors: project
                 .behaviors
                 .into_iter()
-                .filter(|behavior| widget_ids.contains(&behavior.source_widget))
+                .filter(|behavior| {
+                    behavior.source_surface() == Some(surface.id)
+                        || behavior
+                            .source_widget()
+                            .is_some_and(|source| widget_ids.contains(&source))
+                })
                 .collect(),
         };
     }
 
     fn flush_active_cache(&mut self) {
-        let Some(surface) = self.document.surface_mut(self.active_surface) else {
+        let surface_id = self.active_surface;
+        let Some((cache, widget_ids)) = self.document.surface_mut(surface_id).map(|surface| {
+            let cache = surface.tree.app_props.clone();
+            surface.props = SurfaceProps {
+                title: cache.title.clone(),
+                size: [cache.win_w, cache.win_h],
+                icon_path: cache.icon_path.clone(),
+                resizable: cache.resizable,
+                min_size: cache.min_size,
+                max_size: cache.max_size,
+                guides: cache.guides.clone(),
+                show_bezel: cache.show_bezel,
+            };
+            let widget_ids: HashSet<Uuid> = surface
+                .tree
+                .widgets
+                .iter()
+                .map(|widget| widget.id)
+                .collect();
+            (cache, widget_ids)
+        }) else {
             return;
         };
-        let cache = surface.tree.app_props.clone();
-        surface.props = SurfaceProps {
-            title: cache.title,
-            size: [cache.win_w, cache.win_h],
-            icon_path: cache.icon_path,
-            resizable: cache.resizable,
-            min_size: cache.min_size,
-            max_size: cache.max_size,
-            guides: cache.guides,
-            show_bezel: cache.show_bezel,
-        };
-        let widget_ids: HashSet<Uuid> = surface
-            .tree
-            .widgets
-            .iter()
-            .map(|widget| widget.id)
-            .collect();
-        self.document
-            .props
-            .behaviors
-            .retain(|behavior| !widget_ids.contains(&behavior.source_widget));
+        self.document.props.behaviors.retain(|behavior| {
+            behavior.source_surface() != Some(surface_id)
+                && behavior
+                    .source_widget()
+                    .is_none_or(|source| !widget_ids.contains(&source))
+        });
         self.document.props.behaviors.extend(cache.behaviors);
         self.document.props.theme = cache.theme;
         self.document.props.components = cache.components;
@@ -733,6 +1123,16 @@ fn normalized_surface_name(name: &str) -> String {
     } else {
         trimmed.to_owned()
     }
+}
+
+fn action_targets_surface(action: &VisualAction, surface_id: Uuid) -> bool {
+    matches!(
+        action,
+        VisualAction::OpenModal { surface }
+            | VisualAction::AcceptDialog { surface }
+            | VisualAction::RejectDialog { surface }
+            if *surface == surface_id
+    )
 }
 
 const fn default_true() -> bool {

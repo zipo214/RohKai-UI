@@ -73,9 +73,10 @@ impl UiTree {
     /// when the target widget is gone, so only the wire endpoint is cleared.
     fn prune_stale_behaviors(&mut self) {
         let live: HashSet<Uuid> = self.widgets.iter().map(|w| w.id).collect();
-        self.app_props
-            .behaviors
-            .retain(|b| live.contains(&b.source_widget));
+        self.app_props.behaviors.retain(|b| {
+            b.source_widget()
+                .is_none_or(|source| live.contains(&source))
+        });
         for b in &mut self.app_props.behaviors {
             if b.target_widget.is_some_and(|t| !live.contains(&t)) {
                 b.target_widget = None;
@@ -1486,35 +1487,35 @@ mod tests {
             ..Default::default()
         };
         tree.app_props.behaviors = vec![
-            Behavior {
-                id: Uuid::from_u128(0x210),
-                source_widget: btn,
-                event: WidgetEvent::Click,
-                target_widget: Some(bar),
-                action: VisualAction::Add {
+            Behavior::widget(
+                Uuid::from_u128(0x210),
+                btn,
+                WidgetEvent::Click,
+                Some(bar),
+                VisualAction::Add {
                     field: "progress".to_owned(),
                     amount: 0.1,
                     min: Some(0.0),
                     max: Some(1.0),
                 },
-            },
-            Behavior {
-                id: Uuid::from_u128(0x211),
-                source_widget: bar,
-                event: WidgetEvent::Click,
-                target_widget: None,
-                action: VisualAction::Set {
+            ),
+            Behavior::widget(
+                Uuid::from_u128(0x211),
+                bar,
+                WidgetEvent::Click,
+                None,
+                VisualAction::Set {
                     field: "name".to_owned(),
                     value: ValueExpr::Text(String::new()),
                 },
-            },
+            ),
         ];
 
         // Removing the target widget keeps the behavior but clears the wire
         // endpoint; removing the source widget drops the behavior entirely.
         tree.remove(bar);
         assert_eq!(tree.app_props.behaviors.len(), 1);
-        assert_eq!(tree.app_props.behaviors[0].source_widget, btn);
+        assert_eq!(tree.app_props.behaviors[0].source_widget(), Some(btn));
         assert_eq!(tree.app_props.behaviors[0].target_widget, None);
 
         tree.remove(btn);
@@ -1530,15 +1531,15 @@ mod tests {
             widgets: vec![widget(live)],
             ..Default::default()
         };
-        tree.app_props.behaviors = vec![Behavior {
-            id: Uuid::from_u128(0x222),
-            source_widget: ghost,
-            event: WidgetEvent::Click,
-            target_widget: Some(ghost),
-            action: VisualAction::Toggle {
+        tree.app_props.behaviors = vec![Behavior::widget(
+            Uuid::from_u128(0x222),
+            ghost,
+            WidgetEvent::Click,
+            Some(ghost),
+            VisualAction::Toggle {
                 field: "dark".to_owned(),
             },
-        }];
+        )];
         tree.validate_and_repair();
         assert!(
             tree.app_props.behaviors.is_empty(),

@@ -13,8 +13,11 @@
 //! plus `every_visual_action_variant_emits_code` enforce this at compile time
 //! and in CI.
 
-use crate::project::schema::{Behavior, ValueExpr, VisualAction, WidgetEvent};
 use crate::project::ui_tree::UiTree;
+use crate::project::{
+    document::ProjectDocument,
+    schema::{Behavior, BehaviorTrigger, SurfaceEvent, ValueExpr, VisualAction, WidgetEvent},
+};
 use uuid::Uuid;
 
 /// All behaviors fired by `(source_widget, event)`, in declaration order.
@@ -26,16 +29,45 @@ pub fn behaviors_for_event(
     tree.app_props
         .behaviors
         .iter()
-        .filter(|b| b.source_widget == source_widget && b.event == event)
+        .filter(|behavior| {
+            matches!(
+                behavior.trigger,
+                BehaviorTrigger::Widget(source)
+                    if source.source_widget == source_widget && source.event == event
+            )
+        })
         .collect()
 }
 
 /// True when `(source_widget, event)` has at least one behavior wired.
 pub fn has_behaviors_for_event(tree: &UiTree, source_widget: Uuid, event: WidgetEvent) -> bool {
-    tree.app_props
+    tree.app_props.behaviors.iter().any(|behavior| {
+        matches!(
+            behavior.trigger,
+            BehaviorTrigger::Widget(source)
+                if source.source_widget == source_widget && source.event == event
+        )
+    })
+}
+
+/// All behaviors fired by a surface lifecycle event, in declaration order.
+pub fn behaviors_for_surface_event(
+    document: &ProjectDocument,
+    source_surface: Uuid,
+    event: SurfaceEvent,
+) -> Vec<&Behavior> {
+    document
+        .props
         .behaviors
         .iter()
-        .any(|b| b.source_widget == source_widget && b.event == event)
+        .filter(|behavior| {
+            matches!(
+                behavior.trigger,
+                BehaviorTrigger::Surface(source)
+                    if source.source_surface == source_surface && source.event == event
+            )
+        })
+        .collect()
 }
 
 /// Handler names referenced by `CallHandler` actions anywhere in the graph.
@@ -94,7 +126,44 @@ pub fn action_statement(action: &VisualAction, field_prefix: &str) -> String {
                 format!("// behavior: invalid handler name {h:?} — not emitted")
             }
         }
+        VisualAction::OpenModal { surface } => {
+            format!(
+                "self.queue_dialog_action(DialogAction::Open({:?}));",
+                surface.to_string()
+            )
+        }
+        VisualAction::AcceptDialog { surface } => {
+            format!(
+                "self.queue_dialog_action(DialogAction::Accept({:?}));",
+                surface.to_string()
+            )
+        }
+        VisualAction::RejectDialog { surface } => {
+            format!(
+                "self.queue_dialog_action(DialogAction::Reject({:?}));",
+                surface.to_string()
+            )
+        }
     }
+}
+
+/// All behavior statements for one surface lifecycle event.
+pub fn statements_for_surface_event(
+    document: &ProjectDocument,
+    source_surface: Uuid,
+    event: SurfaceEvent,
+    field_prefix: &str,
+    indent: &str,
+) -> String {
+    behaviors_for_surface_event(document, source_surface, event)
+        .iter()
+        .map(|behavior| {
+            format!(
+                "{indent}{}\n",
+                action_statement(&behavior.action, field_prefix)
+            )
+        })
+        .collect()
 }
 
 /// All behavior statements for `(source_widget, event)`, one per line, each
@@ -251,6 +320,15 @@ mod tests {
             VisualAction::CallHandler {
                 handler: "on_go".to_owned(),
             },
+            VisualAction::OpenModal {
+                surface: Uuid::from_u128(0x51),
+            },
+            VisualAction::AcceptDialog {
+                surface: Uuid::from_u128(0x52),
+            },
+            VisualAction::RejectDialog {
+                surface: Uuid::from_u128(0x53),
+            },
         ];
         for action in samples {
             let stmt = action_statement(&action, "state.");
@@ -346,31 +424,31 @@ mod tests {
         let other = Uuid::from_u128(0x2);
         let mut tree = UiTree::default();
         tree.app_props.behaviors = vec![
-            Behavior {
-                id: Uuid::from_u128(0x10),
-                source_widget: btn,
-                event: WidgetEvent::Click,
-                target_widget: None,
-                action: add_progress(),
-            },
-            Behavior {
-                id: Uuid::from_u128(0x11),
-                source_widget: btn,
-                event: WidgetEvent::DoubleClick,
-                target_widget: None,
-                action: VisualAction::Toggle {
+            Behavior::widget(
+                Uuid::from_u128(0x10),
+                btn,
+                WidgetEvent::Click,
+                None,
+                add_progress(),
+            ),
+            Behavior::widget(
+                Uuid::from_u128(0x11),
+                btn,
+                WidgetEvent::DoubleClick,
+                None,
+                VisualAction::Toggle {
                     field: "dark".to_owned(),
                 },
-            },
-            Behavior {
-                id: Uuid::from_u128(0x12),
-                source_widget: other,
-                event: WidgetEvent::Click,
-                target_widget: None,
-                action: VisualAction::CallHandler {
+            ),
+            Behavior::widget(
+                Uuid::from_u128(0x12),
+                other,
+                WidgetEvent::Click,
+                None,
+                VisualAction::CallHandler {
                     handler: "nope".to_owned(),
                 },
-            },
+            ),
         ];
 
         let s = statements_for_event(&tree, btn, WidgetEvent::Click, "state.", "    ");
@@ -393,5 +471,27 @@ mod tests {
         assert_eq!(f32_literal(1.0), "1.0");
         assert_eq!(f32_literal(-2.0), "-2.0");
         assert_eq!(f32_literal(2.5), "2.5");
+    }
+
+    #[test]
+    fn surface_event_filters_and_emits_modal_action() {
+        let source = Uuid::from_u128(0x61);
+        let target = Uuid::from_u128(0x62);
+        let mut document = ProjectDocument::default();
+        document.props.behaviors.push(Behavior::surface(
+            Uuid::from_u128(0x63),
+            source,
+            SurfaceEvent::Opened,
+            VisualAction::OpenModal { surface: target },
+        ));
+
+        assert_eq!(
+            statements_for_surface_event(&document, source, SurfaceEvent::Opened, "state.", "    "),
+            format!(
+                "    self.queue_dialog_action(DialogAction::Open({:?}));\n",
+                target.to_string()
+            )
+        );
+        assert!(behaviors_for_surface_event(&document, source, SurfaceEvent::Closed).is_empty());
     }
 }

@@ -48,6 +48,77 @@ Chronological session record. The roadmap stays strategic; this file records wha
 - Committed locally only; coop hazard (external agent state) still says do not
   push/merge.
 
+## 2026-06-13 - Project Surfaces And Modal Dialogs
+
+### Context Reviewed
+- Preflight, agent guidance, project-model/rust/TDD/plan-execution skills,
+  architecture and engineering invariants, roadmap S19, current CoOp note, and
+  the complete dirty diff in isolated branch `codex/project-surfaces-modal`.
+- The implementation was resumed after the generated modal-focus pass stopped
+  midway. Existing commits already contained the schema-v2 project skeleton and
+  surface-authoring workspace.
+
+### Changes
+- Added `ProjectDocument`, project/global properties, protected root surface,
+  ordered `UiSurface` records, modal policy, central CRUD/remap/repair APIs,
+  schema-v2 persistence, and lossless legacy/schema-v1 migration.
+- Added Surfaces panel/tabs, templates, active-surface properties, per-surface
+  selection/pan/zoom/Lazare workspace state, isolated preview, and guarded
+  deletion.
+- Added typed widget/surface behavior triggers and Open/Accept/Reject actions,
+  structured diagnostics, semantic dialog button roles, and lifecycle editing.
+- Implemented transactional F5 modal runtime and generated native/WASM runtime:
+  supported scalar/vector drafts, bounded nested stack, top-only close,
+  Accept/Reject/Apply/Reset, lifecycle order, Escape/default/backdrop policy,
+  default-control focus, and opener-focus restoration.
+- Made state, handlers, dependencies, generated files, and source ownership
+  multi-surface aware. Export emits named `src/surfaces/*.rs` modules.
+- Extended `check-surface-parity.ps1` to materialize and warning-check native and
+  WASM-source multi-surface projects.
+- Added migration, duplication/remap, diagnostics, lifecycle, semantic role,
+  vector draft, workspace isolation, generated fixture, and
+  50-surface/10,000-widget deterministic stress tests.
+- Updated architecture, invariants, code index, roadmap S19A-D, feature-depth
+  evaluation, and both agents' project-model guidance.
+
+### Verification
+- Focused modal, migration, diagnostic, source-isolation, and generated export
+  tests passed during implementation. The final full run passed 564 library
+  tests, 17 fidelity tests, 23 project-surface integration tests, and one
+  doctest with no ignored tests.
+- `cargo fmt --check`, `cargo check --all-targets`, and
+  `cargo clippy --all-targets -- -D warnings` passed.
+- `scripts/check-surface-parity.ps1` passed: native and WASM-source generated
+  projects compile and pass warning-denied Clippy. The actual
+  `wasm32-unknown-unknown` target check was skipped because that target is not
+  installed.
+- `scripts/check-text-encoding.ps1`, `scripts/validate-svg-import.ps1`, and the
+  preflight guidance/toolchain/dependency checks passed. Preflight still warns
+  that an isolated worktree is not the primary repository path.
+- The 50-surface/10,000-widget debug fixture completed in 1.29 seconds under its
+  15-second guard.
+- Native `rohkai.exe` remained healthy for a six-second launch smoke.
+- The final gate exposed and fixed one nested-export regression: modal focus
+  markers had renamed nested `child_response` bindings to the top-level
+  `evt_response` contract. Separate top-level/child markers now preserve both
+  focus behavior and the all-event nested export invariant.
+- Final review also replaced global `self.state.` string substitution with a
+  Rust-aware code-path rewrite that preserves literals/comments/custom labels,
+  moved keyboard policy dispatch before modal draft storage, and centralized
+  valid dialog action controls so malformed Label/missing policy targets are
+  diagnosed and repaired instead of suppressing focus or becoming inert.
+
+### Risks And Follow-Up
+- The Windows visual automation runtime failed to initialize because an
+  `@oai/sky` internal package subpath was not exported. Repeat the
+  narrow/normal/wide screenshot and accessibility matrix when that runtime is
+  repaired.
+- The preflight helper is rooted to `D:\dev\rohkai`; a future procedural pass
+  should make it worktree-aware so branch/status and newest notes come from the
+  active worktree rather than the primary checkout.
+- S19B modeless/native viewports, S19C docking/main-window framework, and S19D
+  MDI/typed parameters remain separate planned work.
+
 ## 2026-06-12 - Rust 1.96 And Current Dependency Alignment
 
 ### Context Reviewed

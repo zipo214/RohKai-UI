@@ -27,6 +27,11 @@ param(
     [switch]$Strict
 )
 
+$Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = $Utf8NoBom
+[Console]::InputEncoding = $Utf8NoBom
+[Console]::OutputEncoding = $Utf8NoBom
+
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $src = Join-Path $root 'src'
@@ -42,10 +47,10 @@ function Add-Find([string]$line) { $findings.Add($line) | Out-Null }
 # Pre-load all Rust source text once (src + tests) for symbol existence checks.
 $rustFiles = Get-ChildItem -Path $src, (Join-Path $root 'tests') -Recurse -Filter *.rs -ErrorAction SilentlyContinue
 $rustText = [System.Text.StringBuilder]::new()
-foreach ($f in $rustFiles) { [void]$rustText.Append((Get-Content -LiteralPath $f.FullName -Raw)) ; [void]$rustText.Append("`n") }
+foreach ($f in $rustFiles) { [void]$rustText.Append((Get-Content -LiteralPath $f.FullName -Raw -Encoding utf8)) ; [void]$rustText.Append("`n") }
 $allRust = $rustText.ToString()
 $codegenText = (Get-ChildItem -Path $codegenDir -Recurse -Filter *.rs |
-    ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"
+    ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw -Encoding utf8 }) -join "`n"
 
 function Test-SymbolExists([string]$sym) {
     # Word-boundary match anywhere in src+tests.
@@ -60,7 +65,7 @@ function Test-SymbolExists([string]$sym) {
 # Fields known to be positional / non-codegen (read by canvas or io, not the
 # Rust emitter) — annotate so they are not noise.
 $positional = @('id', 'import_metadata')
-$schemaText = Get-Content -LiteralPath $schema -Raw
+$schemaText = Get-Content -LiteralPath $schema -Raw -Encoding utf8
 # Isolate the `pub struct WidgetInstance { ... }` body.
 $m = [regex]::Match($schemaText, 'pub struct WidgetInstance \{(.+?)\n\}', 'Singleline')
 if ($m.Success) {
@@ -90,7 +95,7 @@ if (Test-Path $roadmap) {
         'S12', 'S13', 'S14', 'S15', 'S16', 'S17', 'S18', 'S19', 'S20', 'S21', 'S22',
         'params', 'data', 'file', 'https', 'http', 'var', 'crate', 'std', 'true', 'false')
     $lineNo = 0
-    foreach ($line in (Get-Content -LiteralPath $roadmap)) {
+    foreach ($line in (Get-Content -LiteralPath $roadmap -Encoding utf8)) {
         $lineNo++
         $state = $null
         if ($line -match '^\s*-\s*\[x\]\s*DONE') { $state = 'done' }
@@ -126,7 +131,7 @@ if (Test-Path $roadmap) {
 # class). Legit when it is a planned/test-only API — hence advisory.
 # ---------------------------------------------------------------------------
 foreach ($f in (Get-ChildItem -Path $src -Recurse -Filter *.rs)) {
-    $lines = Get-Content -LiteralPath $f.FullName
+    $lines = Get-Content -LiteralPath $f.FullName -Encoding utf8
     for ($i = 0; $i -lt $lines.Count; $i++) {
         if ($lines[$i] -match '#\[allow\(dead_code\)\]') {
             # Look ahead past further attributes/doc-comments to the declaration.
@@ -147,15 +152,67 @@ foreach ($f in (Get-ChildItem -Path $src -Recurse -Filter *.rs)) {
 "check-surface-parity — RohKai cross-surface drift audit"
 "========================================================"
 if ($findings.Count -eq 0) {
-    "OK — no surface-parity drift detected."
-    exit 0
+    "OK — no static surface-parity drift detected."
 }
-foreach ($line in $findings) { $line }
-""
-"$($findings.Count) finding(s); $overclaims overclaim(s). [bug] broken  [risk] review  [nit] minor."
-"Advisory by default. The hard gates are the exhaustive match arms + tests/fidelity_audit.rs."
+else {
+    foreach ($line in $findings) { $line }
+    ""
+    "$($findings.Count) finding(s); $overclaims overclaim(s). [bug] broken  [risk] review  [nit] minor."
+    "Static findings are advisory unless -Strict is supplied."
+}
 if ($Strict -and $overclaims -gt 0) {
     "STRICT: failing on $overclaims DONE-overclaim(s)."
     exit 1
 }
+
+# ---------------------------------------------------------------------------
+# CHECK 4 — Compile native and WASM multi-surface exports.
+# ---------------------------------------------------------------------------
+$nativeFixture = Join-Path $root 'target/surface-parity-native'
+$wasmFixture = Join-Path $root 'target/surface-parity-wasm'
+$env:ROHKAI_SURFACE_EXPORT_DEST = $nativeFixture
+$env:ROHKAI_SURFACE_WASM_EXPORT_DEST = $wasmFixture
+
+Push-Location $root
+try {
+    & cargo test --test project_surfaces surface_export_fixture_is_available_to_external_compile_gate -- --nocapture
+    if ($LASTEXITCODE -ne 0) { throw 'native surface fixture generation failed' }
+    & cargo test --test project_surfaces surface_wasm_export_fixture_is_available_to_external_compile_gate -- --nocapture
+    if ($LASTEXITCODE -ne 0) { throw 'WASM surface fixture generation failed' }
+}
+finally {
+    Pop-Location
+    Remove-Item Env:ROHKAI_SURFACE_EXPORT_DEST -ErrorAction SilentlyContinue
+    Remove-Item Env:ROHKAI_SURFACE_WASM_EXPORT_DEST -ErrorAction SilentlyContinue
+}
+
+foreach ($fixture in @($nativeFixture, $wasmFixture)) {
+    Push-Location $fixture
+    try {
+        & cargo check
+        if ($LASTEXITCODE -ne 0) { throw "cargo check failed for $fixture" }
+        & cargo clippy --all-targets -- -D warnings
+        if ($LASTEXITCODE -ne 0) { throw "clippy failed for $fixture" }
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+$installedTargets = @(& rustup target list --installed)
+if ($installedTargets -contains 'wasm32-unknown-unknown') {
+    Push-Location $wasmFixture
+    try {
+        & cargo check --target wasm32-unknown-unknown
+        if ($LASTEXITCODE -ne 0) { throw 'WASM target cargo check failed' }
+    }
+    finally {
+        Pop-Location
+    }
+}
+else {
+    Write-Warning 'wasm32-unknown-unknown is not installed; native WASM-source compile passed, target compile skipped.'
+}
+
+"check-surface-parity: generated native/WASM fixtures compile warning-free."
 exit 0

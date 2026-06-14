@@ -4,7 +4,11 @@ use crate::codegen::{
     rust::{effective_field_binding, field_binding, string_literal},
 };
 use crate::project::{
-    schema::{SizePolicy, WidgetEvent, WidgetInstance, WidgetKind},
+    document::{ProjectDocument, SurfaceKind, UiSurface},
+    schema::{
+        DialogButtonRole, DialogButtonTarget, SizePolicy, WidgetEvent, WidgetInstance, WidgetKind,
+        resolve_dialog_button_target, resolve_dialog_initial_focus_target,
+    },
     ui_tree::UiTree,
 };
 use rayon::prelude::*;
@@ -20,6 +24,8 @@ const EXPORTED_EFRAME_VERSION: &str = "0.34.3";
 const EXPORTED_EGUI_VERSION: &str = "0.34.3";
 const EXPORTED_RFD_VERSION: &str = "0.17.2";
 const EXPORTED_RUST_VERSION: &str = "1.92";
+const WIDGETS_BEGIN: &str = "        // ROHKAI_WIDGETS_BEGIN\n";
+const WIDGETS_END: &str = "        // ROHKAI_WIDGETS_END\n";
 
 /// Write a complete compilable Rust project to `dest` folder.
 pub fn write_project(tree: &UiTree, dest: &Path) -> Result<(), String> {
@@ -43,6 +49,24 @@ pub fn write_project(tree: &UiTree, dest: &Path) -> Result<(), String> {
         })
         .collect::<Result<Vec<_>, _>>()?;
 
+    Ok(())
+}
+
+/// Write a complete multi-surface project.
+pub fn write_project_document(document: &ProjectDocument, dest: &Path) -> Result<(), String> {
+    let files = project_files_document(document);
+    for (rel_path, _) in &files {
+        let full = dest.join(rel_path);
+        if let Some(parent) = full.parent() {
+            fs::create_dir_all(parent).map_err(|error| format!("create dirs: {error}"))?;
+        }
+    }
+    files
+        .par_iter()
+        .map(|(rel_path, content)| {
+            fs::write(dest.join(rel_path), content).map_err(|error| format!("{rel_path}: {error}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(())
 }
 
@@ -98,6 +122,27 @@ pub fn project_files(tree: &UiTree) -> Vec<(String, String)> {
     files
 }
 
+/// Generate native project files for every saved surface.
+pub fn project_files_document(document: &ProjectDocument) -> Vec<(String, String)> {
+    let aggregate = project_state_tree(document);
+    let root = document
+        .materialized_tree(document.root_surface)
+        .unwrap_or_default();
+    let mut files = project_files(&aggregate);
+    replace_file(
+        &mut files,
+        "src/main.rs",
+        gen_main_rs(&root).replacen("mod app;", "mod app;\nmod surfaces;", 1),
+    );
+    replace_file(
+        &mut files,
+        "src/app.rs",
+        gen_project_app_rs(document, &aggregate, false),
+    );
+    append_surface_modules(&mut files, document);
+    files
+}
+
 /// Write a WASM-compatible Rust project to `dest` folder.
 ///
 /// The generated project can be built with:
@@ -126,6 +171,28 @@ pub fn write_project_wasm(tree: &UiTree, dest: &Path, gen_index_html: bool) -> R
         })
         .collect::<Result<Vec<_>, _>>()?;
 
+    Ok(())
+}
+
+/// Write a multi-surface WASM-compatible project.
+pub fn write_project_document_wasm(
+    document: &ProjectDocument,
+    dest: &Path,
+    gen_index_html: bool,
+) -> Result<(), String> {
+    let files = project_files_document_wasm(document, gen_index_html);
+    for (rel_path, _) in &files {
+        let full = dest.join(rel_path);
+        if let Some(parent) = full.parent() {
+            fs::create_dir_all(parent).map_err(|error| format!("create dirs: {error}"))?;
+        }
+    }
+    files
+        .par_iter()
+        .map(|(rel_path, content)| {
+            fs::write(dest.join(rel_path), content).map_err(|error| format!("{rel_path}: {error}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(())
 }
 
@@ -166,6 +233,870 @@ pub fn project_files_wasm(tree: &UiTree, gen_index_html: bool) -> Vec<(String, S
     }
 
     files
+}
+
+/// Generate WASM project files with the same in-app modal runtime.
+pub fn project_files_document_wasm(
+    document: &ProjectDocument,
+    gen_index_html: bool,
+) -> Vec<(String, String)> {
+    let aggregate = project_state_tree(document);
+    let root = document
+        .materialized_tree(document.root_surface)
+        .unwrap_or_default();
+    let mut files = project_files_wasm(&aggregate, gen_index_html);
+    replace_file(
+        &mut files,
+        "src/lib.rs",
+        gen_lib_rs_wasm(&root).replacen("mod app;", "mod app;\nmod surfaces;", 1),
+    );
+    replace_file(
+        &mut files,
+        "src/app.rs",
+        gen_project_app_rs(document, &aggregate, true),
+    );
+    if gen_index_html {
+        replace_file(&mut files, "index.html", gen_index_html_wasm(&root));
+    }
+    append_surface_modules(&mut files, document);
+    files
+}
+
+fn replace_file(files: &mut [(String, String)], path: &str, content: String) {
+    if let Some((_, current)) = files.iter_mut().find(|(candidate, _)| candidate == path) {
+        *current = content;
+    }
+}
+
+/// Materialize one deterministic tree containing all project widgets and
+/// project-global behavior/state declarations. This is the canonical input for
+/// aggregate AppState, dependency, handler, and component collection.
+#[must_use]
+pub fn project_state_tree(document: &ProjectDocument) -> UiTree {
+    let mut aggregate = document
+        .materialized_tree(document.root_surface)
+        .unwrap_or_default();
+    aggregate.widgets.clear();
+    for surface in &document.surfaces {
+        if let Some(tree) = document.materialized_tree(surface.id) {
+            aggregate.widgets.extend(tree.widgets);
+        }
+    }
+    aggregate.app_props.behaviors = document.props.behaviors.clone();
+    aggregate
+}
+
+fn append_surface_modules(files: &mut Vec<(String, String)>, document: &ProjectDocument) {
+    let mut module_index = String::new();
+    for surface in &document.surfaces {
+        let module = surface_module_name(surface);
+        module_index.push_str(&format!("pub mod {module};\n"));
+        files.push((
+            format!("src/surfaces/{module}.rs"),
+            format!(
+                "#![allow(dead_code)]\n\
+                 pub const ID: &str = {:?};\n\
+                 pub const NAME: &str = {:?};\n\
+                 pub const TITLE: &str = {:?};\n\
+                 pub const SIZE: [f32; 2] = [{:.1}, {:.1}];\n",
+                surface.id.to_string(),
+                surface.name,
+                surface.props.title,
+                surface.props.size[0],
+                surface.props.size[1],
+            ),
+        ));
+    }
+    files.push(("src/surfaces/mod.rs".to_owned(), module_index));
+}
+
+fn surface_module_name(surface: &UiSurface) -> String {
+    let mut base: String = surface
+        .name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    while base.contains("__") {
+        base = base.replace("__", "_");
+    }
+    let base = base.trim_matches('_');
+    let base = if base.is_empty() { "untitled" } else { base };
+    format!(
+        "surface_{}_{}",
+        base,
+        &surface.id.as_simple().to_string()[..8]
+    )
+}
+
+fn extract_widget_body(source: &str) -> String {
+    let Some(start) = source.find(WIDGETS_BEGIN) else {
+        return String::new();
+    };
+    let body_start = start + WIDGETS_BEGIN.len();
+    let Some(relative_end) = source[body_start..].find(WIDGETS_END) else {
+        return String::new();
+    };
+    source[body_start..body_start + relative_end].to_owned()
+}
+
+fn replace_state_path_in_rust_code(source: &str) -> String {
+    const FROM: &[u8] = b"self.state.";
+    const TO: &[u8] = b"draft.";
+
+    #[derive(Clone, Copy)]
+    enum LexState {
+        Code,
+        String { escaped: bool },
+        RawString { hashes: usize },
+        LineComment,
+        BlockComment { depth: usize },
+    }
+
+    let bytes = source.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut state = LexState::Code;
+    let mut index = 0usize;
+
+    while index < bytes.len() {
+        match state {
+            LexState::Code => {
+                if bytes[index..].starts_with(FROM) {
+                    output.extend_from_slice(TO);
+                    index += FROM.len();
+                } else if bytes[index..].starts_with(b"//") {
+                    output.extend_from_slice(b"//");
+                    index += 2;
+                    state = LexState::LineComment;
+                } else if bytes[index..].starts_with(b"/*") {
+                    output.extend_from_slice(b"/*");
+                    index += 2;
+                    state = LexState::BlockComment { depth: 1 };
+                } else if let Some((opening_end, hashes)) = raw_string_opening(bytes, index) {
+                    output.extend_from_slice(&bytes[index..opening_end]);
+                    index = opening_end;
+                    state = LexState::RawString { hashes };
+                } else if bytes[index] == b'"' {
+                    output.push(bytes[index]);
+                    index += 1;
+                    state = LexState::String { escaped: false };
+                } else if bytes[index] == b'\''
+                    && let Some(end) = rust_char_literal_end(source, index)
+                {
+                    output.extend_from_slice(&bytes[index..end]);
+                    index = end;
+                } else {
+                    output.push(bytes[index]);
+                    index += 1;
+                }
+            }
+            LexState::String { escaped } => {
+                let byte = bytes[index];
+                output.push(byte);
+                index += 1;
+                state = if escaped {
+                    LexState::String { escaped: false }
+                } else if byte == b'\\' {
+                    LexState::String { escaped: true }
+                } else if byte == b'"' {
+                    LexState::Code
+                } else {
+                    LexState::String { escaped: false }
+                };
+            }
+            LexState::RawString { hashes } => {
+                if bytes[index] == b'"'
+                    && bytes
+                        .get(index + 1..index + 1 + hashes)
+                        .is_some_and(|suffix| suffix.iter().all(|byte| *byte == b'#'))
+                {
+                    output.extend_from_slice(&bytes[index..index + 1 + hashes]);
+                    index += 1 + hashes;
+                    state = LexState::Code;
+                } else {
+                    output.push(bytes[index]);
+                    index += 1;
+                }
+            }
+            LexState::LineComment => {
+                let byte = bytes[index];
+                output.push(byte);
+                index += 1;
+                if byte == b'\n' {
+                    state = LexState::Code;
+                }
+            }
+            LexState::BlockComment { depth } => {
+                if bytes[index..].starts_with(b"/*") {
+                    output.extend_from_slice(b"/*");
+                    index += 2;
+                    state = LexState::BlockComment { depth: depth + 1 };
+                } else if bytes[index..].starts_with(b"*/") {
+                    output.extend_from_slice(b"*/");
+                    index += 2;
+                    state = if depth == 1 {
+                        LexState::Code
+                    } else {
+                        LexState::BlockComment { depth: depth - 1 }
+                    };
+                } else {
+                    output.push(bytes[index]);
+                    index += 1;
+                }
+            }
+        }
+    }
+
+    String::from_utf8(output).unwrap_or_else(|_| source.to_owned())
+}
+
+fn raw_string_opening(bytes: &[u8], start: usize) -> Option<(usize, usize)> {
+    let mut index = start;
+    if bytes.get(index) == Some(&b'b') {
+        index += 1;
+    }
+    if bytes.get(index) != Some(&b'r') {
+        return None;
+    }
+    index += 1;
+    let hashes_start = index;
+    while bytes.get(index) == Some(&b'#') {
+        index += 1;
+    }
+    (bytes.get(index) == Some(&b'"')).then_some((index + 1, index - hashes_start))
+}
+
+fn rust_char_literal_end(source: &str, start: usize) -> Option<usize> {
+    let bytes = source.as_bytes();
+    if bytes.get(start) != Some(&b'\'') {
+        return None;
+    }
+    let mut index = start + 1;
+    if bytes.get(index) == Some(&b'\\') {
+        index += 1;
+        match bytes.get(index).copied()? {
+            b'u' if bytes.get(index + 1) == Some(&b'{') => {
+                index += 2;
+                while bytes.get(index).is_some_and(|byte| *byte != b'}') {
+                    index += 1;
+                }
+                if bytes.get(index) != Some(&b'}') {
+                    return None;
+                }
+                index += 1;
+            }
+            b'x' => {
+                index += 3;
+            }
+            _ => {
+                let character = source.get(index..)?.chars().next()?;
+                index += character.len_utf8();
+            }
+        }
+    } else {
+        let character = source.get(index..)?.chars().next()?;
+        if character == '\n' || character == '\r' || character == '\'' {
+            return None;
+        }
+        index += character.len_utf8();
+    }
+    (bytes.get(index) == Some(&b'\'')).then_some(index + 1)
+}
+
+fn gen_project_app_rs(document: &ProjectDocument, aggregate: &UiTree, wasm: bool) -> String {
+    let mut document = document.clone();
+    let mut aggregate = aggregate.clone();
+    if wasm {
+        for surface in &mut document.surfaces {
+            replace_file_pickers(&mut surface.tree);
+        }
+        replace_file_pickers(&mut aggregate);
+    }
+
+    let root_tree = document
+        .materialized_tree(document.root_surface)
+        .unwrap_or_default();
+    let root_body =
+        strip_dialog_focus_markers(extract_widget_body(&gen_app_rs(&root_tree)), &root_tree);
+    let mut source = gen_app_rs(&aggregate);
+    if let (Some(start), Some(end)) = (source.find(WIDGETS_BEGIN), source.find(WIDGETS_END)) {
+        let body_start = start + WIDGETS_BEGIN.len();
+        source.replace_range(
+            body_start..end,
+            &format!(
+                "{root_body}        self.apply_pending_dialog_actions(ctx);\n\
+                 \x20       self.render_modals(ctx);\n\
+                 \x20       self.apply_pending_dialog_actions(ctx);\n"
+            ),
+        );
+    }
+
+    let runtime_types = gen_dialog_runtime_types(&document);
+    source = source.replacen(
+        "pub struct ExportedApp {",
+        &format!("{runtime_types}\npub struct ExportedApp {{"),
+        1,
+    );
+
+    let runtime_fields = gen_dialog_runtime_fields(&document);
+    source = source.replacen(
+        "pub struct ExportedApp {\n    pub state: AppState,\n",
+        &format!("pub struct ExportedApp {{\n    pub state: AppState,\n{runtime_fields}"),
+        1,
+    );
+    let runtime_defaults = gen_dialog_runtime_defaults(&document);
+    source = source.replace(
+        "            state: AppState::default(),\n",
+        &format!("            state: AppState::default(),\n{runtime_defaults}"),
+    );
+    source.push_str(&gen_dialog_runtime_impl(&document));
+    format!("use crate::surfaces;\n{source}")
+}
+
+fn replace_file_pickers(tree: &mut UiTree) {
+    for widget in &mut tree.widgets {
+        if widget.kind == WidgetKind::FilePicker {
+            widget.kind = WidgetKind::Label;
+        }
+    }
+}
+
+fn gen_dialog_runtime_types(document: &ProjectDocument) -> String {
+    let mut code = String::from(
+        "#[derive(Clone, Copy)]\n\
+         enum DialogAction {\n\
+         \x20   Open(&'static str),\n\
+         \x20   Accept(&'static str),\n\
+         \x20   Reject(&'static str),\n\
+         }\n\n",
+    );
+    for surface in modal_surfaces(document) {
+        let Some(tree) = document.materialized_tree(surface.id) else {
+            continue;
+        };
+        let collected = field_collector::collect(&tree);
+        let fields: Vec<_> = collected
+            .fields
+            .iter()
+            .filter(|field| crate::project::document::is_supported_dialog_field_type(&field.ty))
+            .collect();
+        for field in collected
+            .fields
+            .iter()
+            .filter(|field| !crate::project::document::is_supported_dialog_field_type(&field.ty))
+        {
+            code.push_str(&format!(
+                "// DIALOG DIAGNOSTIC: field {:?} with type {:?} is not transactional and was excluded from {}.\n",
+                field.name, field.ty, surface.name
+            ));
+        }
+        let draft_name = draft_type_name(surface);
+        code.push_str(&format!("#[derive(Clone)]\nstruct {draft_name} {{\n"));
+        for field in &fields {
+            code.push_str(&format!("    {}: {},\n", field.name, field.ty));
+        }
+        code.push_str("}\n\n");
+        code.push_str(&format!(
+            "impl {draft_name} {{\n    fn from_state(state: &AppState) -> Self {{\n        Self {{\n"
+        ));
+        for field in &fields {
+            code.push_str(&format!(
+                "            {}: state.{}.clone(),\n",
+                field.name, field.name
+            ));
+        }
+        code.push_str("        }\n    }\n\n    fn commit(self, state: &mut AppState) {\n");
+        for field in &fields {
+            code.push_str(&format!("        state.{0} = self.{0};\n", field.name));
+        }
+        code.push_str("    }\n}\n\n");
+    }
+    code
+}
+
+fn gen_dialog_runtime_fields(document: &ProjectDocument) -> String {
+    let mut code = String::from(
+        "    modal_stack: Vec<&'static str>,\n\
+         \x20   pending_dialog_actions: Vec<DialogAction>,\n\
+         \x20   dialog_diagnostics: Vec<String>,\n",
+    );
+    code.push_str(
+        "    dialog_focus_return: Vec<Option<egui::Id>>,\n\
+         \x20   dialog_initial_focus: Vec<&'static str>,\n",
+    );
+    for surface in modal_surfaces(document) {
+        code.push_str(&format!(
+            "    {}: Option<{}>,\n",
+            draft_field_name(surface),
+            draft_type_name(surface)
+        ));
+    }
+    code
+}
+
+fn gen_dialog_runtime_defaults(document: &ProjectDocument) -> String {
+    let mut code = String::from(
+        "            modal_stack: Vec::new(),\n\
+         \x20           pending_dialog_actions: Vec::new(),\n\
+         \x20           dialog_diagnostics: Vec::new(),\n",
+    );
+    code.push_str(
+        "            dialog_focus_return: Vec::new(),\n\
+         \x20           dialog_initial_focus: Vec::new(),\n",
+    );
+    for surface in modal_surfaces(document) {
+        code.push_str(&format!(
+            "            {}: None,\n",
+            draft_field_name(surface)
+        ));
+    }
+    code
+}
+
+fn gen_dialog_runtime_impl(document: &ProjectDocument) -> String {
+    let mut code = String::from(
+        "\nimpl ExportedApp {\n\
+         \x20   fn queue_dialog_action(&mut self, action: DialogAction) {\n\
+         \x20       self.pending_dialog_actions.push(action);\n\
+         \x20   }\n\n\
+         \x20   fn apply_pending_dialog_actions(&mut self, ctx: &egui::Context) {\n\
+         \x20       let mut processed = 0usize;\n\
+         \x20       while !self.pending_dialog_actions.is_empty() && processed < 64 {\n\
+         \x20           let actions = std::mem::take(&mut self.pending_dialog_actions);\n\
+         \x20           for action in actions {\n\
+         \x20               processed += 1;\n\
+         \x20               match action {\n",
+    );
+    code.push_str(&gen_open_action_match(document));
+    code.push_str(&gen_accept_action_match(document));
+    code.push_str(&gen_reject_action_match(document));
+    code.push_str(
+        "                }\n\
+         \x20           }\n\
+         \x20       }\n\
+         \x20       if processed >= 64 && !self.pending_dialog_actions.is_empty() {\n\
+         \x20           self.pending_dialog_actions.clear();\n\
+         \x20           self.dialog_diagnostics.push(\"Dialog action dispatch limit reached\".to_owned());\n\
+         \x20       }\n\
+         \x20   }\n\n\
+         \x20   fn restore_dialog_focus(&mut self, ctx: &egui::Context) {\n\
+         \x20       if let Some(Some(id)) = self.dialog_focus_return.pop() {\n\
+         \x20           ctx.memory_mut(|memory| memory.request_focus(id));\n\
+         \x20       }\n\
+         \x20   }\n\n\
+         \x20   fn render_modals(&mut self, ctx: &egui::Context) {\n\
+         \x20       let open = self.modal_stack.clone();\n\
+         \x20       for surface in open {\n\
+         \x20           let _ = surface;\n",
+    );
+    for surface in modal_surfaces(document) {
+        let module = surface_module_name(surface);
+        code.push_str(&format!(
+            "            if surface == surfaces::{module}::ID {{ self.render_{module}(ctx); }}\n"
+        ));
+    }
+    code.push_str(
+        "        }\n\
+         \x20   }\n",
+    );
+    for surface in modal_surfaces(document) {
+        code.push_str(&gen_modal_render_method(document, surface));
+    }
+    code.push_str("}\n");
+    code
+}
+
+fn gen_open_action_match(document: &ProjectDocument) -> String {
+    let mut code = String::from(
+        "                    DialogAction::Open(surface) => {\n\
+         \x20                       if self.modal_stack.contains(&surface) {\n\
+         \x20                           self.dialog_diagnostics.push(format!(\"Dialog {surface} is already open\"));\n\
+         \x20                           continue;\n\
+         \x20                       }\n\
+         \x20                       if self.modal_stack.len() >= 16 {\n\
+         \x20                           self.dialog_diagnostics.push(\"Modal stack limit reached\".to_owned());\n\
+         \x20                           continue;\n\
+         \x20                       }\n\
+         \x20                       match surface {\n",
+    );
+    for surface in modal_surfaces(document) {
+        let module = surface_module_name(surface);
+        let field = draft_field_name(surface);
+        let draft = draft_type_name(surface);
+        let opened = crate::codegen::behavior::statements_for_surface_event(
+            document,
+            surface.id,
+            crate::project::schema::SurfaceEvent::Opened,
+            "state.",
+            "                                ",
+        );
+        code.push_str(&format!(
+            "                            surfaces::{module}::ID => {{\n\
+             \x20                               self.dialog_focus_return.push(ctx.memory(|memory| memory.focused()));\n\
+             \x20                               self.dialog_initial_focus.push(surfaces::{module}::ID);\n\
+             \x20                               self.{field} = Some({draft}::from_state(&self.state));\n\
+             \x20                               self.modal_stack.push(surfaces::{module}::ID);\n\
+             {opened}                            }}\n"
+        ));
+    }
+    code.push_str(
+        "                            _ => self.dialog_diagnostics.push(format!(\"Missing modal surface {surface}\")),\n\
+         \x20                       }\n\
+         \x20                   }\n",
+    );
+    code
+}
+
+fn gen_accept_action_match(document: &ProjectDocument) -> String {
+    let mut code = String::from(
+        "                    DialogAction::Accept(surface) => {\n\
+         \x20                       if self.modal_stack.last().copied() != Some(surface) {\n\
+         \x20                           self.dialog_diagnostics.push(format!(\"Only the topmost dialog can be accepted: {surface}\"));\n\
+         \x20                           continue;\n\
+         \x20                       }\n",
+    );
+    for surface in modal_surfaces(document) {
+        let module = surface_module_name(surface);
+        let field = draft_field_name(surface);
+        let accepted = crate::codegen::behavior::statements_for_surface_event(
+            document,
+            surface.id,
+            crate::project::schema::SurfaceEvent::Accepted,
+            "state.",
+            "                                ",
+        );
+        let closed = crate::codegen::behavior::statements_for_surface_event(
+            document,
+            surface.id,
+            crate::project::schema::SurfaceEvent::Closed,
+            "state.",
+            "                                ",
+        );
+        code.push_str(&format!(
+            "                        if surface == surfaces::{module}::ID {{\n\
+             \x20                           if let Some(draft) = self.{field}.take() {{ draft.commit(&mut self.state); }}\n\
+             \x20                           self.modal_stack.pop();\n\
+             \x20                           self.dialog_initial_focus.retain(|pending| *pending != surface);\n\
+             \x20                           self.restore_dialog_focus(ctx);\n\
+             {accepted}{closed}                        }}\n"
+        ));
+    }
+    code.push_str("                    }\n");
+    code
+}
+
+fn gen_reject_action_match(document: &ProjectDocument) -> String {
+    let mut code = String::from(
+        "                    DialogAction::Reject(surface) => {\n\
+         \x20                       if self.modal_stack.last().copied() != Some(surface) {\n\
+         \x20                           self.dialog_diagnostics.push(format!(\"Only the topmost dialog can be rejected: {surface}\"));\n\
+         \x20                           continue;\n\
+         \x20                       }\n",
+    );
+    for surface in modal_surfaces(document) {
+        let module = surface_module_name(surface);
+        let field = draft_field_name(surface);
+        let rejected = crate::codegen::behavior::statements_for_surface_event(
+            document,
+            surface.id,
+            crate::project::schema::SurfaceEvent::Rejected,
+            "state.",
+            "                                ",
+        );
+        let closed = crate::codegen::behavior::statements_for_surface_event(
+            document,
+            surface.id,
+            crate::project::schema::SurfaceEvent::Closed,
+            "state.",
+            "                                ",
+        );
+        code.push_str(&format!(
+            "                        if surface == surfaces::{module}::ID {{\n\
+             \x20                           self.{field} = None;\n\
+             \x20                           self.modal_stack.pop();\n\
+             \x20                           self.dialog_initial_focus.retain(|pending| *pending != surface);\n\
+             \x20                           self.restore_dialog_focus(ctx);\n\
+             {rejected}{closed}                        }}\n"
+        ));
+    }
+    code.push_str("                    }\n");
+    code
+}
+
+fn gen_modal_render_method(document: &ProjectDocument, surface: &UiSurface) -> String {
+    let module = surface_module_name(surface);
+    let field = draft_field_name(surface);
+    let Some(tree) = document.materialized_tree(surface.id) else {
+        return String::new();
+    };
+    let SurfaceKind::ModalDialog(policy) = &surface.kind else {
+        return String::new();
+    };
+    let default_target = resolve_dialog_button_target(
+        &tree.widgets,
+        policy.default_button,
+        DialogButtonRole::Accept,
+    );
+    let initial_focus_target =
+        resolve_dialog_initial_focus_target(&tree.widgets, policy.default_button);
+    let body = rewrite_dialog_button_roles(
+        replace_state_path_in_rust_code(&extract_widget_body(&gen_app_rs(&tree))),
+        &tree,
+        surface,
+        initial_focus_target,
+    );
+    let default_action = default_target
+        .map(|target| gen_modal_target_activation(&tree, surface, target, false))
+        .unwrap_or_default();
+    let reject_action = resolve_dialog_button_target(
+        &tree.widgets,
+        policy.reject_button,
+        DialogButtonRole::Reject,
+    )
+    .map(|target| gen_modal_target_activation(&tree, surface, target, true))
+    .unwrap_or_else(|| {
+        format!("self.queue_dialog_action(DialogAction::Reject(surfaces::{module}::ID));")
+    });
+    let escape_block = if policy.reject_on_escape {
+        format!(
+            "        if is_top && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {{ {reject_action} }}\n"
+        )
+    } else {
+        String::new()
+    };
+    let backdrop_block = if policy.close_on_backdrop {
+        format!(
+            "        if is_top && response.backdrop_response.clicked() {{ self.queue_dialog_action(DialogAction::Reject(surfaces::{module}::ID)); }}\n"
+        )
+    } else {
+        String::new()
+    };
+    let initial_focus_fallback = if initial_focus_target.is_none() {
+        "        if request_initial_focus { response.response.request_focus(); }\n"
+    } else {
+        ""
+    };
+    format!(
+        "\n    fn render_{module}(&mut self, ctx: &egui::Context) {{\n\
+         \x20       if !self.modal_stack.contains(&surfaces::{module}::ID) {{ return; }}\n\
+         \x20       let Some(mut draft) = self.{field}.take() else {{ return; }};\n\
+         \x20       let request_initial_focus = self.dialog_initial_focus.contains(&surfaces::{module}::ID);\n\
+         \x20       let response = egui::Modal::new(egui::Id::new(surfaces::{module}::ID)).show(ctx, |ui| {{\n\
+         \x20           ui.set_min_size(egui::vec2({:.1}, {:.1}));\n\
+         \x20           ui.heading(surfaces::{module}::TITLE);\n\
+         \x20           ui.separator();\n\
+         {body}        }});\n\
+         \x20       let _ = &response;\n\
+         {initial_focus_fallback}        self.dialog_initial_focus.retain(|pending| *pending != surfaces::{module}::ID);\n\
+         \x20       let is_top = self.modal_stack.last().copied() == Some(surfaces::{module}::ID);\n\
+         \x20       if is_top && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {{ {default_action} }}\n\
+         {escape_block}{backdrop_block}\
+         \x20       self.{field} = Some(draft);\n\
+         \x20   }}\n",
+        surface.props.size[0], surface.props.size[1],
+    )
+}
+
+fn gen_modal_target_activation(
+    tree: &UiTree,
+    surface: &UiSurface,
+    target: DialogButtonTarget,
+    reject_fallback: bool,
+) -> String {
+    match target {
+        DialogButtonTarget::Widget(widget) => {
+            gen_modal_button_activation(tree, widget, surface.id, reject_fallback)
+        }
+        DialogButtonTarget::Role { widget, role } => {
+            gen_modal_role_activation(tree, surface, widget, role)
+        }
+    }
+}
+
+fn gen_modal_role_activation(
+    tree: &UiTree,
+    surface: &UiSurface,
+    widget: Uuid,
+    role: DialogButtonRole,
+) -> String {
+    let module = surface_module_name(surface);
+    match role {
+        DialogButtonRole::Accept => {
+            format!("self.queue_dialog_action(DialogAction::Accept(surfaces::{module}::ID));")
+        }
+        DialogButtonRole::Reject => {
+            format!("self.queue_dialog_action(DialogAction::Reject(surfaces::{module}::ID));")
+        }
+        DialogButtonRole::Apply => "draft.clone().commit(&mut self.state);".to_owned(),
+        DialogButtonRole::Reset => {
+            format!(
+                "draft = {}::from_state(&self.state);",
+                draft_type_name(surface)
+            )
+        }
+        DialogButtonRole::Help | DialogButtonRole::Action => {
+            gen_modal_button_activation(tree, widget, surface.id, false)
+        }
+    }
+}
+
+fn rewrite_dialog_button_roles(
+    mut body: String,
+    tree: &UiTree,
+    surface: &UiSurface,
+    default_target: Option<DialogButtonTarget>,
+) -> String {
+    for widget in &tree.widgets {
+        let focus = matches!(
+            default_target,
+            Some(DialogButtonTarget::Widget(target)) if target == widget.id
+        );
+        body = body.replace(
+            &dialog_widget_focus_marker(widget.id),
+            if focus {
+                "if request_initial_focus { evt_response.request_focus(); }"
+            } else {
+                ""
+            },
+        );
+        body = body.replace(
+            &dialog_child_focus_marker(widget.id),
+            if focus {
+                "if request_initial_focus { child_response.request_focus(); }"
+            } else {
+                ""
+            },
+        );
+    }
+
+    let mut role_focus_assigned = false;
+    for widget in tree
+        .widgets
+        .iter()
+        .filter(|widget| widget.kind == WidgetKind::DialogButtonBox)
+    {
+        for (index, button) in crate::project::schema::effective_dialog_buttons(&widget.props)
+            .iter()
+            .enumerate()
+        {
+            let focus = !role_focus_assigned
+                && matches!(
+                    default_target,
+                    Some(DialogButtonTarget::Role { widget: target, role })
+                        if target == widget.id && role == button.role
+                );
+            if focus {
+                role_focus_assigned = true;
+            }
+            body = body.replace(
+                &dialog_button_focus_marker(widget.id, index),
+                if focus {
+                    "if request_initial_focus { dialog_button_response.request_focus(); }"
+                } else {
+                    ""
+                },
+            );
+            body = body.replace(
+                &dialog_button_marker(widget.id, index),
+                &gen_modal_role_activation(tree, surface, widget.id, button.role),
+            );
+        }
+    }
+    body
+}
+
+fn strip_dialog_focus_markers(mut body: String, tree: &UiTree) -> String {
+    for widget in &tree.widgets {
+        body = body.replace(&dialog_widget_focus_marker(widget.id), "");
+        body = body.replace(&dialog_child_focus_marker(widget.id), "");
+        if widget.kind == WidgetKind::DialogButtonBox {
+            for index in 0..crate::project::schema::effective_dialog_buttons(&widget.props).len() {
+                body = body.replace(&dialog_button_focus_marker(widget.id, index), "");
+            }
+        }
+    }
+    body
+}
+
+fn dialog_button_marker(widget: Uuid, index: usize) -> String {
+    format!("/* ROHKAI_DIALOG_BUTTON_{}_{index} */", widget.as_simple())
+}
+
+fn dialog_button_focus_marker(widget: Uuid, index: usize) -> String {
+    format!(
+        "/* ROHKAI_DIALOG_FOCUS_BUTTON_{}_{index} */",
+        widget.as_simple()
+    )
+}
+
+fn dialog_widget_focus_marker(widget: Uuid) -> String {
+    format!("/* ROHKAI_DIALOG_FOCUS_{} */", widget.as_simple())
+}
+
+fn dialog_child_focus_marker(widget: Uuid) -> String {
+    format!("/* ROHKAI_DIALOG_FOCUS_CHILD_{} */", widget.as_simple())
+}
+
+fn gen_modal_button_activation(
+    tree: &UiTree,
+    widget_id: Uuid,
+    surface_id: Uuid,
+    reject_fallback: bool,
+) -> String {
+    let code = crate::codegen::behavior::statements_for_event(
+        tree,
+        widget_id,
+        WidgetEvent::Click,
+        "state.",
+        "",
+    );
+    let mut code = replace_state_path_in_rust_code(&code);
+    if let Some(widget) = tree.widgets.iter().find(|widget| widget.id == widget_id)
+        && let Some(handler) = event_field_handler(widget, WidgetEvent::Click)
+    {
+        code.push_str(&crate::codegen::rust_wiring::handler_call(
+            handler,
+            widget.async_handler,
+            &widget.handler_result,
+            "",
+        ));
+    }
+    if code.trim().is_empty() && reject_fallback {
+        code = format!(
+            "self.queue_dialog_action(DialogAction::Reject({:?}));",
+            surface_id.to_string()
+        );
+    }
+    code
+}
+
+fn modal_surfaces(document: &ProjectDocument) -> impl Iterator<Item = &UiSurface> {
+    document
+        .surfaces
+        .iter()
+        .filter(|surface| matches!(surface.kind, SurfaceKind::ModalDialog(_)))
+}
+
+fn draft_field_name(surface: &UiSurface) -> String {
+    format!("{}_draft", surface_module_name(surface))
+}
+
+fn draft_type_name(surface: &UiSurface) -> String {
+    let module = surface_module_name(surface);
+    let mut name = String::from("Draft");
+    for part in module.split('_').filter(|part| !part.is_empty()) {
+        let mut chars = part.chars();
+        if let Some(first) = chars.next() {
+            name.extend(first.to_uppercase());
+            name.extend(chars);
+        }
+    }
+    name
 }
 
 fn gen_cargo_toml_wasm() -> String {
@@ -476,7 +1407,9 @@ fn gen_app_rs(tree: &UiTree) -> String {
     s.push_str("}\n\n");
 
     // Default impl
-    s.push_str("impl Default for AppState {\n    fn default() -> Self {\n        Self {\n");
+    s.push_str(
+        "#[allow(clippy::derivable_impls)]\nimpl Default for AppState {\n    fn default() -> Self {\n        Self {\n",
+    );
     for f in fields {
         s.push_str(&format!("            {}: {},\n", f.name, f.default_expr));
     }
@@ -515,13 +1448,17 @@ fn gen_app_rs(tree: &UiTree) -> String {
     // so when channels (or async tasks) exist we build them in a `fn default()` body.
     let needs_default_body = !channel_pairs.is_empty() || !async_handlers.is_empty();
     if !needs_default_body {
-        s.push_str("impl Default for ExportedApp {\n    fn default() -> Self {\n        Self {\n            state: AppState::default(),\n");
+        s.push_str(
+            "#[allow(clippy::derivable_impls)]\nimpl Default for ExportedApp {\n    fn default() -> Self {\n        Self {\n            state: AppState::default(),\n",
+        );
         if has_images {
             s.push_str("            svg_textures: HashMap::new(),\n");
         }
         s.push_str("        }\n    }\n}\n\n");
     } else {
-        s.push_str("impl Default for ExportedApp {\n    fn default() -> Self {\n");
+        s.push_str(
+            "#[allow(clippy::derivable_impls)]\nimpl Default for ExportedApp {\n    fn default() -> Self {\n",
+        );
         for (_, init) in &channel_pairs {
             if !init.is_empty() {
                 s.push_str(init);
@@ -576,6 +1513,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
     }
     s.push_str(&gen_theme_setup(&tree.app_props.theme));
     s.push_str("        egui::CentralPanel::default().show_inside(root_ui, |_ui| {});\n");
+    s.push_str("        // ROHKAI_WIDGETS_BEGIN\n");
 
     let child_ids: HashSet<Uuid> = tree
         .widgets
@@ -1080,10 +2018,17 @@ fn gen_app_rs(tree: &UiTree) -> String {
             }
             WidgetKind::DialogButtonBox => {
                 let mut s = String::from("                ui.horizontal(|ui| {\n");
-                for opt in &w.props.options {
+                for (index, button) in crate::project::schema::effective_dialog_buttons(&w.props)
+                    .iter()
+                    .enumerate()
+                {
                     s.push_str(&format!(
-                        "                    if ui.button({}).clicked() {{}}\n",
-                        string_literal(opt)
+                        "                    let dialog_button_response = ui.button({});\n\
+                         \x20                   {}\n\
+                         \x20                   if dialog_button_response.clicked() {{ {} }}\n",
+                        string_literal(&button.label),
+                        dialog_button_focus_marker(w.id, index),
+                        dialog_button_marker(w.id, index),
                     ));
                 }
                 s.push_str("                });\n");
@@ -1214,6 +2159,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
         s.push_str(&line);
         s.push_str("            });\n");
     }
+    s.push_str("        // ROHKAI_WIDGETS_END\n");
     s.push_str("    }\n}\n");
 
     // Iterator-pipeline methods + handler stubs + Image helpers
@@ -1385,10 +2331,12 @@ fn event_dispatch_block(
             arms.push((event_egui_method(ev), handler, behavior_stmts));
         }
     }
-    if arms.is_empty() {
-        return format!("                {resp_expr};\n");
-    }
-    let mut code = format!("                let evt_response = {resp_expr};\n");
+    let mut code = format!(
+        "                let evt_response = {resp_expr};\n\
+         \x20               {}\n\
+         \x20               let _ = &evt_response;\n",
+        dialog_widget_focus_marker(w.id)
+    );
     for (method, handler, behavior_stmts) in arms {
         code.push_str(&format!(
             "                if evt_response.{method}() {{\n{behavior_stmts}"
@@ -1479,10 +2427,12 @@ fn export_child_event_dispatch(
             arms.push((event_egui_method(ev), handler, behavior_stmts));
         }
     }
-    if arms.is_empty() {
-        return format!("                        {resp_expr};\n");
-    }
-    let mut code = format!("                        let child_response = {resp_expr};\n");
+    let mut code = format!(
+        "                        let child_response = {resp_expr};\n\
+         \x20                       {}\n\
+         \x20                       let _ = &child_response;\n",
+        dialog_child_focus_marker(child.id)
+    );
     for (method, handler, behavior_stmts) in arms {
         code.push_str(&format!(
             "                        if child_response.{method}() {{\n{behavior_stmts}"
@@ -1688,9 +2638,27 @@ fn export_child_line(
         WidgetKind::CommandLinkButton => format!(
             "                        if ui.put({rect_expr}, egui::Button::new({child_label})).clicked() {{}}\n"
         ),
-        WidgetKind::DialogButtonBox => format!(
-            "                        ui.put({rect_expr}, egui::Label::new({child_label})); // DialogButtonBox\n"
-        ),
+        WidgetKind::DialogButtonBox => {
+            let mut code = format!(
+                "                        ui.scope_builder(egui::UiBuilder::new().max_rect({rect_expr}), |ui| {{\n"
+            );
+            code.push_str("                            ui.horizontal(|ui| {\n");
+            for (index, button) in crate::project::schema::effective_dialog_buttons(&child.props)
+                .iter()
+                .enumerate()
+            {
+                code.push_str(&format!(
+                    "                                let dialog_button_response = ui.button({});\n\
+                     \x20                               {}\n\
+                     \x20                               if dialog_button_response.clicked() {{ {} }}\n",
+                    string_literal(&button.label),
+                    dialog_button_focus_marker(child.id, index),
+                    dialog_button_marker(child.id, index),
+                ));
+            }
+            code.push_str("                            });\n                        });\n");
+            code
+        }
         WidgetKind::MathLabel => {
             let label_lit = string_literal(&child.props.label);
             let decimals = child.props.formula_decimals;
@@ -2261,6 +3229,28 @@ mod tests {
             !generated.contains("self.state.type,") && !generated.contains("&mut self.state.type)"),
             "raw keyword must not appear as a field reference: {generated}"
         );
+    }
+
+    #[test]
+    fn modal_state_path_rewrite_skips_rust_literals_and_comments() {
+        let source = concat!(
+            "self.state.name = \"self.state.literal\".to_owned();\n",
+            "let raw = r#\"self.state.raw\"#;\n",
+            "let byte = b\"self.state.bytes\";\n",
+            "let ch = 's';\n",
+            "// self.state.line_comment\n",
+            "/* self.state.block_comment */\n",
+            "let shared: &'static str = &self.state.name;\n",
+        );
+
+        let rewritten = replace_state_path_in_rust_code(source);
+
+        assert!(rewritten.contains("draft.name = \"self.state.literal\""));
+        assert!(rewritten.contains("r#\"self.state.raw\"#"));
+        assert!(rewritten.contains("b\"self.state.bytes\""));
+        assert!(rewritten.contains("// self.state.line_comment"));
+        assert!(rewritten.contains("/* self.state.block_comment */"));
+        assert!(rewritten.contains("&'static str = &draft.name"));
     }
 
     #[test]
@@ -3994,27 +4984,27 @@ mod tests {
             ..Default::default()
         };
         tree.app_props.behaviors = vec![
-            crate::project::schema::Behavior {
-                id: Uuid::from_u128(0xB0),
-                source_widget: behavior_btn_id,
-                event: crate::project::schema::WidgetEvent::Click,
-                target_widget: Some(behavior_bar_id),
-                action: crate::project::schema::VisualAction::Add {
+            crate::project::schema::Behavior::widget(
+                Uuid::from_u128(0xB0),
+                behavior_btn_id,
+                crate::project::schema::WidgetEvent::Click,
+                Some(behavior_bar_id),
+                crate::project::schema::VisualAction::Add {
                     field: "behavior_progress".to_owned(),
                     amount: 0.1,
                     min: Some(0.0),
                     max: Some(1.0),
                 },
-            },
-            crate::project::schema::Behavior {
-                id: Uuid::from_u128(0xB1),
-                source_widget: behavior_btn_id,
-                event: crate::project::schema::WidgetEvent::DoubleClick,
-                target_widget: None,
-                action: crate::project::schema::VisualAction::CallHandler {
+            ),
+            crate::project::schema::Behavior::widget(
+                Uuid::from_u128(0xB1),
+                behavior_btn_id,
+                crate::project::schema::WidgetEvent::DoubleClick,
+                None,
+                crate::project::schema::VisualAction::CallHandler {
                     handler: "behavior_bridge".to_owned(),
                 },
-            },
+            ),
         ];
         tree.app_props.rust_wiring = RustWiring {
             channels: vec![ChannelDef {
@@ -4375,18 +5365,18 @@ mod tests {
             widgets,
             ..Default::default()
         };
-        tree.app_props.behaviors = vec![Behavior {
-            id: Uuid::from_u128(0xBB4),
-            source_widget: btn_id,
-            event: WidgetEvent::Click,
-            target_widget: Some(bar_id),
-            action: VisualAction::Add {
+        tree.app_props.behaviors = vec![Behavior::widget(
+            Uuid::from_u128(0xBB4),
+            btn_id,
+            WidgetEvent::Click,
+            Some(bar_id),
+            VisualAction::Add {
                 field: "progress".to_owned(),
                 amount: 0.1,
                 min: Some(0.0),
                 max: Some(1.0),
             },
-        }];
+        )];
         tree
     }
 
@@ -4439,15 +5429,15 @@ mod tests {
     fn call_handler_behavior_generates_stub_and_call() {
         use crate::project::schema::{Behavior, VisualAction, WidgetEvent};
         let mut tree = behavior_tree(None);
-        tree.app_props.behaviors.push(Behavior {
-            id: Uuid::from_u128(0xBB5),
-            source_widget: tree.widgets[0].id,
-            event: WidgetEvent::Click,
-            target_widget: None,
-            action: VisualAction::CallHandler {
+        tree.app_props.behaviors.push(Behavior::widget(
+            Uuid::from_u128(0xBB5),
+            tree.widgets[0].id,
+            WidgetEvent::Click,
+            None,
+            VisualAction::CallHandler {
                 handler: "bridge".to_owned(),
             },
-        });
+        ));
         let g = gen_app_rs(&tree);
         assert!(g.contains("self.bridge();"), "call site:\n{g}");
         assert!(g.contains("fn bridge(&mut self)"), "stub:\n{g}");

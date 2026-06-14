@@ -2,7 +2,10 @@
 
 use crate::project::{
     document::{ActiveDocument, ModalDialogProps, ProjectDocument, SurfaceKind},
-    schema::{Rect, WidgetInstance, WidgetKind, WidgetProps},
+    schema::{
+        Behavior, DialogButtonRole, DialogButtonSpec, Rect, SurfaceEvent, VisualAction,
+        WidgetInstance, WidgetKind, WidgetProps, is_dialog_action_widget,
+    },
     ui_tree::UiTree,
 };
 use uuid::Uuid;
@@ -36,6 +39,8 @@ pub enum SurfaceAction {
     Delete(Uuid),
     MoveUp(Uuid),
     MoveDown(Uuid),
+    Preview(Uuid),
+    WireSelectedToOpen(Uuid),
 }
 
 pub fn show_content(
@@ -83,7 +88,21 @@ pub fn show_content(
             }
             if is_root {
                 ui.label(egui::RichText::new("root").small().weak());
+                if ui
+                    .small_button("▶")
+                    .on_hover_text("Preview this surface")
+                    .clicked()
+                {
+                    action = SurfaceAction::Preview(surface.id);
+                }
                 return;
+            }
+            if ui
+                .small_button("▶")
+                .on_hover_text("Preview this surface in isolation")
+                .clicked()
+            {
+                action = SurfaceAction::Preview(surface.id);
             }
             if ui.small_button("↑").on_hover_text("Move up").clicked() {
                 action = SurfaceAction::MoveUp(surface.id);
@@ -97,6 +116,13 @@ pub fn show_content(
                 .clicked()
             {
                 action = SurfaceAction::Duplicate(surface.id);
+            }
+            if ui
+                .small_button("↗")
+                .on_hover_text("Open this dialog from the selected widget")
+                .clicked()
+            {
+                action = SurfaceAction::WireSelectedToOpen(surface.id);
             }
             if ui
                 .small_button("×")
@@ -140,16 +166,37 @@ pub fn show_tabs(
     requested
 }
 
-pub fn show_active_surface_properties(ui: &mut egui::Ui, active: &mut ActiveDocument) {
+pub fn show_active_surface_properties(
+    ui: &mut egui::Ui,
+    active: &mut ActiveDocument,
+    selected_behavior: &mut Option<Uuid>,
+) {
     let active_id = active.active_surface_id();
-    let mut surface_name = active.active_surface().name.clone();
+    let persisted_name = active.active_surface().name.clone();
+    let name_draft_id = egui::Id::new(("surface_name_draft", active_id));
+    let mut surface_name = ui
+        .data(|data| data.get_temp::<String>(name_draft_id))
+        .unwrap_or_else(|| persisted_name.clone());
     ui.label(egui::RichText::new("Surface").strong());
-    ui.horizontal(|ui| {
-        ui.label("Name");
-        if ui.text_edit_singleline(&mut surface_name).changed() {
-            let _ = active.rename_surface(active_id, &surface_name);
-        }
-    });
+    let name_response = ui
+        .horizontal(|ui| {
+            ui.label("Name");
+            ui.text_edit_singleline(&mut surface_name)
+        })
+        .inner;
+    if name_response.changed() {
+        ui.data_mut(|data| data.insert_temp(name_draft_id, surface_name.clone()));
+    }
+    let commit_name = name_response.lost_focus()
+        || (name_response.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)));
+    if commit_name {
+        let _ = active.rename_surface(active_id, &surface_name);
+        surface_name = active.active_surface().name.clone();
+        ui.data_mut(|data| data.insert_temp(name_draft_id, surface_name.clone()));
+    } else if !name_response.has_focus() && surface_name != persisted_name {
+        surface_name.clone_from(&persisted_name);
+        ui.data_mut(|data| data.insert_temp(name_draft_id, surface_name.clone()));
+    }
     ui.separator();
 
     egui::Grid::new(("surface_props", active_id))
@@ -199,15 +246,7 @@ pub fn show_active_surface_properties(ui: &mut egui::Ui, active: &mut ActiveDocu
     let buttons: Vec<(Uuid, String)> = active
         .widgets
         .iter()
-        .filter(|widget| {
-            matches!(
-                widget.kind,
-                WidgetKind::Button
-                    | WidgetKind::ToolButton
-                    | WidgetKind::CommandLinkButton
-                    | WidgetKind::DialogButtonBox
-            )
-        })
+        .filter(|widget| is_dialog_action_widget(&widget.kind))
         .map(|widget| (widget.id, widget.props.label.clone()))
         .collect();
     changed |= button_role_picker(
@@ -227,6 +266,82 @@ pub fn show_active_surface_properties(ui: &mut egui::Ui, active: &mut ActiveDocu
     if changed {
         let _ = active.set_modal_dialog_props(modal);
     }
+
+    ui.separator();
+    ui.label(egui::RichText::new("Lifecycle Behaviors").strong());
+    ui.label(
+        egui::RichText::new("Run visual actions when this dialog opens or closes.")
+            .small()
+            .weak(),
+    );
+    for event in SurfaceEvent::ALL {
+        let existing: Vec<(Uuid, String)> = active
+            .app_props
+            .behaviors
+            .iter()
+            .filter(|behavior| {
+                behavior.source_surface() == Some(active_id)
+                    && behavior.surface_event() == Some(event)
+            })
+            .map(|behavior| (behavior.id, behavior.action.label().to_owned()))
+            .collect();
+        ui.horizontal(|ui| {
+            ui.label(event.label());
+            for (behavior, action) in &existing {
+                if ui
+                    .selectable_label(*selected_behavior == Some(*behavior), action)
+                    .clicked()
+                {
+                    *selected_behavior = Some(*behavior);
+                }
+            }
+            if ui.small_button("+").on_hover_text("Add behavior").clicked() {
+                let behavior = Behavior::surface(
+                    Uuid::new_v4(),
+                    active_id,
+                    event,
+                    VisualAction::CallHandler {
+                        handler: lifecycle_handler_name(&surface_name, event),
+                    },
+                );
+                *selected_behavior = Some(behavior.id);
+                active.app_props.behaviors.push(behavior);
+            }
+        });
+    }
+
+    let diagnostics: Vec<_> = active
+        .snapshot()
+        .diagnostics()
+        .into_iter()
+        .filter(|diagnostic| diagnostic.surface.is_none() || diagnostic.surface == Some(active_id))
+        .collect();
+    if !diagnostics.is_empty() {
+        ui.separator();
+        ui.label(
+            egui::RichText::new("Surface Diagnostics")
+                .strong()
+                .color(egui::Color32::from_rgb(248, 113, 113)),
+        );
+        for diagnostic in diagnostics {
+            ui.label(
+                egui::RichText::new(format!("• {}", diagnostic.message))
+                    .small()
+                    .color(egui::Color32::from_rgb(248, 113, 113)),
+            );
+        }
+    }
+}
+
+fn lifecycle_handler_name(surface_name: &str, event: SurfaceEvent) -> String {
+    let surface = crate::codegen::rust::effective_binding(surface_name);
+    let event = match event {
+        SurfaceEvent::Opened => "opened",
+        SurfaceEvent::Accepted => "accepted",
+        SurfaceEvent::Rejected => "rejected",
+        SurfaceEvent::Closed => "closed",
+    };
+    format!("{surface}_{event}")
 }
 
 fn button_role_picker(
@@ -309,6 +424,16 @@ fn dialog_button_box(y: f32) -> WidgetInstance {
         props: WidgetProps {
             label: "Dialog actions".to_owned(),
             options: vec!["OK".to_owned(), "Cancel".to_owned()],
+            dialog_buttons: vec![
+                DialogButtonSpec {
+                    label: "OK".to_owned(),
+                    role: DialogButtonRole::Accept,
+                },
+                DialogButtonSpec {
+                    label: "Cancel".to_owned(),
+                    role: DialogButtonRole::Reject,
+                },
+            ],
             ..Default::default()
         },
         ..Default::default()

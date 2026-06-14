@@ -5,18 +5,27 @@ Single binary; no platform-specific dialog layer beyond `rfd` for file pickers.
 
 ---
 
-## Data model — `UiTree` as single source of truth
+## Data model - `ProjectDocument` with surface-local `UiTree`
 
 ```
 src/project/
   schema.rs      — WidgetKind, WidgetProps, Rect, WidgetInstance
+  document.rs    — ProjectDocument, UiSurface, SurfaceKind, ActiveDocument
   ui_tree.rs     — UiTree (owns Vec<WidgetInstance>)
   io.rs          — save/load (serde_json ↔ .rohkai.json)
 src/settings.rs  — user-level Preferences, saved outside project files
 ```
 
-`UiTree` is the **only** authoritative state for what is on the canvas.
-All panels read from it; the canvas mutates it in-place through `tree.get_mut(id)`.
+`ProjectDocument` is the project source of truth. It owns global `ProjectProps`,
+the protected root-surface ID, and every `UiSurface`. Each surface owns exactly
+one `UiTree`, and that tree is the sole canvas/code source for that surface.
+`ActiveDocument` adapts the currently active surface to the existing `UiTree`
+mutation API so panels do not keep a second copy.
+
+Global behaviors, components, assets, theme, and Rust wiring belong to
+`ProjectProps`. Surface title, size, constraints, guides, bezel settings, and
+modal policy belong to `SurfaceProps` / `SurfaceKind`. Widget instances and
+surface-local compatibility `AppProps` remain inside each `UiTree`.
 
 ### Schema types
 
@@ -26,21 +35,26 @@ All panels read from it; the canvas mutates it in-place through `tree.get_mut(id
 | `WidgetProps` | Per-widget content and behaviour knobs (see table below) |
 | `Rect` | `{ x, y, w, h }` in canvas-local pixels; default `(20, 20, 120, 32)` |
 | `WidgetInstance` | Full widget node (see table below) |
-| `UiTree` | `{ widgets: Vec<WidgetInstance>, app_props: AppProps }` |
+| `UiTree` | Surface-local `{ widgets: Vec<WidgetInstance>, app_props: AppProps }` |
+| `UiSurface` | Stable ID, name, kind, surface properties, and one `UiTree` |
+| `SurfaceKind` | `MainWindow` or `ModalDialog(ModalDialogProps)` |
+| `ProjectDocument` | Global properties, protected root ID, ordered surfaces |
 
 `Custom(String)` holds the descriptor id (e.g. `"ply.button"`).
 `Image` holds SVG source in `WidgetInstance.svg_source`.
 
 ### Behavior graph (visual event wiring)
 
-`AppProps.behaviors: Vec<Behavior>` is the beginner-facing counterpart to
-Stage 11 Global Rust Wiring (the advanced app-wide escape hatch). Each
-`Behavior` is one wire: `source_widget` +
-`event: WidgetEvent` + optional `target_widget` (canvas presentation only) +
+`ProjectProps.behaviors: Vec<Behavior>` is the beginner-facing counterpart to
+Stage 11 Global Rust Wiring (the advanced app-wide escape hatch).
+`BehaviorTrigger` is either a widget event or a surface lifecycle event
+(`Opened`, `Accepted`, `Rejected`, `Closed`). Each behavior has an optional
+target widget (canvas presentation only) and a
 `action: VisualAction` (`Set`/`Add`/`Subtract`/`Toggle`/`CallHandler`, typed
-values via `ValueExpr`). Serde-defaulted, so pre-behavior `.rohkai.json` files
-load with an empty graph. `UiTree::remove`/`validate_and_repair` prune
-behaviors whose source widget is gone and clear dangling target refs.
+values via `ValueExpr`) or a surface action (`OpenModal`, `AcceptDialog`,
+`RejectDialog`). Serde-defaulted legacy widget triggers migrate to the typed
+form. `ProjectDocument::diagnostics` reports dangling/cyclic cross-surface
+references; document repair remaps or prunes invalid references.
 
 Canvas: `canvas::interaction` draws an open event socket (right edge) on every
 `is_event_capable()` widget and a closed state socket (left edge) on every
@@ -120,7 +134,10 @@ export registers `CallHandler` names so stubs always exist.
 
 ### Persistence
 
-`project::io::save` serializes `UiTree` to pretty JSON and returns the string.
+`project::io::save` serializes schema-v2 `ProjectDocument` to pretty JSON and
+returns the string. Legacy bare `UiTree` and schema-v1 envelopes migrate to one
+root `MainWindow` without losing widgets, behaviors, components, assets, theme,
+guides, or window settings.
 `RohKaiApp` stores this string as `saved_json` to compute dirty state
 (`is_dirty` = current serialization ≠ `saved_json`).
 
@@ -200,6 +217,14 @@ Both emitters are **pure functions**: `emit(tree: &UiTree) -> String`.
 They are called every frame in `panels::code_preview::show` and their output is
 displayed in the right panel. No caching; strings are regenerated each repaint.
 
+Multi-surface export uses `project_files_document(&ProjectDocument)` and emits a
+module per surface under `src/surfaces/`. The root surface remains the eframe
+update body. Modal surfaces render through `egui::Modal` with a bounded runtime
+stack and one generated draft struct per supported surface state set. State
+fields, handlers, descriptor dependencies, and behaviors are collected across
+all surfaces deterministically. Lazare still edits only the active surface;
+tab switching preserves each surface's valid/invalid buffer separately.
+
 `field_collector.rs` is the single source of truth for which widgets contribute
 AppState fields, their Rust types, and their default expressions. Both
 `state_emitter` and `export` call it instead of duplicating logic.
@@ -262,12 +287,24 @@ Only widgets with a non-`None` `state_binding` appear in the struct.
 
 | Sub-struct | Key fields | Purpose |
 |---|---|---|
-| `ProjectState` | `ui_tree`, `current_file`, `saved_json` | Persistent document — single source of truth + file path + dirty snapshot |
+| `ProjectState` | `ui_tree: ActiveDocument`, `current_file`, `saved_json` | Persistent multi-surface document + active-tree adapter + dirty snapshot |
 | `SessionState` | `interaction`, `selected`, `canvas_settings`, `dragging_guide`, `hovered_guide`, `lock_aspect_ratio` | Per-session canvas interaction and view state (not persisted) |
 | `MessageState` | `last_error`, `export_message`, `template_message` | One-frame status messages for the status bar |
 | `PreferencesState` | `user_settings`, `draft`, `settings_path` | Live + draft user preferences, persistence path |
 | `CodePanelState` | `buffer`, `status`, `last_generated`, `split_ratio`, `wrap_code`, `editor_has_focus` | Lazare code panel — editable buffer, generated/valid/invalid state, wrapping preference, and focus ownership |
 | `DescriptorState` | `widgets`, `errors`, `editor`, `builder` | Loaded `.rkwd` descriptors, load errors, in-app editor state, beginner builder state |
+| `SurfaceWorkspaceState` | `selected`, `zoom`, `pan`, `code` | Per-surface authoring state restored on tab switches |
+
+### Modal runtime
+
+Dialogs are project surfaces, never palette widgets. Opening a modal copies
+supported bound values into a draft. Dialog widgets edit that draft. Accept
+commits and fires `Accepted` then `Closed`; Apply commits without closing;
+Reset reloads from project state; Reject, configured Escape, or configured
+backdrop close discards and fires `Rejected` then `Closed`. Distinct dialogs
+may nest to a cap of 16; reopening an already-open surface is an idempotent
+diagnostic. Initial focus targets the configured/default semantic control or
+the first focusable control, and close restores the opener's egui ID.
 
 Layout per frame:
 

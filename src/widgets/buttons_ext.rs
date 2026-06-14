@@ -1,5 +1,7 @@
 //! Stage 10 button-family widgets: ToolButton, CommandLinkButton, DialogButtonBox.
-use crate::project::schema::{Rect, WidgetInstance, WidgetKind, WidgetProps};
+use crate::project::schema::{
+    DialogButtonRole, DialogButtonSpec, Rect, WidgetInstance, WidgetKind, WidgetProps,
+};
 use uuid::Uuid;
 
 pub fn tool_button_default() -> WidgetInstance {
@@ -52,6 +54,16 @@ pub fn dialog_button_box_default() -> WidgetInstance {
         props: WidgetProps {
             label: String::from("Buttons"),
             options: vec!["OK".to_owned(), "Cancel".to_owned()],
+            dialog_buttons: vec![
+                DialogButtonSpec {
+                    label: "OK".to_owned(),
+                    role: DialogButtonRole::Accept,
+                },
+                DialogButtonSpec {
+                    label: "Cancel".to_owned(),
+                    role: DialogButtonRole::Reject,
+                },
+            ],
             ..Default::default()
         },
         ..Default::default()

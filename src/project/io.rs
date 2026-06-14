@@ -72,22 +72,23 @@ pub fn deserialize(json: &str) -> Result<ProjectDocument, String> {
     Ok(document)
 }
 
-/// Temporary compatibility serializer for the single-tree app shell.
+/// Compatibility serializer for callers that still own a standalone tree.
 ///
-/// New project features must use [`serialize`]. This exists only until
-/// `RohKaiApp` switches to [`ProjectDocument`] in the next implementation slice.
+/// New project features must use [`serialize`]. The active app persists
+/// [`ProjectDocument`]; this adapter intentionally wraps a tree as one main
+/// surface for legacy integrations and tests.
 pub fn serialize_tree(tree: &UiTree) -> Result<String, String> {
     serialize(&ProjectDocument::from_legacy_tree(tree.clone()))
 }
 
-/// Temporary compatibility save path for the single-tree app shell.
+/// Compatibility save path for standalone-tree callers.
 pub fn save_tree(path: &Path, tree: &UiTree) -> Result<String, String> {
     let json = serialize_tree(tree)?;
     std::fs::write(path, &json).map_err(|e| format!("Write error: {e}"))?;
     Ok(json)
 }
 
-/// Temporary compatibility load path returning only the migrated root tree.
+/// Compatibility load path returning only the migrated root tree.
 pub fn load_tree(path: &Path) -> Result<UiTree, String> {
     let document = load(path)?;
     Ok(document.root_surface().tree.clone())
