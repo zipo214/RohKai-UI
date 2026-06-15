@@ -7,6 +7,21 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-14 — Behavior recipes UI surfacing + Global Rust Wiring rename
+
+Branch `dev`. The recipe matrix (`codegen::behavior_recipes`) was already
+committed (e79c787) and auto-applies the default suggestion on wire drop; this
+session closed the two open goal gaps. The Behaviors panel
+(`panels::behaviors`) now surfaces the full suggestion set for the wired
+source→sink pair as one-click selectable chips (default pre-selected, params
+still editable below, raw Action picker kept as advanced). User-facing "Rust
+Wiring" is now "Global Rust Wiring" via a single-source `rust_wiring::PANEL_TITLE`
+const (window + menu button), with a guard test; docs (ARCHITECTURE, CODE_INDEX)
+reframed and the previously-unindexed behavior modules added. No new crates,
+serde untouched, codegen still consumes graph actions not recipe IDs. Full gate
+green (552 unit + 17 fidelity + doctest, all-target clippy, fmt, encoding).
+Committed locally only — coop hazard (external agent state) still says don't push.
+
 ## 2026-06-12 - Rust 1.96 and dependency alignment audit
 
 Branch `codex/toolchain-dependency-refresh`, isolated from `dev`. RohKai now

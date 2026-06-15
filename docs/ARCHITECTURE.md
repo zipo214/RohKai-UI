@@ -34,7 +34,8 @@ All panels read from it; the canvas mutates it in-place through `tree.get_mut(id
 ### Behavior graph (visual event wiring)
 
 `AppProps.behaviors: Vec<Behavior>` is the beginner-facing counterpart to
-Stage 11 Rust Wiring. Each `Behavior` is one wire: `source_widget` +
+Stage 11 Global Rust Wiring (the advanced app-wide escape hatch). Each
+`Behavior` is one wire: `source_widget` +
 `event: WidgetEvent` + optional `target_widget` (canvas presentation only) +
 `action: VisualAction` (`Set`/`Add`/`Subtract`/`Toggle`/`CallHandler`, typed
 values via `ValueExpr`). Serde-defaulted, so pre-behavior `.rohkai.json` files
@@ -45,8 +46,15 @@ Canvas: `canvas::interaction` draws an open event socket (right edge) on every
 `is_event_capable()` widget and a closed state socket (left edge) on every
 bound widget with `kind_table::state_info`; left-drag between them creates a
 behavior, wires render as smooth cubic connectors, clicking a wire selects it.
-Panel: `panels::behaviors` (shown in the Properties tab) edits event, action
-type, field, amount/clamp, and deletion. Codegen: `codegen::behavior` is the
+Recipe matrix: `codegen::behavior_recipes` is a smart constructor (never the
+source of truth) — it maps a `(source event, sink type)` pair to suggested
+typed `VisualAction`s (default first), deriving the sink type from
+`kind_table::state_info` (Invariant 2). The drop path applies the default; the
+panel surfaces the alternates. A sink type with no type-safe action (e.g.
+`Vec<f32>`) yields no suggestion rather than a broken one.
+Panel: `panels::behaviors` (shown in the Properties tab) presents the suggested
+recipes for the wired pair, then edits event, action type, field, amount/clamp,
+and deletion. Codegen: `codegen::behavior` is the
 single emitter both surfaces call — live code uses field prefix `""`
 (`self.progress`), export uses `"state."` (`self.state.progress`) — e.g.
 Button Click → Add(0.1, clamp 0..1) emits

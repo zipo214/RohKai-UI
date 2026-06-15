@@ -128,7 +128,7 @@ impl Default for AppProps {
 // ---------------------------------------------------------------------------
 // Behavior graph — visual event → state-mutation wiring
 //
-// This is the beginner-facing counterpart to Stage 11 Rust Wiring: instead of
+// This is the beginner-facing counterpart to Stage 11 Global Rust Wiring: instead of
 // naming a handler function, the user drags a wire from a widget's event
 // socket to a state target and picks a typed `VisualAction`.  Persisted on
 // `AppProps` so the graph lives inside the UiTree single source of truth.

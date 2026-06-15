@@ -85,8 +85,9 @@ being comfortable.
 - `src/panels/db_panel.rs` - P2.6 Database floating window (connection config +
   per-widget `DbBinding` editor via `show_db_binding`).
 - `src/panels/shortcuts.rs` - keyboard shortcut reference (F1 / ?).
-- `src/panels/rust_wiring.rs` - Stage 11 Rust Wiring editor: mpsc channels,
-  iterator pipelines, trait impls, with live generated-code preview.
+- `src/panels/rust_wiring.rs` - Stage 11 Global Rust Wiring editor (advanced
+  app-wide infrastructure): mpsc channels, iterator pipelines, trait impls, with
+  live generated-code preview. Title via `PANEL_TITLE`.
 - `src/panels/macro_palette.rs` - Stage 11 macro snippet palette → code buffer.
 
 ## Feature Depth Status
@@ -133,6 +134,12 @@ being comfortable.
 - `src/codegen/parser.rs` - Lazare/bidirectional code parsing, diagnostics, and
   source ranges for valid manually edited widget blocks.
 - `src/codegen/kind_table.rs` - field types and widget metadata for codegen.
+- `src/codegen/behavior.rs` - behavior-graph emitter: typed `VisualAction`s →
+  state-mutation statements (single helper for live + export, field-prefix only).
+- `src/codegen/behavior_recipes.rs` - interaction matrix / smart constructor:
+  `(source event, sink type)` → suggested typed actions (not the source of truth).
+- `src/panels/behaviors.rs` - Behaviors panel (Properties tab): recipe
+  suggestions + per-wire event/action/param editing.
 - `src/codegen/rust.rs` - Rust string/binding helpers.
 - `src/codegen/rust_wiring.rs` - Stage 11 Rust-centric emitters: mpsc channel
   fields, iterator-pipeline methods, trait-impl blocks, async/Result-aware

@@ -2,6 +2,52 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-14 - Behavior Recipe UI Surfacing + Global Rust Wiring Rename
+
+### Context Reviewed
+- Preflight, `CLAUDE.md`, `PROMPT_CONTRACT.md`, `ENGINEERING_INVARIANTS.md`,
+  CoOp latest note, branch/status.
+- Existing behavior stack: `project::schema` (Behavior/VisualAction/ValueExpr),
+  `codegen::behavior`, `codegen::behavior_recipes`, `panels::behaviors`,
+  `canvas::interaction` socket/wire/drop path, `panels::rust_wiring`, `app.rs`
+  menu wiring.
+- Git history: recipe matrix already landed (e79c787) with the drop path
+  auto-applying the default suggestion; the goal's remaining gaps were the UI
+  surfacing of the suggestion set and the user-facing rename.
+
+### Changes
+- `panels::behaviors::show_selected`: added a "Suggested" recipe row derived live
+  from the wired target's sink (`behavior_recipes::sink_info_for` +
+  `suggestions_for`), rendered as selectable chips. Default stays pre-selected
+  (applied on drop), alternates are one click, params remain editable, and the
+  raw Action picker is retained as the advanced path.
+- Renamed the advanced escape hatch to "Global Rust Wiring": new
+  `panels::rust_wiring::PANEL_TITLE` const sourced by both the window title and
+  the `app.rs` menu button (hover text clarifies it is advanced app-wide infra vs
+  the canvas behavior graph). Module/`schema` doc comments reframed.
+- Docs: `ARCHITECTURE.md` documents the recipe matrix as a non-source-of-truth
+  smart constructor and the panel surfacing; `CODE_INDEX.md` reframed the wiring
+  entry and added the previously-unindexed `codegen::behavior`,
+  `codegen::behavior_recipes`, and `panels::behaviors`.
+
+### Tests
+- Added `rust_wiring::tests::panel_is_named_global_rust_wiring` (rename guard;
+  one assertion covers window + menu since both source `PANEL_TITLE`).
+- Required recipe/acceptance/export/invariant tests already exist in
+  `codegen::behavior_recipes::tests` (unchanged, not removed).
+
+### Verification
+- `cargo fmt --check`, `cargo check`, `cargo test` (552 unit + 17 fidelity +
+  1 doctest, all green), `cargo clippy --all-targets -- -D warnings` (clean),
+  `scripts/check-text-encoding.ps1` OK.
+
+### Risks / Follow-ups
+- Recipe suggestions are surfaced in the Properties/Behaviors panel rather than a
+  modal popup on drop — faithful to "present suggestions with default + editable
+  params" while staying minimal; a dedicated on-drop popup remains optional.
+- Committed locally only; coop hazard (external agent state) still says do not
+  push/merge.
+
 ## 2026-06-12 - Rust 1.96 And Current Dependency Alignment
 
 ### Context Reviewed

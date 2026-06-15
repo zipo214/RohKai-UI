@@ -2115,8 +2115,12 @@ impl eframe::App for RohKaiApp {
                         ui.close();
                     }
                     if ui
-                        .button("Rust Wiring…")
-                        .on_hover_text("Channels, iterator pipelines, trait impls")
+                        .button(format!("{}…", crate::panels::rust_wiring::PANEL_TITLE))
+                        .on_hover_text(
+                            "Advanced app-wide Rust infrastructure: channels, \
+                             iterator pipelines, trait impls (beginner widget \
+                             wiring lives on the canvas behavior graph)",
+                        )
                         .clicked()
                     {
                         self.session.rust_wiring_open = true;

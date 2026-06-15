@@ -50,6 +50,20 @@ pub fn show_selected(
         .find(|w| w.id == source_id)
         .map(|w| w.kind.supported_events().to_vec())
         .unwrap_or_default();
+
+    // Recipe suggestions for this source→sink pair (the smart constructor).
+    // Derived live from the recorded target widget's sink type via the
+    // interaction matrix; the default was already applied on drop, alternates
+    // are one click, and params stay editable below.  Event does not narrow the
+    // set today, so computing it from the pre-frame event is exact.
+    let target_id = tree.app_props.behaviors[idx].target_widget;
+    let event_now = tree.app_props.behaviors[idx].event;
+    let suggestions: Vec<crate::codegen::behavior_recipes::RecipeSuggestion> = target_id
+        .and_then(|tid| tree.widgets.iter().find(|w| w.id == tid))
+        .and_then(crate::codegen::behavior_recipes::sink_info_for)
+        .map(|sink| crate::codegen::behavior_recipes::suggestions_for(event_now, &sink))
+        .unwrap_or_default();
+
     {
         let b = &mut tree.app_props.behaviors[idx];
         ui.horizontal(|ui| {
@@ -62,6 +76,19 @@ pub fn show_selected(
                     }
                 });
         });
+
+        // Suggested recipes (beginner-facing): one click swaps in a typed
+        // action.  The raw Action picker below stays as the advanced escape.
+        if !suggestions.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Suggested:");
+                for s in &suggestions {
+                    if ui.selectable_label(b.action == s.action, s.label).clicked() {
+                        b.action = s.action.clone();
+                    }
+                }
+            });
+        }
 
         // Action type picker — switching preserves the field where possible.
         let current_field = b.action.field().unwrap_or("").to_owned();
