@@ -57,7 +57,12 @@ pub fn component_state_field_pairs(components: &[DesignComponent]) -> Vec<(Strin
                 let initial = if comp.state_machine.initial_state.is_empty() {
                     String::from("String::new()")
                 } else {
-                    format!("String::from(\"{}\")", comp.state_machine.initial_state)
+                    // Escape via the shared helper so quotes/backslashes in the
+                    // state name can't break the generated string literal.
+                    format!(
+                        "String::from({})",
+                        crate::codegen::rust::string_literal(&comp.state_machine.initial_state)
+                    )
                 };
                 pairs.push((
                     format!("    {name}_state: String,"),

@@ -132,6 +132,9 @@ fn arith_statement(
     let expr = format!("({lhs} {op} {amount_lit})");
     let bounded = match (min, max) {
         (Some(lo), Some(hi)) => {
+            // `f32::clamp` panics when min > max. Persisted/edited data can supply
+            // an inverted range, so normalise before emitting (never emit a panic).
+            let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
             format!("{expr}.clamp({}, {})", f32_literal(lo), f32_literal(hi))
         }
         (Some(lo), None) => format!("{expr}.max({})", f32_literal(lo)),
@@ -199,6 +202,22 @@ mod tests {
         assert_eq!(
             action_statement(&add_progress(), ""),
             "self.progress = (self.progress + 0.1).clamp(0.0, 1.0);"
+        );
+    }
+
+    #[test]
+    fn inverted_clamp_bounds_are_normalised_not_panicking() {
+        // min > max would make the generated `.clamp(min, max)` panic at
+        // runtime; the emitter must order the bounds so lo <= hi.
+        let inverted = VisualAction::Add {
+            field: "p".to_owned(),
+            amount: 0.1,
+            min: Some(1.0),
+            max: Some(0.0),
+        };
+        assert_eq!(
+            action_statement(&inverted, ""),
+            "self.p = (self.p + 0.1).clamp(0.0, 1.0);"
         );
     }
 

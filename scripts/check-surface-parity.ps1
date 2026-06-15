@@ -32,7 +32,6 @@ $root = Split-Path -Parent $PSScriptRoot
 $src = Join-Path $root 'src'
 $schema = Join-Path $src 'project/schema.rs'
 $codegenDir = Join-Path $src 'codegen'
-$fidelity = Join-Path $root 'tests/fidelity_audit.rs'
 $roadmap = Join-Path $root 'docs/ROADMAP_PHASE2.md'
 
 $findings = [System.Collections.Generic.List[string]]::new()

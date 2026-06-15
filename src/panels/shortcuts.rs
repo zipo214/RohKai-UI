@@ -232,10 +232,13 @@ fn show_customize(
                     );
                     if resp.changed() {
                         *dirty = true;
-                        if buf.is_empty() {
+                        // Treat whitespace-only input as blank so the field
+                        // reliably restores the default (matches the UI hint).
+                        let normalized = buf.trim();
+                        if normalized.is_empty() {
                             user_shortcuts.remove(action_key);
                         } else {
-                            user_shortcuts.insert(action_key.to_owned(), buf);
+                            user_shortcuts.insert(action_key.to_owned(), normalized.to_owned());
                         }
                     }
 

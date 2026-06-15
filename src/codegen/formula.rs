@@ -479,7 +479,15 @@ where
         "signum" => format!("{}.signum()", a(0)),
         "hypot" => format!("{}.hypot({})", a(0), a(1)),
         "pow" => format!("{}.powf({})", a(0), a(1)),
-        _ => unreachable!("formula functions are validated before emission"),
+        // `FormulaNode` and this emitter are `pub`; a caller could construct an
+        // unvalidated `Call`. Degrade to a benign literal instead of panicking.
+        _ => {
+            debug_assert!(
+                false,
+                "unsupported formula function reached emitter: {name}"
+            );
+            "0_f64".to_owned()
+        }
     }
 }
 

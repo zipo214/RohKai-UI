@@ -404,7 +404,9 @@ impl RohKaiApp {
             .iter()
             .filter(|c| c.kind == ComponentKind::Timer)
             .map(|c| {
-                let ms = c.interval_ms.unwrap_or(1000) as u64;
+                // Clamp to >= 1ms: a 0ms interval would busy-spin the timer
+                // thread (sleep(0)) and flood repaint/message traffic.
+                let ms = c.interval_ms.unwrap_or(1000).max(1) as u64;
                 (c.name.clone(), ms)
             })
             .collect();

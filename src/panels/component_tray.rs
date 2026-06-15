@@ -281,7 +281,19 @@ fn show_state_machine_editor(ui: &mut egui::Ui, comp: &mut DesignComponent) {
         });
 
     if let Some(i) = remove_state {
-        sm.states.remove(i);
+        // Removing a state must also drop dangling references to it, or the
+        // state machine persists an invalid graph (orphan initial_state /
+        // transitions).
+        let removed_name = sm.states.remove(i).name;
+        if sm.initial_state == removed_name {
+            sm.initial_state = sm
+                .states
+                .first()
+                .map(|s| s.name.clone())
+                .unwrap_or_default();
+        }
+        sm.transitions
+            .retain(|tr| tr.from != removed_name && tr.to != removed_name);
     }
 
     if ui.small_button("+ Add state").clicked() {

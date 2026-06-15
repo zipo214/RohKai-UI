@@ -7,6 +7,26 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-14 — CodeRabbit review triage on PR #9
+
+Branch `dev`. PR #9 diffs against `main`, so CodeRabbit reviewed the whole
+accumulated `dev` history (88 files), not just the recipe/rename change. Triaged
+~30 findings: fixed 10 genuinely-valid low-risk bugs with a regression test for
+the class (behavior clamp min>max panic guard + test; rusqlite version aligned to
+the documented `0.40`; component_state StateMachine initial-state now escaped via
+`string_literal`; shortcuts whitespace-only override trims to blank;
+component_tray state delete now drops dangling initial_state/transitions; app.rs
+timer interval clamped to >=1ms; formula emitter `unreachable!` → debug_assert +
+benign literal; shaper trait doc reconciled with the fontless fallback;
+check-surface-parity unused `$fidelity` removed; Invariant 10 scope clarified to
+"designer binary"). Verified and SKIPPED the "Critical" CornerRadius claim — it is
+a false positive: `egui::CornerRadius::from(f32)` compiles on egui 0.34.3 (probed
+with a throwaway example). Skipped (with reasons) heavier/out-of-scope items:
+behavior sink-type validation (needs emit-time field types), db_panel cache reset
+(Stage 13), app.rs name_counter/timer-respawn lifecycle, rustybuzz glyph_id
+scaffold, and assorted doc-churn. Full gate green (553 unit + 17 fidelity +
+doctest, all-target clippy, fmt, encoding). Local commit; push to PR branch.
+
 ## 2026-06-14 — Behavior recipes UI surfacing + Global Rust Wiring rename
 
 Branch `dev`. The recipe matrix (`codegen::behavior_recipes`) was already

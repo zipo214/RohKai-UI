@@ -48,8 +48,10 @@ pub trait ShaperEngine: Send + Sync {
     /// Shape `text` using the provided raw font bytes.
     ///
     /// Returns one `GlyphInfo` per output glyph in visual order.
-    /// If `font_data` is empty, invalid, or inapplicable, returns an
-    /// empty `Vec` — never panics.
+    /// Engines that require font bytes return an empty `Vec` when `font_data`
+    /// is empty/invalid/inapplicable; fontless fallback engines (e.g.
+    /// `HersheyShaper`) may ignore `font_data` and still shape. Implementations
+    /// must never panic.
     fn shape(&self, text: &str, font_data: &[u8]) -> Vec<GlyphInfo>;
 }
 
