@@ -35,7 +35,7 @@ shipping green.
 
 **Cross-surface parity drift.** RohKai's truth is supposed to flow:
 
-```
+```text
 UiTree schema  →  Properties UI        (edit)
                →  egui_emitter / export (codegen)
                →  canvas / preview      (render)
@@ -120,7 +120,7 @@ The audit surfaced real shallow surfaces. The S1 batch was **resolved the same
 session** (2026-06-12 follow-up commit); the rest stay ordered, not parked:
 
 - ✅ **DONE** — `apply_constraints` was not just non-recursive but
-  *non-idempotent*: it ran every frame and `margin += ` walked widgets off
+  *non-idempotent*: it ran every frame and `margin += …` walked widgets off
   screen. Rewritten to be idempotent (margin folded into absolute alignment) and
   **parent-relative** (frame = parent's solved rect, parents-before-children).
   Tests: `solve_is_idempotent_across_frames`, `alignment_is_parent_relative_not_canvas`.
