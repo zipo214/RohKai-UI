@@ -511,7 +511,7 @@ pub fn apply_template(
     let binding = widget
         .state_binding
         .as_deref()
-        .and_then(|s| crate::codegen::rust::field_binding(Some(s)))
+        .and_then(|s| crate::codegen::rust::effective_field_binding(Some(s)))
         .unwrap_or_default();
     let handler = if !widget.on_click.is_empty() {
         widget.on_click.as_str()
@@ -521,7 +521,7 @@ pub fn apply_template(
 
     let mut out = template.to_owned();
     out = out.replace("{{label}}", &label_lit);
-    out = out.replace("{{binding}}", binding);
+    out = out.replace("{{binding}}", &binding);
     out = out.replace("{{width}}", &format!("{:.1}", widget.rect.w));
     out = out.replace("{{height}}", &format!("{:.1}", widget.rect.h));
     out = out.replace("{{name}}", display_name);

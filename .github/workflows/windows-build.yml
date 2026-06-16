@@ -20,8 +20,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.96.0
+        # SHA-pinned for supply-chain hardening. When pinned to a SHA the action
+        # cannot infer the toolchain from its ref, so set it explicitly.
+        uses: dtolnay/rust-toolchain@6190aa5fb88a88ee71c12769924bbe63a9ab152e # 1.96.0
         with:
+          toolchain: 1.96.0
           components: clippy,rustfmt
 
       - name: Check toolchain and export version alignment

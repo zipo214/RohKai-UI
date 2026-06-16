@@ -1,7 +1,7 @@
 use crate::codegen::formula::{emit_formula_rust_with, parse_formula};
 use crate::codegen::{
     field_collector,
-    rust::{field_binding, string_literal},
+    rust::{effective_field_binding, field_binding, string_literal},
 };
 use crate::project::{
     schema::{SizePolicy, WidgetEvent, WidgetInstance, WidgetKind},
@@ -595,7 +595,8 @@ fn gen_app_rs(tree: &UiTree) -> String {
         } else {
             label.clone()
         };
-        let binding = field_binding(w.state_binding.as_deref());
+        let binding_owned = effective_field_binding(w.state_binding.as_deref());
+        let binding = binding_owned.as_deref();
         let area_id = string_literal(&format!("widget_{}", w.id));
         s.push_str(&format!(
             "        egui::Area::new(egui::Id::new({area_id}))\n            .fixed_pos(egui::pos2({:.1}, {:.1}))\n            .show(ctx, |ui| {{\n                ui.set_min_size(egui::vec2({:.1}, {:.1}));\n",
@@ -754,7 +755,9 @@ fn gen_app_rs(tree: &UiTree) -> String {
                             child.rect.w, child.rect.h
                         );
                         let child_label = string_literal(&child.props.label);
-                        let child_binding = field_binding(child.state_binding.as_deref());
+                        let child_binding_owned =
+                            effective_field_binding(child.state_binding.as_deref());
+                        let child_binding = child_binding_owned.as_deref();
                         code.push_str(&export_child_line(
                             child,
                             &rect_expr,
@@ -1817,7 +1820,8 @@ fn export_layout_child_line(
         );
     }
     let child_label = string_literal(&child.props.label);
-    let child_binding = field_binding(child.state_binding.as_deref());
+    let child_binding_owned = effective_field_binding(child.state_binding.as_deref());
+    let child_binding = child_binding_owned.as_deref();
     let mut code = format!("                    // widget_{}\n", child.id);
     match &child.kind {
         WidgetKind::Button => {
@@ -2218,6 +2222,40 @@ mod tests {
         assert!(generated.contains("r\"<svg/>\""));
         assert!(!generated.contains("egui::Frame::NONE"));
         assert!(!generated.contains("image_export_frame_placeholder_line"));
+    }
+
+    #[test]
+    fn keyword_state_binding_exports_effective_field_name() {
+        // A state_binding equal to a Rust keyword ("type") must be remapped to
+        // `type_value` everywhere: the AppState field AND every emitted reference
+        // (Invariants 1 & 5). Emitting the raw keyword would not compile in the
+        // exported project, and a mismatch between the field and the reference
+        // would leave the widget unbound.
+        let tree = UiTree {
+            widgets: vec![WidgetInstance {
+                id: Uuid::from_u128(0xC0FFEE),
+                kind: WidgetKind::Checkbox,
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 80.0,
+                    h: 24.0,
+                },
+                state_binding: Some("type".to_owned()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let generated = gen_app_rs(&tree);
+        assert!(
+            generated.contains("type_value"),
+            "keyword binding must export as type_value: {generated}"
+        );
+        assert!(
+            !generated.contains("self.state.type,") && !generated.contains("&mut self.state.type)"),
+            "raw keyword must not appear as a field reference: {generated}"
+        );
     }
 
     #[test]

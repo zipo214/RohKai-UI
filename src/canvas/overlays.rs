@@ -48,9 +48,14 @@ pub fn draw_ownership(
         if !panel_rect.intersects(rect) {
             continue;
         }
-        let ty = type_of(binding);
+        // Look up + display the effective field name (keyword bindings like
+        // `type` collect as `type_value`), so the badge matches the legend and
+        // the generated code rather than a raw, unbound name.
+        let field = crate::codegen::rust::effective_field_binding(Some(binding))
+            .unwrap_or_else(|| binding.to_owned());
+        let ty = type_of(&field);
         let color = type_color(&ty);
-        let text = format!("→ {binding}: {ty}");
+        let text = format!("→ {field}: {ty}");
         let pos = egui::pos2(rect.min.x, rect.min.y - 12.0);
         // Background chip for readability.
         let galley = painter.layout_no_wrap(text.clone(), egui::FontId::monospace(9.5), color);
