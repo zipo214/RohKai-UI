@@ -140,7 +140,8 @@ fn sanitise_ident(s: &str) -> String {
     if s.is_empty() {
         return "unknown".to_owned();
     }
-    s.chars()
+    let mut out: String = s
+        .chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '_' {
                 c
@@ -148,5 +149,11 @@ fn sanitise_ident(s: &str) -> String {
                 '_'
             }
         })
-        .collect()
+        .collect();
+    // SQL identifiers cannot start with a digit; prefix one so the generated
+    // unquoted identifier stays valid.
+    if out.starts_with(|c: char| c.is_ascii_digit()) {
+        out.insert(0, '_');
+    }
+    out
 }

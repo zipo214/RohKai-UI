@@ -61,8 +61,7 @@ fn collect_behavior_fields(
         let Some(raw) = b.action.field() else {
             continue; // CallHandler — no state field
         };
-        let effective = crate::codegen::rust::effective_binding(raw.trim());
-        let Some(name) = field_binding(Some(effective.as_str())) else {
+        let Some(name) = crate::codegen::rust::effective_field_binding(Some(raw.trim())) else {
             warnings.push(format!("Invalid behavior field {:?} skipped.", raw));
             continue;
         };
@@ -97,8 +96,7 @@ fn collect_one(
 ) {
     // ---- Standard state binding ----
     if let Some(raw) = w.state_binding.as_deref() {
-        let effective = crate::codegen::rust::effective_binding(raw);
-        if let Some(name) = field_binding(Some(effective.as_str())) {
+        if let Some(name) = crate::codegen::rust::effective_field_binding(Some(raw)) {
             if let Some(info) = kind_table::state_info(&w.kind) {
                 push_field(
                     AppStateField {

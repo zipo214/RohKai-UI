@@ -156,6 +156,8 @@ Current Implementation Contract:
   No event row visible in Properties is ignored by export. `drag_stopped()`,
   `double_clicked()`, and `lost_focus()` are the exact egui 0.34 `Response`
   methods used (verified against the live `egui_emitter` preview path).
+  <!-- MAINTENANCE: when egui is next bumped, re-verify these method names
+       against the new Response API — they have changed between minor versions. -->
 - **Parity holds in the nested/frame-child export path too.** `export_child_line`
   now binds a `child_response` (or `child_combo` for combos) and emits the same
   per-event `if child_response.<method>() { … }` dispatch through

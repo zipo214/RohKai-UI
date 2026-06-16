@@ -882,6 +882,12 @@ audit specifically examines the generated source.
 
 *When added:* Before any SQL codegen work begins in Stage 13.
 
+> **Cross-reference:** The canonical enforced form of this invariant is
+> `docs/ENGINEERING_INVARIANTS.md` row 10 in the invariant table. The expanded
+> text above is the full design specification written during research; the table
+> row is what governs CI checklists and reviewer sign-off. Keep both in sync
+> when the rule is updated.
+
 ---
 
 ## Section 7 — Bespoke Database Abstraction (DatabaseEngine Trait)

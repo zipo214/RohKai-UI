@@ -573,6 +573,13 @@ impl RohKaiApp {
                     self.session.code_navigation_target = None;
                     self.dirty_cache = false;
                     self.dirty_cache_checked_at = 0.0;
+                    // Reseed auto-label counters from the loaded tree so new
+                    // widgets don't collide with labels already in the project.
+                    self.name_counter.clear();
+                    for w in &self.project.ui_tree.widgets {
+                        let key = format!("{:?}", w.kind).to_lowercase();
+                        *self.name_counter.entry(key).or_insert(0) += 1;
+                    }
                     self.reset_undo_baseline();
                     self.refresh_preview_state();
                     self.timers_need_respawn = true;

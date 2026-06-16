@@ -2621,11 +2621,11 @@ mod reset_tests {
     }
 
     #[test]
-    fn reset_label_restores_kind_name() {
+    fn button_kind_debug_name_is_stable() {
+        // The auto-label / kind-tag paths rely on `{:?}` of the kind being the
+        // bare variant name; guard that invariant.
         let w = make_button();
-        let kind_name = format!("{:?}", w.kind);
-        assert_eq!(kind_name, "Button");
-        assert_eq!(kind_name, "Button");
+        assert_eq!(format!("{:?}", w.kind), "Button");
     }
 
     #[test]

@@ -167,13 +167,25 @@ fn refresh_schema(state: &mut DbPanelState, engine: &mut Option<Box<dyn Database
     match eng.list_tables() {
         Ok(tables) => {
             state.tables = tables;
-            if !state.tables.is_empty() && state.selected_table.is_empty() {
-                state.selected_table = state.tables[0].clone();
+            // Drop caches tied to the previous schema so stale columns/rows
+            // don't surface under a new connection.
+            state.expanded_table = None;
+            state.columns.clear();
+            state.preview_headers.clear();
+            state.preview_rows.clear();
+            // Keep the selection only if it still exists; otherwise reseed.
+            if !state.tables.iter().any(|t| t == &state.selected_table) {
+                state.selected_table = state.tables.first().cloned().unwrap_or_default();
             }
         }
         Err(e) => {
             state.status = Some((false, format!("Schema error: {e}")));
             state.tables.clear();
+            state.selected_table.clear();
+            state.expanded_table = None;
+            state.columns.clear();
+            state.preview_headers.clear();
+            state.preview_rows.clear();
         }
     }
 }

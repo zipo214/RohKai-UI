@@ -39,6 +39,20 @@ pub fn effective_binding(raw: &str) -> String {
     }
 }
 
+/// Resolve a raw state binding to the field identifier codegen actually emits:
+/// apply the keyword remap (`effective_binding`) then validate. Returns `None`
+/// for invalid identifiers (leading digit, empty, …).
+///
+/// Every state-binding → `self.<field>` site (field collector, emitter, export,
+/// canvas overlays, descriptor templates) must route through this so the canvas,
+/// preview, and exported project agree on one field name. Using raw
+/// `field_binding` instead silently drops keyword bindings on one surface while
+/// the field collector keeps them as `<kw>_value`, desyncing the surfaces.
+pub fn effective_field_binding(value: Option<&str>) -> Option<String> {
+    let eff = effective_binding(value?);
+    is_valid_identifier(&eff).then_some(eff)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
