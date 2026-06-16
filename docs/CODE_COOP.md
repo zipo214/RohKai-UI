@@ -7,6 +7,10 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-15 — CodeRabbit PR #9 batch 2 + gh thread replies
+
+Branch `dev`. Completed the second batch of CodeRabbit fixes (commit 4a14459): name_counter now reseeds on project open; sanitise_ident guards against leading-digit SQL identifiers; db_panel refresh_schema clears all dependent caches on both Ok and Err paths; added effective_field_binding() helper in codegen/rust.rs to unify binding resolution across all surfaces; properties.rs duplicate test renamed to state the actual invariant. Also added the DB_INTEGRATION_RESEARCH.md cross-reference to ENGINEERING_INVARIANTS.md Invariant 10, and the egui API maintenance reminder in feature-evaluation doc. Posted gh api replies on all 5 remaining open threads (workflow SHA, DB cross-ref, feature-eval reminder, sink-type validation deferred, db_panel stale cache). All 14 original CodeRabbit threads now have zipo214 replies; 554 unit + 17 fidelity + doctest green. Sink-type validation (comment 3417193356) is deferred — needs field-type metadata threading through UiTree into the behavior graph; acknowledged in thread. PR #9 is ready for final CI pass and merge decision.
+
 ## 2026-06-14 — CodeRabbit review triage on PR #9
 
 Branch `dev`. PR #9 diffs against `main`, so CodeRabbit reviewed the whole
