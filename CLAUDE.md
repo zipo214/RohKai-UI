@@ -99,8 +99,8 @@ Core features implemented:
 ## What NOT to build yet
 - Modeless/native secondary windows, docking, and MDI - planned S19B-D. In-app
   modal project surfaces are implemented and are not native child windows.
-- Undo/redo — planned Stage 14; design for it but do not implement until then
-- WASM / non-egui codegen targets — planned Stage 12; do not start before Stage 9–11 complete
+- Non-egui codegen targets beyond the existing egui native/WASM exporters —
+  planned Stage 12; do not start before that scoped platform-target work begins
 - Database integration — planned Stage 13; requires user-approved crate at stage start
 - Own renderer — planned Stage 15; do not touch rendering stack before then
 

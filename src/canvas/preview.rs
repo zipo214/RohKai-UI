@@ -142,12 +142,21 @@ impl PreviewState {
     }
 
     pub fn dispatch_surface_event(&mut self, surface: Uuid, event: SurfaceEvent) {
+        // Scope mutations to the modal draft when the source surface is an open
+        // modal (e.g. an `Opened` behavior firing right after the draft is
+        // pushed); otherwise `Set`/`Add`/`Toggle` would leak into committed
+        // `values`. Mirrors the per-surface scoping in `dispatch_widget_event`.
+        let value_scope = self
+            .modal_stack
+            .iter()
+            .any(|modal| modal.surface_id == surface)
+            .then_some(surface);
         self.dispatch_trigger(
             BehaviorTrigger::Surface(crate::project::schema::SurfaceEventRef {
                 source_surface: surface,
                 event,
             }),
-            None,
+            value_scope,
         );
     }
 
@@ -1364,6 +1373,36 @@ mod tests {
             Some(&PreviewValue::Bool(true))
         );
         assert_eq!(state.values.get("closed"), Some(&PreviewValue::Bool(true)));
+    }
+
+    #[test]
+    fn modal_opened_behavior_writes_to_draft_not_committed_values() {
+        // An `Opened` behavior fires right after the modal draft is pushed; its
+        // mutation must land on the visible draft, not the committed values
+        // behind the dialog.
+        let (mut document, _opener, dialog) = transactional_document();
+        document.props.behaviors.push(Behavior::surface(
+            Uuid::from_u128(0xA07),
+            dialog,
+            SurfaceEvent::Opened,
+            VisualAction::Set {
+                field: "name".to_owned(),
+                value: crate::project::schema::ValueExpr::Text("FromOpened".to_owned()),
+            },
+        ));
+        let mut state = PreviewState::init_from_document(&document);
+
+        assert!(state.open_modal(dialog));
+        assert_eq!(
+            state.modal_stack[0].draft.get("name"),
+            Some(&PreviewValue::Str("FromOpened".to_owned())),
+            "Opened action must mutate the modal draft"
+        );
+        assert_eq!(
+            state.values.get("name"),
+            Some(&PreviewValue::Str("Original".to_owned())),
+            "committed values must not be touched by an Opened action"
+        );
     }
 
     #[test]
