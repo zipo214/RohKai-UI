@@ -32,8 +32,10 @@ $msrv = Require-Match $cargo '^\s*rust-version\s*=\s*"([^"]+)"' "Cargo rust-vers
 $toolchainVersion = Require-Match $toolchain '^\s*channel\s*=\s*"([^"]+)"' "pinned toolchain"
 # The dtolnay action is SHA-pinned (supply-chain hardening), so the Rust
 # version is no longer in the `@ref`; it is set explicitly via the `toolchain:`
-# input. Read it there — that is what actually installs the toolchain in CI.
-$ciVersion = Require-Match $workflow '^\s*toolchain:\s*"?([0-9]+\.[0-9]+\.[0-9]+)"?' "CI toolchain"
+# input. Isolate the dtolnay step first, then read its `toolchain:` input — that
+# scoping avoids binding to a `toolchain:` key in some other step.
+$rustStep = Require-Match $workflow '(?ms)(uses:\s*dtolnay/rust-toolchain@.*?)(?:\r?\n\s*-\s|\z)' "rust-toolchain step"
+$ciVersion = Require-Match $rustStep '^\s*toolchain:\s*"?([0-9]+\.[0-9]+\.[0-9]+)"?' "CI toolchain"
 $designerEframe = Require-Match $cargo '^\s*eframe\s*=\s*\{\s*version\s*=\s*"([^"]+)"' "designer eframe version"
 $designerEgui = Require-Match $cargo '^\s*egui\s*=\s*"([^"]+)"' "designer egui version"
 $designerRfd = Require-Match $cargo '^\s*rfd\s*=\s*"([^"]+)"' "designer rfd version"
