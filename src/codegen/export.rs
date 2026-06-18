@@ -2055,10 +2055,23 @@ fn export_layout_combo(
     let options = combo_option_values(child);
     let selected_expr = combo_selected_text_expr(&format!("self.state.{binding}"), &options);
     let id = child.id.as_simple();
+    let handler = event_field_handler(child, WidgetEvent::Change);
+    let behavior_stmts = crate::codegen::behavior::statements_for_event(
+        tree,
+        child.id,
+        WidgetEvent::Change,
+        "state.",
+        "                        ",
+    );
+    // Only bind `child_combo` when its `.inner` is consumed below; a layout
+    // ComboBox with just a binding (no Change handler, no behavior) would
+    // otherwise emit an unused-variable warning in the exported project.
+    let dispatches = handler.is_some() || !behavior_stmts.is_empty();
+    let combo_assign = if dispatches { "let child_combo = " } else { "" };
     // `inner` carries whether any selectable changed this frame, mirroring
     // export_child_combo — `Option<()>` would not type-check against Some(true).
     let mut code = format!(
-        "                    let child_combo = egui::ComboBox::from_id_salt(\"layout_combo_{id}\")\n                        .selected_text({selected_expr})\n                        .show_ui(ui, |ui| {{\n                            let mut changed = false;\n"
+        "                    {combo_assign}egui::ComboBox::from_id_salt(\"layout_combo_{id}\")\n                        .selected_text({selected_expr})\n                        .show_ui(ui, |ui| {{\n                            let mut changed = false;\n"
     );
     for option in options {
         let option_lit = string_literal(&option);
@@ -2068,15 +2081,7 @@ fn export_layout_combo(
     }
     code.push_str("                            changed\n");
     code.push_str("                        });\n");
-    let handler = event_field_handler(child, WidgetEvent::Change);
-    let behavior_stmts = crate::codegen::behavior::statements_for_event(
-        tree,
-        child.id,
-        WidgetEvent::Change,
-        "state.",
-        "                        ",
-    );
-    if handler.is_some() || !behavior_stmts.is_empty() {
+    if dispatches {
         code.push_str(&format!(
             "                    if child_combo.inner == Some(true) {{\n{behavior_stmts}"
         ));
@@ -3599,6 +3604,67 @@ mod tests {
         assert!(g.contains("evt_response.double_clicked()"));
         assert!(g.contains("self.on_click();"));
         assert!(g.contains("self.on_dbl();"));
+    }
+
+    #[test]
+    fn layout_combo_binds_child_combo_only_when_consumed() {
+        // A layout ComboBox with no Change handler / behavior must NOT emit
+        // `let child_combo = …` — the binding would be unused and the
+        // warning-denied exported project would fail to compile.
+        let combo_id = Uuid::from_u128(0xCB1);
+        let layout_id = Uuid::from_u128(0xCB0);
+        let make = |on_change: &str| {
+            let combo = WidgetInstance {
+                id: combo_id,
+                kind: WidgetKind::ComboBox,
+                state_binding: Some("choice".to_owned()),
+                on_change: on_change.to_owned(),
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 120.0,
+                    h: 24.0,
+                },
+                props: crate::project::schema::WidgetProps {
+                    options: vec!["A".to_owned(), "B".to_owned()],
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let layout = WidgetInstance {
+                id: layout_id,
+                kind: WidgetKind::VLayout,
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 160.0,
+                    h: 80.0,
+                },
+                children: vec![combo_id],
+                ..Default::default()
+            };
+            gen_app_rs(&UiTree {
+                widgets: vec![layout, combo],
+                ..Default::default()
+            })
+        };
+
+        let plain = make("");
+        assert!(
+            plain.contains("layout_combo_"),
+            "layout combo must still be emitted"
+        );
+        assert!(
+            !plain.contains("let child_combo"),
+            "no handler → must not bind unused child_combo"
+        );
+
+        let with_handler = make("on_choice");
+        assert!(
+            with_handler.contains("let child_combo"),
+            "with a handler the combo's `.inner` is consumed and must be bound"
+        );
+        assert!(with_handler.contains("child_combo.inner == Some(true)"));
     }
 
     // -------------------------------------------------------------------------
