@@ -18,4 +18,5 @@ pub mod project;
 pub mod settings;
 pub mod svg_core;
 pub mod svg_import;
+pub mod ui_colors;
 pub mod widgets;

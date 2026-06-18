@@ -1407,7 +1407,8 @@ impl RohKaiApp {
         let [r, g, b] = theme.accent_color;
         let accent = egui::Color32::from_rgb(r, g, b);
         visuals.hyperlink_color = accent;
-        visuals.selection.bg_fill = egui::Color32::from_rgba_premultiplied(r, g, b, 90);
+        visuals.selection.bg_fill = crate::ui_colors::accent_fill_for_text(accent);
+        visuals.selection.stroke = egui::Stroke::new(1.0, crate::ui_colors::text_on_accent_fill());
         if let Some(rounding) = theme.global_corner_radius {
             let corner_radius = egui::CornerRadius::from(rounding);
             visuals.widgets.noninteractive.corner_radius = corner_radius;

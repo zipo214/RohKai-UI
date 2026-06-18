@@ -248,7 +248,7 @@ fn render_row(
 
     // Background.
     let bg = if is_selected {
-        egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 45)
+        crate::ui_colors::accent_fill_for_text(accent)
     } else if is_dragged {
         egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 20)
     } else if response.hovered() {
@@ -291,7 +291,7 @@ fn render_row(
 
     let text_x = dot_x + 10.0;
     let text_color = if is_selected {
-        accent
+        crate::ui_colors::text_on_accent_fill()
     } else {
         egui::Color32::from_gray(210)
     };
