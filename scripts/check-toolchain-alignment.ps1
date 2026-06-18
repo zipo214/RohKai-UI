@@ -30,7 +30,10 @@ $export = Get-Content -Raw -Encoding utf8 -Path "src\codegen\export.rs"
 $edition = Require-Match $cargo '^\s*edition\s*=\s*"([^"]+)"' "Cargo edition"
 $msrv = Require-Match $cargo '^\s*rust-version\s*=\s*"([^"]+)"' "Cargo rust-version"
 $toolchainVersion = Require-Match $toolchain '^\s*channel\s*=\s*"([^"]+)"' "pinned toolchain"
-$ciVersion = Require-Match $workflow 'dtolnay/rust-toolchain@([0-9]+\.[0-9]+\.[0-9]+)' "CI toolchain"
+# The dtolnay action is SHA-pinned (supply-chain hardening), so the Rust
+# version is no longer in the `@ref`; it is set explicitly via the `toolchain:`
+# input. Read it there — that is what actually installs the toolchain in CI.
+$ciVersion = Require-Match $workflow '^\s*toolchain:\s*"?([0-9]+\.[0-9]+\.[0-9]+)"?' "CI toolchain"
 $designerEframe = Require-Match $cargo '^\s*eframe\s*=\s*\{\s*version\s*=\s*"([^"]+)"' "designer eframe version"
 $designerEgui = Require-Match $cargo '^\s*egui\s*=\s*"([^"]+)"' "designer egui version"
 $designerRfd = Require-Match $cargo '^\s*rfd\s*=\s*"([^"]+)"' "designer rfd version"
