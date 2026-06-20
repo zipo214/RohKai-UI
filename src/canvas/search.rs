@@ -66,6 +66,9 @@ pub fn run_search(tree: &UiTree, query: &str) -> Vec<Uuid> {
 }
 
 fn widget_matches(w: &WidgetInstance, q_lower: &str) -> bool {
+    // Intentionally excluded: props.placeholder, props.radio_value, props.group_binding,
+    // props.formula_expr, props.data_source_binding, descriptor_props values —
+    // scope limited to primary label/binding/event fields per spec.
     // Label (free text — Unicode case fold)
     if !w.props.label.is_empty() && w.props.label.to_lowercase().contains(q_lower) {
         return true;
