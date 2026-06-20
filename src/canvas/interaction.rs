@@ -415,6 +415,8 @@ pub struct InteractionState {
     /// Behavior wire selected on the canvas; edited in the Behaviors panel.
     /// Session-only selection — the behavior itself lives in the UiTree.
     pub selected_behavior: Option<Uuid>,
+    /// Session-only canvas search state. Never serialized.
+    pub canvas_search: Option<crate::canvas::search::CanvasSearchState>,
 }
 
 // ---------------------------------------------------------------------------

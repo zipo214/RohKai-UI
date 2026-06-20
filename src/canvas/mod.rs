@@ -8,6 +8,7 @@
 
 pub mod interaction;
 pub mod overlays;
+pub mod search;
 pub mod preview;
 pub mod rulers;
 pub mod shaper;
