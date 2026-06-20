@@ -3341,6 +3341,47 @@ impl eframe::App for RohKaiApp {
                 );
             }
 
+            // Canvas search panel (Ctrl+F).
+            if self.session.interaction.canvas_search.is_some() {
+                // Re-validate matches against live tree each frame.
+                if let Some(ref mut cs) = self.session.interaction.canvas_search {
+                    let live_ids: std::collections::HashSet<uuid::Uuid> =
+                        self.project.ui_tree.widgets.iter().map(|w| w.id).collect();
+                    let prev_len = cs.matches.len();
+                    cs.matches.retain(|id| live_ids.contains(id));
+                    if cs.matches.len() != prev_len {
+                        cs.current_index =
+                            cs.current_index.min(cs.matches.len().saturating_sub(1));
+                    }
+                }
+                let search_resp = {
+                    let cs = self.session.interaction.canvas_search.as_mut().unwrap();
+                    crate::canvas::search::draw_search_panel(
+                        ui.ctx(),
+                        cs,
+                        panel_rect,
+                        &self.project.ui_tree,
+                    )
+                };
+                if search_resp.close_requested {
+                    self.session.interaction.canvas_search = None;
+                }
+                if search_resp.return_focus_to_canvas {
+                    self.session.interaction.canvas_focused = true;
+                }
+                if let Some(ids) = search_resp.select_all_ids {
+                    self.session.selected = ids.into_iter().collect();
+                }
+                if let Some(scroll_id) = search_resp.scroll_to {
+                    crate::canvas::search::scroll_to_widget(
+                        scroll_id,
+                        &self.project.ui_tree,
+                        &mut self.session.canvas_settings,
+                        panel_rect,
+                    );
+                }
+            }
+
             // Stage 11 — Rust-centric overlays (read-only).
             if self.session.show_ownership || self.session.show_error_flow {
                 let origin =

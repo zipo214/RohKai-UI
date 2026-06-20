@@ -2483,7 +2483,11 @@ pub fn handle(
     let key_ctrl_f = keyboard_owned
         && !settings.input_blocked
         && ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::F));
-    let _ = key_ctrl_f; // suppress unused-variable warning until Task 6 wires this up
+    // Ctrl+F — open canvas search panel (or leave open if already open;
+    // the panel's own Ctrl+F handler refocuses the TextEdit when already open).
+    if key_ctrl_f && state.canvas_search.is_none() {
+        state.canvas_search = Some(crate::canvas::search::CanvasSearchState::default());
+    }
     let double_clicked = pointer_owned && resp.double_clicked();
 
     // -------------------------------------------------------------------

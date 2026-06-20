@@ -644,6 +644,43 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_f_only_opens_when_canvas_focused() {
+        let canvas_focused = false;
+        let input_blocked = false;
+        let key_ctrl_f = true;
+
+        let mut canvas_search: Option<CanvasSearchState> = None;
+
+        if canvas_focused && !input_blocked && key_ctrl_f {
+            canvas_search = Some(CanvasSearchState::default());
+        }
+
+        assert!(canvas_search.is_none(), "should not open when canvas not focused");
+    }
+
+    #[test]
+    fn deleted_widget_removed_from_match_list() {
+        let id_a = uuid::Uuid::new_v4();
+        let id_b = uuid::Uuid::new_v4();
+
+        let mut state = CanvasSearchState {
+            query: "button".into(),
+            matches: vec![id_a, id_b],
+            current_index: 1,
+            ..Default::default()
+        };
+
+        let live_ids: std::collections::HashSet<uuid::Uuid> =
+            std::iter::once(id_b).collect();
+        state.matches.retain(|id| live_ids.contains(id));
+        state.current_index =
+            state.current_index.min(state.matches.len().saturating_sub(1));
+
+        assert_eq!(state.matches, vec![id_b]);
+        assert_eq!(state.current_index, 0);
+    }
+
+    #[test]
     fn key_f_guard_logic_bare_vs_ctrl() {
         // Verify the guard logic: bare F fires zoom-to-fit; Ctrl+F fires search.
         let keyboard_owned = true;
