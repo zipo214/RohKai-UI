@@ -1,5 +1,5 @@
 use crate::codegen::formula::{collect_variables, emit_formula_rust, parse_formula};
-use crate::codegen::rust::{field_binding, string_literal};
+use crate::codegen::rust::{field_binding, line_comment_text, string_literal};
 use crate::codegen::source_map::{GeneratedCodeDocument, SourceSpan, WidgetSourceSpan};
 use crate::project::schema::{
     CrossAlign, LayoutCrossAlign, Orientation, SizePolicy, TextAlign, WidgetEvent, WidgetInstance,
@@ -645,7 +645,7 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                     {
                         lines.push((
                             Some(w.id),
-                            format!("            // grid slot: {}", slot_name.trim()),
+                            format!("            // grid slot: {}", line_comment_text(slot_name)),
                         ));
                     }
                     let span = (child.grid_col_span as usize).clamp(1, columns);
@@ -1211,6 +1211,9 @@ fn emit_child_lines(
         | WidgetKind::ListView
         | WidgetKind::TreeView
         | WidgetKind::Chart => {
+            if emit_frame_layout_child(child, &rect_expr, tree, lines, depth) {
+                return;
+            }
             format!(
                 "{indent}// Nested container {:?} — not expanded in child codegen",
                 child.kind
@@ -1517,6 +1520,81 @@ fn emit_layout_child_lines(
     lines.push((Some(child.id), line));
 }
 
+fn emit_frame_layout_child(
+    child: &WidgetInstance,
+    rect_expr: &str,
+    tree: &UiTree,
+    lines: &mut Vec<(Option<Uuid>, String)>,
+    depth: usize,
+) -> bool {
+    if !matches!(
+        child.kind,
+        WidgetKind::VLayout | WidgetKind::HLayout | WidgetKind::GridLayout
+    ) {
+        return false;
+    }
+    let indent = "    ".repeat(depth + 3);
+    let open = match child.kind {
+        WidgetKind::VLayout => format!(
+            "{indent}ui.scope_builder(egui::UiBuilder::new().max_rect({rect_expr}), |ui| {{\n{indent}    ui.vertical(|ui| {{"
+        ),
+        WidgetKind::HLayout => format!(
+            "{indent}ui.scope_builder(egui::UiBuilder::new().max_rect({rect_expr}), |ui| {{\n{indent}    ui.horizontal(|ui| {{"
+        ),
+        WidgetKind::GridLayout => format!(
+            "{indent}ui.scope_builder(egui::UiBuilder::new().max_rect({rect_expr}), |ui| {{\n{indent}    egui::Grid::new(\"{}\").show(ui, |ui| {{",
+            child.id.as_simple()
+        ),
+        _ => unreachable!(),
+    };
+    lines.push((Some(child.id), open));
+
+    let columns = child.props.grid_columns.clamp(1, MAX_GRID_COLUMNS);
+    let mut col_pos = 0usize;
+    for (slot_idx, &grandchild_id) in child.children.iter().enumerate() {
+        let Some(grandchild) = tree
+            .widgets
+            .iter()
+            .find(|widget| widget.id == grandchild_id)
+        else {
+            continue;
+        };
+        if child.kind == WidgetKind::GridLayout
+            && let Some(slot_name) = child
+                .props
+                .grid_slot_names
+                .get(slot_idx)
+                .filter(|name| !name.trim().is_empty())
+        {
+            lines.push((
+                Some(child.id),
+                format!("{indent}    // grid slot: {}", line_comment_text(slot_name)),
+            ));
+        }
+        emit_layout_child_lines(grandchild, child.id, tree, lines, depth + 1);
+        if child.kind == WidgetKind::GridLayout {
+            let span = (grandchild.grid_col_span as usize).clamp(1, columns);
+            for _ in 1..span {
+                lines.push((
+                    Some(grandchild.id),
+                    format!("{indent}    ui.label(\"\"); // span filler"),
+                ));
+            }
+            col_pos += span;
+            if col_pos >= columns {
+                lines.push((Some(child.id), format!("{indent}    ui.end_row();")));
+                col_pos = 0;
+            }
+        }
+    }
+    if child.kind == WidgetKind::GridLayout && col_pos > 0 {
+        lines.push((Some(child.id), format!("{indent}    ui.end_row();")));
+    }
+    lines.push((Some(child.id), format!("{indent}    }});")));
+    lines.push((Some(child.id), format!("{indent}}});")));
+    true
+}
+
 fn emit_nested_layout_child(
     child: &WidgetInstance,
     tree: &UiTree,
@@ -1553,7 +1631,7 @@ fn emit_nested_layout_child(
         {
             lines.push((
                 Some(child.id),
-                format!("            // grid slot: {}", slot_name.trim()),
+                format!("            // grid slot: {}", line_comment_text(slot_name)),
             ));
         }
         emit_layout_child_lines(grandchild, child.id, tree, lines, depth + 1);
@@ -1913,6 +1991,91 @@ mod tests {
             .join("\n");
         assert!(generated.contains("// grid slot: Primary action"));
         assert!(generated.contains(&format!("parent_{parent_id}")));
+    }
+
+    #[test]
+    fn frame_child_layout_emits_recursively() {
+        let frame_id = Uuid::from_u128(0x510);
+        let layout_id = Uuid::from_u128(0x511);
+        let child_id = Uuid::from_u128(0x512);
+        let tree = UiTree {
+            widgets: vec![
+                WidgetInstance {
+                    id: frame_id,
+                    kind: WidgetKind::Frame,
+                    children: vec![layout_id],
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: layout_id,
+                    kind: WidgetKind::VLayout,
+                    children: vec![child_id],
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: child_id,
+                    kind: WidgetKind::Button,
+                    props: WidgetProps {
+                        label: "Nested".to_owned(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let generated = emit_indexed(&tree)
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(generated.contains("ui.scope_builder"));
+        assert!(generated.contains("ui.vertical(|ui| {"));
+        assert!(generated.contains("egui::Button::new(\"Nested\")"));
+        assert!(!generated.contains("not expanded in child codegen"));
+        assert!(!generated.contains("sequential export not implemented yet"));
+    }
+
+    #[test]
+    fn grid_slot_comment_sanitizes_multiline_names() {
+        let parent_id = Uuid::from_u128(0x520);
+        let child_id = Uuid::from_u128(0x521);
+        let tree = UiTree {
+            widgets: vec![
+                WidgetInstance {
+                    id: parent_id,
+                    kind: WidgetKind::GridLayout,
+                    children: vec![child_id],
+                    props: WidgetProps {
+                        grid_slot_names: vec!["Main\nui.label(\"oops\");".to_owned()],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: child_id,
+                    kind: WidgetKind::Button,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let generated = emit_indexed(&tree)
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(generated.contains("// grid slot: Main ui.label(\"oops\");"));
+        for line in generated.lines().filter(|line| line.contains("oops")) {
+            assert!(
+                line.trim_start().starts_with("// grid slot:"),
+                "slot label must stay inside the generated comment: {line}"
+            );
+        }
     }
 
     #[test]

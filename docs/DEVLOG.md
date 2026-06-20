@@ -2,6 +2,54 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-20 - S1 Review Fixes: Layout Ownership And Recursive Codegen
+
+### Context Reviewed
+- Preflight, current CoOp note, git status, S1 review findings, `project-model`,
+  `codegen-rules`, `canvas-patterns`, systematic debugging, and TDD guidance.
+- Relevant implementation files: `src/project/ui_tree.rs`,
+  `src/codegen/egui_emitter.rs`, `src/codegen/export.rs`,
+  `src/codegen/rust.rs`, and the already-dirty palette polish file.
+
+### Changes
+- Fixed layout ownership transfer: attaching a widget to a layout now removes it
+  from any previous parent, not only old layout parents, and avoids attaching a
+  parent into one of its descendants.
+- Hardened `UiTree::validate_and_repair` so child ownership is tree-shaped:
+  stale refs, duplicates, duplicate parents, self-edges, and cycles are pruned
+  before reflow.
+- Added recursive codegen for VLayout/HLayout/GridLayout when those layouts are
+  children of a Frame, in both the live emitter and exported app code.
+- Added `codegen::rust::line_comment_text` and routed grid slot comment labels
+  through it so user-entered CR/LF/control characters cannot create new
+  generated Rust lines.
+- Ran `cargo fmt`, which also normalized existing formatting drift in
+  `src/app.rs`, `src/canvas/mod.rs`, and `src/canvas/search.rs`.
+
+### Tests
+- Added ownership/repair tests in `project::ui_tree`.
+- Added live/export tests for Frame-owned recursive layouts.
+- Added live/export tests for grid slot multiline comment sanitization.
+- Added a shared helper test for one-line generated comment text.
+
+### Verification
+- `cargo test ui_tree::tests:: -- --nocapture` — 26 passed.
+- `cargo test codegen::egui_emitter::tests:: -- --nocapture` — 39 passed.
+- `cargo test codegen::export::tests:: -- --nocapture` — 67 passed.
+- `cargo check` — clean.
+- `cargo test` — 598 unit tests plus integration and doctests passed.
+- `cargo clippy --all-targets -- -D warnings` — clean.
+- `cargo fmt --check` — clean after formatting.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1`
+  — OK.
+
+### Risks / Follow-ups
+- Frame-owned layout recursion now emits a scoped layout surface inside the
+  Frame; deeper parity for non-layout nested containers remains separate from
+  this S1 fix.
+- The earlier palette heading de-duplication remains in the same working tree
+  and is not part of these S1 invariants.
+
 ## 2026-06-14 - Behavior Recipe UI Surfacing + Global Rust Wiring Rename
 
 ### Context Reviewed

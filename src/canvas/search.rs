@@ -1,9 +1,9 @@
 //! Canvas widget search — state, panel, and scroll helper.
 
-use uuid::Uuid;
 use crate::canvas::interaction::CanvasSettings;
 use crate::project::{schema::WidgetInstance, ui_tree::UiTree};
 use egui;
+use uuid::Uuid;
 
 /// Width of the floating canvas search panel (px). Also used for viewport occlusion checks.
 pub const SEARCH_PANEL_W: f32 = 350.0;
@@ -174,16 +174,12 @@ pub fn draw_search_panel(
                     }
 
                     // Navigation keys — read inside panel, NOT gated by keyboard_owned
-                    let enter = ctx.input(|i| {
-                        i.key_pressed(egui::Key::Enter) && !i.modifiers.shift
-                    });
-                    let shift_enter = ctx.input(|i| {
-                        i.key_pressed(egui::Key::Enter) && i.modifiers.shift
-                    });
+                    let enter =
+                        ctx.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift);
+                    let shift_enter =
+                        ctx.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.shift);
                     let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
-                    let ctrl_f = ctx.input(|i| {
-                        i.modifiers.ctrl && i.key_pressed(egui::Key::F)
-                    });
+                    let ctrl_f = ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::F));
 
                     if ctrl_f {
                         te_resp.request_focus();
@@ -202,8 +198,7 @@ pub fn draw_search_panel(
                         } else if shift_enter {
                             let n = state.matches.len();
                             state.just_wrapped = state.current_index == 0;
-                            state.current_index =
-                                (state.current_index + n.saturating_sub(1)) % n;
+                            state.current_index = (state.current_index + n.saturating_sub(1)) % n;
                             resp.scroll_to = Some(state.matches[state.current_index]);
                         } else {
                             // No keyboard navigation this frame — clear the wrap
@@ -221,9 +216,8 @@ pub fn draw_search_panel(
                         };
                         if state.matches.is_empty() {
                             ui.label(
-                                egui::RichText::new(counter_text).color(
-                                    egui::Color32::from_rgba_unmultiplied(255, 80, 80, 220),
-                                ),
+                                egui::RichText::new(counter_text)
+                                    .color(egui::Color32::from_rgba_unmultiplied(255, 80, 80, 220)),
                             );
                         } else if state.just_wrapped {
                             ui.strong(counter_text);
@@ -234,14 +228,19 @@ pub fn draw_search_panel(
 
                     // ↑ ↓ navigation buttons
                     let nav_enabled = !state.matches.is_empty();
-                    if ui.add_enabled(nav_enabled, egui::Button::new("↑")).clicked() {
+                    if ui
+                        .add_enabled(nav_enabled, egui::Button::new("↑"))
+                        .clicked()
+                    {
                         let n = state.matches.len();
                         state.just_wrapped = state.current_index == 0;
-                        state.current_index =
-                            (state.current_index + n.saturating_sub(1)) % n;
+                        state.current_index = (state.current_index + n.saturating_sub(1)) % n;
                         resp.scroll_to = Some(state.matches[state.current_index]);
                     }
-                    if ui.add_enabled(nav_enabled, egui::Button::new("↓")).clicked() {
+                    if ui
+                        .add_enabled(nav_enabled, egui::Button::new("↓"))
+                        .clicked()
+                    {
                         let n = state.matches.len();
                         state.just_wrapped = state.current_index == n - 1;
                         state.current_index = (state.current_index + 1) % n;
@@ -307,8 +306,8 @@ pub fn scroll_to_widget(
 
     // Canonical origin: where canvas (0,0) maps to screen.
     // Matches the transform used in src/canvas/rulers.rs (canvas_origin).
-    let origin = viewport.center().to_vec2() + settings.pan
-        - egui::vec2(canvas_w, canvas_h) * zoom / 2.0;
+    let origin =
+        viewport.center().to_vec2() + settings.pan - egui::vec2(canvas_w, canvas_h) * zoom / 2.0;
 
     // Widget center in screen space.
     let widget_screen_center = (origin + widget_canvas_center * zoom).to_pos2();
@@ -364,12 +363,8 @@ pub fn draw_search_overlay(
 
         if i == state.current_index {
             // Current match: solid teal ring, no fill.
-            let ring_color = egui::Color32::from_rgba_unmultiplied(
-                teal.r(),
-                teal.g(),
-                teal.b(),
-                ring_alpha,
-            );
+            let ring_color =
+                egui::Color32::from_rgba_unmultiplied(teal.r(), teal.g(), teal.b(), ring_alpha);
             painter.rect_stroke(
                 rect.expand(3.0),
                 4.0,
@@ -405,7 +400,10 @@ mod tests {
         // Compile-time proof: CanvasSearchState must NOT implement Serialize.
         // We verify the type is Clone + Default (session state traits only).
         let _: CanvasSearchState = CanvasSearchState::default();
-        let s = CanvasSearchState { query: "x".into(), ..Default::default() };
+        let s = CanvasSearchState {
+            query: "x".into(),
+            ..Default::default()
+        };
         let _ = s.clone();
     }
 
@@ -641,8 +639,16 @@ mod tests {
         let widget = WidgetInstance {
             id: widget_id,
             kind: WidgetKind::Label,
-            rect: Rect { x: 2000.0, y: 2000.0, w: 100.0, h: 40.0 },
-            props: WidgetProps { label: "far".into(), ..Default::default() },
+            rect: Rect {
+                x: 2000.0,
+                y: 2000.0,
+                w: 100.0,
+                h: 40.0,
+            },
+            props: WidgetProps {
+                label: "far".into(),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let mut tree = UiTree::default();
@@ -652,10 +658,7 @@ mod tests {
         tree.app_props.win_h = 300.0;
 
         // Use a non-origin viewport to expose coordinate-space bugs
-        let viewport = egui::Rect::from_min_max(
-            egui::pos2(200.0, 40.0),
-            egui::pos2(1000.0, 640.0),
-        );
+        let viewport = egui::Rect::from_min_max(egui::pos2(200.0, 40.0), egui::pos2(1000.0, 640.0));
         scroll_to_widget(widget_id, &tree, &mut settings, viewport);
 
         // After scrolling, widget center should be in viewport (not behind panel)
@@ -665,7 +668,10 @@ mod tests {
         let origin = viewport.center().to_vec2() + settings.pan
             - egui::vec2(canvas_w, canvas_h) * zoom / 2.0;
         let widget_screen_center = (origin + egui::vec2(2050.0, 2020.0) * zoom).to_pos2();
-        assert!(viewport.contains(widget_screen_center), "widget should be visible after scroll");
+        assert!(
+            viewport.contains(widget_screen_center),
+            "widget should be visible after scroll"
+        );
     }
 
     #[test]
@@ -683,8 +689,16 @@ mod tests {
         let widget = WidgetInstance {
             id: widget_id,
             kind: WidgetKind::Label,
-            rect: Rect { x: 100.0, y: 100.0, w: 80.0, h: 30.0 },
-            props: WidgetProps { label: "near".into(), ..Default::default() },
+            rect: Rect {
+                x: 100.0,
+                y: 100.0,
+                w: 80.0,
+                h: 30.0,
+            },
+            props: WidgetProps {
+                label: "near".into(),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let mut tree = UiTree::default();
@@ -693,10 +707,7 @@ mod tests {
         tree.app_props.win_h = 300.0;
 
         // Use same non-origin viewport
-        let viewport = egui::Rect::from_min_max(
-            egui::pos2(200.0, 40.0),
-            egui::pos2(1000.0, 640.0),
-        );
+        let viewport = egui::Rect::from_min_max(egui::pos2(200.0, 40.0), egui::pos2(1000.0, 640.0));
 
         // Widget center is (140, 115) in canvas space.
         // With zoom=1, pan=ZERO, canvas 400x300:
@@ -708,7 +719,10 @@ mod tests {
         // Should NOT pan.
         let initial_pan = settings.pan;
         scroll_to_widget(widget_id, &tree, &mut settings, viewport);
-        assert_eq!(settings.pan, initial_pan, "pan should not change for already-visible widget");
+        assert_eq!(
+            settings.pan, initial_pan,
+            "pan should not change for already-visible widget"
+        );
     }
 
     #[test]
@@ -723,7 +737,10 @@ mod tests {
             canvas_search = Some(CanvasSearchState::default());
         }
 
-        assert!(canvas_search.is_none(), "should not open when canvas not focused");
+        assert!(
+            canvas_search.is_none(),
+            "should not open when canvas not focused"
+        );
     }
 
     #[test]
@@ -738,11 +755,11 @@ mod tests {
             ..Default::default()
         };
 
-        let live_ids: std::collections::HashSet<uuid::Uuid> =
-            std::iter::once(id_b).collect();
+        let live_ids: std::collections::HashSet<uuid::Uuid> = std::iter::once(id_b).collect();
         state.matches.retain(|id| live_ids.contains(id));
-        state.current_index =
-            state.current_index.min(state.matches.len().saturating_sub(1));
+        state.current_index = state
+            .current_index
+            .min(state.matches.len().saturating_sub(1));
 
         assert_eq!(state.matches, vec![id_b]);
         assert_eq!(state.current_index, 0);

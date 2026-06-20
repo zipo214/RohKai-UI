@@ -17,6 +17,17 @@ pub fn string_literal(value: &str) -> String {
     format!("{value:?}")
 }
 
+pub fn line_comment_text(value: &str) -> String {
+    value
+        .trim()
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 pub fn is_valid_identifier(value: &str) -> bool {
     let mut chars = value.chars();
     let Some(first) = chars.next() else {
@@ -73,6 +84,14 @@ mod tests {
         );
         let emoji = string_literal("🦀");
         assert!(emoji.starts_with('"') && emoji.ends_with('"') && emoji.contains("🦀"));
+    }
+
+    #[test]
+    fn line_comment_text_collapses_control_chars() {
+        assert_eq!(
+            line_comment_text("Main\r\nui.label(\"oops\");\ttrail"),
+            "Main ui.label(\"oops\"); trail"
+        );
     }
 
     #[test]

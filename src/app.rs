@@ -3350,8 +3350,7 @@ impl eframe::App for RohKaiApp {
                     let prev_len = cs.matches.len();
                     cs.matches.retain(|id| live_ids.contains(id));
                     if cs.matches.len() != prev_len {
-                        cs.current_index =
-                            cs.current_index.min(cs.matches.len().saturating_sub(1));
+                        cs.current_index = cs.current_index.min(cs.matches.len().saturating_sub(1));
                     }
                 }
                 let search_resp = {
@@ -3428,12 +3427,7 @@ impl eframe::App for RohKaiApp {
                     .collect();
                 let painter = ui.painter_at(panel_rect);
                 let dark_mode = ui.visuals().dark_mode;
-                crate::canvas::search::draw_search_overlay(
-                    &painter,
-                    cs,
-                    &screen_rects,
-                    dark_mode,
-                );
+                crate::canvas::search::draw_search_overlay(&painter, cs, &screen_rects, dark_mode);
             }
         });
 

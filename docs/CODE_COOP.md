@@ -7,6 +7,28 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-20 — S1 review fixes: layout ownership + recursive codegen
+
+Branch `dev`. Closed three S1 review findings: `UiTree::attach_to_layout_at`
+now transfers child ownership out of any previous parent and repair enforces
+single-parent/no-cycle child trees; Frame-owned V/H/Grid layouts now emit
+recursive live/export code instead of placeholder comments; grid slot labels are
+sanitized through a shared one-line comment helper before entering generated
+Rust. Added focused regression tests in `ui_tree`, `egui_emitter`, `export`, and
+`codegen::rust`; full `cargo test` passed with 598 unit tests plus integration
+and doctests, and all-target clippy is clean. Mechanical `cargo fmt` also
+normalized pre-existing formatting drift in `app.rs`, `canvas/mod.rs`, and
+`canvas/search.rs`.
+
+## 2026-06-20 — Left panel palette header de-duplication
+
+Branch `dev`. Removed the internal `ui.heading("Palette")`/separator from
+`src/panels/palette.rs` so the Palette tab and Stack-mode collapsing header are
+the location signal instead of showing Palette twice. This is a small UI polish
+pass only; palette categories and drag/click behavior are unchanged. Verify with
+`cargo fmt --check` and `cargo check`; a visual smoke should show Basic directly
+under the selected Palette section header.
+
 ## 2026-06-20 — S2 Item 1: Canvas widget search (Ctrl+F) — PR #11
 
 Branch `dev`. Implemented full canvas widget search: `src/canvas/search.rs` (new, ~500 lines) owns `CanvasSearchState`, `SearchPanelResponse`, `run_search`, `scroll_to_widget`, `draw_search_panel`, `draw_search_overlay`, `SEARCH_PANEL_W/H` constants. Wired in `interaction.rs` (`key_ctrl_f`, `canvas_search` field on `InteractionState`), `app.rs` (panel draw + response handling + ring/glow overlay after rulers/bezel), `code_preview.rs` (`editor_has_focus` gate), `shortcuts.rs` (registration + reference panel). Critical fixes applied during 10-agent adversarial review: correct coordinate transform in `scroll_to_widget` (uses canonical `canvas_origin` formula), correct usable-rect top-right footprint for visibility check, `just_wrapped` cleared on non-wrapping navigation. 20 canvas::search tests, 23 lib tests total, zero warnings. PR #11 open on dev→main. Next: remaining 7 S2 items (undo history, zoom-to-selection refinements, multi-select drag, etc.).
