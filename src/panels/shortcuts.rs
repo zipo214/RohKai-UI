@@ -29,6 +29,7 @@ pub const BUILTIN_SHORTCUTS: &[(&str, &str, &str)] = &[
     ("group", "Ctrl+G", "Group 2+ selected widgets into a Frame"),
     ("ungroup", "Ctrl+Shift+G", "Ungroup selected Frame"),
     ("shortcuts_help", "F1", "Show / hide this reference"),
+    ("canvas_search", "Ctrl+F", "Open canvas widget search"),
 ];
 
 // ---------------------------------------------------------------------------

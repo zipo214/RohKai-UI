@@ -2476,7 +2476,14 @@ pub fn handle(
     };
     let key_g = keyboard_owned && ui.input(|i| i.key_pressed(egui::Key::G));
     let key_0 = keyboard_owned && ui.input(|i| ctrl_held && i.key_pressed(egui::Key::Num0));
-    let key_f = keyboard_owned && ui.input(|i| i.key_pressed(egui::Key::F));
+    // Bare F = zoom-to-fit. Guard against Ctrl held so Ctrl+F goes to canvas_search.
+    let key_f = keyboard_owned && ui.input(|i| !i.modifiers.ctrl && i.key_pressed(egui::Key::F));
+    // Ctrl+F = open canvas search (gated: keyboard must be owned and not modal-blocked).
+    // Wired to open the search panel in Task 6.
+    let key_ctrl_f = keyboard_owned
+        && !settings.input_blocked
+        && ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::F));
+    let _ = key_ctrl_f; // suppress unused-variable warning until Task 6 wires this up
     let double_clicked = pointer_owned && resp.double_clicked();
 
     // -------------------------------------------------------------------

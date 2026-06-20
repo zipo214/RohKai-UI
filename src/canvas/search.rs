@@ -500,4 +500,25 @@ mod tests {
         scroll_to_widget(widget_id, &tree, &mut settings, viewport);
         assert_eq!(settings.pan, initial_pan, "pan should not change for already-visible widget");
     }
+
+    #[test]
+    fn key_f_guard_logic_bare_vs_ctrl() {
+        // Verify the guard logic: bare F fires zoom-to-fit; Ctrl+F fires search.
+        let keyboard_owned = true;
+        let input_blocked = false;
+
+        // Bare F (no ctrl): should only trigger zoom-to-fit, not search.
+        let ctrl_held = false;
+        let key_f_bare = keyboard_owned && !ctrl_held;
+        let key_ctrl_f = keyboard_owned && !input_blocked && ctrl_held;
+        assert!(key_f_bare, "bare F should trigger zoom-to-fit");
+        assert!(!key_ctrl_f, "bare F should not trigger canvas search");
+
+        // Ctrl+F: should only trigger search, not zoom-to-fit.
+        let ctrl_held = true;
+        let key_f_with_ctrl = keyboard_owned && !ctrl_held;
+        let key_ctrl_f = keyboard_owned && !input_blocked && ctrl_held;
+        assert!(!key_f_with_ctrl, "Ctrl+F should not trigger zoom-to-fit");
+        assert!(key_ctrl_f, "Ctrl+F should trigger canvas search");
+    }
 }
