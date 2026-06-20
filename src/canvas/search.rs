@@ -5,6 +5,11 @@ use crate::canvas::interaction::CanvasSettings;
 use crate::project::{schema::WidgetInstance, ui_tree::UiTree};
 use egui;
 
+/// Width of the floating canvas search panel (px). Also used for viewport occlusion checks.
+pub const SEARCH_PANEL_W: f32 = 350.0;
+/// Height of the floating canvas search panel (px). Also used for viewport occlusion checks.
+pub const SEARCH_PANEL_H: f32 = 50.0;
+
 /// Session-only state for the Ctrl+F canvas search panel.
 /// Never serialize this type — it must not derive Serialize/Deserialize.
 #[derive(Debug, Default, Clone)]
@@ -166,8 +171,8 @@ pub fn scroll_to_widget(
     // Visibility check: inside viewport AND not occluded by the top-right
     // search panel footprint (350 wide × 50 tall).
     let in_viewport = viewport.contains(widget_screen_center);
-    let in_panel_footprint = widget_screen_center.x >= viewport.max.x - 350.0
-        && widget_screen_center.y <= viewport.min.y + 50.0;
+    let in_panel_footprint = widget_screen_center.x >= viewport.max.x - SEARCH_PANEL_W
+        && widget_screen_center.y <= viewport.min.y + SEARCH_PANEL_H;
     if in_viewport && !in_panel_footprint {
         return; // already visible — do nothing
     }
