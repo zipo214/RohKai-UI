@@ -1,7 +1,9 @@
 //! Canvas widget search — state, panel, and scroll helper.
 
 use uuid::Uuid;
+use crate::canvas::interaction::CanvasSettings;
 use crate::project::{schema::WidgetInstance, ui_tree::UiTree};
+use egui;
 
 /// Session-only state for the Ctrl+F canvas search panel.
 /// Never serialize this type — it must not derive Serialize/Deserialize.
@@ -126,6 +128,46 @@ fn widget_matches(w: &WidgetInstance, q_lower: &str) -> bool {
         }
     }
     false
+}
+
+/// Adjusts `settings.pan` to bring the widget with `id` into the visible viewport.
+/// Does NOT change zoom level. No-ops if the widget is already visible.
+///
+/// The usable rect excludes the top-right 350×50 px occupied by the search panel
+/// so the current match is never scrolled behind it.
+pub fn scroll_to_widget(
+    id: Uuid,
+    tree: &UiTree,
+    settings: &mut CanvasSettings,
+    viewport: egui::Rect,
+) {
+    let Some(widget) = tree.widgets.iter().find(|w| w.id == id) else {
+        return;
+    };
+
+    // Widget center in canvas space.
+    let widget_canvas_center = egui::vec2(
+        widget.rect.x + widget.rect.w / 2.0,
+        widget.rect.y + widget.rect.h / 2.0,
+    );
+
+    // Widget center in screen space (apply zoom and pan).
+    let widget_screen_center =
+        (widget_canvas_center * settings.zoom).to_pos2() + settings.pan;
+
+    // Shrink viewport to exclude the search panel footprint (top-right 350×50).
+    let usable = egui::Rect::from_min_max(
+        viewport.min,
+        egui::pos2(viewport.max.x - 350.0, viewport.max.y - 50.0),
+    );
+
+    if usable.contains(widget_screen_center) {
+        return; // already visible — do nothing
+    }
+
+    // Pan so the widget center lands at the centre of the usable viewport.
+    settings.pan =
+        usable.center().to_vec2() - widget_canvas_center * settings.zoom;
 }
 
 #[cfg(test)]
@@ -354,5 +396,65 @@ mod tests {
         // Simulate surface switch: replace with fresh default (as app.rs does).
         let reset = InteractionState::default();
         assert!(reset.canvas_search.is_none());
+    }
+
+    // ── scroll_to_widget tests ────────────────────────────────────────────────
+
+    #[test]
+    fn scroll_to_widget_pans_to_offscreen_widget() {
+        use crate::canvas::interaction::CanvasSettings;
+        use crate::project::schema::{Rect, WidgetInstance, WidgetKind, WidgetProps};
+
+        let mut widget = WidgetInstance {
+            id: uuid::Uuid::new_v4(),
+            kind: WidgetKind::Button,
+            props: WidgetProps {
+                label: "Far Away".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        // Place widget far offscreen
+        widget.rect = Rect { x: 2000.0, y: 2000.0, w: 80.0, h: 30.0 };
+        let id = widget.id;
+
+        let tree = make_tree(vec![widget]);
+        let mut settings = CanvasSettings::default(); // zoom=1.0, pan=ZERO
+        let viewport = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(800.0, 600.0));
+
+        scroll_to_widget(id, &tree, &mut settings, viewport);
+
+        // Pan must have changed — widget was offscreen
+        assert_ne!(settings.pan, egui::Vec2::ZERO);
+    }
+
+    #[test]
+    fn scroll_to_widget_noop_for_already_visible() {
+        use crate::canvas::interaction::CanvasSettings;
+        use crate::project::schema::{Rect, WidgetInstance, WidgetKind, WidgetProps};
+
+        let mut widget = WidgetInstance {
+            id: uuid::Uuid::new_v4(),
+            kind: WidgetKind::Button,
+            props: WidgetProps {
+                label: "Visible".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        // Place widget clearly inside viewport — center at (140, 115)
+        widget.rect = Rect { x: 100.0, y: 100.0, w: 80.0, h: 30.0 };
+        let id = widget.id;
+
+        let tree = make_tree(vec![widget]);
+        let mut settings = CanvasSettings::default(); // zoom=1.0, pan=ZERO
+        // Viewport 800×600; usable shrinks to (0,0)→(450,550) after search panel exclusion.
+        // Widget center (140, 115) is inside usable rect — no scroll needed.
+        let viewport = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(800.0, 600.0));
+
+        scroll_to_widget(id, &tree, &mut settings, viewport);
+
+        // Pan must be unchanged
+        assert_eq!(settings.pan, egui::Vec2::ZERO);
     }
 }
