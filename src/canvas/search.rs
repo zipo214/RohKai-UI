@@ -135,6 +135,148 @@ fn widget_matches(w: &WidgetInstance, q_lower: &str) -> bool {
     false
 }
 
+/// Draw the floating search panel. Returns side-effects for the caller to apply.
+/// Navigation keys (Enter, Shift+Enter, Escape) are read inside here, bypassing
+/// the `keyboard_owned` gate in interaction.rs — this is intentional.
+pub fn draw_search_panel(
+    ctx: &egui::Context,
+    state: &mut CanvasSearchState,
+    canvas_rect: egui::Rect,
+    tree: &UiTree,
+) -> SearchPanelResponse {
+    let mut resp = SearchPanelResponse::default();
+
+    let panel_x = (canvas_rect.max.x - SEARCH_PANEL_W - 8.0).max(canvas_rect.min.x + 4.0);
+    let panel_pos = egui::pos2(panel_x, canvas_rect.min.y + 8.0);
+
+    egui::Area::new(egui::Id::new("canvas_search_panel"))
+        .order(egui::Order::Tooltip)
+        .fixed_pos(panel_pos)
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.set_width(SEARCH_PANEL_W - 16.0);
+                ui.horizontal(|ui| {
+                    ui.label("🔍");
+
+                    // Query input
+                    let te_resp = ui.add(
+                        egui::TextEdit::singleline(&mut state.query)
+                            .desired_width(120.0)
+                            .hint_text("search widgets…"),
+                    );
+
+                    // Recompute on query change
+                    if state.query != state.last_query {
+                        state.last_query = state.query.clone();
+                        state.matches = run_search(tree, &state.query);
+                        state.current_index = 0;
+                        state.just_wrapped = false;
+                    }
+
+                    // Navigation keys — read inside panel, NOT gated by keyboard_owned
+                    let enter = ctx.input(|i| {
+                        i.key_pressed(egui::Key::Enter) && !i.modifiers.shift
+                    });
+                    let shift_enter = ctx.input(|i| {
+                        i.key_pressed(egui::Key::Enter) && i.modifiers.shift
+                    });
+                    let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+                    let ctrl_f = ctx.input(|i| {
+                        i.modifiers.ctrl && i.key_pressed(egui::Key::F)
+                    });
+
+                    if ctrl_f {
+                        te_resp.request_focus();
+                    }
+                    if escape {
+                        resp.close_requested = true;
+                        resp.return_focus_to_canvas = true;
+                    }
+
+                    if !state.matches.is_empty() {
+                        if enter {
+                            let n = state.matches.len();
+                            state.just_wrapped = state.current_index == n - 1;
+                            state.current_index = (state.current_index + 1) % n;
+                            resp.scroll_to = Some(state.matches[state.current_index]);
+                        }
+                        if shift_enter {
+                            let n = state.matches.len();
+                            state.just_wrapped = state.current_index == 0;
+                            state.current_index =
+                                (state.current_index + n.saturating_sub(1)) % n;
+                            resp.scroll_to = Some(state.matches[state.current_index]);
+                        }
+                    }
+
+                    // Counter display
+                    if !state.query.is_empty() {
+                        let counter_text = if state.matches.is_empty() {
+                            "0 / 0".to_string()
+                        } else {
+                            format!("{} / {}", state.current_index + 1, state.matches.len())
+                        };
+                        if state.matches.is_empty() {
+                            ui.label(
+                                egui::RichText::new(counter_text).color(
+                                    egui::Color32::from_rgba_unmultiplied(255, 80, 80, 220),
+                                ),
+                            );
+                        } else if state.just_wrapped {
+                            ui.strong(counter_text);
+                        } else {
+                            ui.label(counter_text);
+                        }
+                    }
+
+                    // ↑ ↓ navigation buttons
+                    let nav_enabled = !state.matches.is_empty();
+                    if ui.add_enabled(nav_enabled, egui::Button::new("↑")).clicked() {
+                        let n = state.matches.len();
+                        state.just_wrapped = state.current_index == 0;
+                        state.current_index =
+                            (state.current_index + n.saturating_sub(1)) % n;
+                        resp.scroll_to = Some(state.matches[state.current_index]);
+                    }
+                    if ui.add_enabled(nav_enabled, egui::Button::new("↓")).clicked() {
+                        let n = state.matches.len();
+                        state.just_wrapped = state.current_index == n - 1;
+                        state.current_index = (state.current_index + 1) % n;
+                        resp.scroll_to = Some(state.matches[state.current_index]);
+                    }
+
+                    // Select All
+                    if ui
+                        .add_enabled(nav_enabled, egui::Button::new("Select All"))
+                        .clicked()
+                    {
+                        let live_ids: std::collections::HashSet<uuid::Uuid> =
+                            tree.widgets.iter().map(|w| w.id).collect();
+                        let valid: Vec<uuid::Uuid> = state
+                            .matches
+                            .iter()
+                            .filter(|id| live_ids.contains(id))
+                            .copied()
+                            .collect();
+                        if !valid.is_empty() {
+                            resp.select_all_ids = Some(valid);
+                            resp.close_requested = true;
+                            resp.return_focus_to_canvas = true;
+                        }
+                    }
+
+                    // ✕ close
+                    if ui.button("✕").clicked() {
+                        resp.close_requested = true;
+                        resp.return_focus_to_canvas = true;
+                    }
+                });
+            });
+        });
+
+    resp
+}
+
 /// Adjusts `settings.pan` to bring the widget with `id` into the visible viewport.
 /// Does NOT change zoom level. No-ops if the widget is already visible.
 ///
