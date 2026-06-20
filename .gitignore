@@ -1,6 +1,9 @@
 # Rust build output
 /target/
 
+# Superpowers visual companion server artifacts
+.superpowers/
+
 # Local RohKai project scratch files
 *.rohkai.json
 *.forge.json
