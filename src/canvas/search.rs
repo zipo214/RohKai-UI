@@ -133,8 +133,8 @@ fn widget_matches(w: &WidgetInstance, q_lower: &str) -> bool {
 /// Adjusts `settings.pan` to bring the widget with `id` into the visible viewport.
 /// Does NOT change zoom level. No-ops if the widget is already visible.
 ///
-/// The usable rect excludes the top-right 350×50 px occupied by the search panel
-/// so the current match is never scrolled behind it.
+/// The visibility check excludes the top-right 350×50 px occupied by the search
+/// panel so the current match is never considered visible when it is behind it.
 pub fn scroll_to_widget(
     id: Uuid,
     tree: &UiTree,
@@ -145,29 +145,40 @@ pub fn scroll_to_widget(
         return;
     };
 
+    let canvas_w = tree.app_props.win_w;
+    let canvas_h = tree.app_props.win_h;
+    let zoom = settings.zoom;
+
     // Widget center in canvas space.
     let widget_canvas_center = egui::vec2(
         widget.rect.x + widget.rect.w / 2.0,
         widget.rect.y + widget.rect.h / 2.0,
     );
 
-    // Widget center in screen space (apply zoom and pan).
-    let widget_screen_center =
-        (widget_canvas_center * settings.zoom).to_pos2() + settings.pan;
+    // Canonical origin: where canvas (0,0) maps to screen.
+    // Matches the transform used in src/canvas/rulers.rs (canvas_origin).
+    let origin = viewport.center().to_vec2() + settings.pan
+        - egui::vec2(canvas_w, canvas_h) * zoom / 2.0;
 
-    // Shrink viewport to exclude the search panel footprint (top-right 350×50).
-    let usable = egui::Rect::from_min_max(
-        viewport.min,
-        egui::pos2(viewport.max.x - 350.0, viewport.max.y - 50.0),
-    );
+    // Widget center in screen space.
+    let widget_screen_center = (origin + widget_canvas_center * zoom).to_pos2();
 
-    if usable.contains(widget_screen_center) {
+    // Visibility check: inside viewport AND not occluded by the top-right
+    // search panel footprint (350 wide × 50 tall).
+    let in_viewport = viewport.contains(widget_screen_center);
+    let in_panel_footprint = widget_screen_center.x >= viewport.max.x - 350.0
+        && widget_screen_center.y <= viewport.min.y + 50.0;
+    if in_viewport && !in_panel_footprint {
         return; // already visible — do nothing
     }
 
-    // Pan so the widget center lands at the centre of the usable viewport.
-    settings.pan =
-        usable.center().to_vec2() - widget_canvas_center * settings.zoom;
+    // Scroll so the widget center lands at the viewport center (always clear
+    // of the panel corner).
+    // Derivation:
+    //   new_origin = viewport.center() + new_pan - canvas_size * zoom / 2
+    //   target = new_origin + widget_canvas_center * zoom = viewport.center()
+    //   => new_pan = canvas_size * zoom / 2 - widget_canvas_center * zoom
+    settings.pan = egui::vec2(canvas_w, canvas_h) * zoom / 2.0 - widget_canvas_center * zoom;
 }
 
 #[cfg(test)]
@@ -404,57 +415,84 @@ mod tests {
     fn scroll_to_widget_pans_to_offscreen_widget() {
         use crate::canvas::interaction::CanvasSettings;
         use crate::project::schema::{Rect, WidgetInstance, WidgetKind, WidgetProps};
+        use crate::project::ui_tree::UiTree;
 
-        let mut widget = WidgetInstance {
-            id: uuid::Uuid::new_v4(),
-            kind: WidgetKind::Button,
-            props: WidgetProps {
-                label: "Far Away".to_string(),
-                ..Default::default()
-            },
+        let mut settings = CanvasSettings {
+            zoom: 1.0,
+            pan: egui::Vec2::ZERO,
             ..Default::default()
         };
-        // Place widget far offscreen
-        widget.rect = Rect { x: 2000.0, y: 2000.0, w: 80.0, h: 30.0 };
-        let id = widget.id;
+        let widget_id = uuid::Uuid::new_v4();
+        let widget = WidgetInstance {
+            id: widget_id,
+            kind: WidgetKind::Label,
+            rect: Rect { x: 2000.0, y: 2000.0, w: 100.0, h: 40.0 },
+            props: WidgetProps { label: "far".into(), ..Default::default() },
+            ..Default::default()
+        };
+        let mut tree = UiTree::default();
+        tree.widgets.push(widget);
+        // Use canvas size 400x300 (from tree.app_props.win_w/win_h)
+        tree.app_props.win_w = 400.0;
+        tree.app_props.win_h = 300.0;
 
-        let tree = make_tree(vec![widget]);
-        let mut settings = CanvasSettings::default(); // zoom=1.0, pan=ZERO
-        let viewport = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(800.0, 600.0));
+        // Use a non-origin viewport to expose coordinate-space bugs
+        let viewport = egui::Rect::from_min_max(
+            egui::pos2(200.0, 40.0),
+            egui::pos2(1000.0, 640.0),
+        );
+        scroll_to_widget(widget_id, &tree, &mut settings, viewport);
 
-        scroll_to_widget(id, &tree, &mut settings, viewport);
-
-        // Pan must have changed — widget was offscreen
-        assert_ne!(settings.pan, egui::Vec2::ZERO);
+        // After scrolling, widget center should be in viewport (not behind panel)
+        let canvas_w = tree.app_props.win_w;
+        let canvas_h = tree.app_props.win_h;
+        let zoom = settings.zoom;
+        let origin = viewport.center().to_vec2() + settings.pan
+            - egui::vec2(canvas_w, canvas_h) * zoom / 2.0;
+        let widget_screen_center = (origin + egui::vec2(2050.0, 2020.0) * zoom).to_pos2();
+        assert!(viewport.contains(widget_screen_center), "widget should be visible after scroll");
     }
 
     #[test]
     fn scroll_to_widget_noop_for_already_visible() {
         use crate::canvas::interaction::CanvasSettings;
         use crate::project::schema::{Rect, WidgetInstance, WidgetKind, WidgetProps};
+        use crate::project::ui_tree::UiTree;
 
-        let mut widget = WidgetInstance {
-            id: uuid::Uuid::new_v4(),
-            kind: WidgetKind::Button,
-            props: WidgetProps {
-                label: "Visible".to_string(),
-                ..Default::default()
-            },
+        let mut settings = CanvasSettings {
+            zoom: 1.0,
+            pan: egui::Vec2::ZERO,
             ..Default::default()
         };
-        // Place widget clearly inside viewport — center at (140, 115)
-        widget.rect = Rect { x: 100.0, y: 100.0, w: 80.0, h: 30.0 };
-        let id = widget.id;
+        let widget_id = uuid::Uuid::new_v4();
+        let widget = WidgetInstance {
+            id: widget_id,
+            kind: WidgetKind::Label,
+            rect: Rect { x: 100.0, y: 100.0, w: 80.0, h: 30.0 },
+            props: WidgetProps { label: "near".into(), ..Default::default() },
+            ..Default::default()
+        };
+        let mut tree = UiTree::default();
+        tree.widgets.push(widget);
+        tree.app_props.win_w = 400.0;
+        tree.app_props.win_h = 300.0;
 
-        let tree = make_tree(vec![widget]);
-        let mut settings = CanvasSettings::default(); // zoom=1.0, pan=ZERO
-        // Viewport 800×600; usable shrinks to (0,0)→(450,550) after search panel exclusion.
-        // Widget center (140, 115) is inside usable rect — no scroll needed.
-        let viewport = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(800.0, 600.0));
+        // Use same non-origin viewport
+        let viewport = egui::Rect::from_min_max(
+            egui::pos2(200.0, 40.0),
+            egui::pos2(1000.0, 640.0),
+        );
 
-        scroll_to_widget(id, &tree, &mut settings, viewport);
-
-        // Pan must be unchanged
-        assert_eq!(settings.pan, egui::Vec2::ZERO);
+        // Widget center is (140, 115) in canvas space.
+        // With zoom=1, pan=ZERO, canvas 400x300:
+        // origin = viewport.center() + pan - canvas_size/2
+        //        = (600, 340) + (0,0) - (200, 150) = (400, 190)
+        // screen center = (400+140, 190+115) = (540, 305)
+        // viewport is (200,40)-(1000,640), so (540,305) IS inside.
+        // Not in panel footprint (max.x-350=650, 540 < 650).
+        // Should NOT pan.
+        let initial_pan = settings.pan;
+        scroll_to_widget(widget_id, &tree, &mut settings, viewport);
+        assert_eq!(settings.pan, initial_pan, "pan should not change for already-visible widget");
     }
 }
