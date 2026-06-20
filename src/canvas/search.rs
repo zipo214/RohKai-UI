@@ -199,13 +199,16 @@ pub fn draw_search_panel(
                             state.just_wrapped = state.current_index == n - 1;
                             state.current_index = (state.current_index + 1) % n;
                             resp.scroll_to = Some(state.matches[state.current_index]);
-                        }
-                        if shift_enter {
+                        } else if shift_enter {
                             let n = state.matches.len();
                             state.just_wrapped = state.current_index == 0;
                             state.current_index =
                                 (state.current_index + n.saturating_sub(1)) % n;
                             resp.scroll_to = Some(state.matches[state.current_index]);
+                        } else {
+                            // No keyboard navigation this frame — clear the wrap
+                            // flash so it only shows for the single frame of the wrap.
+                            state.just_wrapped = false;
                         }
                     }
 
