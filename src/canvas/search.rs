@@ -328,6 +328,71 @@ pub fn scroll_to_widget(
     settings.pan = egui::vec2(canvas_w, canvas_h) * zoom / 2.0 - widget_canvas_center * zoom;
 }
 
+/// Paint search match rings and glows onto the canvas painter.
+/// Called AFTER rulers, bezel, and Stage-11 overlays so rings are on top.
+///
+/// `widget_screen_rects` — pre-computed (id, screen_rect) pairs derived from
+/// widget canvas rects projected through canvas_origin + zoom.
+pub fn draw_search_overlay(
+    painter: &egui::Painter,
+    state: &CanvasSearchState,
+    widget_screen_rects: &[(uuid::Uuid, egui::Rect)],
+    dark_mode: bool,
+) {
+    if state.query.is_empty() || state.matches.is_empty() {
+        return;
+    }
+
+    // Established project accent colors (same as kind-accent ring system).
+    // Current match: teal ring at 75% opacity (rgba 52,211,153, ~192/255).
+    // Other matches: soft glow (18% inner, 12% outer of 255).
+    let teal = egui::Color32::from_rgb(52, 211, 153);
+
+    let (ring_alpha, glow_inner_alpha, glow_outer_alpha): (u8, u8, u8) = if dark_mode {
+        (192, 46, 31) // 0.75, ~0.18, ~0.12 of 255
+    } else {
+        (220, 77, 51) // boosted slightly for light backgrounds
+    };
+
+    for (i, &match_id) in state.matches.iter().enumerate() {
+        let Some(&(_, rect)) = widget_screen_rects.iter().find(|(id, _)| *id == match_id) else {
+            continue; // widget not visible on canvas this frame
+        };
+
+        if i == state.current_index {
+            // Current match: solid teal ring, no fill.
+            let ring_color = egui::Color32::from_rgba_unmultiplied(
+                teal.r(),
+                teal.g(),
+                teal.b(),
+                ring_alpha,
+            );
+            painter.rect_stroke(
+                rect.expand(3.0),
+                4.0,
+                egui::Stroke::new(2.0, ring_color),
+                egui::StrokeKind::Outside,
+            );
+        } else {
+            // Other matches: soft glow (two filled rects, no stroke).
+            let inner_color = egui::Color32::from_rgba_unmultiplied(
+                teal.r(),
+                teal.g(),
+                teal.b(),
+                glow_inner_alpha,
+            );
+            let outer_color = egui::Color32::from_rgba_unmultiplied(
+                teal.r(),
+                teal.g(),
+                teal.b(),
+                glow_outer_alpha,
+            );
+            painter.rect_filled(rect.expand(6.0), 4.0, outer_color);
+            painter.rect_filled(rect.expand(3.0), 4.0, inner_color);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

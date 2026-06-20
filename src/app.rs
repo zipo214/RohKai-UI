@@ -3406,6 +3406,35 @@ impl eframe::App for RohKaiApp {
                     );
                 }
             }
+
+            // Search overlay: rings and glows above all other canvas content.
+            if let Some(ref cs) = self.session.interaction.canvas_search
+                && !cs.matches.is_empty()
+            {
+                let origin =
+                    crate::canvas::rulers::canvas_origin(canvas_size, zoom, pan, panel_rect);
+                let screen_rects: Vec<(uuid::Uuid, egui::Rect)> = self
+                    .project
+                    .ui_tree
+                    .widgets
+                    .iter()
+                    .map(|w| {
+                        let r = egui::Rect::from_min_size(
+                            origin + egui::vec2(w.rect.x, w.rect.y) * zoom,
+                            egui::vec2(w.rect.w, w.rect.h) * zoom,
+                        );
+                        (w.id, r)
+                    })
+                    .collect();
+                let painter = ui.painter_at(panel_rect);
+                let dark_mode = ui.visuals().dark_mode;
+                crate::canvas::search::draw_search_overlay(
+                    &painter,
+                    cs,
+                    &screen_rects,
+                    dark_mode,
+                );
+            }
         });
 
         // Prune SVG texture cache for widgets removed from canvas.
