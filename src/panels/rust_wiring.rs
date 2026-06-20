@@ -1,26 +1,33 @@
-//! Stage 11 — Rust Wiring editor window.
+//! Stage 11 — Global Rust Wiring editor window.
 //!
-//! Edits `AppProps.rust_wiring`: mpsc channels, iterator pipelines, and trait
-//! impls. A live preview of the generated code for each section reuses the
-//! `codegen::rust_wiring` emitters, so what the user sees is what export writes.
+//! Edits `AppProps.rust_wiring`: app-wide mpsc channels, iterator pipelines, and
+//! trait impls. This is the **advanced** escape hatch — beginner-facing
+//! per-widget wiring lives in the visual behavior graph (`panels::behaviors` +
+//! `codegen::behavior_recipes`). A live preview of the generated code for each
+//! section reuses the `codegen::rust_wiring` emitters, so what the user sees is
+//! what export writes.
 
 use crate::project::schema::{ChannelDef, IterOp, IteratorPipeline, RustWiring, TraitImpl};
 use uuid::Uuid;
 
-/// Render the Rust Wiring window. Mutates `wiring` in place. Returns while open.
+/// User-facing name for the advanced app-wide Rust infrastructure editor.
+/// Single source of truth so the window title and the menu button never drift.
+pub const PANEL_TITLE: &str = "Global Rust Wiring";
+
+/// Render the Global Rust Wiring window. Mutates `wiring` in place. Returns while open.
 pub fn show(ctx: &egui::Context, open: &mut bool, wiring: &mut RustWiring) -> bool {
     if !*open {
         return false;
     }
     let mut keep_open = true;
 
-    let screen = ctx.screen_rect();
+    let screen = ctx.content_rect();
     let default_pos = egui::pos2(
         (screen.center().x - 320.0).max(screen.min.x + 20.0),
         (screen.center().y - 260.0).max(screen.min.y + 20.0),
     );
 
-    egui::Window::new("Rust Wiring")
+    egui::Window::new(PANEL_TITLE)
         .id(egui::Id::new("rust_wiring_window"))
         .open(&mut keep_open)
         .default_pos(default_pos)
@@ -254,4 +261,19 @@ fn code_preview(ui: &mut egui::Ui, salt: &str, code: &str) {
                     .interactive(false),
             );
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The advanced escape hatch is presented as "Global Rust Wiring" so users
+    /// distinguish it from the beginner visual behavior graph.  Both the window
+    /// title and the menu button source this constant, so asserting it here
+    /// guards the rename for every user-facing surface at once.
+    #[test]
+    fn panel_is_named_global_rust_wiring() {
+        assert_eq!(PANEL_TITLE, "Global Rust Wiring");
+        assert!(PANEL_TITLE.starts_with("Global "));
+    }
 }

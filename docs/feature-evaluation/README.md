@@ -30,6 +30,7 @@ state, and how to measure whether it got there.
 | SVG import and renderer | `svg-import-renderer.md` | How close are importer and renderer to mature SVG engines? |
 | Custom widget system | `custom-widget-system.md` | Are descriptors, builder, and future maker distinct and useful? |
 | Project infrastructure | `project-infrastructure.md` | Are files, assets, undo, project views, and templates robust? |
+| Project surfaces and dialogs | `project-surfaces-dialogs.md` | Are multiple forms real authoring/runtime surfaces with transactional modal behavior? |
 | Preferences, theming, and platform | `preferences-theming-platform.md` | Can users adapt RohKai and exported apps to their environment? |
 | Testing and quality gates | `testing-quality.md` | How do we prove features work and stay working? |
 
@@ -48,10 +49,12 @@ state, and how to measure whether it got there.
 | SVG importer | 3 | 5 |
 | SVG raster preview/export | 4 | 5 |
 | Project infrastructure | 3 | 5 |
+| Project surfaces and modal dialogs | 4 | 5 |
 | Preferences/theming | 3 | 5 |
 | Testing/verification | 3-4 | 5 |
 
-RohKai's strongest differentiator is the live loop: `UiTree` drives canvas,
-code preview, AppState, and export. Its largest depth gaps are model-bound data
+RohKai's strongest differentiator is the live loop: `ProjectDocument` owns the
+project and each surface `UiTree` drives canvas, code preview, AppState, and
+export. Its largest depth gaps are model-bound data
 widgets, runtime non-visual components, true formula/charting systems, the visual
 widget maker, and full SVG/text rendering.

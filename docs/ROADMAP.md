@@ -1,17 +1,21 @@
 # RohKai Roadmap
 
-## Current Active Work — Pre-Release Depth (SVG Renderer Roadmap R0–R8 Closed)
+## Current Active Work — Master Execution Backlog (no deferral)
 
-- Keep RohKai on egui/eframe while closing reliability and feature-depth gaps.
-- SVG execution follows `docs/SVG_RENDERER_ROADMAP.md`, now **complete R0–R8**:
-  R0 metadata, shared microsyntax/style, bounded references, R1 geometry, R3
-  linear/radial paint servers, R4 clipping/viewport-overflow/group-compositing,
-  R5 PNG + baseline JPEG `data:` embedded images, R6 editable chunked text
-  import, R7 alpha/luminance masks + filter tier-1, and R8 in-app report UI +
-  source viewer + golden corpus + benchmark + dev-only oracle. Deferred,
-  runtime-diagnosed follow-ons: progressive JPEG, the R6 vector-outline snapshot
-  / raster text, and filter tier 2/3.
-- Stage 15's general RohKai renderer is deferred and is not the current stage.
+- This file (`ROADMAP.md`) is the **strategic stage history**. The single
+  ordered list of everything still to do lives in
+  **`docs/ROADMAP_PHASE2.md`** (stages S1–S22). Deferral is no longer an option:
+  every formerly-deferred item or non-goal is an ordered to-do there, ending with
+  the in-house renderer (S22).
+- Keep RohKai on egui/eframe until S22; close reliability and depth gaps in order.
+- SVG execution follows `docs/SVG_RENDERER_ROADMAP.md`, now **complete R0–R12 +
+  filter tier-3** (geometry, paint servers, clip/mask, filters tier-1/2/3,
+  patterns, markers, raster text/textPath, namespace recovery, a11y). The
+  formerly-deferred follow-ons are **scheduled**, not parked: ICC + progressive/
+  CMYK JPEG (S7), real-font text + shaping/bidi (S3→S9), full CSS (S10),
+  animation (S14), foreignObject + external resources (S16), scripting (S18).
+- Stage 15's general RohKai renderer is the **final** stage (S22), by design —
+  it is last in the order, not abandoned.
 
 ## Stage 0 — Bootstrap ✅
 - [x] Cargo scaffold, eframe window opens
@@ -19,7 +23,8 @@
 - [x] `cargo check` passes, zero warnings
 
 ## Stage 1 — Core Loop ✅
-- [x] `UiTree` as single source of truth (serde-serializable)
+- [x] `UiTree` as the serde-serializable single-surface source of truth
+      (later nested under the project-authoritative `ProjectDocument`)
 - [x] Palette panel — click to add Button / Label / TextInput / Slider / Checkbox
 - [x] Canvas — click to select, drag to move, Delete key to remove
 - [x] Properties panel — live-edit label, binding, x/y/w/h, min/max
@@ -245,7 +250,7 @@
 - [x] Add `WidgetMakerDocument` internal model for visual primitive composition.
       (`WidgetMakerDoc` + `MakerPrimitive` in `src/canvas/widget_maker.rs`; commit 4f60e72)
 - [x] Add separate Visual Widget Maker window with mini-canvas and inspector.
-      (floating window via `widget_maker_panel`; "Visual Widget Maker…" in Tools menu)
+      (`widget_maker_panel`; Widgets → Create New Widget…)
 - [x] Primitive vertical slice: rect, outline, ellipse, text; drag/select/resize
       (interactive corner handles), normalised [0,1] coordinates.
       (hit region / z-order reorder remain as future depth items)
@@ -255,8 +260,13 @@
       (`doc_to_descriptor` → JSON with live_preview + export templates)
 - [x] Save generated descriptor to `widgets/`, reload palette, and preserve
       Advanced Descriptor escape hatch. (Save button + `load_from_widgets_dir` refresh)
-- [ ] Later: z-order reorder, hit regions, slots, layout groups, constraints,
-      state variants, event zones, style tokens, round-trip from .rkwd to maker doc.
+- [x] Z-order reorder, hit regions, slots, H/V/Grid/Stack layout groups, anchors,
+      state variants, event zones, style tokens, and Visual-Maker `.rkwd`
+      round-trip metadata.
+- [x] Consolidate widget authoring under the Widgets menu: Create New Widget
+      opens the Visual Widget Maker; guided and advanced descriptor editors are
+      explicitly named secondary paths. All three windows share viewport-safe
+      bounds and cannot persist off-screen.
 
 ## Stage 7.x - SVG Source Viewing — Historical Snapshot
 
@@ -490,7 +500,7 @@ gap.
 - [x] Properties expose first-slice stretch/fill behavior through
       `layout_stretch`; container reflow preserves child size hints when
       stretch is disabled.
-- [ ] Properties expose alignment, grid row policies, and per-child
+- [x] Properties expose alignment, grid row policies, and per-child
       stretch/fixed-size behavior.
 - [x] Spacers are layout-aware first-slice items: `VerticalSpacer` flexes inside
       `VLayout`, `HorizontalSpacer` flexes inside `HLayout`, and generated code
@@ -499,17 +509,19 @@ gap.
       instead of as a flat draw-order row with incidental indentation.
 - [x] Delete, group, ungroup, and first-slice child reorder semantics respect
       layout-child ownership and reflow through `UiTree`.
-- [ ] Hit testing, rubber-band selection, and richer drag-reorder semantics need
-      more layout-aware polish.
+- [x] Hit testing, rubber-band selection, and drag-reorder are layout-aware;
+      Grid children can be dragged directly between row-major slots.
 - [x] Stack layout slice: live codegen and export place direct
       `VLayout`/`HLayout` children inside `ui.vertical(|ui| { ... })` or
       `ui.horizontal(|ui| { ... })` closures in child order.
-- [x] Lazare parser first-slice round-trips one-level layout-owned hierarchy
-      from generated/edited layout closures.
+- [x] Lazare round-trips multi-level layout-owned hierarchy from generated or
+      edited layout closures using explicit parent markers; empty containers
+      clear prior ownership.
 - [x] Add tests proving canvas child order, resize reflow, generated code
       nesting, export output, and first-slice parser behavior stay consistent.
-- [ ] Add richer cell/slot editor, named slots, drag-to-slot behavior, and
-      multi-level layout hierarchy round-trip tests.
+- [x] Grid cell/slot editor stores stable names, displays them on canvas and in
+      generated code, supports arrow reorder plus canvas drag-to-slot, and has
+      multi-level reflow/parser/export regression tests.
 
 ### New Widget Kinds — Containers
 - [x] Scroll Area — canvas box with simulated scrollbar indicator
@@ -527,7 +539,7 @@ gap.
 
 ### Feature Depth Status
 - **Full enough for current export:** `FilePicker` now emits `rfd::FileDialog`,
-      generated AppState path storage, and the required exported `rfd = "0.14"`
+      generated AppState path storage, and the required exported `rfd = "0.17.2"`
       Cargo dependency.
 - **Functional MVP:** `MathLabel` is a computed `f32` label, not a formula
       editor; `Chart` is a minimal `Vec<f32>` bar painter, not a charting
@@ -557,7 +569,7 @@ gap.
 - [x] Data table widget MVP — `Table` (egui::Grid, columns from static options)
       — merged with Table View; model/data binding remains future work
 - [x] File picker widget — `FilePicker`; emits `rfd::FileDialog`, path field,
-      and generated `rfd = "0.14"` dependency
+      and generated `rfd = "0.17.2"` dependency
 - [x] Chart widget MVP — `Chart`; canvas bar preview and generated egui painter
       bar output from a `Vec<f32>` binding
 
@@ -607,8 +619,9 @@ See `docs/STAGE11_PLAN.md` for the full design (function, depth, UX, impact).
       definition wins, a near-handler `// CODEGEN CONFLICT` comment plus a
       top-of-`app.rs` conflict summary block. Button Click+DoubleClick fire
       independently per egui semantics (Click not suppressed). A real `cargo check`
-      compile fixture (`export_compile_fixture_cargo_check`, `#[ignore]`) +
-      always-run smoke now prove the generated crate compiles across top + nested
+      warning-denied compile fixtures (`export_compile_fixture_cargo_check` and
+      `all_builtin_widgets_export_cargo_check`) run in the normal test suite and
+      prove generated crates compile across top + nested
       events, async Plain/Result, FilePicker/rfd, channel fields, iterator methods,
       simple local trait binding, and state bindings. Remaining (not top-class):
       auto-bind status to a widget, cancellation/progress, typed task I/O, and
@@ -649,14 +662,19 @@ See `docs/STAGE11_PLAN.md` for the full design (function, depth, UX, impact).
 
 ---
 
-## Stage 13 — Data & Integration
-- [ ] DB connection configurator — SQLite/PostgreSQL/MySQL/Supabase
-- [ ] Uses sqlx or rusqlite crate (user approves exact crate at stage start)
-- [ ] Visual query builder — select table, columns, filter
-- [ ] Bind widget to query result field
-- [ ] Generated code uses correct Rust DB crate with async/sync query calls
-- [ ] Schema viewer — see tables and fields visually
-- [ ] Generates AppState with db connection pool field
+## Stage 13 — Data & Integration (SQLite slice shipped; depth → S12)
+
+Detailed ordered work in `docs/ROADMAP_PHASE2.md` **S12**.
+
+- [x] DB connection configurator (SQLite) — `DatabaseEngine` trait + `SqliteEngine`
+      (`rusqlite`, `params![]` only — Invariant 10)
+- [x] Bind widget to query result field — `DbBinding` on `WidgetInstance`
+- [x] Generates `AppState` with db field + `load_from_db()` codegen
+- [ ] Multi-backend (PostgreSQL / MySQL / Supabase), async query calls,
+      connection pool — **S12** (approved crate(s) at stage start)
+- [ ] Visual query builder — **S12**
+- [ ] Schema viewer — **S12**
+- [ ] Design-time data preview — **S12**
 
 ---
 
@@ -735,9 +753,10 @@ and prioritizes depth over more palette breadth.
       formula parser (formula.rs) and Rust emitter; Chart remains Vec<f32> bar
       MVP. Separate charting library system deferred to Stage 13.
 - [x] Visual Widget Maker: WidgetMakerDoc + MakerPrimitive data model
-      (Rect/Outline/Ellipse/Text); normalised primitive mini-canvas; toolbar;
-      RGB/position/size properties; generated code preview; Save Descriptor
-      button writes .rkwd + reloads palette. "Visual Widget Maker…" in Tools menu.
+      (Rect/Outline/Ellipse/Text/HitRegion plus layout groups); normalised
+      primitive mini-canvas; toolbar; RGB/position/size/state/slot properties;
+      generated code preview; Save Descriptor writes .rkwd + reloads palette.
+      Widgets → Create New Widget opens this true visual construction surface.
 - [x] Object Inspector/component tray depth: describe_kind() per-component
       description; "design-time stub" runtime status badge; sectioned Identity/
       Handler/Generated config layout; generated AppState field + update() comment
@@ -745,24 +764,71 @@ and prioritizes depth over more palette breadth.
 
 ---
 
-## Stage 15 — Own Renderer
+## Stage 15 — Own Renderer → master backlog **S22** (FINAL)
 
-> This is **not** the SVG renderer roadmap. SVG R0-R8 improves SVG import,
+> This is **not** the SVG renderer roadmap. SVG R0–R12 improves SVG import,
 > Image preview, and SVG export while RohKai continues to run on egui/eframe.
-> Stage 15 would replace RohKai's general widget/runtime rendering layer and
-> remains deferred until the pre-release depth gate is closed and a separate
-> architecture decision explicitly activates it.
+> Stage 15 replaces RohKai's general widget/runtime rendering layer. It is the
+> **final** stage in the ordered backlog (S22), not deferred — it runs last by
+> design, after S1–S21, and is where the two architecture invariants (no
+> external renderer dependency, no C FFI) pay off in full visual control.
 
-- [ ] Replace egui rendering layer with RohKai-owned pure Rust renderer
-- [ ] Widget descriptor format drives renderer widget model directly
-- [ ] Zero transient C dependencies
-- [ ] All previously constrained visual properties become available:
-      per-widget color, corner radius on all types, border widths, drop shadows
+- [ ] Replace egui rendering layer with RohKai-owned pure Rust renderer — **S22**
+- [ ] Widget descriptor format drives renderer widget model directly — **S22**
+- [ ] Zero transient C dependencies — **S22**
+- [ ] All previously constrained visual properties (per-widget color, corner
+      radius on all types, border widths, drop shadows, gradients, blend modes) — **S22**
 
-### Later / High Risk
-- [ ] Model-based item views
-- [ ] Dock Widget
-- [ ] MDI Area
-- [ ] Multi-window support
-- [ ] QAxWidget-style platform integrations
-      (not compatible with RohKai's pure Rust / no C FFI rule)
+### Project surfaces and windowing → master backlog **S19**
+
+#### S19A - Project Surfaces And Modal Dialogs - Depth 4 implemented
+- [x] Schema-v2 `ProjectDocument` owns one root `MainWindow` plus any number of
+      editable `ModalDialog` surfaces; legacy bare trees and schema-v1 projects
+      migrate losslessly.
+- [x] Surfaces panel and canvas tabs support create, activate, rename, duplicate,
+      reorder, isolated preview, guarded delete, and Blank/OK-Cancel/Settings
+      templates.
+- [x] Per-surface selection, pan, zoom, Lazare buffer, and valid/invalid edit
+      state remain isolated while switching tabs.
+- [x] Typed surface lifecycle triggers (`Opened`, `Accepted`, `Rejected`,
+      `Closed`) and modal actions (`OpenModal`, `AcceptDialog`, `RejectDialog`)
+      work in F5 preview and generated native/WASM source.
+- [x] Transactional dialog drafts copy supported scalar, `Vec<String>`, and
+      `Vec<f32>` state; Accept commits, Apply commits without closing, Reset
+      reloads state, and Reject/Escape discards.
+- [x] Nested distinct dialogs use a bounded top-only stack; duplicate opens are
+      idempotent diagnostics. Default controls receive initial focus and opener
+      focus is restored after close.
+- [x] `DialogButtonBox` stores semantic Accept/Reject/Apply/Reset/Help/Action
+      roles while preserving legacy option strings through migration.
+- [x] Multi-surface export emits `src/surfaces/*.rs`, aggregate AppState,
+      handlers/dependencies, modal runtime, and warning-clean native/WASM
+      fixtures.
+- [x] Validation reports invalid main counts, duplicate surface IDs/names, missing or
+      recursive modal targets, dangling button policies, and unsupported draft
+      fields.
+- [x] Hardening fixtures cover migration, duplication/remapping, lifecycle
+      ordering, nested dialogs, source isolation, generated-project Clippy, and
+      50 surfaces / 10,000 widgets (1.29 s debug run on the development machine).
+- [~] Manual screenshot/accessibility matrix remains to be rerun when the
+      Windows UI automation runtime is healthy; automated behavior and export
+      gates are green.
+
+#### S19B - Modeless Secondary Windows - planned
+- [ ] Secondary eframe deferred viewports with synchronized shared state.
+- [ ] Multiple instances, ownership/lifecycle, geometry persistence,
+      multi-monitor/DPI behavior, and explicit web fallback diagnostics.
+
+#### S19C - Main-Window Framework - planned
+- [ ] Toolbars, menus/actions, status areas, docks, tab groups, and persisted
+      workspace layouts.
+
+#### S19D - MDI And Advanced Windowing - planned
+- [ ] MDI subwindows, application/window modality, typed surface
+      parameters/results, and advanced instance management.
+- [ ] Model-based item views and Dock Widget remain separate depth work inside
+      S19; modal surfaces do not satisfy those gaps.
+- [ ] Native-quality platform integrations (the capability formerly framed as
+      "QAxWidget") are delivered by the in-house renderer + pure-Rust platform
+      layer in **S22** — **never** via C FFI. C FFI / system-toolkit bindings
+      remain a permanent architecture invariant, not a deferral.

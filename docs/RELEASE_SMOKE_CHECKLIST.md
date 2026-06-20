@@ -6,8 +6,17 @@ surface. Mark each checkbox as the tester works through the list.
 ## Setup
 
 ```
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-toolchain-alignment.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\audit-dependency-updates.ps1
+cargo fmt --check
+cargo check --all-targets
+cargo test
+cargo clippy --all-targets -- -D warnings
 cargo build --release
 ```
+
+Record and review any available dependency update before tagging. A newer
+major release is a compatibility decision, not an automatic release blocker.
 
 Run the release binary for all steps below.
 

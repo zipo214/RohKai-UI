@@ -8,7 +8,7 @@ const CODE_EDITOR_GUTTER_Y: f32 = 8.0;
 const CODE_HIGHLIGHT_PADDING: f32 = 4.0;
 const CODE_HIGHLIGHT_STROKE_WIDTH: f32 = 1.25;
 
-#[derive(Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub enum CodeStatus {
     #[default]
     Generated,
@@ -17,6 +17,9 @@ pub enum CodeStatus {
 }
 
 pub struct CodePreviewArgs<'a> {
+    /// Project-wide field collection tree. Code editing still targets `tree`,
+    /// while the AppState view includes bindings from every saved surface.
+    pub app_state_tree: &'a UiTree,
     pub selected_ids: &'a mut Vec<Uuid>,
     pub navigation_target: &'a mut Option<Uuid>,
     /// Tracé: if Some(name), insert handler stub and clear after consuming.
@@ -74,15 +77,16 @@ impl CodeEditorSurface<'_> {
             .auto_shrink([false, false])
             .show(&mut editor_ui, |ui| {
                 let wrap_width = inner_rect.width().max(24.0);
-                let mut layouter = |ui: &egui::Ui, text: &str, requested_width: f32| {
-                    let width = if self.wrap {
-                        requested_width.min(wrap_width)
-                    } else {
-                        f32::INFINITY
+                let mut layouter =
+                    |ui: &egui::Ui, text: &dyn egui::TextBuffer, requested_width: f32| {
+                        let width = if self.wrap {
+                            requested_width.min(wrap_width)
+                        } else {
+                            f32::INFINITY
+                        };
+                        let job = code_layout_job(ui, text.as_str(), self.font_size, width);
+                        ui.fonts_mut(|fonts| fonts.layout_job(job))
                     };
-                    let job = code_layout_job(ui, text, self.font_size, width);
-                    ui.fonts(|fonts| fonts.layout_job(job))
-                };
 
                 let output = egui::TextEdit::multiline(self.text)
                     .font(egui::FontId::monospace(self.font_size))
@@ -91,7 +95,7 @@ impl CodeEditorSurface<'_> {
                     .min_size(egui::vec2(wrap_width, inner_rect.height()))
                     .code_editor()
                     .layouter(&mut layouter)
-                    .frame(false)
+                    .frame(egui::Frame::NONE)
                     .show(ui);
 
                 let block_rects: Vec<egui::Rect> = self
@@ -100,21 +104,20 @@ impl CodeEditorSurface<'_> {
                     .filter_map(|span| source_span_rect(&output, self.text, span))
                     .collect();
 
-                if let Some(navigation) = self.navigation {
-                    if let Some(rect) = source_span_rect(&output, self.text, navigation) {
-                        let viewport = ui.clip_rect();
-                        let align = if rect.width() <= viewport.width()
-                            && rect.height() <= viewport.height()
-                        {
+                if let Some(navigation) = self.navigation
+                    && let Some(rect) = source_span_rect(&output, self.text, navigation)
+                {
+                    let viewport = ui.clip_rect();
+                    let align =
+                        if rect.width() <= viewport.width() && rect.height() <= viewport.height() {
                             egui::Align::Center
                         } else {
                             egui::Align::Min
                         };
-                        ui.scroll_to_rect(rect.expand(2.0), Some(align));
-                    }
+                    ui.scroll_to_rect(rect.expand(2.0), Some(align));
                 }
 
-                (output.response.clone(), block_rects)
+                (output.response.response.clone(), block_rects)
             });
 
         let stroke = egui::Stroke::new(
@@ -129,7 +132,7 @@ impl CodeEditorSurface<'_> {
             .filter_map(|rect| highlight_outline_rect(rect, inner_rect, decoration_clip))
             .collect();
         for rect in &outline_rects {
-            painter.rect_stroke(*rect, 3.0, stroke);
+            painter.rect_stroke(*rect, 3.0, stroke, egui::StrokeKind::Inside);
         }
 
         CodeEditorSurfaceOutput {
@@ -189,8 +192,8 @@ fn source_span_rect(
             let left = row.x_offset(local_start);
             let right = row.x_offset(local_end.max(local_start));
             let row_rect = egui::Rect::from_min_max(
-                egui::pos2(left.min(right), row.rect.top()),
-                egui::pos2(left.max(right), row.rect.bottom()),
+                egui::pos2(left.min(right), row.rect().top()),
+                egui::pos2(left.max(right), row.rect().bottom()),
             )
             .translate(output.galley_pos.to_vec2());
             block_rect = Some(match block_rect {
@@ -266,10 +269,10 @@ fn parse_diag_line(msg: &str) -> Option<usize> {
     }
     // "N:M" column:line pattern at start
     let first_word: &str = msg.split_whitespace().next().unwrap_or("");
-    if let Some((n, _)) = first_word.split_once(':') {
-        if let Ok(v) = n.parse::<usize>() {
-            return Some(v);
-        }
+    if let Some((n, _)) = first_word.split_once(':')
+        && let Ok(v) = n.parse::<usize>()
+    {
+        return Some(v);
     }
     None
 }
@@ -345,7 +348,8 @@ fn is_canonical_widget_free_edit(code: &str, tree: &UiTree, report: &parser::Par
         && code.trim() == canonical_widget_free_code(tree).trim()
 }
 
-pub fn show(ctx: &egui::Context, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
+pub fn show(root_ui: &mut egui::Ui, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
+    let ctx = root_ui.ctx().clone();
     let CodePreviewArgs {
         selected_ids,
         navigation_target,
@@ -360,6 +364,7 @@ pub fn show(ctx: &egui::Context, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
         search_query,
         search_open,
         search_match_idx,
+        app_state_tree,
     } = args;
 
     let generated = egui_emitter::emit_document(tree);
@@ -390,10 +395,10 @@ pub fn show(ctx: &egui::Context, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
     }
     let requested_navigation = navigation_target.take();
 
-    egui::SidePanel::right("code_output")
-        .min_width(220.0)
+    egui::Panel::right("code_output")
+        .min_size(220.0)
         .resizable(true)
-        .show(ctx, |ui| {
+        .show_inside(root_ui, |ui| {
             ui.heading("Generated Code");
             ui.separator();
 
@@ -508,8 +513,8 @@ pub fn show(ctx: &egui::Context, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
                     } else {
                         "Parse error"
                     });
-                if diag_resp.clicked() {
-                    if let Some(line) = diag_line {
+                if diag_resp.clicked()
+                    && let Some(line) = diag_line {
                         // Compute byte offset for the target line start
                         let byte_start: usize = code_buffer
                             .lines()
@@ -543,7 +548,6 @@ pub fn show(ctx: &egui::Context, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
                             }
                         }
                     }
-                }
                 if tree_changed_while_invalid {
                     ui.label(
                         egui::RichText::new(
@@ -689,7 +693,7 @@ pub fn show(ctx: &egui::Context, tree: &mut UiTree, args: CodePreviewArgs<'_>) {
 
             // ---- AppState (always read-only) ----
             ui.label(egui::RichText::new("AppState").strong());
-            let state = state_emitter::emit(tree);
+            let state = state_emitter::emit(app_state_tree);
             egui::ScrollArea::vertical()
                 .id_salt("state_scroll")
                 .max_height(state_h)

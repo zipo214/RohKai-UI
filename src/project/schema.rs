@@ -95,6 +95,9 @@ pub struct AppProps {
     /// Stage 11 — app-wide Rust wiring (channels, iterators, trait impls).
     #[serde(default, skip_serializing_if = "rust_wiring_is_empty")]
     pub rust_wiring: RustWiring,
+    /// Visual behavior graph — widget event → typed state mutation wires.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub behaviors: Vec<Behavior>,
 }
 
 fn rust_wiring_is_empty(w: &RustWiring) -> bool {
@@ -117,8 +120,290 @@ impl Default for AppProps {
             components: Vec::new(),
             assets: Vec::new(),
             rust_wiring: RustWiring::default(),
+            behaviors: Vec::new(),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Behavior graph — visual event → state-mutation wiring
+//
+// This is the beginner-facing counterpart to Stage 11 Global Rust Wiring: instead of
+// naming a handler function, the user drags a wire from a widget's event
+// socket to a state target and picks a typed `VisualAction`. Project-wide
+// behaviors are persisted by `ProjectDocument::props`; `AppProps.behaviors`
+// remains the compatibility representation materialized into surface trees.
+// Codegen for these lives in `codegen::behavior`.
+// ---------------------------------------------------------------------------
+
+/// A typed literal value used by `VisualAction::Set`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ValueExpr {
+    /// An `f32` literal.
+    Number(f32),
+    /// A `String` literal.
+    Text(String),
+    /// A `bool` literal.
+    Flag(bool),
+}
+
+/// A typed state mutation fired when the source widget's event triggers.
+///
+/// Every variant must emit real Rust in `codegen::behavior::action_statement`
+/// (invariant-tested there) — no variant may exist UI-only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum VisualAction {
+    /// `state.field = value;`
+    Set { field: String, value: ValueExpr },
+    /// `state.field = (state.field + amount).clamp(min, max);`
+    Add {
+        field: String,
+        amount: f32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min: Option<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max: Option<f32>,
+    },
+    /// `state.field = (state.field - amount).clamp(min, max);`
+    Subtract {
+        field: String,
+        amount: f32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min: Option<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max: Option<f32>,
+    },
+    /// `state.field = !state.field;`
+    Toggle { field: String },
+    /// `self.handler();` — bridges into a named handler stub.
+    CallHandler { handler: String },
+    /// Open a saved modal surface. Reopening an already-open surface is
+    /// intentionally idempotent at runtime.
+    OpenModal { surface: Uuid },
+    /// Commit a modal surface's transactional draft and close it.
+    AcceptDialog { surface: Uuid },
+    /// Discard a modal surface's transactional draft and close it.
+    RejectDialog { surface: Uuid },
+}
+
+impl VisualAction {
+    /// The AppState field this action mutates (`None` for `CallHandler`).
+    pub fn field(&self) -> Option<&str> {
+        match self {
+            VisualAction::Set { field, .. }
+            | VisualAction::Add { field, .. }
+            | VisualAction::Subtract { field, .. }
+            | VisualAction::Toggle { field } => Some(field.as_str()),
+            VisualAction::CallHandler { .. }
+            | VisualAction::OpenModal { .. }
+            | VisualAction::AcceptDialog { .. }
+            | VisualAction::RejectDialog { .. } => None,
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            VisualAction::Set { .. } => "Set",
+            VisualAction::Add { .. } => "Add",
+            VisualAction::Subtract { .. } => "Subtract",
+            VisualAction::Toggle { .. } => "Toggle",
+            VisualAction::CallHandler { .. } => "Call handler",
+            VisualAction::OpenModal { .. } => "Open modal",
+            VisualAction::AcceptDialog { .. } => "Accept dialog",
+            VisualAction::RejectDialog { .. } => "Reject dialog",
+        }
+    }
+}
+
+/// A widget event source in the behavior graph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WidgetEventRef {
+    pub source_widget: Uuid,
+    pub event: WidgetEvent,
+}
+
+/// A lifecycle event emitted by a project surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SurfaceEvent {
+    Opened,
+    Accepted,
+    Rejected,
+    Closed,
+}
+
+impl SurfaceEvent {
+    pub const ALL: [Self; 4] = [Self::Opened, Self::Accepted, Self::Rejected, Self::Closed];
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Opened => "On Opened",
+            Self::Accepted => "On Accepted",
+            Self::Rejected => "On Rejected",
+            Self::Closed => "On Closed",
+        }
+    }
+}
+
+/// A surface lifecycle source in the behavior graph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SurfaceEventRef {
+    pub source_surface: Uuid,
+    #[serde(rename = "surface_event")]
+    pub event: SurfaceEvent,
+}
+
+/// Typed trigger for a visual behavior.
+///
+/// The untagged flattened representation intentionally preserves the legacy
+/// `{source_widget, event}` JSON shape while adding the distinct
+/// `{source_surface, surface_event}` shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum BehaviorTrigger {
+    Widget(WidgetEventRef),
+    Surface(SurfaceEventRef),
+}
+
+/// One wire in the behavior graph: typed trigger → typed action.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Behavior {
+    pub id: Uuid,
+    #[serde(flatten)]
+    pub trigger: BehaviorTrigger,
+    /// Widget the wire visually lands on (for canvas drawing). The action's
+    /// `field` is authoritative for codegen; this is presentation metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_widget: Option<Uuid>,
+    pub action: VisualAction,
+}
+
+impl Behavior {
+    #[must_use]
+    pub const fn widget(
+        id: Uuid,
+        source_widget: Uuid,
+        event: WidgetEvent,
+        target_widget: Option<Uuid>,
+        action: VisualAction,
+    ) -> Self {
+        Self {
+            id,
+            trigger: BehaviorTrigger::Widget(WidgetEventRef {
+                source_widget,
+                event,
+            }),
+            target_widget,
+            action,
+        }
+    }
+
+    #[must_use]
+    pub const fn surface(
+        id: Uuid,
+        source_surface: Uuid,
+        event: SurfaceEvent,
+        action: VisualAction,
+    ) -> Self {
+        Self {
+            id,
+            trigger: BehaviorTrigger::Surface(SurfaceEventRef {
+                source_surface,
+                event,
+            }),
+            target_widget: None,
+            action,
+        }
+    }
+
+    #[must_use]
+    pub const fn source_widget(&self) -> Option<Uuid> {
+        match self.trigger {
+            BehaviorTrigger::Widget(source) => Some(source.source_widget),
+            BehaviorTrigger::Surface(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn widget_event(&self) -> Option<WidgetEvent> {
+        match self.trigger {
+            BehaviorTrigger::Widget(source) => Some(source.event),
+            BehaviorTrigger::Surface(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn source_surface(&self) -> Option<Uuid> {
+        match self.trigger {
+            BehaviorTrigger::Widget(_) => None,
+            BehaviorTrigger::Surface(source) => Some(source.source_surface),
+        }
+    }
+
+    #[must_use]
+    pub const fn surface_event(&self) -> Option<SurfaceEvent> {
+        match self.trigger {
+            BehaviorTrigger::Widget(_) => None,
+            BehaviorTrigger::Surface(source) => Some(source.event),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// State-machine schema types (P2.5)
+// ---------------------------------------------------------------------------
+
+/// One state in a StateMachine component.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StateDef {
+    /// Unique name for this state, e.g. `"idle"`.
+    pub name: String,
+    /// Optional Rust expression called on entry to this state.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub entry_action: String,
+    /// Optional Rust expression called on exit from this state.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub exit_action: String,
+}
+
+impl Default for StateDef {
+    fn default() -> Self {
+        // name defaults to "state" (not ""), so this cannot be derived.
+        Self {
+            name: String::from("state"),
+            entry_action: String::new(),
+            exit_action: String::new(),
+        }
+    }
+}
+
+/// A directed transition between two states.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct TransitionDef {
+    /// Source state name.
+    pub from: String,
+    /// Destination state name.
+    pub to: String,
+    /// Optional boolean guard expression (e.g. `"self.count > 0"`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub guard: String,
+    /// Optional Rust expression to execute during the transition.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub action: String,
+}
+
+/// Full state-machine definition attached to a `ComponentKind::StateMachine`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct StateMachineProps {
+    /// Ordered list of states.
+    #[serde(default)]
+    pub states: Vec<StateDef>,
+    /// Transition edges.
+    #[serde(default)]
+    pub transitions: Vec<TransitionDef>,
+    /// Name of the initial state (must match an entry in `states`).
+    #[serde(default)]
+    pub initial_state: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -138,6 +423,13 @@ pub struct DesignComponent {
     /// Handler function name emitted in codegen.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub handler: String,
+    /// State-machine definition (StateMachine kind only).
+    #[serde(default, skip_serializing_if = "state_machine_props_is_empty")]
+    pub state_machine: StateMachineProps,
+}
+
+fn state_machine_props_is_empty(p: &StateMachineProps) -> bool {
+    p.states.is_empty() && p.transitions.is_empty() && p.initial_state.is_empty()
 }
 
 /// A project asset reference (image, font, data file).
@@ -342,7 +634,7 @@ pub enum WidgetKind {
 // ---------------------------------------------------------------------------
 
 /// A user-interaction event a widget can expose a handler for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WidgetEvent {
     Click,
     DoubleClick,
@@ -370,6 +662,20 @@ pub const EVENT_CAPABLE_KINDS: [WidgetKind; 9] = [
     WidgetKind::FontComboBox,
     WidgetKind::RadioButton,
 ];
+
+impl WidgetEvent {
+    /// Human-readable name shared by the Properties events UI and the
+    /// Behaviors panel.
+    pub const fn label(self) -> &'static str {
+        match self {
+            WidgetEvent::Click => "On Click",
+            WidgetEvent::DoubleClick => "On Double-Click",
+            WidgetEvent::Change => "On Change",
+            WidgetEvent::LostFocus => "On Lost Focus",
+            WidgetEvent::DragStopped => "On Drag Stopped",
+        }
+    }
+}
 
 impl WidgetKind {
     /// The authoritative list of events this kind exposes in Properties.
@@ -462,6 +768,33 @@ pub enum LayoutCrossAlign {
     End,
 }
 
+/// Per-child cross-axis alignment override for a widget placed inside a
+/// VLayout or HLayout. When set on the child, it overrides the parent's
+/// `layout_cross_align` for that child only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum CrossAlign {
+    /// Align to the start of the cross axis (left for VLayout, top for HLayout).
+    #[default]
+    Start,
+    /// Center on the cross axis.
+    Center,
+    /// Align to the end of the cross axis (right for VLayout, bottom for HLayout).
+    End,
+    /// Stretch to fill the full cross-axis extent.
+    Stretch,
+}
+
+impl CrossAlign {
+    pub fn label(&self) -> &'static str {
+        match self {
+            CrossAlign::Start => "Start",
+            CrossAlign::Center => "Center",
+            CrossAlign::End => "End",
+            CrossAlign::Stretch => "Stretch",
+        }
+    }
+}
+
 /// Per-child size policy for widgets placed inside a layout container.
 /// Controls how a child consumes available space along the main axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -539,6 +872,10 @@ pub struct WidgetProps {
         skip_serializing_if = "is_default_combo_options"
     )]
     pub options: Vec<String>,
+    /// Structured roles for DialogButtonBox. Legacy projects with only
+    /// `options` are interpreted through [`effective_dialog_buttons`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dialog_buttons: Vec<DialogButtonSpec>,
 
     // Slider specific
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -595,6 +932,11 @@ pub struct WidgetProps {
         skip_serializing_if = "is_default_grid_columns"
     )]
     pub grid_columns: usize,
+    /// Optional human-readable names for GridLayout cells, indexed row-major.
+    /// Names describe slots rather than children, so reordering a child moves
+    /// it between stable named destinations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grid_slot_names: Vec<String>,
     #[serde(default, skip_serializing_if = "LayoutCrossAlign::is_start")]
     pub layout_cross_align: LayoutCrossAlign,
 
@@ -696,6 +1038,15 @@ fn default_formula_decimals() -> usize {
 fn is_default_formula_decimals(v: &usize) -> bool {
     *v == 2
 }
+fn child_flex_is_zero(v: &f32) -> bool {
+    *v == 0.0
+}
+fn default_one_u32() -> u32 {
+    1
+}
+fn is_one_u32(v: &u32) -> bool {
+    *v == 1
+}
 
 impl Default for WidgetProps {
     fn default() -> Self {
@@ -705,6 +1056,7 @@ impl Default for WidgetProps {
             max: 1.0,
             default_value: 0.0,
             options: default_combo_options(),
+            dialog_buttons: Vec::new(),
             step: None,
             show_value: true,
             orientation: Orientation::Horizontal,
@@ -721,6 +1073,7 @@ impl Default for WidgetProps {
             layout_spacing: 6.0,
             layout_stretch: true,
             grid_columns: 3,
+            grid_slot_names: Vec::new(),
             layout_cross_align: LayoutCrossAlign::Start,
             formula_expr: String::new(),
             formula_decimals: 2,
@@ -731,6 +1084,170 @@ impl Default for WidgetProps {
             text_wrap: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DialogButtonRole {
+    Accept,
+    Reject,
+    Apply,
+    Reset,
+    Help,
+    Action,
+}
+
+impl DialogButtonRole {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Accept => "Accept",
+            Self::Reject => "Reject",
+            Self::Apply => "Apply",
+            Self::Reset => "Reset",
+            Self::Help => "Help",
+            Self::Action => "Action",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DialogButtonSpec {
+    pub label: String,
+    pub role: DialogButtonRole,
+}
+
+/// Resolved keyboard/policy target for a modal button action.
+///
+/// Standalone buttons dispatch their normal click event. A
+/// [`WidgetKind::DialogButtonBox`] resolves to one of its structured roles so
+/// Enter and Escape activate the same semantic operation as a pointer click.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DialogButtonTarget {
+    Widget(Uuid),
+    Role {
+        widget: Uuid,
+        role: DialogButtonRole,
+    },
+}
+
+#[must_use]
+pub fn is_dialog_action_widget(kind: &WidgetKind) -> bool {
+    matches!(
+        kind,
+        WidgetKind::Button
+            | WidgetKind::ToolButton
+            | WidgetKind::CommandLinkButton
+            | WidgetKind::DialogButtonBox
+    )
+}
+
+/// Resolve structured dialog buttons, migrating legacy string options without
+/// mutating the saved widget.
+#[must_use]
+pub fn effective_dialog_buttons(props: &WidgetProps) -> Vec<DialogButtonSpec> {
+    if !props.dialog_buttons.is_empty() {
+        return props.dialog_buttons.clone();
+    }
+    props
+        .options
+        .iter()
+        .map(|label| {
+            let normalized = label.trim().to_ascii_lowercase();
+            let role = match normalized.as_str() {
+                "ok" | "accept" | "save" | "yes" => DialogButtonRole::Accept,
+                "cancel" | "reject" | "close" | "no" => DialogButtonRole::Reject,
+                "apply" => DialogButtonRole::Apply,
+                "reset" | "restore defaults" => DialogButtonRole::Reset,
+                "help" => DialogButtonRole::Help,
+                _ => DialogButtonRole::Action,
+            };
+            DialogButtonSpec {
+                label: label.clone(),
+                role,
+            }
+        })
+        .collect()
+}
+
+/// Resolve an explicit modal-policy widget or the first semantic fallback.
+#[must_use]
+pub fn resolve_dialog_button_target(
+    widgets: &[WidgetInstance],
+    configured_widget: Option<Uuid>,
+    fallback_role: DialogButtonRole,
+) -> Option<DialogButtonTarget> {
+    if let Some(widget_id) = configured_widget
+        && let Some(widget) = widgets.iter().find(|widget| widget.id == widget_id)
+    {
+        if !is_dialog_action_widget(&widget.kind) {
+            // Invalid persisted policy: ignore it and continue to the semantic
+            // fallback instead of pretending an inert widget is activatable.
+        } else if widget.kind != WidgetKind::DialogButtonBox {
+            return Some(DialogButtonTarget::Widget(widget_id));
+        } else if effective_dialog_buttons(&widget.props)
+            .iter()
+            .any(|button| button.role == fallback_role)
+        {
+            return Some(DialogButtonTarget::Role {
+                widget: widget_id,
+                role: fallback_role,
+            });
+        }
+    }
+
+    widgets
+        .iter()
+        .filter(|widget| widget.kind == WidgetKind::DialogButtonBox)
+        .find(|widget| {
+            effective_dialog_buttons(&widget.props)
+                .iter()
+                .any(|button| button.role == fallback_role)
+        })
+        .map(|widget| DialogButtonTarget::Role {
+            widget: widget.id,
+            role: fallback_role,
+        })
+}
+
+/// Resolve the control that should receive focus when a modal first opens.
+///
+/// A configured/default Accept control wins. If the dialog has no Accept
+/// action, the first focusable widget is used so keyboard users still enter
+/// the dialog at a real control rather than at the modal container.
+#[must_use]
+pub fn resolve_dialog_initial_focus_target(
+    widgets: &[WidgetInstance],
+    configured_widget: Option<Uuid>,
+) -> Option<DialogButtonTarget> {
+    resolve_dialog_button_target(widgets, configured_widget, DialogButtonRole::Accept).or_else(
+        || {
+            widgets.iter().find_map(|widget| {
+                if widget.kind == WidgetKind::DialogButtonBox {
+                    return effective_dialog_buttons(&widget.props)
+                        .first()
+                        .map(|button| DialogButtonTarget::Role {
+                            widget: widget.id,
+                            role: button.role,
+                        });
+                }
+                matches!(
+                    widget.kind,
+                    WidgetKind::Button
+                        | WidgetKind::TextInput
+                        | WidgetKind::TextArea
+                        | WidgetKind::Slider
+                        | WidgetKind::SpinBox
+                        | WidgetKind::Checkbox
+                        | WidgetKind::RadioButton
+                        | WidgetKind::ComboBox
+                        | WidgetKind::FontComboBox
+                        | WidgetKind::ToolButton
+                        | WidgetKind::CommandLinkButton
+                )
+                .then_some(DialogButtonTarget::Widget(widget.id))
+            })
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -801,6 +1318,80 @@ pub struct CustomProp {
     pub name: String,
     #[serde(default)]
     pub ty: CustomPropType,
+}
+
+// ---------------------------------------------------------------------------
+// P2.3 — Constraint-Based Layout
+// ---------------------------------------------------------------------------
+
+/// Horizontal alignment anchor for constraint layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum HAlign {
+    /// Align to the left / leading edge.
+    #[default]
+    Leading,
+    /// Align to the right / trailing edge.
+    Trailing,
+    /// Center horizontally.
+    Center,
+    /// Stretch to fill available width.
+    Stretch,
+}
+
+/// Vertical alignment anchor for constraint layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum VAlign {
+    /// Align to the top edge.
+    #[default]
+    Top,
+    /// Align to the bottom edge.
+    Bottom,
+    /// Center vertically.
+    Center,
+    /// Stretch to fill available height.
+    Stretch,
+}
+
+/// Per-widget layout constraints applied by the constraint solver.
+///
+/// All fields are optional / defaulted so old project files deserialize cleanly.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LayoutConstraints {
+    /// Horizontal alignment anchor. `None` = unconstrained (position free).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub h_align: Option<HAlign>,
+    /// Vertical alignment anchor. `None` = unconstrained.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v_align: Option<VAlign>,
+    /// ID of another widget whose width this widget should equal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equal_width_to: Option<String>,
+    /// ID of another widget whose height this widget should equal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equal_height_to: Option<String>,
+    /// Locked width-to-height aspect ratio (e.g. `Some(1.0)` for square).
+    /// `None` = no lock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aspect_ratio: Option<f32>,
+    /// Minimum width in logical pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_w: Option<f32>,
+    /// Maximum width in logical pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_w: Option<f32>,
+    /// Minimum height in logical pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_h: Option<f32>,
+    /// Maximum height in logical pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_h: Option<f32>,
+    /// Margin insets `[top, right, bottom, left]` in logical pixels.
+    #[serde(default, skip_serializing_if = "margin_is_zero")]
+    pub margin: [f32; 4],
+}
+
+fn margin_is_zero(m: &[f32; 4]) -> bool {
+    m[0] == 0.0 && m[1] == 0.0 && m[2] == 0.0 && m[3] == 0.0
 }
 
 // ---------------------------------------------------------------------------
@@ -906,6 +1497,19 @@ pub struct WidgetInstance {
     /// widget-creation time so state_emitter works without re-loading descriptors.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub descriptor_state_fields: Vec<[String; 3]>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_cross_align: Option<CrossAlign>,
+    #[serde(default, skip_serializing_if = "child_flex_is_zero")]
+    pub child_flex: f32,
+    #[serde(default = "default_one_u32", skip_serializing_if = "is_one_u32")]
+    pub grid_col_span: u32,
+    #[serde(default = "default_one_u32", skip_serializing_if = "is_one_u32")]
+    pub grid_row_span: u32,
+    #[serde(default, skip_serializing_if = "constraints_are_default")]
+    pub constraints: LayoutConstraints,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db_binding: Option<DbBinding>,
 }
 
 impl Default for WidgetInstance {
@@ -944,8 +1548,27 @@ impl Default for WidgetInstance {
             descriptor_props: HashMap::new(),
             descriptor_cargo_deps: Vec::new(),
             descriptor_state_fields: Vec::new(),
+            child_cross_align: None,
+            child_flex: 0.0,
+            grid_col_span: 1,
+            grid_row_span: 1,
+            constraints: LayoutConstraints::default(),
+            db_binding: None,
         }
     }
+}
+
+fn constraints_are_default(c: &LayoutConstraints) -> bool {
+    c.h_align.is_none()
+        && c.v_align.is_none()
+        && c.equal_width_to.is_none()
+        && c.equal_height_to.is_none()
+        && c.aspect_ratio.is_none()
+        && c.min_w.is_none()
+        && c.max_w.is_none()
+        && c.min_h.is_none()
+        && c.max_h.is_none()
+        && margin_is_zero(&c.margin)
 }
 
 // ---------------------------------------------------------------------------
@@ -964,6 +1587,30 @@ pub struct SvgImportMetadata {
     /// the shared group id tying the chunks of one text element together.
     #[serde(default)]
     pub text_group: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Stage 13 — Database binding
+// ---------------------------------------------------------------------------
+
+/// A widget → database column binding.
+/// When present on a `WidgetInstance`, `state_emitter` emits a
+/// `rusqlite::Connection` field and a `load_from_db()` method stub.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DbBinding {
+    /// SQLite table name (unquoted, validated as a plain identifier).
+    pub table: String,
+    /// Column name to bind the widget value to.
+    pub column: String,
+}
+
+impl Default for DbBinding {
+    fn default() -> Self {
+        Self {
+            table: String::from("my_table"),
+            column: String::from("my_column"),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1024,6 +1671,25 @@ mod tests {
     }
 
     #[test]
+    fn db_binding_serde_default_is_none() {
+        // A WidgetInstance serialised without a db_binding field must deserialise
+        // with db_binding = None.  This guards the #[serde(default)] annotation.
+        let json = r#"{
+            "id": "00000000-0000-0000-0000-000000000000",
+            "kind": "Button",
+            "rect": {"x":20,"y":20,"w":120,"h":32},
+            "props": {"label":"X","min":0,"max":1,"default_value":0,
+                      "options":["Option A","Option B","Option C"]},
+            "state_binding": null
+        }"#;
+        let w: WidgetInstance = serde_json::from_str(json).unwrap();
+        assert!(
+            w.db_binding.is_none(),
+            "db_binding should default to None when absent from JSON"
+        );
+    }
+
+    #[test]
     fn display_and_container_kinds_have_no_events() {
         for k in [
             WidgetKind::Label,
@@ -1038,5 +1704,297 @@ mod tests {
             assert!(!k.is_event_capable(), "{k:?} should expose no events");
             assert_eq!(k.primary_event(), None);
         }
+    }
+
+    // P2.4 tests ----------------------------------------------------------------
+
+    #[test]
+    fn child_flex_default_is_zero() {
+        let w = WidgetInstance::default();
+        assert_eq!(w.child_flex, 0.0, "child_flex must default to 0.0");
+        assert_eq!(w.grid_col_span, 1);
+        assert_eq!(w.grid_row_span, 1);
+        assert!(w.child_cross_align.is_none());
+    }
+
+    #[test]
+    fn layout_child_fields_serde_round_trip() {
+        let w = WidgetInstance {
+            child_cross_align: Some(CrossAlign::Center),
+            child_flex: 1.5,
+            grid_col_span: 2,
+            grid_row_span: 3,
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&w).expect("serialize");
+        let w2: WidgetInstance = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(w2.child_cross_align, Some(CrossAlign::Center));
+        assert!((w2.child_flex - 1.5).abs() < 0.001);
+        assert_eq!(w2.grid_col_span, 2);
+        assert_eq!(w2.grid_row_span, 3);
+    }
+
+    #[test]
+    fn layout_child_fields_skip_serialized_at_defaults() {
+        let w = WidgetInstance::default();
+        let json = serde_json::to_string(&w).expect("serialize");
+        assert!(
+            !json.contains("child_cross_align"),
+            "default cross_align omitted"
+        );
+        assert!(!json.contains("child_flex"), "zero flex omitted");
+        assert!(!json.contains("grid_col_span"), "default col_span omitted");
+        assert!(!json.contains("grid_row_span"), "default row_span omitted");
+    }
+
+    // P2.5 state-machine tests -----------------------------------------------
+
+    #[test]
+    fn state_machine_default_has_empty_states() {
+        let sm = StateMachineProps::default();
+        assert!(
+            sm.states.is_empty(),
+            "default StateMachineProps must have no states"
+        );
+        assert!(
+            sm.transitions.is_empty(),
+            "default StateMachineProps must have no transitions"
+        );
+        assert!(
+            sm.initial_state.is_empty(),
+            "default initial_state must be empty"
+        );
+    }
+
+    #[test]
+    fn design_component_state_machine_round_trips() {
+        use uuid::Uuid;
+        let comp = DesignComponent {
+            id: Uuid::new_v4(),
+            kind: ComponentKind::StateMachine,
+            name: "flow".to_owned(),
+            interval_ms: None,
+            handler: String::new(),
+            state_machine: StateMachineProps {
+                states: vec![
+                    StateDef {
+                        name: "idle".to_owned(),
+                        entry_action: String::new(),
+                        exit_action: String::new(),
+                    },
+                    StateDef {
+                        name: "running".to_owned(),
+                        entry_action: "self.start()".to_owned(),
+                        exit_action: String::new(),
+                    },
+                ],
+                transitions: vec![TransitionDef {
+                    from: "idle".to_owned(),
+                    to: "running".to_owned(),
+                    guard: "self.ready".to_owned(),
+                    action: String::new(),
+                }],
+                initial_state: "idle".to_owned(),
+            },
+        };
+        let json = serde_json::to_string(&comp).expect("serialize");
+        let back: DesignComponent = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.state_machine.states.len(), 2);
+        assert_eq!(back.state_machine.transitions.len(), 1);
+        assert_eq!(back.state_machine.initial_state, "idle");
+    }
+
+    // Behavior graph tests --------------------------------------------------
+
+    #[test]
+    fn behavior_button_click_add_round_trips() {
+        let b = Behavior::widget(
+            Uuid::from_u128(0xBE1),
+            Uuid::from_u128(0x01),
+            WidgetEvent::Click,
+            Some(Uuid::from_u128(0x02)),
+            VisualAction::Add {
+                field: "progress".to_owned(),
+                amount: 0.1,
+                min: Some(0.0),
+                max: Some(1.0),
+            },
+        );
+        let json = serde_json::to_string(&b).expect("serialize");
+        let back: Behavior = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, b);
+        assert_eq!(back.widget_event(), Some(WidgetEvent::Click));
+        assert_eq!(back.action.field(), Some("progress"));
+    }
+
+    #[test]
+    fn legacy_dialog_button_options_resolve_to_semantic_roles() {
+        let props = WidgetProps {
+            options: vec![
+                "OK".to_owned(),
+                "Cancel".to_owned(),
+                "Apply".to_owned(),
+                "Help".to_owned(),
+                "Later".to_owned(),
+            ],
+            dialog_buttons: Vec::new(),
+            ..Default::default()
+        };
+
+        let buttons = effective_dialog_buttons(&props);
+
+        assert_eq!(
+            buttons.iter().map(|button| button.role).collect::<Vec<_>>(),
+            vec![
+                DialogButtonRole::Accept,
+                DialogButtonRole::Reject,
+                DialogButtonRole::Apply,
+                DialogButtonRole::Help,
+                DialogButtonRole::Action,
+            ]
+        );
+    }
+
+    #[test]
+    fn structured_dialog_buttons_override_legacy_options() {
+        let props = WidgetProps {
+            options: vec!["OK".to_owned(), "Cancel".to_owned()],
+            dialog_buttons: vec![DialogButtonSpec {
+                label: "Commit".to_owned(),
+                role: DialogButtonRole::Accept,
+            }],
+            ..Default::default()
+        };
+
+        assert_eq!(effective_dialog_buttons(&props), props.dialog_buttons);
+    }
+
+    #[test]
+    fn dialog_keyboard_target_finds_semantic_button_box_role() {
+        let widget_id = Uuid::from_u128(0xDB01);
+        let widgets = vec![WidgetInstance {
+            id: widget_id,
+            kind: WidgetKind::DialogButtonBox,
+            props: WidgetProps {
+                dialog_buttons: vec![
+                    DialogButtonSpec {
+                        label: "Save".to_owned(),
+                        role: DialogButtonRole::Accept,
+                    },
+                    DialogButtonSpec {
+                        label: "Cancel".to_owned(),
+                        role: DialogButtonRole::Reject,
+                    },
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        }];
+
+        assert_eq!(
+            resolve_dialog_button_target(&widgets, None, DialogButtonRole::Accept),
+            Some(DialogButtonTarget::Role {
+                widget: widget_id,
+                role: DialogButtonRole::Accept,
+            })
+        );
+        assert_eq!(
+            resolve_dialog_button_target(&widgets, Some(widget_id), DialogButtonRole::Reject),
+            Some(DialogButtonTarget::Role {
+                widget: widget_id,
+                role: DialogButtonRole::Reject,
+            })
+        );
+    }
+
+    #[test]
+    fn dialog_initial_focus_falls_back_to_first_focusable_control() {
+        let label = WidgetInstance {
+            id: Uuid::from_u128(0xDB10),
+            kind: WidgetKind::Label,
+            ..Default::default()
+        };
+        let input = WidgetInstance {
+            id: Uuid::from_u128(0xDB11),
+            kind: WidgetKind::TextInput,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            resolve_dialog_initial_focus_target(&[label, input.clone()], None),
+            Some(DialogButtonTarget::Widget(input.id))
+        );
+    }
+
+    #[test]
+    fn app_props_without_behaviors_field_defaults_empty() {
+        // Old .rohkai.json files predate the behavior graph; they must load
+        // with an empty graph, and a default graph must not serialize.
+        let json = r#"{"title":"Old","win_w":800.0,"win_h":600.0,"icon_path":null}"#;
+        let props: AppProps = serde_json::from_str(json).expect("legacy AppProps");
+        assert!(props.behaviors.is_empty());
+
+        let out = serde_json::to_string(&AppProps::default()).expect("serialize");
+        assert!(
+            !out.contains("behaviors"),
+            "empty behavior graph must be skip-serialized"
+        );
+    }
+
+    #[test]
+    fn every_visual_action_round_trips() {
+        let actions = vec![
+            VisualAction::Set {
+                field: "name".to_owned(),
+                value: ValueExpr::Text("hi".to_owned()),
+            },
+            VisualAction::Set {
+                field: "vol".to_owned(),
+                value: ValueExpr::Number(2.5),
+            },
+            VisualAction::Set {
+                field: "flag".to_owned(),
+                value: ValueExpr::Flag(true),
+            },
+            VisualAction::Add {
+                field: "p".to_owned(),
+                amount: 0.1,
+                min: None,
+                max: None,
+            },
+            VisualAction::Subtract {
+                field: "p".to_owned(),
+                amount: 0.2,
+                min: Some(0.0),
+                max: Some(1.0),
+            },
+            VisualAction::Toggle {
+                field: "dark".to_owned(),
+            },
+            VisualAction::CallHandler {
+                handler: "on_go".to_owned(),
+            },
+        ];
+        for a in actions {
+            let json = serde_json::to_string(&a).expect("serialize");
+            let back: VisualAction = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(back, a);
+        }
+    }
+
+    #[test]
+    fn timer_default_interval_is_1000ms() {
+        use uuid::Uuid;
+        let comp = DesignComponent {
+            id: Uuid::new_v4(),
+            kind: ComponentKind::Timer,
+            name: "tick".to_owned(),
+            interval_ms: None,
+            handler: String::new(),
+            state_machine: StateMachineProps::default(),
+        };
+        assert_eq!(comp.interval_ms.unwrap_or(1000), 1000);
     }
 }

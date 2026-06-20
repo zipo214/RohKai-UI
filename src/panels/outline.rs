@@ -122,20 +122,18 @@ pub fn show_content(
             }
 
             // Draw drop-indicator line while dragging.
-            if drag.dragged_id.is_some() {
-                if let Some(pos) = pointer_pos {
-                    if let Some(&(_, _, cy)) = row_centers
-                        .iter()
-                        .min_by_key(|(_, _, c)| ((pos.y - c).abs() * 1000.0) as i64)
-                    {
-                        let clip = ui.clip_rect();
-                        ui.painter().hline(
-                            clip.min.x..=clip.max.x,
-                            cy,
-                            egui::Stroke::new(2.0, egui::Color32::from_rgb(96, 165, 250)),
-                        );
-                    }
-                }
+            if drag.dragged_id.is_some()
+                && let Some(pos) = pointer_pos
+                && let Some(&(_, _, cy)) = row_centers
+                    .iter()
+                    .min_by_key(|(_, _, c)| ((pos.y - c).abs() * 1000.0) as i64)
+            {
+                let clip = ui.clip_rect();
+                ui.painter().hline(
+                    clip.min.x..=clip.max.x,
+                    cy,
+                    egui::Stroke::new(2.0, egui::Color32::from_rgb(96, 165, 250)),
+                );
             }
         });
 
@@ -250,7 +248,7 @@ fn render_row(
 
     // Background.
     let bg = if is_selected {
-        egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 45)
+        crate::ui_colors::accent_fill_for_text(accent)
     } else if is_dragged {
         egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 20)
     } else if response.hovered() {
@@ -293,7 +291,7 @@ fn render_row(
 
     let text_x = dot_x + 10.0;
     let text_color = if is_selected {
-        accent
+        crate::ui_colors::text_on_accent_fill()
     } else {
         egui::Color32::from_gray(210)
     };
@@ -321,8 +319,12 @@ fn render_row(
 
     // Drag outline for the row being dragged.
     if is_dragged {
-        ui.painter()
-            .rect_stroke(row_rect, 2.0, egui::Stroke::new(1.5, accent));
+        ui.painter().rect_stroke(
+            row_rect,
+            2.0,
+            egui::Stroke::new(1.5, accent),
+            egui::StrokeKind::Inside,
+        );
     }
 
     (

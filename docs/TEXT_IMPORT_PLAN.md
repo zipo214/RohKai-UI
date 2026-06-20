@@ -63,13 +63,21 @@ clone in the next pass.
 3. Optional vector-outline snapshot mode for visual comparison. **(done — R11:
    Image-mode rasterizer renders text via the bundled Hershey simplex vector
    font with textPath; editable import stays the component-import default.)**
-4. RohKai-owned text layout/shaping engine only if the editable workflow still
-   needs it after phases 1-3. **(deferred)**
+4. RohKai-owned text layout/shaping engine. **(scheduled — master backlog S3
+   builds the `ShaperEngine` HarfBuzz-class port; S9 integrates real `.ttf`/
+   `.otf` glyphs + shaping/bidi into the rasterizer.)** No longer conditional.
 
-## Non-Goals For The Next SVG Hardening Pass
+## Posture For The Next SVG Hardening Pass (formerly "Non-Goals")
 
-- No new crates.
-- No full text renderer.
-- No external font loading.
-- No browser CSS layout engine.
-- No conversion of normal text into dead outlines by default.
+Deferral is no longer an option (`docs/ROADMAP_PHASE2.md`). These are **default
+postures and one invariant**, not parked capabilities:
+
+- **Invariant:** no new SVG/text renderer crate — the shaper is a pure-Rust,
+  zero-C port in `src/canvas/shaper/` (rustybuzz is the interim main-app engine
+  only, never embedded in `svg_rasterizer.rs`).
+- Full text renderer → **S3** (shaper) + **S9** (rasterizer glyphs).
+- External / custom font loading → **S9** (designer font load) + **S16**
+  (opt-in external resources). Default stays no-external-load.
+- Browser CSS layout for text → **S10** / **S16**.
+- Editable-first stays the **default**: normal text is not converted to dead
+  outlines unless the user picks Image/snapshot mode.

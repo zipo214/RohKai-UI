@@ -1,16 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod app;
-mod canvas;
-mod codegen;
-mod panels;
-mod project;
-mod settings;
-mod svg_core;
-mod svg_import;
-mod widgets;
+//! Binary entry point. All designer modules live in the `rohkai` library crate
+//! (`src/lib.rs`); this shell only bootstraps eframe and rasterises the window
+//! icon.
 
 use ab_glyph::{Font as _, FontRef, PxScale, ScaleFont as _};
+use rohkai::app;
 use std::sync::Arc;
 
 fn main() -> eframe::Result<()> {
@@ -163,6 +158,9 @@ fn draw_rounded_tile(rgba: &mut [u8], size: u32, background: [u8; 3], border: [u
     }
 }
 
+// TODO(P2-A): wire ShaperEngine — icon rasteriser uses ab_glyph directly; once
+// ShaperEngine is plumbed here, RustyBuzzShaper supplies shaped clusters and
+// ab_glyph is only needed for pixel-level rasterization (outline_glyph).
 fn draw_glyph_run(
     rgba: &mut [u8],
     size: u32,

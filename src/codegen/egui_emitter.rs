@@ -2,7 +2,8 @@ use crate::codegen::formula::{collect_variables, emit_formula_rust, parse_formul
 use crate::codegen::rust::{field_binding, string_literal};
 use crate::codegen::source_map::{GeneratedCodeDocument, SourceSpan, WidgetSourceSpan};
 use crate::project::schema::{
-    LayoutCrossAlign, Orientation, SizePolicy, WidgetInstance, WidgetKind,
+    CrossAlign, LayoutCrossAlign, Orientation, SizePolicy, TextAlign, WidgetEvent, WidgetInstance,
+    WidgetKind,
 };
 use crate::project::ui_tree::UiTree;
 use rayon::prelude::*;
@@ -21,7 +22,7 @@ pub fn emit_indexed(tree: &UiTree) -> Vec<(Option<Uuid>, String)> {
 
     lines.push((
         None,
-        "egui::CentralPanel::default().show(ctx, |_ui| {});".to_owned(),
+        "egui::CentralPanel::default().show_inside(ui, |_ui| {});".to_owned(),
     ));
 
     // Children are emitted inside their parent Frame — skip them in the top-level loop.
@@ -121,8 +122,8 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                 .map(|c| format!("egui::Color32::from_rgb({}, {}, {})", c[0], c[1], c[2]))
                 .unwrap_or_else(|| "egui::Color32::from_gray(100)".to_owned());
             let mut frame_expr = format!(
-                    "egui::Frame::none()\n            .inner_margin({inner_m:.1})\n            .stroke(egui::Stroke::new({stroke_w:.1}, {stroke_col}))"
-                );
+                "egui::Frame::NONE\n            .inner_margin({inner_m:.1})\n            .stroke(egui::Stroke::new({stroke_w:.1}, {stroke_col}))"
+            );
             if let Some(c) = w.bg_color {
                 frame_expr.push_str(&format!(
                     "\n            .fill(egui::Color32::from_rgb({}, {}, {}))",
@@ -131,7 +132,7 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
             }
             if let Some(r) = w.corner_radius.filter(|&r| r > 0.0) {
                 frame_expr.push_str(&format!(
-                    "\n            .rounding(egui::Rounding::same({r:.1}))"
+                    "\n            .corner_radius(egui::CornerRadius::from({r:.1}))"
                 ));
             }
             lines.push((Some(w.id), format!("        {frame_expr}.show(ui, |ui| {{")));
@@ -144,7 +145,7 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
             ));
             for &child_id in &w.children {
                 if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
-                    emit_child_lines(child, w, &mut lines, 0);
+                    emit_child_lines(child, w, tree, &mut lines, 0);
                 }
             }
             lines.push((Some(w.id), "        });".to_owned()));
@@ -153,7 +154,7 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
             let rounding_chain = w
                 .corner_radius
                 .filter(|&r| r > 0.0)
-                .map(|r| format!(".rounding(egui::Rounding::same({r:.1}))"))
+                .map(|r| format!(".corner_radius(egui::CornerRadius::from({r:.1}))"))
                 .unwrap_or_default();
             let fill_chain = w
                 .bg_color
@@ -166,24 +167,31 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                 .unwrap_or_default();
             let label_expr = rich_text_expr(&label_lit, w.font_size, fg_color_expr.as_deref());
             let base = format!(
-                    "ui.add_sized([{:.1}, {:.1}], egui::Button::new({label_expr}){rounding_chain}{fill_chain})",
-                    w.rect.w, w.rect.h
-                );
+                "ui.add_sized([{:.1}, {:.1}], egui::Button::new({label_expr}){rounding_chain}{fill_chain})",
+                w.rect.w, w.rect.h
+            );
             let with_tip = append_tip(base, tip.as_deref());
-            let mut line = if let Some(h) = resolve_handler_click(w) {
-                format!(
-                        "        let _btn_{id} = {with_tip};\n        if _btn_{id}.clicked() {{\n            self.{h}();\n        }}",
-                        id = w.id.as_simple()
-                    )
-            } else {
-                format!("        let _btn_{id} = {with_tip};", id = w.id.as_simple())
-            };
-            if !w.on_double_click.is_empty() {
-                let h = &w.on_double_click;
-                let id = w.id.as_simple();
+            let id = w.id.as_simple();
+            let mut line = format!("        let _btn_{id} = {with_tip};");
+            let click_beh = live_behavior_stmts(tree, w, WidgetEvent::Click, "            ");
+            let click_handler = resolve_handler_click(w);
+            if click_handler.is_some() || !click_beh.is_empty() {
+                line.push_str(&format!("\n        if _btn_{id}.clicked() {{\n{click_beh}"));
+                if let Some(h) = click_handler {
+                    line.push_str(&format!("            self.{h}();\n"));
+                }
+                line.push_str("        }");
+            }
+            let dclick_beh = live_behavior_stmts(tree, w, WidgetEvent::DoubleClick, "            ");
+            if !w.on_double_click.is_empty() || !dclick_beh.is_empty() {
                 line.push_str(&format!(
-                        "\n        if _btn_{id}.double_clicked() {{\n            self.{h}();\n        }}"
-                    ));
+                    "\n        if _btn_{id}.double_clicked() {{\n{dclick_beh}"
+                ));
+                if !w.on_double_click.is_empty() {
+                    let h = &w.on_double_click;
+                    line.push_str(&format!("            self.{h}();\n"));
+                }
+                line.push_str("        }");
             }
             lines.push((Some(w.id), line));
         }
@@ -202,7 +210,16 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                 }
             }
             let base = format!("ui.add({lbl})");
-            let line = format!("        {};", append_tip(base, tip.as_deref()));
+            let stmt = append_tip(base, tip.as_deref());
+            let line = match &w.text_align {
+                Some(TextAlign::Center) => format!(
+                    "        ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {{ {stmt}; }});"
+                ),
+                Some(TextAlign::Right) => format!(
+                    "        ui.with_layout(egui::Layout::top_down(egui::Align::RIGHT), |ui| {{ {stmt}; }});"
+                ),
+                _ => format!("        {stmt};"),
+            };
             lines.push((Some(w.id), line));
         }
         WidgetKind::TextInput => {
@@ -222,16 +239,28 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                     let with_tip = append_tip(sized, tip.as_deref());
                     let id = w.id.as_simple();
                     let mut parts = format!("        let _ti_{id} = {with_tip};");
-                    if let Some(h) = resolve_handler_change(w) {
-                        parts.push_str(&format!(
-                                "\n        if _ti_{id}.changed() {{\n            self.{h}();\n        }}"
-                            ));
+                    let change_beh =
+                        live_behavior_stmts(tree, w, WidgetEvent::Change, "            ");
+                    let change_handler = resolve_handler_change(w);
+                    if change_handler.is_some() || !change_beh.is_empty() {
+                        parts
+                            .push_str(&format!("\n        if _ti_{id}.changed() {{\n{change_beh}"));
+                        if let Some(h) = change_handler {
+                            parts.push_str(&format!("            self.{h}();\n"));
+                        }
+                        parts.push_str("        }");
                     }
-                    if !w.on_lost_focus.is_empty() {
-                        let h = &w.on_lost_focus;
+                    let blur_beh =
+                        live_behavior_stmts(tree, w, WidgetEvent::LostFocus, "            ");
+                    if !w.on_lost_focus.is_empty() || !blur_beh.is_empty() {
                         parts.push_str(&format!(
-                                "\n        if _ti_{id}.lost_focus() {{\n            self.{h}();\n        }}"
-                            ));
+                            "\n        if _ti_{id}.lost_focus() {{\n{blur_beh}"
+                        ));
+                        if !w.on_lost_focus.is_empty() {
+                            let h = &w.on_lost_focus;
+                            parts.push_str(&format!("            self.{h}();\n"));
+                        }
+                        parts.push_str("        }");
                     }
                     parts
                 }
@@ -260,16 +289,28 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                     let with_tip = append_tip(sized, tip.as_deref());
                     let id = w.id.as_simple();
                     let mut parts = format!("        let _sl_{id} = {with_tip};");
-                    if let Some(h) = resolve_handler_change(w) {
-                        parts.push_str(&format!(
-                                "\n        if _sl_{id}.changed() {{\n            self.{h}();\n        }}"
-                            ));
+                    let change_beh =
+                        live_behavior_stmts(tree, w, WidgetEvent::Change, "            ");
+                    let change_handler = resolve_handler_change(w);
+                    if change_handler.is_some() || !change_beh.is_empty() {
+                        parts
+                            .push_str(&format!("\n        if _sl_{id}.changed() {{\n{change_beh}"));
+                        if let Some(h) = change_handler {
+                            parts.push_str(&format!("            self.{h}();\n"));
+                        }
+                        parts.push_str("        }");
                     }
-                    if !w.on_drag_stopped.is_empty() {
-                        let h = &w.on_drag_stopped;
+                    let drag_beh =
+                        live_behavior_stmts(tree, w, WidgetEvent::DragStopped, "            ");
+                    if !w.on_drag_stopped.is_empty() || !drag_beh.is_empty() {
                         parts.push_str(&format!(
-                                "\n        if _sl_{id}.drag_stopped() {{\n            self.{h}();\n        }}"
-                            ));
+                            "\n        if _sl_{id}.drag_stopped() {{\n{drag_beh}"
+                        ));
+                        if !w.on_drag_stopped.is_empty() {
+                            let h = &w.on_drag_stopped;
+                            parts.push_str(&format!("            self.{h}();\n"));
+                        }
+                        parts.push_str("        }");
                     }
                     parts
                 }
@@ -281,12 +322,20 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
             let line = match binding {
                 Some(b) => {
                     let base = format!(
-                            "ui.add_sized([{:.1}, {:.1}], egui::Checkbox::new(&mut self.{b}, {label_lit}))",
-                            w.rect.w, w.rect.h
-                        );
+                        "ui.add_sized([{:.1}, {:.1}], egui::Checkbox::new(&mut self.{b}, {label_lit}))",
+                        w.rect.w, w.rect.h
+                    );
                     let with_tip = append_tip(base, tip.as_deref());
-                    let with_handler = if let Some(h) = resolve_handler_change(w) {
-                        format!("if {with_tip}.changed() {{\n            self.{h}();\n        }}")
+                    let change_beh =
+                        live_behavior_stmts(tree, w, WidgetEvent::Change, "            ");
+                    let change_handler = resolve_handler_change(w);
+                    let with_handler = if change_handler.is_some() || !change_beh.is_empty() {
+                        let mut s = format!("if {with_tip}.changed() {{\n{change_beh}");
+                        if let Some(h) = change_handler {
+                            s.push_str(&format!("            self.{h}();\n"));
+                        }
+                        s.push_str("        }");
+                        s
                     } else {
                         format!("{with_tip};")
                     };
@@ -302,9 +351,9 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                     let options = combo_option_values(w);
                     let selected_expr = combo_selected_text_expr(&format!("self.{b}"), &options);
                     let mut base = format!(
-                            "let combo_resp = egui::ComboBox::from_label({label_lit})\n            .selected_text({selected_expr})\n            .width({:.1})\n            .show_ui(ui, |ui| {{\n",
-                            w.rect.w
-                        );
+                        "let combo_resp = egui::ComboBox::from_label({label_lit})\n            .selected_text({selected_expr})\n            .width({:.1})\n            .show_ui(ui, |ui| {{\n",
+                        w.rect.w
+                    );
                     for option in options {
                         let option_lit = string_literal(&option);
                         base.push_str(&format!(
@@ -313,20 +362,25 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                     }
                     base.push_str("            });\n");
                     let handler = resolve_handler_change(w);
-                    let uses_response = tip.is_some() || handler.is_some();
+                    let change_beh =
+                        live_behavior_stmts(tree, w, WidgetEvent::Change, "            ");
+                    let dispatches = handler.is_some() || !change_beh.is_empty();
+                    let uses_response = tip.is_some() || dispatches;
                     if uses_response {
                         base.push_str("        let combo_response = combo_resp.response;\n");
                     }
-                    if handler.is_some() {
+                    if dispatches {
                         base.push_str("        let combo_changed = combo_response.changed();\n");
                     }
                     if let Some(tip) = tip.as_deref() {
                         base.push_str(&format!("        combo_response.on_hover_text({tip});\n"));
                     }
-                    if let Some(h) = handler {
-                        base.push_str(&format!(
-                            "        if combo_changed {{\n            self.{h}();\n        }}"
-                        ));
+                    if dispatches {
+                        base.push_str(&format!("        if combo_changed {{\n{change_beh}"));
+                        if let Some(h) = handler {
+                            base.push_str(&format!("            self.{h}();\n"));
+                        }
+                        base.push_str("        }");
                     } else if !uses_response {
                         base.push_str("        let _ = combo_resp;");
                     }
@@ -349,8 +403,16 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                         "ui.radio_value(&mut self.{b}, {value_lit}.to_owned(), {label_lit})"
                     );
                     let with_tip = append_tip(base, tip.as_deref());
-                    let line = if let Some(h) = resolve_handler_change(w) {
-                        format!("if {with_tip}.clicked() {{\n            self.{h}();\n        }}")
+                    let change_beh =
+                        live_behavior_stmts(tree, w, WidgetEvent::Change, "            ");
+                    let change_handler = resolve_handler_change(w);
+                    let line = if change_handler.is_some() || !change_beh.is_empty() {
+                        let mut s = format!("if {with_tip}.clicked() {{\n{change_beh}");
+                        if let Some(h) = change_handler {
+                            s.push_str(&format!("            self.{h}();\n"));
+                        }
+                        s.push_str("        }");
+                        s
                     } else {
                         format!("{with_tip};")
                     };
@@ -413,8 +475,16 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                     );
                     let sized = format!("ui.add({dv})");
                     let with_tip = append_tip(sized, tip.as_deref());
-                    let with_handler = if let Some(h) = resolve_handler_change(w) {
-                        format!("if {with_tip}.changed() {{\n            self.{h}();\n        }}")
+                    let change_beh =
+                        live_behavior_stmts(tree, w, WidgetEvent::Change, "            ");
+                    let change_handler = resolve_handler_change(w);
+                    let with_handler = if change_handler.is_some() || !change_beh.is_empty() {
+                        let mut s = format!("if {with_tip}.changed() {{\n{change_beh}");
+                        if let Some(h) = change_handler {
+                            s.push_str(&format!("            self.{h}();\n"));
+                        }
+                        s.push_str("        }");
+                        s
                     } else {
                         format!("{with_tip};")
                     };
@@ -428,13 +498,13 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
             let line = match binding {
                 Some(b) => {
                     let line = format!(
-                            "        egui::ComboBox::from_id_salt(\"{b}\")\n            \
+                        "        egui::ComboBox::from_id_salt(\"{b}\")\n            \
                             .selected_text(&self.{b})\n            \
                             .show_ui(ui, |ui| {{\n                \
                             for font in [\"Proportional\", \"Monospace\"] {{\n                    \
                             ui.selectable_value(&mut self.{b}, font.to_owned(), font);\n                \
                             }}\n            }});"
-                        );
+                    );
                     line
                 }
                 None => format!("        // FontComboBox {label_lit}: set a valid Binding"),
@@ -475,9 +545,31 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                 }
             };
             lines.push((Some(w.id), open));
+            let total_flex: f32 = w
+                .children
+                .iter()
+                .filter_map(|&cid| tree.widgets.iter().find(|cw| cw.id == cid))
+                .map(|c| c.child_flex)
+                .sum();
             for &child_id in &w.children {
                 if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
-                    emit_layout_child_lines(child, &mut lines);
+                    let cross = cross_align_open(child, true);
+                    if let Some(open) = &cross {
+                        lines.push((Some(child.id), open.clone()));
+                    }
+                    if child.child_flex > 0.0 && total_flex > 0.0 {
+                        let ratio = child.child_flex / total_flex;
+                        lines.push((Some(child.id), format!(
+                            "        ui.allocate_ui(egui::vec2(ui.available_width(), (ui.available_height() * {ratio:.4}).max(0.0)), |ui| {{"
+                        )));
+                        emit_layout_child_lines(child, w.id, tree, &mut lines, 0);
+                        lines.push((Some(child.id), "        });".to_owned()));
+                    } else {
+                        emit_layout_child_lines(child, w.id, tree, &mut lines, 0);
+                    }
+                    if cross.is_some() {
+                        lines.push((Some(child.id), "        });".to_owned()));
+                    }
                 }
             }
             lines.push((Some(w.id), "        });".to_owned()));
@@ -493,9 +585,31 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                     }
                 };
             lines.push((Some(w.id), open));
+            let total_flex: f32 = w
+                .children
+                .iter()
+                .filter_map(|&cid| tree.widgets.iter().find(|cw| cw.id == cid))
+                .map(|c| c.child_flex)
+                .sum();
             for &child_id in &w.children {
                 if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
-                    emit_layout_child_lines(child, &mut lines);
+                    let cross = cross_align_open(child, false);
+                    if let Some(open) = &cross {
+                        lines.push((Some(child.id), open.clone()));
+                    }
+                    if child.child_flex > 0.0 && total_flex > 0.0 {
+                        let ratio = child.child_flex / total_flex;
+                        lines.push((Some(child.id), format!(
+                            "        ui.allocate_ui(egui::vec2((ui.available_width() * {ratio:.4}).max(0.0), ui.available_height()), |ui| {{"
+                        )));
+                        emit_layout_child_lines(child, w.id, tree, &mut lines, 0);
+                        lines.push((Some(child.id), "        });".to_owned()));
+                    } else {
+                        emit_layout_child_lines(child, w.id, tree, &mut lines, 0);
+                    }
+                    if cross.is_some() {
+                        lines.push((Some(child.id), "        });".to_owned()));
+                    }
                 }
             }
             lines.push((Some(w.id), "        });".to_owned()));
@@ -520,15 +634,53 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                     w.id.as_simple()
                 ),
             ));
-            for (idx, &child_id) in w.children.iter().enumerate() {
+            let mut col_pos = 0usize;
+            for (slot_idx, &child_id) in w.children.iter().enumerate() {
                 if let Some(child) = tree.widgets.iter().find(|cw| cw.id == child_id) {
-                    emit_layout_child_lines(child, &mut lines);
-                    if (idx + 1) % columns == 0 {
+                    if let Some(slot_name) = w
+                        .props
+                        .grid_slot_names
+                        .get(slot_idx)
+                        .filter(|name| !name.trim().is_empty())
+                    {
+                        lines.push((
+                            Some(w.id),
+                            format!("            // grid slot: {}", slot_name.trim()),
+                        ));
+                    }
+                    let span = (child.grid_col_span as usize).clamp(1, columns);
+                    // Force row-break if this child + span would overflow.
+                    if col_pos > 0 && col_pos + span > columns {
                         lines.push((Some(w.id), "            ui.end_row();".to_owned()));
+                        col_pos = 0;
+                    }
+                    if span > 1 {
+                        lines.push((Some(child.id), format!(
+                            "            // grid_col_span={span}: egui::Grid has no native span; {} empty filler cell(s) appended",
+                            span - 1
+                        )));
+                    }
+                    if child.grid_row_span > 1 {
+                        lines.push((Some(child.id), format!(
+                            "            // grid_row_span={}: row spans are not supported in egui::Grid",
+                            child.grid_row_span
+                        )));
+                    }
+                    emit_layout_child_lines(child, w.id, tree, &mut lines, 0);
+                    for _ in 1..span {
+                        lines.push((
+                            Some(child.id),
+                            "            ui.label(\"\"); // span filler".to_owned(),
+                        ));
+                    }
+                    col_pos += span;
+                    if col_pos >= columns {
+                        lines.push((Some(w.id), "            ui.end_row();".to_owned()));
+                        col_pos = 0;
                     }
                 }
             }
-            if !w.children.is_empty() && !w.children.len().is_multiple_of(columns) {
+            if col_pos > 0 {
                 lines.push((Some(w.id), "            ui.end_row();".to_owned()));
             }
             lines.push((Some(w.id), "        });".to_owned()));
@@ -536,7 +688,7 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
         WidgetKind::TabWidget => {
             let tabs = w.props.options.to_vec();
             let mut tab_lines = format!(
-                "        egui::TopBottomPanel::top(\"{}_tabs\").show_inside(ui, |ui| {{\n",
+                "        egui::Panel::top(\"{}_tabs\").show_inside(ui, |ui| {{\n",
                 w.id.as_simple()
             );
             for tab in &tabs {
@@ -563,9 +715,9 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
             let title = string_literal(&w.props.label);
             let desc = string_literal(&w.props.placeholder);
             let base = format!(
-                    "ui.add_sized([{:.1}, {:.1}], egui::Button::new(format!(\"{{}}\\n{{}}\", {title}, {desc})))",
-                    w.rect.w, w.rect.h
-                );
+                "ui.add_sized([{:.1}, {:.1}], egui::Button::new(format!(\"{{}}\\n{{}}\", {title}, {desc})))",
+                w.rect.w, w.rect.h
+            );
             let with_tip = append_tip(base, tip.as_deref());
             let line = if let Some(h) = resolve_handler_click(w) {
                 format!("        if {with_tip}.clicked() {{\n            self.{h}();\n        }}")
@@ -599,8 +751,8 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                             .map(|v| format!("            let {v} = self.{v} as f64;\n"))
                             .collect();
                         format!(
-                                "        ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, {{\n{bindings}            {rust_expr}\n        }}));"
-                            )
+                            "        ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, {{\n{bindings}            {rust_expr}\n        }}));"
+                        )
                     }
                     Err(e) => {
                         format!("        // Formula parse error: {e}")
@@ -612,8 +764,8 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
                         let label_lit = string_literal(&w.props.label);
                         let decimals = w.props.formula_decimals;
                         format!(
-                                "        ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, self.{b}));"
-                            )
+                            "        ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label_lit}, self.{b}));"
+                        )
                     }
                     None => format!("        // MathLabel {label_lit}: set a valid Binding"),
                 }
@@ -706,12 +858,12 @@ fn emit_widget_area_block(w: &WidgetInstance, tree: &UiTree) -> Vec<(Option<Uuid
             let s = if let Some(ref src) = w.props.data_source_binding {
                 let label_lit = string_literal(&w.props.label);
                 format!(
-                        "        egui::CollapsingHeader::new({label_lit}).default_open(true).show(ui, |ui| {{\n\
+                    "        egui::CollapsingHeader::new({label_lit}).default_open(true).show(ui, |ui| {{\n\
                              for node in &self.{src} {{\n\
                                  ui.label(node.as_str());\n\
                              }}\n\
                          }});"
-                    )
+                )
             } else {
                 let root = w
                     .props
@@ -838,6 +990,13 @@ fn resolve_handler_click(w: &WidgetInstance) -> Option<&str> {
     crate::codegen::handlers::resolve_click_handler(w)
 }
 
+/// Behavior-graph statements for `(w, ev)` in live-preview field syntax
+/// (`self.{field}` — no `state.` prefix).  One line per behavior, each
+/// prefixed with `indent` and newline-terminated; empty when nothing is wired.
+fn live_behavior_stmts(tree: &UiTree, w: &WidgetInstance, ev: WidgetEvent, indent: &str) -> String {
+    crate::codegen::behavior::statements_for_event(tree, w.id, ev, "", indent)
+}
+
 fn resolve_handler_change(w: &WidgetInstance) -> Option<&str> {
     crate::codegen::handlers::resolve_change_handler(w)
 }
@@ -863,7 +1022,7 @@ fn chart_preview_block(binding_expr: &str, width: f32, height: f32, indent: usiz
         "{pad}let chart_size = egui::vec2({width:.1}, {height:.1});\n\
 {pad}let (chart_rect, _) = ui.allocate_exact_size(chart_size, egui::Sense::hover());\n\
 {pad}let chart_painter = ui.painter_at(chart_rect);\n\
-{pad}chart_painter.rect_stroke(chart_rect, 2.0, egui::Stroke::new(1.0, egui::Color32::from_gray(120)));\n\
+{pad}chart_painter.rect_stroke(chart_rect, 2.0, egui::Stroke::new(1.0, egui::Color32::from_gray(120)), egui::StrokeKind::Inside);\n\
 {pad}let chart_values = &{binding_expr};\n\
 {pad}if !chart_values.is_empty() {{\n\
 {pad}    let chart_max = chart_values.iter().copied().fold(0.0_f32, f32::max).max(1.0);\n\
@@ -924,6 +1083,7 @@ fn combo_selected_text_expr(state_expr: &str, options: &[String]) -> String {
 fn emit_child_lines(
     child: &WidgetInstance,
     parent: &WidgetInstance,
+    tree: &UiTree,
     lines: &mut Vec<(Option<Uuid>, String)>,
     depth: usize,
 ) {
@@ -944,17 +1104,25 @@ fn emit_child_lines(
     lines.push((Some(child.id), format!("{indent}// widget_{}", child.id)));
 
     let line = match &child.kind {
-        WidgetKind::Button => format!(
-            "{indent}if ui.put({rect_expr}, egui::Button::new({label})).clicked() {{}}"
-        ),
+        WidgetKind::Button => {
+            let click_beh =
+                live_behavior_stmts(tree, child, WidgetEvent::Click, &format!("{indent}    "));
+            if click_beh.is_empty() {
+                format!("{indent}if ui.put({rect_expr}, egui::Button::new({label})).clicked() {{}}")
+            } else {
+                format!(
+                    "{indent}if ui.put({rect_expr}, egui::Button::new({label})).clicked() {{\n{click_beh}{indent}}}"
+                )
+            }
+        }
         WidgetKind::Label => match binding {
             Some(b) => format!("{indent}ui.put({rect_expr}, egui::Label::new(&self.{b}));"),
             None => format!("{indent}ui.put({rect_expr}, egui::Label::new({label}));"),
         },
         WidgetKind::TextInput => match binding {
-            Some(b) => format!(
-                "{indent}ui.put({rect_expr}, egui::TextEdit::singleline(&mut self.{b}));"
-            ),
+            Some(b) => {
+                format!("{indent}ui.put({rect_expr}, egui::TextEdit::singleline(&mut self.{b}));")
+            }
             None => format!("{indent}// TextInput {label}: set a valid Binding"),
         },
         WidgetKind::Slider => match binding {
@@ -965,14 +1133,14 @@ fn emit_child_lines(
             None => format!("{indent}// Slider {label}: set a valid Binding"),
         },
         WidgetKind::Checkbox => match binding {
-            Some(b) => format!(
-                "{indent}ui.put({rect_expr}, egui::Checkbox::new(&mut self.{b}, {label}));"
-            ),
+            Some(b) => {
+                format!("{indent}ui.put({rect_expr}, egui::Checkbox::new(&mut self.{b}, {label}));")
+            }
             None => format!("{indent}// Checkbox {label}: set a valid Binding"),
         },
-        WidgetKind::Frame => format!(
-            "{indent}// Nested Frame {label} — grouping not recursive in codegen"
-        ),
+        WidgetKind::Frame => {
+            format!("{indent}// Nested Frame {label} — grouping not recursive in codegen")
+        }
         WidgetKind::ComboBox => match binding {
             Some(b) => format!(
                 "{indent}ui.put({rect_expr}, egui::Label::new(self.{b}.as_str())); // ComboBox"
@@ -986,9 +1154,7 @@ fn emit_child_lines(
                 } else {
                     string_literal(&child.props.radio_value)
                 };
-                format!(
-                    "{indent}ui.radio_value(&mut self.{b}, {value_lit}.to_owned(), {label});"
-                )
+                format!("{indent}ui.radio_value(&mut self.{b}, {value_lit}.to_owned(), {label});")
             }
             None => format!("{indent}// RadioButton {label}: set a valid Binding"),
         },
@@ -1003,9 +1169,9 @@ fn emit_child_lines(
             None => format!("{indent}// ProgressBar {label}: set a valid Binding"),
         },
         WidgetKind::TextArea => match binding {
-            Some(b) => format!(
-                "{indent}ui.put({rect_expr}, egui::TextEdit::multiline(&mut self.{b}));"
-            ),
+            Some(b) => {
+                format!("{indent}ui.put({rect_expr}, egui::TextEdit::multiline(&mut self.{b}));")
+            }
             None => format!("{indent}// TextArea {label}: set a valid Binding"),
         },
         WidgetKind::SpinBox => match binding {
@@ -1022,10 +1188,16 @@ fn emit_child_lines(
             None => format!("{indent}// FontComboBox {label}: set a valid Binding"),
         },
         WidgetKind::HorizontalSpacer => {
-            format!("{indent}ui.add_space({:.1}); // HorizontalSpacer", child.rect.w)
+            format!(
+                "{indent}ui.add_space({:.1}); // HorizontalSpacer",
+                child.rect.w
+            )
         }
         WidgetKind::VerticalSpacer => {
-            format!("{indent}ui.add_space({:.1}); // VerticalSpacer", child.rect.h)
+            format!(
+                "{indent}ui.add_space({:.1}); // VerticalSpacer",
+                child.rect.h
+            )
         }
         WidgetKind::GroupBox
         | WidgetKind::VLayout
@@ -1039,10 +1211,15 @@ fn emit_child_lines(
         | WidgetKind::ListView
         | WidgetKind::TreeView
         | WidgetKind::Chart => {
-            format!("{indent}// Nested container {:?} — not expanded in child codegen", child.kind)
+            format!(
+                "{indent}// Nested container {:?} — not expanded in child codegen",
+                child.kind
+            )
         }
         WidgetKind::ToolButton => {
-            format!("{indent}if ui.put({rect_expr}, egui::Button::new({label}).small()).clicked() {{}}")
+            format!(
+                "{indent}if ui.put({rect_expr}, egui::Button::new({label}).small()).clicked() {{}}"
+            )
         }
         WidgetKind::CommandLinkButton => {
             format!("{indent}if ui.put({rect_expr}, egui::Button::new({label})).clicked() {{}}")
@@ -1057,9 +1234,9 @@ fn emit_child_lines(
             None => format!("{indent}// MathLabel {label}: set a valid Binding"),
         },
         WidgetKind::FilePicker => match binding {
-            Some(b) => format!(
-                "{indent}ui.put({rect_expr}, egui::Label::new(&self.{b})); // FilePicker"
-            ),
+            Some(b) => {
+                format!("{indent}ui.put({rect_expr}, egui::Label::new(&self.{b})); // FilePicker")
+            }
             None => format!("{indent}// FilePicker {label}: set a valid Binding"),
         },
         WidgetKind::Image => image_child_preview_line(child, &rect_expr),
@@ -1071,7 +1248,10 @@ fn emit_child_lines(
                     child.descriptor_name.as_deref().unwrap_or("Custom"),
                 )
             } else {
-                format!("{indent}// Custom child {:?}: descriptor not loaded", child.kind)
+                format!(
+                    "{indent}// Custom child {:?}: descriptor not loaded",
+                    child.kind
+                )
             }
         }
     };
@@ -1123,7 +1303,47 @@ fn child_size_str(child: &WidgetInstance) -> String {
     }
 }
 
-fn emit_layout_child_lines(child: &WidgetInstance, lines: &mut Vec<(Option<Uuid>, String)>) {
+/// Opening line for a per-child cross-axis alignment override inside a
+/// VLayout (`vertical = true`) or HLayout. Returns `None` for Start (the
+/// container default applies). `Stretch` is not exposed in the UI (the
+/// container only supports Start/Center/End), so it folds to the default.
+fn cross_align_open(child: &WidgetInstance, vertical: bool) -> Option<String> {
+    let axis = if vertical {
+        "top_down"
+    } else {
+        "left_to_right"
+    };
+    match child.child_cross_align {
+        Some(CrossAlign::Center) => Some(format!(
+            "        ui.with_layout(egui::Layout::{axis}(egui::Align::Center), |ui| {{"
+        )),
+        Some(CrossAlign::End) => {
+            let end = if vertical { "RIGHT" } else { "BOTTOM" };
+            Some(format!(
+                "        ui.with_layout(egui::Layout::{axis}(egui::Align::{end}), |ui| {{"
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn emit_layout_child_lines(
+    child: &WidgetInstance,
+    parent_id: Uuid,
+    tree: &UiTree,
+    lines: &mut Vec<(Option<Uuid>, String)>,
+    depth: usize,
+) {
+    if depth > 64 {
+        lines.push((
+            Some(child.id),
+            format!(
+                "            // widget_{} parent_{}: nesting limit reached",
+                child.id, parent_id
+            ),
+        ));
+        return;
+    }
     let label = string_literal(&child.props.label);
     let eff = child
         .state_binding
@@ -1132,8 +1352,11 @@ fn emit_layout_child_lines(child: &WidgetInstance, lines: &mut Vec<(Option<Uuid>
     let binding = field_binding(eff.as_deref());
     lines.push((
         Some(child.id),
-        format!("            // widget_{}", child.id),
+        format!("            // widget_{} parent_{}", child.id, parent_id),
     ));
+    if emit_nested_layout_child(child, tree, lines, depth) {
+        return;
+    }
     let line = match &child.kind {
         WidgetKind::Button => {
             let id = child.id.as_simple();
@@ -1141,16 +1364,29 @@ fn emit_layout_child_lines(child: &WidgetInstance, lines: &mut Vec<(Option<Uuid>
             let mut s = format!(
                 "            let _btn_{id} = ui.add_sized({sz}, egui::Button::new({label}));"
             );
-            if let Some(h) = resolve_handler_click(child) {
+            let click_beh =
+                live_behavior_stmts(tree, child, WidgetEvent::Click, "                ");
+            let click_handler = resolve_handler_click(child);
+            if click_handler.is_some() || !click_beh.is_empty() {
                 s.push_str(&format!(
-                    "\n            if _btn_{id}.clicked() {{\n                self.{h}();\n            }}"
+                    "\n            if _btn_{id}.clicked() {{\n{click_beh}"
                 ));
+                if let Some(h) = click_handler {
+                    s.push_str(&format!("                self.{h}();\n"));
+                }
+                s.push_str("            }");
             }
-            if !child.on_double_click.is_empty() {
-                let h = &child.on_double_click;
+            let dclick_beh =
+                live_behavior_stmts(tree, child, WidgetEvent::DoubleClick, "                ");
+            if !child.on_double_click.is_empty() || !dclick_beh.is_empty() {
                 s.push_str(&format!(
-                    "\n            if _btn_{id}.double_clicked() {{\n                self.{h}();\n            }}"
+                    "\n            if _btn_{id}.double_clicked() {{\n{dclick_beh}"
                 ));
+                if !child.on_double_click.is_empty() {
+                    let h = &child.on_double_click;
+                    s.push_str(&format!("                self.{h}();\n"));
+                }
+                s.push_str("            }");
             }
             s
         }
@@ -1158,15 +1394,15 @@ fn emit_layout_child_lines(child: &WidgetInstance, lines: &mut Vec<(Option<Uuid>
             Some(b) => format!("            ui.label(&self.{b});"),
             None => format!("            ui.label({label});"),
         },
-        WidgetKind::TextInput => {
-            match binding {
-                Some(b) => {
-                    let sz = child_size_str(child);
-                    format!("            ui.add_sized({sz}, egui::TextEdit::singleline(&mut self.{b}));")
-                }
-                None => format!("            // TextInput {label}: set a valid Binding"),
+        WidgetKind::TextInput => match binding {
+            Some(b) => {
+                let sz = child_size_str(child);
+                format!(
+                    "            ui.add_sized({sz}, egui::TextEdit::singleline(&mut self.{b}));"
+                )
             }
-        }
+            None => format!("            // TextInput {label}: set a valid Binding"),
+        },
         WidgetKind::TextArea => match binding {
             Some(b) => {
                 let sz = child_size_str(child);
@@ -1177,8 +1413,10 @@ fn emit_layout_child_lines(child: &WidgetInstance, lines: &mut Vec<(Option<Uuid>
         WidgetKind::Slider => match binding {
             Some(b) => {
                 let sz = child_size_str(child);
-                format!("            ui.add_sized({sz}, egui::Slider::new(&mut self.{b}, {:.1}..={:.1}).text({label}));",
-                    child.props.min, child.props.max)
+                format!(
+                    "            ui.add_sized({sz}, egui::Slider::new(&mut self.{b}, {:.1}..={:.1}).text({label}));",
+                    child.props.min, child.props.max
+                )
             }
             None => format!("            // Slider {label}: set a valid Binding"),
         },
@@ -1236,7 +1474,9 @@ fn emit_layout_child_lines(child: &WidgetInstance, lines: &mut Vec<(Option<Uuid>
                             .iter()
                             .map(|v| format!("                let {v} = self.{v} as f64;\n"))
                             .collect();
-                        format!("            ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label}, {{\n{binds}                {rust_expr}\n            }}));")
+                        format!(
+                            "            ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label}, {{\n{binds}                {rust_expr}\n            }}));"
+                        )
                     }
                     Err(e) => format!("            // Formula parse error: {e}"),
                 }
@@ -1244,7 +1484,9 @@ fn emit_layout_child_lines(child: &WidgetInstance, lines: &mut Vec<(Option<Uuid>
                 match binding {
                     Some(b) => {
                         let decimals = child.props.formula_decimals;
-                        format!("            ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label}, self.{b}));")
+                        format!(
+                            "            ui.label(format!(\"{{}} = {{:.{decimals}}}\", {label}, self.{b}));"
+                        )
                     }
                     None => format!("            // MathLabel {label}: set a valid Binding"),
                 }
@@ -1275,10 +1517,122 @@ fn emit_layout_child_lines(child: &WidgetInstance, lines: &mut Vec<(Option<Uuid>
     lines.push((Some(child.id), line));
 }
 
+fn emit_nested_layout_child(
+    child: &WidgetInstance,
+    tree: &UiTree,
+    lines: &mut Vec<(Option<Uuid>, String)>,
+    depth: usize,
+) -> bool {
+    let open = match child.kind {
+        WidgetKind::VLayout => "            ui.vertical(|ui| {".to_owned(),
+        WidgetKind::HLayout => "            ui.horizontal(|ui| {".to_owned(),
+        WidgetKind::GridLayout => format!(
+            "            egui::Grid::new(\"{}\").show(ui, |ui| {{",
+            child.id.as_simple()
+        ),
+        _ => return false,
+    };
+    lines.push((Some(child.id), open));
+
+    let columns = child.props.grid_columns.clamp(1, MAX_GRID_COLUMNS);
+    let mut col_pos = 0usize;
+    for (slot_idx, &grandchild_id) in child.children.iter().enumerate() {
+        let Some(grandchild) = tree
+            .widgets
+            .iter()
+            .find(|widget| widget.id == grandchild_id)
+        else {
+            continue;
+        };
+        if child.kind == WidgetKind::GridLayout
+            && let Some(slot_name) = child
+                .props
+                .grid_slot_names
+                .get(slot_idx)
+                .filter(|name| !name.trim().is_empty())
+        {
+            lines.push((
+                Some(child.id),
+                format!("            // grid slot: {}", slot_name.trim()),
+            ));
+        }
+        emit_layout_child_lines(grandchild, child.id, tree, lines, depth + 1);
+        if child.kind == WidgetKind::GridLayout {
+            let span = (grandchild.grid_col_span as usize).clamp(1, columns);
+            for _ in 1..span {
+                lines.push((
+                    Some(grandchild.id),
+                    "            ui.label(\"\"); // span filler".to_owned(),
+                ));
+            }
+            col_pos += span;
+            if col_pos >= columns {
+                lines.push((Some(child.id), "            ui.end_row();".to_owned()));
+                col_pos = 0;
+            }
+        }
+    }
+    if child.kind == WidgetKind::GridLayout && col_pos > 0 {
+        lines.push((Some(child.id), "            ui.end_row();".to_owned()));
+    }
+    lines.push((Some(child.id), "            });".to_owned()));
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::project::schema::{Rect, WidgetInstance, WidgetProps};
+
+    #[test]
+    fn button_click_behavior_emits_progress_mutation_in_live_code() {
+        use crate::project::schema::{Behavior, VisualAction};
+        let btn_id = Uuid::from_u128(0xB1);
+        let bar_id = Uuid::from_u128(0xB2);
+        let btn = WidgetInstance {
+            id: btn_id,
+            kind: WidgetKind::Button,
+            props: WidgetProps {
+                label: "More".to_owned(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let bar = WidgetInstance {
+            id: bar_id,
+            kind: WidgetKind::ProgressBar,
+            state_binding: Some("progress".to_owned()),
+            ..Default::default()
+        };
+        let mut tree = UiTree {
+            widgets: vec![btn, bar],
+            ..Default::default()
+        };
+        tree.app_props.behaviors = vec![Behavior::widget(
+            Uuid::from_u128(0xB3),
+            btn_id,
+            WidgetEvent::Click,
+            Some(bar_id),
+            VisualAction::Add {
+                field: "progress".to_owned(),
+                amount: 0.1,
+                min: Some(0.0),
+                max: Some(1.0),
+            },
+        )];
+
+        let text = emit_document(&tree).text;
+        assert!(
+            text.contains(".clicked() {"),
+            "button without handler but with behavior must still dispatch click"
+        );
+        assert!(
+            text.contains("self.progress = (self.progress + 0.1).clamp(0.0, 1.0);"),
+            "live code must mutate state via behavior, got:\n{text}"
+        );
+        // ProgressBar keeps reading its binding — never mutated directly.
+        assert!(text.contains("egui::ProgressBar::new(self.progress)"));
+    }
 
     #[test]
     fn generated_document_maps_every_widget_and_nested_child() {
@@ -1364,7 +1718,7 @@ mod tests {
         );
         assert!(generated.contains("120.0"));
         assert!(generated.contains("80.0"));
-        assert!(!generated.contains("egui::Frame::none()"));
+        assert!(!generated.contains("egui::Frame::NONE"));
     }
 
     #[test]
@@ -1526,6 +1880,39 @@ mod tests {
         for child_id in child_ids {
             assert!(generated.contains(&format!("// widget_{child_id}")));
         }
+    }
+
+    #[test]
+    fn gridlayout_emits_stable_named_slot_comments() {
+        let parent_id = Uuid::from_u128(0x501);
+        let child_id = Uuid::from_u128(0x502);
+        let tree = UiTree {
+            widgets: vec![
+                WidgetInstance {
+                    id: parent_id,
+                    kind: WidgetKind::GridLayout,
+                    children: vec![child_id],
+                    props: WidgetProps {
+                        grid_slot_names: vec!["Primary action".to_owned()],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: child_id,
+                    kind: WidgetKind::Button,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let generated = emit_indexed(&tree)
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(generated.contains("// grid slot: Primary action"));
+        assert!(generated.contains(&format!("parent_{parent_id}")));
     }
 
     #[test]
@@ -1996,6 +2383,173 @@ mod tests {
         assert!(
             code.contains(".min_row_height(48.0)"),
             "GridLayout with grid_row_height must emit min_row_height: {code}"
+        );
+    }
+
+    #[test]
+    fn vlayout_child_flex_emits_allocate_ui() {
+        let parent_id = Uuid::from_u128(0xA0);
+        let flex_id = Uuid::from_u128(0xA1);
+        let fixed_id = Uuid::from_u128(0xA2);
+        let widgets = vec![
+            WidgetInstance {
+                id: parent_id,
+                kind: WidgetKind::VLayout,
+                children: vec![flex_id, fixed_id],
+                ..Default::default()
+            },
+            WidgetInstance {
+                id: flex_id,
+                kind: WidgetKind::Button,
+                child_flex: 1.0,
+                ..Default::default()
+            },
+            WidgetInstance {
+                id: fixed_id,
+                kind: WidgetKind::Button,
+                child_flex: 0.0,
+                ..Default::default()
+            },
+        ];
+        let tree = UiTree {
+            widgets,
+            ..Default::default()
+        };
+        let code = emit_indexed(&tree)
+            .into_iter()
+            .map(|(_, l)| l)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            code.contains("allocate_ui"),
+            "flex child in VLayout must emit allocate_ui, got: {code}"
+        );
+        // flex ratio for a single flex=1 vs total=1 is 1.0000
+        assert!(
+            code.contains("available_height()"),
+            "VLayout flex must allocate proportional height: {code}"
+        );
+    }
+
+    #[test]
+    fn hlayout_child_flex_emits_allocate_ui() {
+        let parent_id = Uuid::from_u128(0xB0);
+        let flex_id = Uuid::from_u128(0xB1);
+        let widgets = vec![
+            WidgetInstance {
+                id: parent_id,
+                kind: WidgetKind::HLayout,
+                children: vec![flex_id],
+                ..Default::default()
+            },
+            WidgetInstance {
+                id: flex_id,
+                kind: WidgetKind::Label,
+                child_flex: 2.0,
+                ..Default::default()
+            },
+        ];
+        let tree = UiTree {
+            widgets,
+            ..Default::default()
+        };
+        let code = emit_indexed(&tree)
+            .into_iter()
+            .map(|(_, l)| l)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            code.contains("allocate_ui"),
+            "flex child in HLayout must emit allocate_ui: {code}"
+        );
+        assert!(
+            code.contains("available_width()"),
+            "HLayout flex must allocate proportional width: {code}"
+        );
+    }
+
+    #[test]
+    fn grid_col_span_emits_filler_cells_and_comment() {
+        let parent_id = Uuid::from_u128(0xC0);
+        let span2_id = Uuid::from_u128(0xC1);
+        let normal_id = Uuid::from_u128(0xC2);
+        let widgets = vec![
+            WidgetInstance {
+                id: parent_id,
+                kind: WidgetKind::GridLayout,
+                children: vec![span2_id, normal_id],
+                props: WidgetProps {
+                    grid_columns: 3,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            WidgetInstance {
+                id: span2_id,
+                kind: WidgetKind::Label,
+                grid_col_span: 2,
+                ..Default::default()
+            },
+            WidgetInstance {
+                id: normal_id,
+                kind: WidgetKind::Label,
+                grid_col_span: 1,
+                ..Default::default()
+            },
+        ];
+        let tree = UiTree {
+            widgets,
+            ..Default::default()
+        };
+        let code = emit_indexed(&tree)
+            .into_iter()
+            .map(|(_, l)| l)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            code.contains("span filler"),
+            "grid_col_span=2 must emit a filler cell: {code}"
+        );
+        assert!(
+            code.contains("grid_col_span=2"),
+            "span comment must identify the span value: {code}"
+        );
+    }
+
+    #[test]
+    fn grid_row_span_emits_comment() {
+        let parent_id = Uuid::from_u128(0xD0);
+        let child_id = Uuid::from_u128(0xD1);
+        let widgets = vec![
+            WidgetInstance {
+                id: parent_id,
+                kind: WidgetKind::GridLayout,
+                children: vec![child_id],
+                props: WidgetProps {
+                    grid_columns: 2,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            WidgetInstance {
+                id: child_id,
+                kind: WidgetKind::Label,
+                grid_row_span: 2,
+                ..Default::default()
+            },
+        ];
+        let tree = UiTree {
+            widgets,
+            ..Default::default()
+        };
+        let code = emit_indexed(&tree)
+            .into_iter()
+            .map(|(_, l)| l)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            code.contains("grid_row_span=2"),
+            "grid_row_span=2 must emit a diagnostic comment: {code}"
         );
     }
 }

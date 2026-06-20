@@ -1,7 +1,121 @@
-use crate::project::schema::{Rect as SchemaRect, WidgetInstance, WidgetKind};
+use crate::codegen::rust::is_valid_identifier;
+use crate::project::schema::{
+    Behavior, BehaviorTrigger, HAlign, Rect as SchemaRect, VAlign, VisualAction, WidgetEvent,
+    WidgetEventRef, WidgetInstance, WidgetKind,
+};
 use crate::project::ui_tree::UiTree;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
+
+// ---------------------------------------------------------------------------
+// Widget validation — error set computed once per frame during canvas draw.
+// ---------------------------------------------------------------------------
+
+/// Classes of validation error that trigger a red outline on the canvas.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WidgetError {
+    DuplicateId,
+    InvalidHandler,
+    MissingBinding,
+}
+
+/// Returns the set of widget IDs that have at least one validation error.
+/// Computed once per frame; does not mutate UiTree.
+pub fn compute_widget_errors(widgets: &[WidgetInstance]) -> HashMap<Uuid, Vec<WidgetError>> {
+    // Count IDs to detect duplicates.
+    let mut id_counts: HashMap<Uuid, usize> = HashMap::new();
+    for w in widgets {
+        *id_counts.entry(w.id).or_insert(0) += 1;
+    }
+
+    let mut result: HashMap<Uuid, Vec<WidgetError>> = HashMap::new();
+
+    for w in widgets {
+        let mut errors: Vec<WidgetError> = Vec::new();
+
+        // Duplicate ID
+        if id_counts.get(&w.id).copied().unwrap_or(0) > 1 {
+            errors.push(WidgetError::DuplicateId);
+        }
+
+        // Invalid handler name (non-empty but not a valid Rust identifier)
+        let handlers = [
+            &w.on_click,
+            &w.on_change,
+            &w.on_double_click,
+            &w.on_lost_focus,
+            &w.on_drag_stopped,
+        ];
+        let has_invalid_handler = handlers
+            .iter()
+            .any(|h| !h.is_empty() && !is_valid_identifier(h));
+        if has_invalid_handler {
+            errors.push(WidgetError::InvalidHandler);
+        }
+
+        // Missing binding: kinds that require a state_binding
+        let needs_binding = matches!(
+            w.kind,
+            WidgetKind::Slider
+                | WidgetKind::TextInput
+                | WidgetKind::Checkbox
+                | WidgetKind::ComboBox
+                | WidgetKind::ProgressBar
+        );
+        if needs_binding
+            && w.state_binding
+                .as_deref()
+                .map(str::is_empty)
+                .unwrap_or(true)
+        {
+            errors.push(WidgetError::MissingBinding);
+        }
+
+        if !errors.is_empty() {
+            result.insert(w.id, errors);
+        }
+    }
+
+    result
+}
+
+// ---------------------------------------------------------------------------
+// Zoom-to-fit helpers
+// ---------------------------------------------------------------------------
+
+/// Compute the (zoom, pan) values that fit `content_rect` (in canvas
+/// coordinates) inside `viewport_rect` (in screen coordinates) with
+/// `padding_fraction` of whitespace on each side.
+///
+/// Returns `None` when `content_rect` or `viewport_rect` has zero area.
+///
+/// The returned `pan` is the `CanvasSettings::pan` value that centres the
+/// content in the viewport.  The caller must supply `canvas_size` (the
+/// unzoomed canvas dimensions) to complete the calculation:
+///   `pan = zoom * (egui::vec2(canvas_w, canvas_h) / 2.0 - content_center)`
+///
+/// This function returns `(zoom, content_center)` so callers can complete
+/// the pan arithmetic themselves.
+pub fn compute_fit_rect(
+    content_rect: egui::Rect,
+    viewport_rect: egui::Rect,
+    padding_fraction: f32,
+) -> Option<(f32, egui::Pos2)> {
+    if content_rect.width() < 0.5
+        || content_rect.height() < 0.5
+        || viewport_rect.width() < 0.5
+        || viewport_rect.height() < 0.5
+    {
+        return None;
+    }
+    let pad = padding_fraction.clamp(0.0, 0.45);
+    let avail_w = viewport_rect.width() * (1.0 - 2.0 * pad);
+    let avail_h = viewport_rect.height() * (1.0 - 2.0 * pad);
+    let zoom = (avail_w / content_rect.width())
+        .min(avail_h / content_rect.height())
+        .clamp(0.25, 4.0);
+    Some((zoom, content_rect.center()))
+}
 
 // ---------------------------------------------------------------------------
 // SVG texture cache for Image widgets.
@@ -216,6 +330,66 @@ pub struct DragState {
     pub start_rects: Vec<(Uuid, SchemaRect)>,
 }
 
+/// Tracks an in-progress drag-reorder of a layout child.
+/// Active from mouse-down on a layout-child until release.
+pub struct ReorderDrag {
+    /// The child being dragged.
+    pub child_id: Uuid,
+    /// Parent layout container.
+    pub parent_id: Uuid,
+    /// Current insertion index (between children) — updated every frame.
+    pub insert_idx: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConstraintHandle {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+impl ConstraintHandle {
+    const ALL: [Self; 4] = [Self::Left, Self::Right, Self::Top, Self::Bottom];
+
+    fn center(self, rect: egui::Rect) -> egui::Pos2 {
+        const OFFSET: f32 = 18.0;
+        match self {
+            Self::Left => rect.left_center() - egui::vec2(OFFSET, 0.0),
+            Self::Right => rect.right_center() + egui::vec2(OFFSET, 0.0),
+            Self::Top => rect.center_top() - egui::vec2(0.0, OFFSET),
+            Self::Bottom => rect.center_bottom() + egui::vec2(0.0, OFFSET),
+        }
+    }
+
+    fn hit_rect(self, rect: egui::Rect) -> egui::Rect {
+        egui::Rect::from_center_size(self.center(rect), egui::vec2(12.0, 12.0))
+    }
+
+    fn is_horizontal(self) -> bool {
+        matches!(self, Self::Left | Self::Right)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConstraintTarget {
+    Horizontal(HAlign),
+    Vertical(VAlign),
+}
+
+pub struct ConstraintAnchorDrag {
+    pub id: Uuid,
+    handle: ConstraintHandle,
+    target: Option<ConstraintTarget>,
+}
+
+/// Active drag from a widget's event socket toward a state-target socket.
+/// Committed into `tree.app_props.behaviors` on release.
+pub struct BehaviorWireDrag {
+    pub source_widget: Uuid,
+    pub event: WidgetEvent,
+}
+
 #[derive(Default)]
 pub struct InteractionState {
     pub drag: Option<DragState>,
@@ -232,6 +406,15 @@ pub struct InteractionState {
     /// Keyboard shortcuts target the canvas only after the user interacts with
     /// the visible canvas surface. Clicking another panel/window clears this.
     pub canvas_focused: bool,
+    /// Active drag-reorder session (VLayout / HLayout child being repositioned).
+    pub reorder_drag: Option<ReorderDrag>,
+    /// Active drag from a visual constraint handle to a parent anchor target.
+    pub constraint_anchor_drag: Option<ConstraintAnchorDrag>,
+    /// Active behavior-wire drag (event socket → state socket).
+    pub behavior_drag: Option<BehaviorWireDrag>,
+    /// Behavior wire selected on the canvas; edited in the Behaviors panel.
+    /// Session-only selection — the behavior itself lives in the UiTree.
+    pub selected_behavior: Option<Uuid>,
 }
 
 // ---------------------------------------------------------------------------
@@ -395,6 +578,128 @@ fn crect(w: &crate::project::schema::WidgetInstance, origin: egui::Pos2, zoom: f
     crate::canvas::widget_instance::canvas_rect(w, origin, zoom)
 }
 
+fn constraint_frame(tree: &UiTree, widget_id: Uuid) -> SchemaRect {
+    tree.parent_of(widget_id)
+        .and_then(|parent_id| {
+            tree.widgets
+                .iter()
+                .find(|widget| widget.id == parent_id)
+                .map(|parent| parent.rect.clone())
+        })
+        .unwrap_or(SchemaRect {
+            x: 0.0,
+            y: 0.0,
+            w: tree.app_props.win_w,
+            h: tree.app_props.win_h,
+        })
+}
+
+fn constraint_frame_screen(frame: &SchemaRect, origin: egui::Pos2, zoom: f32) -> egui::Rect {
+    egui::Rect::from_min_size(
+        origin + egui::vec2(frame.x, frame.y) * zoom,
+        egui::vec2(frame.w, frame.h) * zoom,
+    )
+}
+
+fn nearest_constraint_target(
+    handle: ConstraintHandle,
+    pointer: egui::Pos2,
+    frame: egui::Rect,
+) -> ConstraintTarget {
+    if handle.is_horizontal() {
+        let candidates = [
+            (frame.left(), HAlign::Leading),
+            (frame.center().x, HAlign::Center),
+            (frame.right(), HAlign::Trailing),
+        ];
+        let align = candidates
+            .into_iter()
+            .min_by(|(ax, _), (bx, _)| (pointer.x - *ax).abs().total_cmp(&(pointer.x - *bx).abs()))
+            .map(|(_, align)| align)
+            .unwrap_or(HAlign::Leading);
+        ConstraintTarget::Horizontal(align)
+    } else {
+        let candidates = [
+            (frame.top(), VAlign::Top),
+            (frame.center().y, VAlign::Center),
+            (frame.bottom(), VAlign::Bottom),
+        ];
+        let align = candidates
+            .into_iter()
+            .min_by(|(ay, _), (by, _)| (pointer.y - *ay).abs().total_cmp(&(pointer.y - *by).abs()))
+            .map(|(_, align)| align)
+            .unwrap_or(VAlign::Top);
+        ConstraintTarget::Vertical(align)
+    }
+}
+
+fn constraint_target_point(
+    target: ConstraintTarget,
+    widget_rect: egui::Rect,
+    frame: egui::Rect,
+) -> egui::Pos2 {
+    match target {
+        ConstraintTarget::Horizontal(HAlign::Leading) => {
+            egui::pos2(frame.left(), widget_rect.center().y)
+        }
+        ConstraintTarget::Horizontal(HAlign::Center | HAlign::Stretch) => {
+            egui::pos2(frame.center().x, widget_rect.center().y)
+        }
+        ConstraintTarget::Horizontal(HAlign::Trailing) => {
+            egui::pos2(frame.right(), widget_rect.center().y)
+        }
+        ConstraintTarget::Vertical(VAlign::Top) => egui::pos2(widget_rect.center().x, frame.top()),
+        ConstraintTarget::Vertical(VAlign::Center | VAlign::Stretch) => {
+            egui::pos2(widget_rect.center().x, frame.center().y)
+        }
+        ConstraintTarget::Vertical(VAlign::Bottom) => {
+            egui::pos2(widget_rect.center().x, frame.bottom())
+        }
+    }
+}
+
+fn apply_constraint_target(
+    widget: &mut WidgetInstance,
+    frame: &SchemaRect,
+    target: ConstraintTarget,
+) {
+    let c = &mut widget.constraints;
+    match target {
+        ConstraintTarget::Horizontal(HAlign::Leading) => {
+            c.h_align = Some(HAlign::Leading);
+            c.margin[3] = (widget.rect.x - frame.x).max(0.0);
+            c.margin[1] = 0.0;
+        }
+        ConstraintTarget::Horizontal(HAlign::Trailing) => {
+            c.h_align = Some(HAlign::Trailing);
+            c.margin[1] = (frame.x + frame.w - (widget.rect.x + widget.rect.w)).max(0.0);
+            c.margin[3] = 0.0;
+        }
+        ConstraintTarget::Horizontal(HAlign::Center | HAlign::Stretch) => {
+            c.h_align = Some(HAlign::Center);
+            let offset = 2.0 * (widget.rect.x - frame.x) - (frame.w - widget.rect.w);
+            c.margin[3] = offset.max(0.0);
+            c.margin[1] = (-offset).max(0.0);
+        }
+        ConstraintTarget::Vertical(VAlign::Top) => {
+            c.v_align = Some(VAlign::Top);
+            c.margin[0] = (widget.rect.y - frame.y).max(0.0);
+            c.margin[2] = 0.0;
+        }
+        ConstraintTarget::Vertical(VAlign::Bottom) => {
+            c.v_align = Some(VAlign::Bottom);
+            c.margin[2] = (frame.y + frame.h - (widget.rect.y + widget.rect.h)).max(0.0);
+            c.margin[0] = 0.0;
+        }
+        ConstraintTarget::Vertical(VAlign::Center | VAlign::Stretch) => {
+            c.v_align = Some(VAlign::Center);
+            let offset = 2.0 * (widget.rect.y - frame.y) - (frame.h - widget.rect.h);
+            c.margin[0] = offset.max(0.0);
+            c.margin[2] = (-offset).max(0.0);
+        }
+    }
+}
+
 /// Topmost widget id under `pos`. Children are tested before their parent Frame
 /// so a child can be targeted even when the Frame also covers the cursor.
 fn hit_widget_id(
@@ -417,6 +722,193 @@ fn hit_widget_id(
         .map(|w| w.id)
 }
 
+/// Returns the topmost VLayout/HLayout/GridLayout container whose canvas rect
+/// contains `pos` (in screen space). Used for layout-aware rubber-band and
+/// drag-reorder candidate restriction.
+pub fn find_layout_container_at(
+    pos: egui::Pos2,
+    tree: &crate::project::ui_tree::UiTree,
+    origin: egui::Pos2,
+    zoom: f32,
+) -> Option<Uuid> {
+    tree.widgets
+        .iter()
+        .rev()
+        .find(|w| {
+            matches!(
+                w.kind,
+                WidgetKind::VLayout | WidgetKind::HLayout | WidgetKind::GridLayout
+            ) && crect(w, origin, zoom).contains(pos)
+        })
+        .map(|w| w.id)
+}
+
+/// Given a dragged layout child and its current screen position, compute which
+/// insertion index within the parent's `children` list best corresponds to the
+/// cursor position. For VLayout, insertion is by Y; for HLayout, by X.
+fn layout_insert_idx(
+    parent: &crate::project::schema::WidgetInstance,
+    widgets: &[crate::project::schema::WidgetInstance],
+    pos_canvas: egui::Pos2,
+    dragged_id: Uuid,
+) -> usize {
+    let mut insertion = parent.children.len(); // default: append at end
+    match parent.kind {
+        WidgetKind::VLayout => {
+            for (i, cid) in parent.children.iter().enumerate() {
+                if *cid == dragged_id {
+                    continue;
+                }
+                if let Some(c) = widgets.iter().find(|w| w.id == *cid) {
+                    let mid_y = c.rect.y + c.rect.h * 0.5;
+                    if pos_canvas.y < mid_y {
+                        insertion = i;
+                        break;
+                    }
+                }
+            }
+        }
+        WidgetKind::HLayout => {
+            for (i, cid) in parent.children.iter().enumerate() {
+                if *cid == dragged_id {
+                    continue;
+                }
+                if let Some(c) = widgets.iter().find(|w| w.id == *cid) {
+                    let mid_x = c.rect.x + c.rect.w * 0.5;
+                    if pos_canvas.x < mid_x {
+                        insertion = i;
+                        break;
+                    }
+                }
+            }
+        }
+        WidgetKind::GridLayout => {
+            let count = parent.children.len().max(1);
+            let columns = parent.props.grid_columns.clamp(1, 12).min(count);
+            let rows = count.div_ceil(columns);
+            let padding = parent.props.inner_margin.max(0.0);
+            let spacing = parent.props.layout_spacing.max(0.0);
+            let available_w =
+                (parent.rect.w - padding * 2.0 - spacing * columns.saturating_sub(1) as f32)
+                    .max(1.0);
+            let available_h =
+                (parent.rect.h - padding * 2.0 - spacing * rows.saturating_sub(1) as f32).max(1.0);
+            let cell_w = available_w / columns as f32;
+            let cell_h = available_h / rows as f32;
+            let local_x = (pos_canvas.x - parent.rect.x - padding).max(0.0);
+            let local_y = (pos_canvas.y - parent.rect.y - padding).max(0.0);
+            let col = (local_x / (cell_w + spacing)).floor() as usize;
+            let row = (local_y / (cell_h + spacing)).floor() as usize;
+            insertion = (row * columns + col.min(columns - 1)).min(count - 1);
+        }
+        _ => {}
+    }
+    insertion
+}
+
+fn grid_slot_rect(parent: &WidgetInstance, slot_idx: usize, slot_count: usize) -> SchemaRect {
+    let count = slot_count.max(1);
+    let columns = parent.props.grid_columns.clamp(1, 12).min(count);
+    let rows = count.div_ceil(columns);
+    let padding = parent.props.inner_margin.max(0.0);
+    let spacing = parent.props.layout_spacing.max(0.0);
+    let available_w =
+        (parent.rect.w - padding * 2.0 - spacing * columns.saturating_sub(1) as f32).max(1.0);
+    let available_h =
+        (parent.rect.h - padding * 2.0 - spacing * rows.saturating_sub(1) as f32).max(1.0);
+    let cell_w = available_w / columns as f32;
+    let cell_h = available_h / rows as f32;
+    let idx = slot_idx.min(count - 1);
+    let col = idx % columns;
+    let row = idx / columns;
+    SchemaRect {
+        x: parent.rect.x + padding + col as f32 * (cell_w + spacing),
+        y: parent.rect.y + padding + row as f32 * (cell_h + spacing),
+        w: cell_w,
+        h: cell_h,
+    }
+}
+
+/// Draw the insertion-placeholder line for drag-reorder feedback.
+fn draw_insertion_placeholder(
+    painter: &egui::Painter,
+    parent: &crate::project::schema::WidgetInstance,
+    widgets: &[crate::project::schema::WidgetInstance],
+    insert_idx: usize,
+    accent: egui::Color32,
+    origin: egui::Pos2,
+    zoom: f32,
+) {
+    let stroke = egui::Stroke::new(2.5, accent);
+    let parent_rect = crect(parent, origin, zoom);
+
+    // Determine the Y (VLayout) or X (HLayout) position of the placeholder line
+    match parent.kind {
+        WidgetKind::VLayout => {
+            let line_y = if parent.children.is_empty() || insert_idx == 0 {
+                parent_rect.min.y + 4.0
+            } else {
+                // Find the bottom edge of the child just before the insert index
+                let ref_idx = insert_idx.saturating_sub(1).min(parent.children.len() - 1);
+                if let Some(cid) = parent.children.get(ref_idx) {
+                    if let Some(c) = widgets.iter().find(|w| w.id == *cid) {
+                        crect(c, origin, zoom).max.y + 2.0
+                    } else {
+                        parent_rect.max.y - 4.0
+                    }
+                } else {
+                    parent_rect.max.y - 4.0
+                }
+            };
+            painter.line_segment(
+                [
+                    egui::pos2(parent_rect.min.x + 4.0, line_y),
+                    egui::pos2(parent_rect.max.x - 4.0, line_y),
+                ],
+                stroke,
+            );
+        }
+        WidgetKind::HLayout => {
+            let line_x = if parent.children.is_empty() || insert_idx == 0 {
+                parent_rect.min.x + 4.0
+            } else {
+                let ref_idx = insert_idx.saturating_sub(1).min(parent.children.len() - 1);
+                if let Some(cid) = parent.children.get(ref_idx) {
+                    if let Some(c) = widgets.iter().find(|w| w.id == *cid) {
+                        crect(c, origin, zoom).max.x + 2.0
+                    } else {
+                        parent_rect.max.x - 4.0
+                    }
+                } else {
+                    parent_rect.max.x - 4.0
+                }
+            };
+            painter.line_segment(
+                [
+                    egui::pos2(line_x, parent_rect.min.y + 4.0),
+                    egui::pos2(line_x, parent_rect.max.y - 4.0),
+                ],
+                stroke,
+            );
+        }
+        WidgetKind::GridLayout => {
+            let slot = grid_slot_rect(parent, insert_idx, parent.children.len());
+            let slot_rect = egui::Rect::from_min_size(
+                origin + egui::vec2(slot.x, slot.y) * zoom,
+                egui::vec2(slot.w, slot.h) * zoom,
+            )
+            .shrink(2.0);
+            painter.rect_filled(
+                slot_rect,
+                2.0,
+                egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 30),
+            );
+            painter.rect_stroke(slot_rect, 2.0, stroke, egui::StrokeKind::Inside);
+        }
+        _ => {}
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Per-widget canvas drawing
 // ---------------------------------------------------------------------------
@@ -426,6 +918,103 @@ struct WidgetDrawFlags {
     is_selected: bool,
     is_child: bool,
     has_selected_child: bool,
+}
+
+fn subtree_contains_selection(
+    tree: &UiTree,
+    widget_id: Uuid,
+    selected: &[Uuid],
+    rubber_preview: &HashSet<Uuid>,
+    visited: &mut HashSet<Uuid>,
+    depth: usize,
+) -> bool {
+    if depth > 64 || !visited.insert(widget_id) {
+        return false;
+    }
+    let Some(widget) = tree
+        .widgets
+        .iter()
+        .find(|candidate| candidate.id == widget_id)
+    else {
+        return false;
+    };
+    widget.children.iter().any(|child_id| {
+        selected.contains(child_id)
+            || rubber_preview.contains(child_id)
+            || subtree_contains_selection(
+                tree,
+                *child_id,
+                selected,
+                rubber_preview,
+                visited,
+                depth + 1,
+            )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_widget_subtree(
+    painter: &egui::Painter,
+    tree: &UiTree,
+    widget_id: Uuid,
+    selected: &[Uuid],
+    rubber_preview: &HashSet<Uuid>,
+    origin: egui::Pos2,
+    zoom: f32,
+    zoom_stable: bool,
+    text_settings: CanvasTextSettings,
+    svg_texture_cache: &mut SvgTextureCache,
+    depth: usize,
+    visited: &mut HashSet<Uuid>,
+) {
+    if depth > 64 || !visited.insert(widget_id) {
+        return;
+    }
+    let Some(widget) = tree
+        .widgets
+        .iter()
+        .find(|candidate| candidate.id == widget_id)
+    else {
+        return;
+    };
+    let has_selected_descendant = subtree_contains_selection(
+        tree,
+        widget.id,
+        selected,
+        rubber_preview,
+        &mut HashSet::new(),
+        0,
+    );
+    draw_widget(
+        painter,
+        widget,
+        crect(widget, origin, zoom),
+        WidgetDrawFlags {
+            is_selected: selected.contains(&widget.id) || rubber_preview.contains(&widget.id),
+            is_child: depth > 0,
+            has_selected_child: has_selected_descendant,
+        },
+        zoom,
+        zoom_stable,
+        text_settings,
+        svg_texture_cache,
+    );
+    for child_id in &widget.children {
+        draw_widget_subtree(
+            painter,
+            tree,
+            *child_id,
+            selected,
+            rubber_preview,
+            origin,
+            zoom,
+            zoom_stable,
+            text_settings,
+            svg_texture_cache,
+            depth + 1,
+            visited,
+        );
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -509,6 +1098,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             let fill_w = rect.width() * 0.6;
             let fill_rect = egui::Rect::from_min_size(rect.min, egui::vec2(fill_w, rect.height()));
@@ -539,6 +1129,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             let r = (rect.height() * 0.28).clamp(4.0, 9.0);
             let center = egui::pos2(rect.min.x + r + 4.0, rect.center().y);
@@ -577,6 +1168,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             painter.text(
                 egui::pos2(rect.min.x + 6.0, rect.center().y),
@@ -601,6 +1193,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
 
             let margin_x = rect.width() * 0.1;
@@ -656,6 +1249,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             painter.text(
                 rect.center(),
@@ -679,6 +1273,7 @@ fn draw_widget(
                         egui::Color32::from_gray(55)
                     },
                 ),
+                egui::StrokeKind::Inside,
             );
             painter.text(
                 rect.left_center() + egui::vec2(2.0, 0.0),
@@ -696,6 +1291,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             // Show placeholder if set, otherwise fall back to label
             let hint = if widget.props.placeholder.is_empty() {
@@ -725,6 +1321,7 @@ fn draw_widget(
                         egui::Color32::from_gray(55)
                     },
                 ),
+                egui::StrokeKind::Inside,
             );
             let box_size = (rect.height() * 0.52).clamp(12.0, 20.0);
             let box_rect = egui::Rect::from_center_size(
@@ -732,7 +1329,12 @@ fn draw_widget(
                 egui::vec2(box_size, box_size),
             );
             painter.rect_filled(box_rect, 2.0, egui::Color32::from_gray(30));
-            painter.rect_stroke(box_rect, 2.0, egui::Stroke::new(1.2, accent));
+            painter.rect_stroke(
+                box_rect,
+                2.0,
+                egui::Stroke::new(1.2, accent),
+                egui::StrokeKind::Inside,
+            );
             painter.text(
                 egui::pos2(box_rect.max.x + 7.0, rect.center().y),
                 egui::Align2::LEFT_CENTER,
@@ -749,6 +1351,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             let hint = if widget.props.placeholder.is_empty() {
                 widget.props.label.as_str()
@@ -784,6 +1387,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             let val_str = format!("{:.1}", widget.props.default_value);
             painter.text(
@@ -817,6 +1421,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             painter.text(
                 egui::pos2(rect.min.x + 6.0, rect.center().y),
@@ -856,7 +1461,12 @@ fn draw_widget(
                 x += dash_len + gap;
             }
             if flags.is_selected {
-                painter.rect_stroke(rect, 1.0, egui::Stroke::new(1.0, accent));
+                painter.rect_stroke(
+                    rect,
+                    1.0,
+                    egui::Stroke::new(1.0, accent),
+                    egui::StrokeKind::Inside,
+                );
             }
         }
 
@@ -875,7 +1485,12 @@ fn draw_widget(
                 y += dash_len + gap;
             }
             if flags.is_selected {
-                painter.rect_stroke(rect, 1.0, egui::Stroke::new(1.0, accent));
+                painter.rect_stroke(
+                    rect,
+                    1.0,
+                    egui::Stroke::new(1.0, accent),
+                    egui::StrokeKind::Inside,
+                );
             }
         }
 
@@ -888,6 +1503,7 @@ fn draw_widget(
                     if flags.is_selected { stroke_width } else { 1.0 },
                     stroke_color,
                 ),
+                egui::StrokeKind::Inside,
             );
             let label_bg_rect = egui::Rect::from_min_size(
                 egui::pos2(rect.min.x + 8.0, rect.min.y - label_size * 0.6),
@@ -915,6 +1531,7 @@ fn draw_widget(
                     if flags.is_selected { stroke_width } else { 1.0 },
                     stroke_color,
                 ),
+                egui::StrokeKind::Inside,
             );
             painter.text(
                 rect.center(),
@@ -941,6 +1558,7 @@ fn draw_widget(
                     if flags.is_selected { stroke_width } else { 1.0 },
                     stroke_color,
                 ),
+                egui::StrokeKind::Inside,
             );
             painter.text(
                 rect.center(),
@@ -967,6 +1585,7 @@ fn draw_widget(
                     if flags.is_selected { stroke_width } else { 1.0 },
                     stroke_color,
                 ),
+                egui::StrokeKind::Inside,
             );
             // Simulated scrollbar on right edge
             let sb_w = 6.0_f32;
@@ -996,6 +1615,7 @@ fn draw_widget(
                     if flags.is_selected { stroke_width } else { 1.0 },
                     stroke_color,
                 ),
+                egui::StrokeKind::Inside,
             );
             let cols = widget.props.grid_columns.clamp(1, 12);
             let rows = widget.children.len().div_ceil(cols).max(1);
@@ -1019,6 +1639,30 @@ fn draw_widget(
                     egui::Stroke::new(0.5, accent.linear_multiply(0.3)),
                 );
             }
+            for (idx, slot_name) in widget
+                .props
+                .grid_slot_names
+                .iter()
+                .take(widget.children.len())
+                .enumerate()
+            {
+                if slot_name.trim().is_empty() {
+                    continue;
+                }
+                let col = idx % cols;
+                let row = idx / cols;
+                let cell_min = egui::pos2(
+                    rect.min.x + rect.width() * col as f32 / cols as f32,
+                    rect.min.y + rect.height() * row as f32 / rows as f32,
+                );
+                painter.text(
+                    cell_min + egui::vec2(4.0, 12.0),
+                    egui::Align2::LEFT_TOP,
+                    slot_name,
+                    egui::FontId::proportional((tag_size * 0.85).max(7.0)),
+                    accent.linear_multiply(0.65),
+                );
+            }
             painter.text(
                 rect.left_top() + egui::vec2(4.0, 2.0),
                 egui::Align2::LEFT_TOP,
@@ -1036,7 +1680,7 @@ fn draw_widget(
                 egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.min.y + tab_h));
             painter.rect_filled(
                 tab_bar_rect,
-                egui::Rounding::same(rounding),
+                egui::CornerRadius::from(rounding),
                 kind_fill(accent),
             );
             painter.rect_stroke(
@@ -1046,6 +1690,7 @@ fn draw_widget(
                     if flags.is_selected { stroke_width } else { 1.0 },
                     stroke_color,
                 ),
+                egui::StrokeKind::Inside,
             );
             // Draw tab labels from options
             let tabs: Vec<&str> = widget.props.options.iter().map(String::as_str).collect();
@@ -1062,7 +1707,7 @@ fn draw_widget(
                 if is_first {
                     painter.rect_filled(
                         tab_rect,
-                        egui::Rounding::same(2.0),
+                        egui::CornerRadius::from(2.0),
                         egui::Color32::from_gray(45),
                     );
                 }
@@ -1087,6 +1732,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             painter.text(
                 rect.center(),
@@ -1108,6 +1754,7 @@ fn draw_widget(
                 rect,
                 rounding.max(4.0),
                 egui::Stroke::new(stroke_width, accent),
+                egui::StrokeKind::Inside,
             );
             painter.text(
                 rect.left_top() + egui::vec2(10.0, 8.0),
@@ -1139,7 +1786,12 @@ fn draw_widget(
                     egui::pos2(x, rect.center().y + 12.0),
                 );
                 painter.rect_filled(b_rect, 3.0, egui::Color32::from_gray(58));
-                painter.rect_stroke(b_rect, 3.0, egui::Stroke::new(1.0, accent));
+                painter.rect_stroke(
+                    b_rect,
+                    3.0,
+                    egui::Stroke::new(1.0, accent),
+                    egui::StrokeKind::Inside,
+                );
                 painter.text(
                     b_rect.center(),
                     egui::Align2::CENTER_CENTER,
@@ -1158,6 +1810,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             painter.text(
                 rect.left_center() + egui::vec2(6.0, 0.0),
@@ -1181,7 +1834,12 @@ fn draw_widget(
             let btn_rect =
                 egui::Rect::from_min_max(rect.min, egui::pos2(rect.min.x + btn_w, rect.max.y));
             painter.rect_filled(btn_rect, rounding, egui::Color32::from_gray(58));
-            painter.rect_stroke(btn_rect, rounding, egui::Stroke::new(1.0, accent));
+            painter.rect_stroke(
+                btn_rect,
+                rounding,
+                egui::Stroke::new(1.0, accent),
+                egui::StrokeKind::Inside,
+            );
             painter.text(
                 btn_rect.center(),
                 egui::Align2::CENTER_CENTER,
@@ -1208,6 +1866,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             // axes
             let pad = 8.0;
@@ -1250,6 +1909,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             let cols = widget.props.options.len().max(1);
             let col_w = rect.width() / cols as f32;
@@ -1292,6 +1952,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             let row_h = label_size + 6.0;
             let mut y = rect.min.y + 2.0;
@@ -1328,6 +1989,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             let row_h = label_size + 6.0;
             let mut y = rect.min.y + 2.0;
@@ -1357,6 +2019,7 @@ fn draw_widget(
                     if flags.is_selected { stroke_width } else { 1.0 },
                     stroke_color,
                 ),
+                egui::StrokeKind::Inside,
             );
             let label = widget
                 .props
@@ -1389,6 +2052,7 @@ fn draw_widget(
                     if flags.is_selected { stroke_width } else { 1.0 },
                     stroke_color,
                 ),
+                egui::StrokeKind::Inside,
             );
             let sec_h = label_size + 8.0;
             let mut y = rect.min.y;
@@ -1429,6 +2093,7 @@ fn draw_widget(
                 rect,
                 rounding,
                 egui::Stroke::new(stroke_width, stroke_color),
+                egui::StrokeKind::Inside,
             );
             let display = widget
                 .descriptor_name
@@ -1442,7 +2107,12 @@ fn draw_widget(
                 fg.unwrap_or(egui::Color32::WHITE),
             );
             if flags.is_selected {
-                painter.rect_stroke(rect, rounding, egui::Stroke::new(2.0, custom_accent));
+                painter.rect_stroke(
+                    rect,
+                    rounding,
+                    egui::Stroke::new(2.0, custom_accent),
+                    egui::StrokeKind::Inside,
+                );
             }
         }
 
@@ -1503,7 +2173,12 @@ fn draw_widget(
                 draw_svg_placeholder(painter, rect, rounding, label_size, "SVG");
             }
             if flags.is_selected {
-                painter.rect_stroke(rect, rounding, egui::Stroke::new(2.0, accent));
+                painter.rect_stroke(
+                    rect,
+                    rounding,
+                    egui::Stroke::new(2.0, accent),
+                    egui::StrokeKind::Inside,
+                );
             }
         }
     }
@@ -1592,6 +2267,7 @@ fn draw_svg_placeholder(
         rect,
         rounding,
         egui::Stroke::new(1.0, egui::Color32::from_gray(90)),
+        egui::StrokeKind::Inside,
     );
     painter.text(
         rect.center(),
@@ -1616,6 +2292,129 @@ fn canvas_owns_keyboard(
     wants_keyboard_input: bool,
 ) -> bool {
     !modal_blocked && canvas_focused && !wants_keyboard_input
+}
+
+// ---------------------------------------------------------------------------
+// Behavior wires — sockets, Visio-style connectors, hit-testing
+// ---------------------------------------------------------------------------
+
+const BEHAVIOR_SOCKET_RADIUS: f32 = 4.5;
+const BEHAVIOR_SOCKET_HIT_RADIUS: f32 = 9.0;
+const BEHAVIOR_WIRE_HIT_DISTANCE: f32 = 7.0;
+const BEHAVIOR_WIRE_COLOR: egui::Color32 = egui::Color32::from_rgb(244, 196, 96);
+
+/// Screen position of a widget's event (source) socket — right edge center.
+fn event_socket_pos(rect: egui::Rect) -> egui::Pos2 {
+    rect.right_center()
+}
+
+/// Screen position of a widget's state (target) socket — left edge center.
+fn state_socket_pos(rect: egui::Rect) -> egui::Pos2 {
+    rect.left_center()
+}
+
+/// The default event a fresh wire from this widget fires on: the first entry
+/// of the canonical `supported_events()` list (Click for Button, Change for
+/// value widgets).  Editable afterwards in the Behaviors panel.
+fn behavior_source_event(w: &WidgetInstance) -> Option<WidgetEvent> {
+    w.kind.supported_events().first().copied()
+}
+
+/// True when a wire dropped on this widget can mutate state: the recipe
+/// matrix derives this from `state_binding` + `kind_table::state_info` and is
+/// the single classifier (Invariant 2).
+fn behavior_target_field(w: &WidgetInstance) -> Option<String> {
+    crate::codegen::behavior_recipes::sink_info_for(w).map(|sink| sink.field)
+}
+
+/// Default typed action for dropping an `event` wire on `target`: the recipe
+/// matrix's default suggestion for that source/sink pair.  The Behaviors panel
+/// offers the alternates afterwards.
+fn default_behavior_action(target: &WidgetInstance, event: WidgetEvent) -> Option<VisualAction> {
+    let sink = crate::codegen::behavior_recipes::sink_info_for(target)?;
+    crate::codegen::behavior_recipes::default_suggestion(event, &sink).map(|s| s.action)
+}
+
+/// Resolve a behavior's wire endpoints in screen space.  Prefers the recorded
+/// target widget; falls back to any widget bound to the action's field so the
+/// wire survives target deletion when the field is still bound elsewhere.
+fn behavior_wire_endpoints(
+    behavior: &Behavior,
+    tree: &UiTree,
+    origin: egui::Pos2,
+    zoom: f32,
+) -> Option<(egui::Pos2, egui::Pos2)> {
+    let source_id = behavior.source_widget()?;
+    let source = tree.widgets.iter().find(|w| w.id == source_id)?;
+    let target = behavior
+        .target_widget
+        .and_then(|tid| tree.widgets.iter().find(|w| w.id == tid))
+        .or_else(|| {
+            behavior.action.field().and_then(|field| {
+                tree.widgets
+                    .iter()
+                    .find(|w| w.state_binding.as_deref() == Some(field))
+            })
+        })?;
+    Some((
+        event_socket_pos(crect(source, origin, zoom)),
+        state_socket_pos(crect(target, origin, zoom)),
+    ))
+}
+
+/// Sample the Visio-style connector cubic between `p0` and `p3`.
+fn behavior_wire_points(p0: egui::Pos2, p3: egui::Pos2) -> Vec<egui::Pos2> {
+    let dx = (p3.x - p0.x).abs();
+    let reach = (dx * 0.5).clamp(32.0, 140.0);
+    let c1 = p0 + egui::vec2(reach, 0.0);
+    let c2 = p3 - egui::vec2(reach, 0.0);
+    const STEPS: usize = 24;
+    (0..=STEPS)
+        .map(|i| {
+            let t = i as f32 / STEPS as f32;
+            let u = 1.0 - t;
+            let pt = p0.to_vec2() * (u * u * u)
+                + c1.to_vec2() * (3.0 * u * u * t)
+                + c2.to_vec2() * (3.0 * u * t * t)
+                + p3.to_vec2() * (t * t * t);
+            egui::pos2(pt.x, pt.y)
+        })
+        .collect()
+}
+
+fn behavior_wire_hit(p0: egui::Pos2, p3: egui::Pos2, pos: egui::Pos2) -> bool {
+    let pts = behavior_wire_points(p0, p3);
+    pts.windows(2).any(|seg| {
+        let (a, b) = (seg[0], seg[1]);
+        let ab = b - a;
+        let len_sq = ab.length_sq();
+        let t = if len_sq <= f32::EPSILON {
+            0.0
+        } else {
+            ((pos - a).dot(ab) / len_sq).clamp(0.0, 1.0)
+        };
+        (a + ab * t).distance(pos) <= BEHAVIOR_WIRE_HIT_DISTANCE
+    })
+}
+
+/// Draw one wire: smooth connector, open circle on the event side, closed
+/// circle on the state side.
+fn draw_behavior_wire(
+    painter: &egui::Painter,
+    p0: egui::Pos2,
+    p3: egui::Pos2,
+    color: egui::Color32,
+    selected: bool,
+) {
+    let stroke = egui::Stroke::new(if selected { 2.5 } else { 1.5 }, color);
+    let pts = behavior_wire_points(p0, p3);
+    for seg in pts.windows(2) {
+        painter.line_segment([seg[0], seg[1]], stroke);
+    }
+    // Open circle = source/event socket; closed circle = target/state socket.
+    painter.circle_filled(p0, BEHAVIOR_SOCKET_RADIUS, egui::Color32::from_gray(28));
+    painter.circle_stroke(p0, BEHAVIOR_SOCKET_RADIUS, egui::Stroke::new(1.8, color));
+    painter.circle_filled(p3, BEHAVIOR_SOCKET_RADIUS, color);
 }
 
 pub fn handle(
@@ -1652,7 +2451,7 @@ pub fn handle(
     let keyboard_owned = canvas_owns_keyboard(
         modal_blocked,
         state.canvas_focused,
-        ui.ctx().wants_keyboard_input(),
+        ui.ctx().egui_wants_keyboard_input(),
     );
     let pointer = pointer_owned.then_some(raw_pointer).flatten();
     let just_pressed = pointer_owned && ui.input(|i| i.pointer.primary_pressed());
@@ -1669,12 +2468,13 @@ pub fn handle(
         egui::Vec2::ZERO
     };
     let scroll_y = if pointer_owned {
-        ui.input(|i| i.raw_scroll_delta.y)
+        ui.input(|i| i.smooth_scroll_delta.y)
     } else {
         0.0
     };
     let key_g = keyboard_owned && ui.input(|i| i.key_pressed(egui::Key::G));
     let key_0 = keyboard_owned && ui.input(|i| ctrl_held && i.key_pressed(egui::Key::Num0));
+    let key_f = keyboard_owned && ui.input(|i| i.key_pressed(egui::Key::F));
     let double_clicked = pointer_owned && resp.double_clicked();
 
     // -------------------------------------------------------------------
@@ -1686,6 +2486,51 @@ pub fn handle(
     if key_0 {
         settings.zoom = 1.0;
         settings.pan = egui::Vec2::ZERO;
+    }
+
+    // F — zoom to selection (or fit all widgets if nothing selected)
+    if key_f {
+        let target_widgets: Vec<&crate::project::schema::WidgetInstance> = if selected.is_empty() {
+            tree.widgets.iter().collect()
+        } else {
+            tree.widgets
+                .iter()
+                .filter(|w| selected.contains(&w.id))
+                .collect()
+        };
+        if !target_widgets.is_empty() {
+            let min_x = target_widgets
+                .iter()
+                .map(|w| w.rect.x)
+                .fold(f32::MAX, f32::min);
+            let min_y = target_widgets
+                .iter()
+                .map(|w| w.rect.y)
+                .fold(f32::MAX, f32::min);
+            let max_x = target_widgets
+                .iter()
+                .map(|w| w.rect.x + w.rect.w)
+                .fold(f32::MIN, f32::max);
+            let max_y = target_widgets
+                .iter()
+                .map(|w| w.rect.y + w.rect.h)
+                .fold(f32::MIN, f32::max);
+            let content_rect =
+                egui::Rect::from_min_max(egui::pos2(min_x, min_y), egui::pos2(max_x, max_y));
+            let viewport_rect = resp.rect;
+            if let Some((new_zoom, content_center)) =
+                compute_fit_rect(content_rect, viewport_rect, 0.10)
+            {
+                let canvas_w = tree.app_props.win_w;
+                let canvas_h = tree.app_props.win_h;
+                settings.zoom = new_zoom;
+                settings.pan = new_zoom
+                    * egui::vec2(
+                        canvas_w / 2.0 - content_center.x,
+                        canvas_h / 2.0 - content_center.y,
+                    );
+            }
+        }
     }
 
     // -------------------------------------------------------------------
@@ -1798,124 +2643,259 @@ pub fn handle(
         };
 
     // -------------------------------------------------------------------
-    // Draw widgets (parents first, then their children as sub-pass)
+    // Draw widgets recursively, parents before descendants.
     // -------------------------------------------------------------------
+    let mut drawn = HashSet::new();
     for widget in &tree.widgets {
         if child_ids.contains(&widget.id) {
-            continue; // drawn inside parent Frame below
+            continue;
         }
-        let rect = crect(widget, origin, zoom);
-        let is_sel = selected.contains(&widget.id) || rubber_preview.contains(&widget.id);
-        let has_sel_child = widget
-            .children
-            .iter()
-            .any(|&cid| selected.contains(&cid) || rubber_preview.contains(&cid));
-        draw_widget(
+        draw_widget_subtree(
             &painter,
-            widget,
-            rect,
-            WidgetDrawFlags {
-                is_selected: is_sel,
-                is_child: false,
-                has_selected_child: has_sel_child,
-            },
+            tree,
+            widget.id,
+            selected,
+            &rubber_preview,
+            origin,
             zoom,
             zoom_stable,
             text_settings,
             svg_texture_cache,
+            0,
+            &mut drawn,
         );
+    }
 
-        // Draw children inside this Frame
-        for &child_id in &widget.children {
-            if let Some(child) = tree.widgets.iter().find(|w| w.id == child_id) {
-                let child_rect = crect(child, origin, zoom);
-                let child_sel = selected.contains(&child.id) || rubber_preview.contains(&child.id);
-                draw_widget(
-                    &painter,
-                    child,
-                    child_rect,
-                    WidgetDrawFlags {
-                        is_selected: child_sel,
-                        is_child: true,
-                        has_selected_child: false,
-                    },
-                    zoom,
-                    zoom_stable,
-                    text_settings,
-                    svg_texture_cache,
-                );
+    // -------------------------------------------------------------------
+    // Error highlighting — red outline on widgets with validation errors
+    // -------------------------------------------------------------------
+    {
+        let widget_errors = compute_widget_errors(&tree.widgets);
+        if !widget_errors.is_empty() {
+            let error_stroke = egui::Stroke::new(2.0, egui::Color32::RED);
+            for widget in &tree.widgets {
+                if widget_errors.contains_key(&widget.id) {
+                    let rect = crect(widget, origin, zoom);
+                    painter.rect_stroke(rect, 3.0, error_stroke, egui::StrokeKind::Inside);
+                }
             }
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Behavior wires + sockets
+    // -------------------------------------------------------------------
+    {
+        // Drop the selection if its behavior no longer exists in the tree.
+        if state
+            .selected_behavior
+            .is_some_and(|bid| !tree.app_props.behaviors.iter().any(|b| b.id == bid))
+        {
+            state.selected_behavior = None;
+        }
+
+        // Committed wires.
+        for behavior in &tree.app_props.behaviors {
+            if let Some((p0, p3)) = behavior_wire_endpoints(behavior, tree, origin, zoom) {
+                let selected_wire = state.selected_behavior == Some(behavior.id);
+                let color = if selected_wire {
+                    egui::Color32::from_rgb(52, 211, 153)
+                } else {
+                    BEHAVIOR_WIRE_COLOR
+                };
+                draw_behavior_wire(&painter, p0, p3, color, selected_wire);
+            }
+        }
+
+        // Sockets: open circle on every event-capable widget (source side),
+        // closed circle on every state-bound widget (target side).  Capability
+        // derives from the canonical APIs, never re-listed per kind.
+        let drag_active = state.behavior_drag.is_some();
+        for widget in &tree.widgets {
+            let rect = crect(widget, origin, zoom);
+            if behavior_source_event(widget).is_some() {
+                let p = event_socket_pos(rect);
+                let hovered = pointer.is_some_and(|pos| {
+                    p.distance(pos) <= BEHAVIOR_SOCKET_HIT_RADIUS && !drag_active
+                });
+                let color = if hovered {
+                    egui::Color32::from_rgb(52, 211, 153)
+                } else {
+                    egui::Color32::from_gray(120)
+                };
+                painter.circle_filled(p, BEHAVIOR_SOCKET_RADIUS, egui::Color32::from_gray(28));
+                painter.circle_stroke(p, BEHAVIOR_SOCKET_RADIUS, egui::Stroke::new(1.5, color));
+            }
+            if behavior_target_field(widget).is_some() {
+                let p = state_socket_pos(rect);
+                let highlighted = drag_active
+                    && state
+                        .behavior_drag
+                        .as_ref()
+                        .is_some_and(|d| d.source_widget != widget.id);
+                let color = if highlighted {
+                    egui::Color32::from_rgb(52, 211, 153)
+                } else {
+                    egui::Color32::from_gray(120)
+                };
+                painter.circle_filled(p, BEHAVIOR_SOCKET_RADIUS, color);
+            }
+        }
+
+        // Live wire while dragging.
+        if let (Some(drag), Some(pos)) = (&state.behavior_drag, pointer)
+            && let Some(source) = tree.widgets.iter().find(|w| w.id == drag.source_widget)
+        {
+            let p0 = event_socket_pos(crect(source, origin, zoom));
+            draw_behavior_wire(&painter, p0, pos, BEHAVIOR_WIRE_COLOR, true);
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         }
     }
 
     // -------------------------------------------------------------------
     // Inline label edit overlay
     // -------------------------------------------------------------------
-    if pointer_owned {
-        if let Some((edit_id, ref mut edit_buf)) = state.inline_edit {
-            if let Some(widget) = tree.widgets.iter().find(|w| w.id == edit_id) {
-                let rect = crect(widget, origin, zoom);
-                let accent = kind_accent(&widget.kind);
-                // Frosted overlay behind the text edit
-                painter.rect_filled(
-                    rect,
-                    3.0,
-                    egui::Color32::from_rgba_unmultiplied(20, 20, 20, 220),
-                );
-                painter.rect_stroke(rect, 3.0, egui::Stroke::new(1.5, accent));
+    if pointer_owned && let Some((edit_id, ref mut edit_buf)) = state.inline_edit {
+        if let Some(widget) = tree.widgets.iter().find(|w| w.id == edit_id) {
+            let rect = crect(widget, origin, zoom);
+            let accent = kind_accent(&widget.kind);
+            // Frosted overlay behind the text edit
+            painter.rect_filled(
+                rect,
+                3.0,
+                egui::Color32::from_rgba_unmultiplied(20, 20, 20, 220),
+            );
+            painter.rect_stroke(
+                rect,
+                3.0,
+                egui::Stroke::new(1.5, accent),
+                egui::StrokeKind::Inside,
+            );
 
-                // Place a TextEdit widget at the widget rect
-                let te_resp = ui.put(
-                    rect,
-                    egui::TextEdit::singleline(edit_buf)
-                        .font(egui::FontId::proportional(
-                            (12.0 * zoom * text_settings.label_scale).clamp(8.0, 24.0),
-                        ))
-                        .frame(false)
-                        .text_color(egui::Color32::WHITE),
-                );
-                te_resp.request_focus();
+            // Place a TextEdit widget at the widget rect
+            let te_resp = ui.put(
+                rect,
+                egui::TextEdit::singleline(edit_buf)
+                    .font(egui::FontId::proportional(
+                        (12.0 * zoom * text_settings.label_scale).clamp(8.0, 24.0),
+                    ))
+                    .frame(egui::Frame::NONE)
+                    .text_color(egui::Color32::WHITE),
+            );
+            te_resp.request_focus();
 
-                // Commit on Enter or focus loss; Escape cancels
-                let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                let escape_pressed = ui.input(|i| i.key_pressed(egui::Key::Escape));
-                let focus_lost = !te_resp.has_focus() && !te_resp.gained_focus();
+            // Commit on Enter or focus loss; Escape cancels
+            let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let escape_pressed = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            let focus_lost = !te_resp.has_focus() && !te_resp.gained_focus();
 
-                if enter_pressed || (focus_lost && !escape_pressed) {
-                    // Commit: update label in tree
-                    if let Some(w) = tree.get_mut(edit_id) {
-                        if !edit_buf.is_empty() {
-                            w.props.label = edit_buf.clone();
-                        }
-                    }
-                    state.inline_edit = None;
-                } else if escape_pressed {
-                    // Cancel: discard
-                    state.inline_edit = None;
+            if enter_pressed || (focus_lost && !escape_pressed) {
+                // Commit: update label in tree
+                if let Some(w) = tree.get_mut(edit_id)
+                    && !edit_buf.is_empty()
+                {
+                    w.props.label = edit_buf.clone();
                 }
-            } else {
-                // Widget was removed while editing
+                state.inline_edit = None;
+            } else if escape_pressed {
+                // Cancel: discard
                 state.inline_edit = None;
             }
+        } else {
+            // Widget was removed while editing
+            state.inline_edit = None;
         }
     }
 
     // -------------------------------------------------------------------
-    // Resize handles — primary widget only
+    // Constraint anchors + resize handles — primary widget only
     // -------------------------------------------------------------------
-    if let Some(prim_id) = primary {
-        if let Some(widget) = tree.widgets.iter().find(|w| w.id == prim_id) {
-            let rect = crect(widget, origin, zoom);
-            let accent = kind_accent(&widget.kind);
-            for &h in &ResizeHandle::ALL {
-                let hr = h.hit_rect(rect);
-                painter.rect_filled(hr, 1.0, egui::Color32::from_gray(230));
-                painter.rect_stroke(hr, 1.0, egui::Stroke::new(1.0, accent));
-                if let Some(pos) = pointer {
-                    if hr.contains(pos) {
-                        ui.ctx().set_cursor_icon(h.cursor());
-                    }
-                }
+    if let Some(prim_id) = primary
+        && let Some(widget) = tree.widgets.iter().find(|w| w.id == prim_id)
+    {
+        let rect = crect(widget, origin, zoom);
+        let accent = kind_accent(&widget.kind);
+        let frame = constraint_frame(tree, prim_id);
+        let frame_rect = constraint_frame_screen(&frame, origin, zoom);
+        let anchor_color = egui::Color32::from_rgb(96, 165, 250);
+
+        for target in [
+            widget.constraints.h_align.map(ConstraintTarget::Horizontal),
+            widget.constraints.v_align.map(ConstraintTarget::Vertical),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let target_pos = constraint_target_point(target, rect, frame_rect);
+            let start = match target {
+                ConstraintTarget::Horizontal(HAlign::Leading) => rect.left_center(),
+                ConstraintTarget::Horizontal(HAlign::Trailing) => rect.right_center(),
+                ConstraintTarget::Horizontal(HAlign::Center | HAlign::Stretch) => rect.center(),
+                ConstraintTarget::Vertical(VAlign::Top) => rect.center_top(),
+                ConstraintTarget::Vertical(VAlign::Bottom) => rect.center_bottom(),
+                ConstraintTarget::Vertical(VAlign::Center | VAlign::Stretch) => rect.center(),
+            };
+            painter.line_segment([start, target_pos], egui::Stroke::new(1.0, anchor_color));
+            painter.circle_filled(target_pos, 3.0, anchor_color);
+        }
+
+        if let Some(drag) = state
+            .constraint_anchor_drag
+            .as_ref()
+            .filter(|drag| drag.id == prim_id)
+        {
+            let targets: Vec<ConstraintTarget> = if drag.handle.is_horizontal() {
+                vec![
+                    ConstraintTarget::Horizontal(HAlign::Leading),
+                    ConstraintTarget::Horizontal(HAlign::Center),
+                    ConstraintTarget::Horizontal(HAlign::Trailing),
+                ]
+            } else {
+                vec![
+                    ConstraintTarget::Vertical(VAlign::Top),
+                    ConstraintTarget::Vertical(VAlign::Center),
+                    ConstraintTarget::Vertical(VAlign::Bottom),
+                ]
+            };
+            for target in targets {
+                let point = constraint_target_point(target, rect, frame_rect);
+                painter.circle_stroke(point, 5.0, egui::Stroke::new(1.5, anchor_color));
+            }
+            if let Some(target) = drag.target {
+                painter.line_segment(
+                    [
+                        drag.handle.center(rect),
+                        constraint_target_point(target, rect, frame_rect),
+                    ],
+                    egui::Stroke::new(2.0, anchor_color),
+                );
+            }
+        }
+
+        for handle in ConstraintHandle::ALL {
+            let center = handle.center(rect);
+            painter.circle_filled(center, 5.0, egui::Color32::from_gray(30));
+            painter.circle_stroke(center, 5.0, egui::Stroke::new(1.5, anchor_color));
+            if let Some(pos) = pointer
+                && handle.hit_rect(rect).contains(pos)
+            {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            }
+        }
+
+        for &h in &ResizeHandle::ALL {
+            let hr = h.hit_rect(rect);
+            painter.rect_filled(hr, 1.0, egui::Color32::from_gray(230));
+            painter.rect_stroke(
+                hr,
+                1.0,
+                egui::Stroke::new(1.0, accent),
+                egui::StrokeKind::Inside,
+            );
+            if let Some(pos) = pointer
+                && hr.contains(pos)
+            {
+                ui.ctx().set_cursor_icon(h.cursor());
             }
         }
     }
@@ -1923,12 +2903,11 @@ pub fn handle(
     // -------------------------------------------------------------------
     // Context menu (z-order)
     // -------------------------------------------------------------------
-    if right_clicked {
-        if let Some(pos) = pointer {
-            if let Some(id) = hit_widget_id(&tree.widgets, &child_ids, pos, origin, zoom) {
-                state.context_menu = Some((id, pos));
-            }
-        }
+    if right_clicked
+        && let Some(pos) = pointer
+        && let Some(id) = hit_widget_id(&tree.widgets, &child_ids, pos, origin, zoom)
+    {
+        state.context_menu = Some((id, pos));
     }
 
     let ctx_group_available = selected.len() >= 2;
@@ -1994,11 +2973,9 @@ pub fn handle(
             _ => tree.send_to_back(id),
         }
     }
-    if do_group {
-        if let Some(new_id) = tree.group(selected) {
-            selected.clear();
-            selected.push(new_id);
-        }
+    if do_group && let Some(new_id) = tree.group(selected) {
+        selected.clear();
+        selected.push(new_id);
     }
     if let Some(frame_id) = do_ungroup {
         let children = tree.ungroup(frame_id);
@@ -2012,30 +2989,29 @@ pub fn handle(
     // -------------------------------------------------------------------
     // Double-click → inline label edit OR Lazare highlight
     // -------------------------------------------------------------------
-    if double_clicked {
-        if let Some(pos) = pointer {
-            if resp.rect.contains(pos) {
-                let hit = tree
-                    .widgets
-                    .iter()
-                    .rev()
-                    .find(|w| crect(w, origin, zoom).contains(pos));
-                if let Some(w) = hit {
-                    if ctrl_held {
-                        state.double_clicked_widget = Some(w.id);
-                    } else {
-                        // Widgets that support meaningful inline label editing
-                        let supports_inline = matches!(
-                            w.kind,
-                            WidgetKind::Button
-                                | WidgetKind::Label
-                                | WidgetKind::Checkbox
-                                | WidgetKind::RadioButton
-                        );
-                        if supports_inline {
-                            state.inline_edit = Some((w.id, w.props.label.clone()));
-                        }
-                    }
+    if double_clicked
+        && let Some(pos) = pointer
+        && resp.rect.contains(pos)
+    {
+        let hit = tree
+            .widgets
+            .iter()
+            .rev()
+            .find(|w| crect(w, origin, zoom).contains(pos));
+        if let Some(w) = hit {
+            if ctrl_held {
+                state.double_clicked_widget = Some(w.id);
+            } else {
+                // Widgets that support meaningful inline label editing
+                let supports_inline = matches!(
+                    w.kind,
+                    WidgetKind::Button
+                        | WidgetKind::Label
+                        | WidgetKind::Checkbox
+                        | WidgetKind::RadioButton
+                );
+                if supports_inline {
+                    state.inline_edit = Some((w.id, w.props.label.clone()));
                 }
             }
         }
@@ -2044,34 +3020,30 @@ pub fn handle(
     // -------------------------------------------------------------------
     // Template drag drop — release in canvas
     // -------------------------------------------------------------------
-    if primary_released {
-        if let Some(instances) = state.template_drag.take() {
-            if let Some(pos) = pointer {
-                if resp.rect.contains(pos) {
-                    // Convert screen pos to canvas space, place first widget there
-                    let canvas_pos = (pos - origin) / zoom;
-                    let offset_x = canvas_pos.x.max(0.0);
-                    let offset_y = canvas_pos.y.max(0.0);
-                    // Find bounding box of the template to offset correctly
-                    let min_x = instances.iter().map(|w| w.rect.x).fold(f32::MAX, f32::min);
-                    let min_y = instances.iter().map(|w| w.rect.y).fold(f32::MAX, f32::min);
-                    for mut w in instances {
-                        w.id = Uuid::new_v4();
-                        w.rect.x = (w.rect.x - min_x + offset_x).max(0.0);
-                        w.rect.y = (w.rect.y - min_y + offset_y).max(0.0);
-                        let id = w.id;
-                        let center = (w.rect.x + w.rect.w * 0.5, w.rect.y + w.rect.h * 0.5);
-                        tree.add(w);
-                        if !matches!(
-                            tree.widgets.iter().find(|w| w.id == id).map(|w| &w.kind),
-                            Some(
-                                WidgetKind::VLayout | WidgetKind::HLayout | WidgetKind::GridLayout
-                            )
-                        ) {
-                            tree.attach_to_layout_at(id, center);
-                        }
-                    }
-                }
+    if primary_released
+        && let Some(instances) = state.template_drag.take()
+        && let Some(pos) = pointer
+        && resp.rect.contains(pos)
+    {
+        // Convert screen pos to canvas space, place first widget there
+        let canvas_pos = (pos - origin) / zoom;
+        let offset_x = canvas_pos.x.max(0.0);
+        let offset_y = canvas_pos.y.max(0.0);
+        // Find bounding box of the template to offset correctly
+        let min_x = instances.iter().map(|w| w.rect.x).fold(f32::MAX, f32::min);
+        let min_y = instances.iter().map(|w| w.rect.y).fold(f32::MAX, f32::min);
+        for mut w in instances {
+            w.id = Uuid::new_v4();
+            w.rect.x = (w.rect.x - min_x + offset_x).max(0.0);
+            w.rect.y = (w.rect.y - min_y + offset_y).max(0.0);
+            let id = w.id;
+            let center = (w.rect.x + w.rect.w * 0.5, w.rect.y + w.rect.h * 0.5);
+            tree.add(w);
+            if !matches!(
+                tree.widgets.iter().find(|w| w.id == id).map(|w| &w.kind),
+                Some(WidgetKind::VLayout | WidgetKind::HLayout | WidgetKind::GridLayout)
+            ) {
+                tree.attach_to_layout_at(id, center);
             }
         }
     }
@@ -2083,106 +3055,203 @@ pub fn handle(
     if settings.guide_drag_active {
         state.rubber_band = None;
         state.drag = None;
+        state.reorder_drag = None;
+        state.constraint_anchor_drag = None;
+        state.behavior_drag = None;
     }
     if just_pressed && !settings.guide_drag_active && state.context_menu.is_none() {
-        if let Some(pos) = pointer {
-            if resp.rect.contains(pos) {
-                let mut started_resize = false;
+        state.reorder_drag = None; // clear any stale reorder from previous gesture
+        if let Some(pos) = pointer
+            && resp.rect.contains(pos)
+        {
+            let mut started_constraint_anchor = false;
+            let mut started_resize = false;
+            let mut started_behavior_wire = false;
 
-                // 1) Resize handle on primary
-                if let Some(prim_id) = primary {
-                    if let Some(widget) = tree.widgets.iter().find(|w| w.id == prim_id) {
-                        let rect = crect(widget, origin, zoom);
-                        for &h in &ResizeHandle::ALL {
-                            if h.hit_rect(rect).contains(pos) {
-                                state.resize = Some(ResizeState {
-                                    id: prim_id,
-                                    handle: h,
-                                    start_rect: widget.rect.clone(),
-                                    start_pos: pos,
-                                });
-                                state.drag = None;
-                                state.rubber_band = None;
-                                started_resize = true;
-                                break;
-                            }
-                        }
+            // 0) Behavior event socket on any event-capable widget — wires
+            // are drawn topmost, so socket hits win over body hits.
+            for widget in tree.widgets.iter().rev() {
+                let Some(event) = behavior_source_event(widget) else {
+                    continue;
+                };
+                let socket = event_socket_pos(crect(widget, origin, zoom));
+                if socket.distance(pos) <= BEHAVIOR_SOCKET_HIT_RADIUS {
+                    state.behavior_drag = Some(BehaviorWireDrag {
+                        source_widget: widget.id,
+                        event,
+                    });
+                    state.resize = None;
+                    state.drag = None;
+                    state.rubber_band = None;
+                    started_behavior_wire = true;
+                    break;
+                }
+            }
+
+            // 1) Constraint anchor handle on primary. These sit farther
+            // outside the widget than resize handles, so both remain
+            // independently targetable.
+            if let Some(prim_id) = primary.filter(|_| !started_behavior_wire)
+                && let Some(widget) = tree.widgets.iter().find(|w| w.id == prim_id)
+            {
+                let rect = crect(widget, origin, zoom);
+                for handle in ConstraintHandle::ALL {
+                    if handle.hit_rect(rect).contains(pos) {
+                        let frame =
+                            constraint_frame_screen(&constraint_frame(tree, prim_id), origin, zoom);
+                        state.constraint_anchor_drag = Some(ConstraintAnchorDrag {
+                            id: prim_id,
+                            handle,
+                            target: Some(nearest_constraint_target(handle, pos, frame)),
+                        });
+                        state.resize = None;
+                        state.drag = None;
+                        state.rubber_band = None;
+                        started_constraint_anchor = true;
+                        break;
                     }
                 }
+            }
 
-                if !started_resize {
-                    let hit_widget = hit_widget_id(&tree.widgets, &child_ids, pos, origin, zoom);
+            // 2) Resize handle on primary
+            if !started_behavior_wire
+                && !started_constraint_anchor
+                && let Some(prim_id) = primary
+                && let Some(widget) = tree.widgets.iter().find(|w| w.id == prim_id)
+            {
+                let rect = crect(widget, origin, zoom);
+                for &h in &ResizeHandle::ALL {
+                    if h.hit_rect(rect).contains(pos) {
+                        state.resize = Some(ResizeState {
+                            id: prim_id,
+                            handle: h,
+                            start_rect: widget.rect.clone(),
+                            start_pos: pos,
+                        });
+                        state.drag = None;
+                        state.rubber_band = None;
+                        started_resize = true;
+                        break;
+                    }
+                }
+            }
 
-                    if shift_held {
-                        if let Some(id) = hit_widget {
-                            if selected.contains(&id) {
-                                selected.retain(|&x| x != id);
-                            } else {
-                                selected.push(id);
-                            }
+            if !started_behavior_wire && !started_constraint_anchor && !started_resize {
+                let hit_widget = hit_widget_id(&tree.widgets, &child_ids, pos, origin, zoom);
+
+                // Any non-socket press re-resolves wire selection: clicking
+                // a wire selects it; clicking anything else clears it.
+                state.selected_behavior = tree
+                    .app_props
+                    .behaviors
+                    .iter()
+                    .filter(|_| hit_widget.is_none())
+                    .find(|b| {
+                        behavior_wire_endpoints(b, tree, origin, zoom)
+                            .is_some_and(|(p0, p3)| behavior_wire_hit(p0, p3, pos))
+                    })
+                    .map(|b| b.id);
+                let hit_wire = state.selected_behavior.is_some();
+
+                if hit_wire {
+                    // Wire click: keep widget selection untouched, no
+                    // rubber band / drag this gesture.
+                    state.drag = None;
+                    state.rubber_band = None;
+                } else if shift_held {
+                    if let Some(id) = hit_widget {
+                        if selected.contains(&id) {
+                            selected.retain(|&x| x != id);
                         } else {
-                            state.rubber_band = Some(pos);
-                            state.drag = None;
+                            selected.push(id);
                         }
                     } else {
-                        match hit_widget {
-                            Some(id) if selected.contains(&id) => {
-                                let mut drag_ids: Vec<Uuid> = selected.clone();
-                                for &sid in selected.iter() {
-                                    if let Some(w) = tree.widgets.iter().find(|w| w.id == sid) {
-                                        for &cid in &w.children {
-                                            if !drag_ids.contains(&cid) {
-                                                drag_ids.push(cid);
-                                            }
+                        state.rubber_band = Some(pos);
+                        state.drag = None;
+                    }
+                } else {
+                    match hit_widget {
+                        Some(id) if selected.contains(&id) => {
+                            let mut drag_ids: Vec<Uuid> = selected.clone();
+                            for &sid in selected.iter() {
+                                if let Some(w) = tree.widgets.iter().find(|w| w.id == sid) {
+                                    for &cid in &w.children {
+                                        if !drag_ids.contains(&cid) {
+                                            drag_ids.push(cid);
                                         }
                                     }
                                 }
-                                let start_rects = drag_ids
-                                    .iter()
-                                    .filter_map(|&did| {
-                                        tree.widgets
-                                            .iter()
-                                            .find(|w| w.id == did)
-                                            .map(|w| (did, w.rect.clone()))
-                                    })
-                                    .collect();
-                                state.drag = Some(DragState {
-                                    start_pos: pos,
-                                    start_rects,
-                                });
-                                state.rubber_band = None;
                             }
-                            Some(id) => {
-                                selected.clear();
-                                selected.push(id);
-                                let mut drag_ids = vec![id];
-                                if let Some(w) = tree.widgets.iter().find(|w| w.id == id) {
-                                    for &cid in &w.children {
-                                        drag_ids.push(cid);
-                                    }
-                                }
-                                let start_rects = drag_ids
-                                    .iter()
-                                    .filter_map(|&did| {
-                                        tree.widgets
-                                            .iter()
-                                            .find(|w| w.id == did)
-                                            .map(|w| (did, w.rect.clone()))
-                                    })
-                                    .collect();
-                                state.drag = Some(DragState {
-                                    start_pos: pos,
-                                    start_rects,
-                                });
-                                state.rubber_band = None;
-                            }
-                            None => {
-                                selected.clear();
-                                state.drag = None;
-                                state.resize = None;
-                                state.rubber_band = Some(pos);
-                            }
+                            let start_rects = drag_ids
+                                .iter()
+                                .filter_map(|&did| {
+                                    tree.widgets
+                                        .iter()
+                                        .find(|w| w.id == did)
+                                        .map(|w| (did, w.rect.clone()))
+                                })
+                                .collect();
+                            state.drag = Some(DragState {
+                                start_pos: pos,
+                                start_rects,
+                            });
+                            state.rubber_band = None;
                         }
+                        Some(id) => {
+                            selected.clear();
+                            selected.push(id);
+                            let mut drag_ids = vec![id];
+                            if let Some(w) = tree.widgets.iter().find(|w| w.id == id) {
+                                for &cid in &w.children {
+                                    drag_ids.push(cid);
+                                }
+                            }
+                            let start_rects = drag_ids
+                                .iter()
+                                .filter_map(|&did| {
+                                    tree.widgets
+                                        .iter()
+                                        .find(|w| w.id == did)
+                                        .map(|w| (did, w.rect.clone()))
+                                })
+                                .collect();
+                            state.drag = Some(DragState {
+                                start_pos: pos,
+                                start_rects,
+                            });
+                            state.rubber_band = None;
+                        }
+                        None => {
+                            selected.clear();
+                            state.drag = None;
+                            state.resize = None;
+                            state.rubber_band = Some(pos);
+                        }
+                    }
+                }
+            }
+
+            // After drag is established, check if the dragged widget is a
+            // direct child of a VLayout or HLayout — if so, start reorder.
+            if !started_constraint_anchor && state.drag.is_some() && !shift_held {
+                let drag_id = selected.last().copied();
+                if let Some(did) = drag_id {
+                    let parent_id = tree.parent_of(did);
+                    if let Some(pid) = parent_id
+                        && let Some(parent) = tree.widgets.iter().find(|w| w.id == pid)
+                        && matches!(
+                            parent.kind,
+                            WidgetKind::VLayout | WidgetKind::HLayout | WidgetKind::GridLayout
+                        )
+                    {
+                        let v = (pos - origin) / zoom;
+                        let pos_canvas = egui::pos2(v.x, v.y);
+                        let insert_idx = layout_insert_idx(parent, &tree.widgets, pos_canvas, did);
+                        state.reorder_drag = Some(ReorderDrag {
+                            child_id: did,
+                            parent_id: pid,
+                            insert_idx,
+                        });
                     }
                 }
             }
@@ -2195,51 +3264,199 @@ pub fn handle(
     let mut guide_h: Option<(f32, f32, f32)> = None; // horizontal line: screen_y, x0, x1
 
     // -------------------------------------------------------------------
+    // Constraint-anchor drag — preview the nearest parent anchor target.
+    // The actual constraint is committed atomically on release.
+    // -------------------------------------------------------------------
+    if is_down && let (Some(drag), Some(pos)) = (&mut state.constraint_anchor_drag, pointer) {
+        let frame = constraint_frame_screen(&constraint_frame(tree, drag.id), origin, zoom);
+        drag.target = Some(nearest_constraint_target(drag.handle, pos, frame));
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
+
+    // -------------------------------------------------------------------
     // Resize drag — with smart guide snap on moving edge(s)
     // -------------------------------------------------------------------
-    if is_down {
-        if let (Some(rs), Some(pos)) = (&state.resize, pointer) {
-            let screen_delta = pos - rs.start_pos;
-            let canvas_delta = screen_delta / zoom;
-            let mut new_rect = rs.handle.apply_delta(&rs.start_rect, canvas_delta);
-            if settings.snap_enabled {
-                new_rect = snap_rect(new_rect, settings.snap_step);
+    if is_down && let (Some(rs), Some(pos)) = (&state.resize, pointer) {
+        let screen_delta = pos - rs.start_pos;
+        let canvas_delta = screen_delta / zoom;
+        let mut new_rect = rs.handle.apply_delta(&rs.start_rect, canvas_delta);
+        if settings.snap_enabled {
+            new_rect = snap_rect(new_rect, settings.snap_step);
+        }
+
+        let snap_thr = 4.0_f32 / zoom.max(0.01);
+        let resize_id = rs.id;
+        let handle = rs.handle;
+
+        // Which canvas coordinate is the "moving edge" for each axis?
+        let moving_x: Option<f32> = match handle {
+            ResizeHandle::Left | ResizeHandle::TopLeft | ResizeHandle::BottomLeft => {
+                Some(new_rect.x)
             }
+            ResizeHandle::Right | ResizeHandle::TopRight | ResizeHandle::BottomRight => {
+                Some(new_rect.x + new_rect.w)
+            }
+            _ => None,
+        };
+        let moving_y: Option<f32> = match handle {
+            ResizeHandle::Top | ResizeHandle::TopLeft | ResizeHandle::TopRight => Some(new_rect.y),
+            ResizeHandle::Bottom | ResizeHandle::BottomLeft | ResizeHandle::BottomRight => {
+                Some(new_rect.y + new_rect.h)
+            }
+            _ => None,
+        };
 
-            let snap_thr = 4.0_f32 / zoom.max(0.01);
-            let resize_id = rs.id;
-            let handle = rs.handle;
+        // Find best snap adjustment per axis (scoped so tree borrow ends before get_mut)
+        let (adj_x, adj_y, raw_rv, raw_rh) = {
+            let mut best_x = snap_thr;
+            let mut best_y = snap_thr;
+            let mut ax = 0.0_f32;
+            let mut ay = 0.0_f32;
+            let mut rv: Option<(f32, f32, f32)> = None; // (canvas_x, y_min, y_max)
+            let mut rh: Option<(f32, f32, f32)> = None; // (canvas_y, x_min, x_max)
 
-            // Which canvas coordinate is the "moving edge" for each axis?
-            let moving_x: Option<f32> = match handle {
+            for sw in tree.widgets.iter().filter(|w| w.id != resize_id) {
+                let sxs = [
+                    sw.rect.x,
+                    sw.rect.x + sw.rect.w * 0.5,
+                    sw.rect.x + sw.rect.w,
+                ];
+                let sys = [
+                    sw.rect.y,
+                    sw.rect.y + sw.rect.h * 0.5,
+                    sw.rect.y + sw.rect.h,
+                ];
+                if let Some(mx) = moving_x {
+                    for &sx in &sxs {
+                        let d = (mx - sx).abs();
+                        if d < best_x {
+                            best_x = d;
+                            ax = sx - mx;
+                            rv = Some((
+                                sx,
+                                new_rect.y.min(sw.rect.y),
+                                (new_rect.y + new_rect.h).max(sw.rect.y + sw.rect.h),
+                            ));
+                        }
+                    }
+                }
+                if let Some(my) = moving_y {
+                    for &sy in &sys {
+                        let d = (my - sy).abs();
+                        if d < best_y {
+                            best_y = d;
+                            ay = sy - my;
+                            rh = Some((
+                                sy,
+                                new_rect.x.min(sw.rect.x),
+                                (new_rect.x + new_rect.w).max(sw.rect.x + sw.rect.w),
+                            ));
+                        }
+                    }
+                }
+            }
+            (ax, ay, rv, rh)
+        };
+
+        // Apply snap adjustment to the moving edge
+        if adj_x != 0.0 {
+            match handle {
                 ResizeHandle::Left | ResizeHandle::TopLeft | ResizeHandle::BottomLeft => {
-                    Some(new_rect.x)
+                    new_rect.x = (new_rect.x + adj_x).max(0.0);
+                    new_rect.w = (new_rect.w - adj_x).max(MIN_SIZE);
                 }
                 ResizeHandle::Right | ResizeHandle::TopRight | ResizeHandle::BottomRight => {
-                    Some(new_rect.x + new_rect.w)
+                    new_rect.w = (new_rect.w + adj_x).max(MIN_SIZE);
                 }
-                _ => None,
-            };
-            let moving_y: Option<f32> = match handle {
+                _ => {}
+            }
+        }
+        if adj_y != 0.0 {
+            match handle {
                 ResizeHandle::Top | ResizeHandle::TopLeft | ResizeHandle::TopRight => {
-                    Some(new_rect.y)
+                    new_rect.y = (new_rect.y + adj_y).max(0.0);
+                    new_rect.h = (new_rect.h - adj_y).max(MIN_SIZE);
                 }
                 ResizeHandle::Bottom | ResizeHandle::BottomLeft | ResizeHandle::BottomRight => {
-                    Some(new_rect.y + new_rect.h)
+                    new_rect.h = (new_rect.h + adj_y).max(MIN_SIZE);
                 }
-                _ => None,
-            };
+                _ => {}
+            }
+        }
 
-            // Find best snap adjustment per axis (scoped so tree borrow ends before get_mut)
-            let (adj_x, adj_y, raw_rv, raw_rh) = {
-                let mut best_x = snap_thr;
-                let mut best_y = snap_thr;
-                let mut ax = 0.0_f32;
-                let mut ay = 0.0_f32;
-                let mut rv: Option<(f32, f32, f32)> = None; // (canvas_x, y_min, y_max)
-                let mut rh: Option<(f32, f32, f32)> = None; // (canvas_y, x_min, x_max)
+        // Convert guide spans to screen space (40px overhang)
+        guide_v = raw_rv.map(|(cx, y_min, y_max)| {
+            (
+                origin.x + cx * zoom,
+                origin.y + y_min * zoom - 40.0,
+                origin.y + y_max * zoom + 40.0,
+            )
+        });
+        guide_h = raw_rh.map(|(cy, x_min, x_max)| {
+            (
+                origin.y + cy * zoom,
+                origin.x + x_min * zoom - 40.0,
+                origin.x + x_max * zoom + 40.0,
+            )
+        });
 
-                for sw in tree.widgets.iter().filter(|w| w.id != resize_id) {
+        let cursor = handle.cursor();
+        if let Some(w) = tree.get_mut(resize_id) {
+            w.rect = new_rect;
+        }
+        tree.reflow_layouts();
+        ui.ctx().set_cursor_icon(cursor);
+    }
+
+    // -------------------------------------------------------------------
+    // Multi-drag with smart guide snap
+    // -------------------------------------------------------------------
+
+    if is_down && let (Some(ds), Some(pos)) = (&state.drag, pointer) {
+        let screen_delta = pos - ds.start_pos;
+        let canvas_delta = screen_delta / zoom;
+        let drag_id_set: HashSet<Uuid> = ds.start_rects.iter().map(|(id, _)| *id).collect();
+        let snap_thr = 4.0_f32 / zoom.max(0.01);
+
+        let drag_updates: Vec<(Uuid, f32, f32)> = {
+            let static_ws: Vec<_> = tree
+                .widgets
+                .iter()
+                .filter(|w| !drag_id_set.contains(&w.id))
+                .collect();
+
+            let mut pos_list: Vec<(Uuid, f32, f32, f32, f32)> = ds
+                .start_rects
+                .iter()
+                .filter_map(|(id, sr)| {
+                    let w = tree.widgets.iter().find(|w| w.id == *id)?;
+                    let (nx, ny) = if settings.snap_enabled {
+                        (
+                            snap((sr.x + canvas_delta.x).max(0.0), settings.snap_step),
+                            snap((sr.y + canvas_delta.y).max(0.0), settings.snap_step),
+                        )
+                    } else {
+                        (
+                            (sr.x + canvas_delta.x).max(0.0),
+                            (sr.y + canvas_delta.y).max(0.0),
+                        )
+                    };
+                    Some((*id, nx, ny, w.rect.w, w.rect.h))
+                })
+                .collect();
+
+            // Find strongest alignment per axis; record guide span alongside
+            let mut best_x = snap_thr;
+            let mut best_y = snap_thr;
+            let mut adj_x = 0.0_f32;
+            let mut adj_y = 0.0_f32;
+            let mut raw_guide_v: Option<(f32, f32, f32)> = None; // (canvas_x, y_min, y_max)
+            let mut raw_guide_h: Option<(f32, f32, f32)> = None; // (canvas_y, x_min, x_max)
+
+            for (_, nx, ny, nw, nh) in &pos_list {
+                let dxs = [*nx, nx + nw * 0.5, nx + nw];
+                let dys = [*ny, ny + nh * 0.5, ny + nh];
+                for sw in &static_ws {
                     let sxs = [
                         sw.rect.x,
                         sw.rect.x + sw.rect.w * 0.5,
@@ -2250,73 +3467,77 @@ pub fn handle(
                         sw.rect.y + sw.rect.h * 0.5,
                         sw.rect.y + sw.rect.h,
                     ];
-                    if let Some(mx) = moving_x {
+                    for &dx in &dxs {
                         for &sx in &sxs {
-                            let d = (mx - sx).abs();
+                            let d = (dx - sx).abs();
                             if d < best_x {
                                 best_x = d;
-                                ax = sx - mx;
-                                rv = Some((
-                                    sx,
-                                    new_rect.y.min(sw.rect.y),
-                                    (new_rect.y + new_rect.h).max(sw.rect.y + sw.rect.h),
-                                ));
+                                adj_x = sx - dx;
+                                let y_min = ny.min(sw.rect.y);
+                                let y_max = (ny + nh).max(sw.rect.y + sw.rect.h);
+                                raw_guide_v = Some((sx, y_min, y_max));
                             }
                         }
                     }
-                    if let Some(my) = moving_y {
+                    for &dy in &dys {
                         for &sy in &sys {
-                            let d = (my - sy).abs();
+                            let d = (dy - sy).abs();
                             if d < best_y {
                                 best_y = d;
-                                ay = sy - my;
-                                rh = Some((
-                                    sy,
-                                    new_rect.x.min(sw.rect.x),
-                                    (new_rect.x + new_rect.w).max(sw.rect.x + sw.rect.w),
-                                ));
+                                adj_y = sy - dy;
+                                let x_min = nx.min(sw.rect.x);
+                                let x_max = (nx + nw).max(sw.rect.x + sw.rect.w);
+                                raw_guide_h = Some((sy, x_min, x_max));
                             }
                         }
                     }
                 }
-                (ax, ay, rv, rh)
-            };
-
-            // Apply snap adjustment to the moving edge
-            if adj_x != 0.0 {
-                match handle {
-                    ResizeHandle::Left | ResizeHandle::TopLeft | ResizeHandle::BottomLeft => {
-                        new_rect.x = (new_rect.x + adj_x).max(0.0);
-                        new_rect.w = (new_rect.w - adj_x).max(MIN_SIZE);
-                    }
-                    ResizeHandle::Right | ResizeHandle::TopRight | ResizeHandle::BottomRight => {
-                        new_rect.w = (new_rect.w + adj_x).max(MIN_SIZE);
-                    }
-                    _ => {}
-                }
-            }
-            if adj_y != 0.0 {
-                match handle {
-                    ResizeHandle::Top | ResizeHandle::TopLeft | ResizeHandle::TopRight => {
-                        new_rect.y = (new_rect.y + adj_y).max(0.0);
-                        new_rect.h = (new_rect.h - adj_y).max(MIN_SIZE);
-                    }
-                    ResizeHandle::Bottom | ResizeHandle::BottomLeft | ResizeHandle::BottomRight => {
-                        new_rect.h = (new_rect.h + adj_y).max(MIN_SIZE);
-                    }
-                    _ => {}
-                }
             }
 
-            // Convert guide spans to screen space (40px overhang)
-            guide_v = raw_rv.map(|(cx, y_min, y_max)| {
+            // Guide snapping — snap widget edges/center to ruler guide lines
+            for (_, nx, ny, nw, nh) in &pos_list {
+                let dxs = [*nx, nx + nw * 0.5, nx + nw];
+                let dys = [*ny, ny + nh * 0.5, ny + nh];
+                for g in &tree.app_props.guides {
+                    match g.orientation {
+                        crate::project::schema::GuideOrientation::Vertical => {
+                            for &dx in &dxs {
+                                let d = (dx - g.position).abs();
+                                if d < best_x {
+                                    best_x = d;
+                                    adj_x = g.position - dx;
+                                    raw_guide_v = Some((g.position, *ny, ny + nh));
+                                }
+                            }
+                        }
+                        crate::project::schema::GuideOrientation::Horizontal => {
+                            for &dy in &dys {
+                                let d = (dy - g.position).abs();
+                                if d < best_y {
+                                    best_y = d;
+                                    adj_y = g.position - dy;
+                                    raw_guide_h = Some((g.position, *nx, nx + nw));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            for (_, nx, ny, _, _) in &mut pos_list {
+                *nx = (*nx + adj_x).max(0.0);
+                *ny = (*ny + adj_y).max(0.0);
+            }
+
+            // Convert canvas-space guide spans to screen space (with 40px overhang)
+            guide_v = raw_guide_v.map(|(cx, y_min, y_max)| {
                 (
                     origin.x + cx * zoom,
                     origin.y + y_min * zoom - 40.0,
                     origin.y + y_max * zoom + 40.0,
                 )
             });
-            guide_h = raw_rh.map(|(cy, x_min, x_max)| {
+            guide_h = raw_guide_h.map(|(cy, x_min, x_max)| {
                 (
                     origin.y + cy * zoom,
                     origin.x + x_min * zoom - 40.0,
@@ -2324,223 +3545,75 @@ pub fn handle(
                 )
             });
 
-            let cursor = handle.cursor();
-            if let Some(w) = tree.get_mut(resize_id) {
-                w.rect = new_rect;
+            // Equidistant spacing marks
+            let mut all_pts: Vec<(f32, f32)> = pos_list
+                .iter()
+                .map(|(_, nx, ny, nw, nh)| (nx + nw * 0.5, ny + nh * 0.5))
+                .collect();
+            for sw in &static_ws {
+                all_pts.push((sw.rect.x + sw.rect.w * 0.5, sw.rect.y + sw.rect.h * 0.5));
             }
-            tree.reflow_layouts();
-            ui.ctx().set_cursor_icon(cursor);
-        }
-    }
+            let mark_color = egui::Color32::from_rgba_unmultiplied(255, 80, 80, 180);
+            let tc = 5.0_f32;
 
-    // -------------------------------------------------------------------
-    // Multi-drag with smart guide snap
-    // -------------------------------------------------------------------
-
-    if is_down {
-        if let (Some(ds), Some(pos)) = (&state.drag, pointer) {
-            let screen_delta = pos - ds.start_pos;
-            let canvas_delta = screen_delta / zoom;
-            let drag_id_set: HashSet<Uuid> = ds.start_rects.iter().map(|(id, _)| *id).collect();
-            let snap_thr = 4.0_f32 / zoom.max(0.01);
-
-            let drag_updates: Vec<(Uuid, f32, f32)> = {
-                let static_ws: Vec<_> = tree
-                    .widgets
-                    .iter()
-                    .filter(|w| !drag_id_set.contains(&w.id))
-                    .collect();
-
-                let mut pos_list: Vec<(Uuid, f32, f32, f32, f32)> = ds
-                    .start_rects
-                    .iter()
-                    .filter_map(|(id, sr)| {
-                        let w = tree.widgets.iter().find(|w| w.id == *id)?;
-                        let (nx, ny) = if settings.snap_enabled {
-                            (
-                                snap((sr.x + canvas_delta.x).max(0.0), settings.snap_step),
-                                snap((sr.y + canvas_delta.y).max(0.0), settings.snap_step),
-                            )
-                        } else {
-                            (
-                                (sr.x + canvas_delta.x).max(0.0),
-                                (sr.y + canvas_delta.y).max(0.0),
-                            )
-                        };
-                        Some((*id, nx, ny, w.rect.w, w.rect.h))
-                    })
-                    .collect();
-
-                // Find strongest alignment per axis; record guide span alongside
-                let mut best_x = snap_thr;
-                let mut best_y = snap_thr;
-                let mut adj_x = 0.0_f32;
-                let mut adj_y = 0.0_f32;
-                let mut raw_guide_v: Option<(f32, f32, f32)> = None; // (canvas_x, y_min, y_max)
-                let mut raw_guide_h: Option<(f32, f32, f32)> = None; // (canvas_y, x_min, x_max)
-
-                for (_, nx, ny, nw, nh) in &pos_list {
-                    let dxs = [*nx, nx + nw * 0.5, nx + nw];
-                    let dys = [*ny, ny + nh * 0.5, ny + nh];
-                    for sw in &static_ws {
-                        let sxs = [
-                            sw.rect.x,
-                            sw.rect.x + sw.rect.w * 0.5,
-                            sw.rect.x + sw.rect.w,
-                        ];
-                        let sys = [
-                            sw.rect.y,
-                            sw.rect.y + sw.rect.h * 0.5,
-                            sw.rect.y + sw.rect.h,
-                        ];
-                        for &dx in &dxs {
-                            for &sx in &sxs {
-                                let d = (dx - sx).abs();
-                                if d < best_x {
-                                    best_x = d;
-                                    adj_x = sx - dx;
-                                    let y_min = ny.min(sw.rect.y);
-                                    let y_max = (ny + nh).max(sw.rect.y + sw.rect.h);
-                                    raw_guide_v = Some((sx, y_min, y_max));
-                                }
-                            }
-                        }
-                        for &dy in &dys {
-                            for &sy in &sys {
-                                let d = (dy - sy).abs();
-                                if d < best_y {
-                                    best_y = d;
-                                    adj_y = sy - dy;
-                                    let x_min = nx.min(sw.rect.x);
-                                    let x_max = (nx + nw).max(sw.rect.x + sw.rect.w);
-                                    raw_guide_h = Some((sy, x_min, x_max));
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Guide snapping — snap widget edges/center to ruler guide lines
-                for (_, nx, ny, nw, nh) in &pos_list {
-                    let dxs = [*nx, nx + nw * 0.5, nx + nw];
-                    let dys = [*ny, ny + nh * 0.5, ny + nh];
-                    for g in &tree.app_props.guides {
-                        match g.orientation {
-                            crate::project::schema::GuideOrientation::Vertical => {
-                                for &dx in &dxs {
-                                    let d = (dx - g.position).abs();
-                                    if d < best_x {
-                                        best_x = d;
-                                        adj_x = g.position - dx;
-                                        raw_guide_v = Some((g.position, *ny, ny + nh));
-                                    }
-                                }
-                            }
-                            crate::project::schema::GuideOrientation::Horizontal => {
-                                for &dy in &dys {
-                                    let d = (dy - g.position).abs();
-                                    if d < best_y {
-                                        best_y = d;
-                                        adj_y = g.position - dy;
-                                        raw_guide_h = Some((g.position, *nx, nx + nw));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                for (_, nx, ny, _, _) in &mut pos_list {
-                    *nx = (*nx + adj_x).max(0.0);
-                    *ny = (*ny + adj_y).max(0.0);
-                }
-
-                // Convert canvas-space guide spans to screen space (with 40px overhang)
-                guide_v = raw_guide_v.map(|(cx, y_min, y_max)| {
-                    (
-                        origin.x + cx * zoom,
-                        origin.y + y_min * zoom - 40.0,
-                        origin.y + y_max * zoom + 40.0,
-                    )
-                });
-                guide_h = raw_guide_h.map(|(cy, x_min, x_max)| {
-                    (
-                        origin.y + cy * zoom,
-                        origin.x + x_min * zoom - 40.0,
-                        origin.x + x_max * zoom + 40.0,
-                    )
-                });
-
-                // Equidistant spacing marks
-                let mut all_pts: Vec<(f32, f32)> = pos_list
-                    .iter()
-                    .map(|(_, nx, ny, nw, nh)| (nx + nw * 0.5, ny + nh * 0.5))
-                    .collect();
-                for sw in &static_ws {
-                    all_pts.push((sw.rect.x + sw.rect.w * 0.5, sw.rect.y + sw.rect.h * 0.5));
-                }
-                let mark_color = egui::Color32::from_rgba_unmultiplied(255, 80, 80, 180);
-                let tc = 5.0_f32;
-
-                let mut pts_x = all_pts.clone();
-                pts_x.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-                for i in 0..pts_x.len().saturating_sub(2) {
-                    let g1 = pts_x[i + 1].0 - pts_x[i].0;
-                    let g2 = pts_x[i + 2].0 - pts_x[i + 1].0;
-                    if g1 > 2.0 && (g1 - g2).abs() < snap_thr {
-                        let avg_sy = (pts_x[i].1 + pts_x[i + 1].1 + pts_x[i + 2].1) / 3.0;
-                        let sy = origin.y + avg_sy * zoom;
-                        let sx0 = origin.x + pts_x[i].0 * zoom;
-                        let sx1 = origin.x + pts_x[i + 1].0 * zoom;
-                        let sx2 = origin.x + pts_x[i + 2].0 * zoom;
-                        for sx in [sx0, sx1, sx2] {
-                            painter.line_segment(
-                                [egui::pos2(sx, sy - tc), egui::pos2(sx, sy + tc)],
-                                egui::Stroke::new(1.0, mark_color),
-                            );
-                        }
+            let mut pts_x = all_pts.clone();
+            pts_x.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            for i in 0..pts_x.len().saturating_sub(2) {
+                let g1 = pts_x[i + 1].0 - pts_x[i].0;
+                let g2 = pts_x[i + 2].0 - pts_x[i + 1].0;
+                if g1 > 2.0 && (g1 - g2).abs() < snap_thr {
+                    let avg_sy = (pts_x[i].1 + pts_x[i + 1].1 + pts_x[i + 2].1) / 3.0;
+                    let sy = origin.y + avg_sy * zoom;
+                    let sx0 = origin.x + pts_x[i].0 * zoom;
+                    let sx1 = origin.x + pts_x[i + 1].0 * zoom;
+                    let sx2 = origin.x + pts_x[i + 2].0 * zoom;
+                    for sx in [sx0, sx1, sx2] {
                         painter.line_segment(
-                            [egui::pos2(sx0, sy), egui::pos2(sx2, sy)],
+                            [egui::pos2(sx, sy - tc), egui::pos2(sx, sy + tc)],
                             egui::Stroke::new(1.0, mark_color),
                         );
                     }
+                    painter.line_segment(
+                        [egui::pos2(sx0, sy), egui::pos2(sx2, sy)],
+                        egui::Stroke::new(1.0, mark_color),
+                    );
                 }
+            }
 
-                let mut pts_y = all_pts;
-                pts_y.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-                for i in 0..pts_y.len().saturating_sub(2) {
-                    let g1 = pts_y[i + 1].1 - pts_y[i].1;
-                    let g2 = pts_y[i + 2].1 - pts_y[i + 1].1;
-                    if g1 > 2.0 && (g1 - g2).abs() < snap_thr {
-                        let avg_sx = (pts_y[i].0 + pts_y[i + 1].0 + pts_y[i + 2].0) / 3.0;
-                        let sx = origin.x + avg_sx * zoom;
-                        let sy0 = origin.y + pts_y[i].1 * zoom;
-                        let sy1 = origin.y + pts_y[i + 1].1 * zoom;
-                        let sy2 = origin.y + pts_y[i + 2].1 * zoom;
-                        for sy in [sy0, sy1, sy2] {
-                            painter.line_segment(
-                                [egui::pos2(sx - tc, sy), egui::pos2(sx + tc, sy)],
-                                egui::Stroke::new(1.0, mark_color),
-                            );
-                        }
+            let mut pts_y = all_pts;
+            pts_y.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            for i in 0..pts_y.len().saturating_sub(2) {
+                let g1 = pts_y[i + 1].1 - pts_y[i].1;
+                let g2 = pts_y[i + 2].1 - pts_y[i + 1].1;
+                if g1 > 2.0 && (g1 - g2).abs() < snap_thr {
+                    let avg_sx = (pts_y[i].0 + pts_y[i + 1].0 + pts_y[i + 2].0) / 3.0;
+                    let sx = origin.x + avg_sx * zoom;
+                    let sy0 = origin.y + pts_y[i].1 * zoom;
+                    let sy1 = origin.y + pts_y[i + 1].1 * zoom;
+                    let sy2 = origin.y + pts_y[i + 2].1 * zoom;
+                    for sy in [sy0, sy1, sy2] {
                         painter.line_segment(
-                            [egui::pos2(sx, sy0), egui::pos2(sx, sy2)],
+                            [egui::pos2(sx - tc, sy), egui::pos2(sx + tc, sy)],
                             egui::Stroke::new(1.0, mark_color),
                         );
                     }
+                    painter.line_segment(
+                        [egui::pos2(sx, sy0), egui::pos2(sx, sy2)],
+                        egui::Stroke::new(1.0, mark_color),
+                    );
                 }
+            }
 
-                pos_list
-                    .iter()
-                    .map(|(id, nx, ny, _, _)| (*id, *nx, *ny))
-                    .collect()
-            };
+            pos_list
+                .iter()
+                .map(|(id, nx, ny, _, _)| (*id, *nx, *ny))
+                .collect()
+        };
 
-            for (id, nx, ny) in drag_updates {
-                if let Some(w) = tree.get_mut(id) {
-                    w.rect.x = nx;
-                    w.rect.y = ny;
-                }
+        for (id, nx, ny) in drag_updates {
+            if let Some(w) = tree.get_mut(id) {
+                w.rect.x = nx;
+                w.rect.y = ny;
             }
         }
     }
@@ -2570,9 +3643,78 @@ pub fn handle(
     }
 
     // -------------------------------------------------------------------
+    // Reorder-drag: update insertion index + draw placeholder
+    // -------------------------------------------------------------------
+    if is_down
+        && let Some(ref mut rd) = state.reorder_drag
+        && let Some(pos) = pointer
+    {
+        let v = (pos - origin) / zoom;
+        let pos_canvas = egui::pos2(v.x, v.y);
+        if let Some(parent) = tree.widgets.iter().find(|w| w.id == rd.parent_id).cloned() {
+            rd.insert_idx = layout_insert_idx(&parent, &tree.widgets, pos_canvas, rd.child_id);
+            let accent = egui::Color32::from_rgb(52, 211, 153);
+            draw_insertion_placeholder(
+                &painter,
+                &parent,
+                &tree.widgets,
+                rd.insert_idx,
+                accent,
+                origin,
+                zoom,
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------
     // Release — rubber-band finalise
     // -------------------------------------------------------------------
     if !is_down {
+        // Commit behavior-wire drag: dropping on a state socket (or anywhere on
+        // a state-bound widget) creates a typed behavior in the UiTree.
+        if let Some(wire) = state.behavior_drag.take() {
+            let drop = pointer.and_then(|pos| {
+                tree.widgets
+                    .iter()
+                    .rev()
+                    .filter(|w| w.id != wire.source_widget)
+                    .find(|w| {
+                        let rect = crect(w, origin, zoom);
+                        behavior_target_field(w).is_some()
+                            && (state_socket_pos(rect).distance(pos) <= BEHAVIOR_SOCKET_HIT_RADIUS
+                                || rect.contains(pos))
+                    })
+                    .and_then(|target| {
+                        default_behavior_action(target, wire.event)
+                            .map(|action| (target.id, action))
+                    })
+            });
+            if let Some((target_id, action)) = drop {
+                let behavior = Behavior {
+                    id: Uuid::new_v4(),
+                    trigger: BehaviorTrigger::Widget(WidgetEventRef {
+                        source_widget: wire.source_widget,
+                        event: wire.event,
+                    }),
+                    target_widget: Some(target_id),
+                    action,
+                };
+                state.selected_behavior = Some(behavior.id);
+                tree.app_props.behaviors.push(behavior);
+            }
+        }
+        if let Some(anchor_drag) = state.constraint_anchor_drag.take()
+            && let Some(target) = anchor_drag.target
+        {
+            let frame = constraint_frame(tree, anchor_drag.id);
+            if let Some(widget) = tree.get_mut(anchor_drag.id) {
+                apply_constraint_target(widget, &frame, target);
+            }
+        }
+        // Commit reorder-drag first (before attach_to_layout clears the parent rel)
+        if let Some(rd) = state.reorder_drag.take() {
+            tree.move_child_within_parent(rd.parent_id, rd.child_id, rd.insert_idx);
+        }
         if let Some(ds) = &state.drag {
             let dragged_ids: Vec<Uuid> = ds.start_rects.iter().map(|(id, _)| *id).collect();
             for id in dragged_ids {
@@ -2596,8 +3738,22 @@ pub fn handle(
             let band_rect = egui::Rect::from_two_pos(band_start, pos);
             if band_rect.width() > 4.0 || band_rect.height() > 4.0 {
                 let before_len = selected.len();
+                // Layout-aware rubber-band: if the band started inside a layout
+                // container, restrict candidates to direct children of that container.
+                let container_children: Option<HashSet<Uuid>> =
+                    find_layout_container_at(band_start, tree, origin, zoom).and_then(|pid| {
+                        tree.widgets
+                            .iter()
+                            .find(|w| w.id == pid)
+                            .map(|p| p.children.iter().copied().collect())
+                    });
                 for widget in &tree.widgets {
-                    if band_rect.intersects(crect(widget, origin, zoom))
+                    let in_scope = container_children
+                        .as_ref()
+                        .map(|allowed| allowed.contains(&widget.id))
+                        .unwrap_or(true);
+                    if in_scope
+                        && band_rect.intersects(crect(widget, origin, zoom))
                         && !selected.contains(&widget.id)
                     {
                         selected.push(widget.id);
@@ -2611,6 +3767,9 @@ pub fn handle(
         state.drag = None;
         state.resize = None;
         state.rubber_band = None;
+        state.constraint_anchor_drag = None;
+        // reorder_drag already consumed above via take(); set None in case of early exit
+        state.reorder_drag = None;
     }
 
     // -------------------------------------------------------------------
@@ -2627,6 +3786,7 @@ pub fn handle(
             band_rect,
             0.0,
             egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 180, 255)),
+            egui::StrokeKind::Inside,
         );
     }
 
@@ -2714,6 +3874,81 @@ mod resize_snap_tests {
         assert!(result.w >= MIN_SIZE, "width must not fall below MIN_SIZE");
         assert!(result.h >= MIN_SIZE, "height must not fall below MIN_SIZE");
     }
+
+    #[test]
+    fn constraint_handle_chooses_nearest_parent_anchor() {
+        let frame = egui::Rect::from_min_size(egui::pos2(100.0, 80.0), egui::vec2(300.0, 200.0));
+        assert_eq!(
+            nearest_constraint_target(ConstraintHandle::Left, egui::pos2(245.0, 150.0), frame),
+            ConstraintTarget::Horizontal(HAlign::Center)
+        );
+        assert_eq!(
+            nearest_constraint_target(ConstraintHandle::Bottom, egui::pos2(200.0, 274.0), frame),
+            ConstraintTarget::Vertical(VAlign::Bottom)
+        );
+    }
+
+    #[test]
+    fn applying_parent_anchor_preserves_current_geometry() {
+        let parent_id = Uuid::from_u128(0xA10);
+        let child_id = Uuid::from_u128(0xA20);
+        let frame = schema_rect(100.0, 80.0, 300.0, 200.0);
+        let child_rect = schema_rect(170.0, 130.0, 80.0, 30.0);
+        let mut tree = UiTree {
+            widgets: vec![
+                WidgetInstance {
+                    id: parent_id,
+                    kind: WidgetKind::Frame,
+                    rect: frame.clone(),
+                    children: vec![child_id],
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: child_id,
+                    kind: WidgetKind::Button,
+                    rect: child_rect.clone(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        apply_constraint_target(
+            tree.get_mut(child_id).unwrap(),
+            &frame,
+            ConstraintTarget::Horizontal(HAlign::Center),
+        );
+        crate::project::constraint_solver::apply_constraints(&mut tree);
+        let child = tree.widgets.iter().find(|w| w.id == child_id).unwrap();
+        assert_eq!(child.constraints.h_align, Some(HAlign::Center));
+        assert!((child.rect.x - child_rect.x).abs() < 0.01);
+        assert!((child.rect.w - child_rect.w).abs() < 0.01);
+    }
+
+    #[test]
+    fn grid_drag_maps_pointer_to_row_major_slot() {
+        let child_ids = (1..=4).map(Uuid::from_u128).collect::<Vec<_>>();
+        let parent = WidgetInstance {
+            kind: WidgetKind::GridLayout,
+            rect: schema_rect(100.0, 100.0, 220.0, 120.0),
+            children: child_ids.clone(),
+            props: crate::project::schema::WidgetProps {
+                grid_columns: 2,
+                inner_margin: 10.0,
+                layout_spacing: 4.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let widgets = child_ids
+            .iter()
+            .map(|id| WidgetInstance {
+                id: *id,
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        let idx = layout_insert_idx(&parent, &widgets, egui::pos2(130.0, 190.0), child_ids[0]);
+        assert_eq!(idx, 2);
+    }
 }
 
 #[cfg(test)]
@@ -2734,5 +3969,107 @@ mod input_ownership_tests {
         assert!(!canvas_owns_keyboard(false, true, true));
         assert!(!canvas_owns_keyboard(false, false, false));
         assert!(!canvas_owns_keyboard(true, true, false));
+    }
+}
+
+#[cfg(test)]
+mod zoom_fit_tests {
+    use super::compute_fit_rect;
+
+    #[test]
+    fn compute_fit_rect_single_widget() {
+        // A 100×50 widget at canvas (10,10).
+        let content = egui::Rect::from_min_max(egui::pos2(10.0, 10.0), egui::pos2(110.0, 60.0));
+        // Viewport 800×600 screen pixels.
+        let viewport = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(800.0, 600.0));
+        let (zoom, center) = compute_fit_rect(content, viewport, 0.10).unwrap();
+        // zoom = min(800*0.8/100, 600*0.8/50) = min(6.4, 9.6) = 6.4, clamped to 4.0
+        assert!((zoom - 4.0).abs() < 0.01, "zoom={zoom}");
+        // center should be the content rect center
+        assert!((center.x - 60.0).abs() < 0.5, "cx={}", center.x);
+        assert!((center.y - 35.0).abs() < 0.5, "cy={}", center.y);
+    }
+
+    #[test]
+    fn compute_fit_rect_zero_area_returns_none() {
+        let zero = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(0.0, 0.0));
+        let viewport = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(800.0, 600.0));
+        assert!(compute_fit_rect(zero, viewport, 0.10).is_none());
+    }
+
+    #[test]
+    fn compute_fit_rect_zoom_clamp_lower_bound() {
+        // A very large widget (4000×3000) in a small viewport (200×150).
+        let content = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(4000.0, 3000.0));
+        let viewport = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(200.0, 150.0));
+        let (zoom, _) = compute_fit_rect(content, viewport, 0.10).unwrap();
+        assert!(zoom >= 0.25, "zoom must not go below 0.25, got {zoom}");
+    }
+}
+
+#[cfg(test)]
+mod widget_error_tests {
+    use super::{WidgetError, compute_widget_errors};
+    use crate::project::schema::{WidgetInstance, WidgetKind};
+    use uuid::Uuid;
+
+    fn make_widget(kind: WidgetKind) -> WidgetInstance {
+        WidgetInstance {
+            id: Uuid::new_v4(),
+            kind,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn no_errors_for_clean_widget() {
+        let button = make_widget(WidgetKind::Button);
+        let errors = compute_widget_errors(&[button]);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn duplicate_id_detected() {
+        let shared_id = Uuid::new_v4();
+        let mut a = make_widget(WidgetKind::Button);
+        let mut b = make_widget(WidgetKind::Label);
+        a.id = shared_id;
+        b.id = shared_id;
+        let errors = compute_widget_errors(&[a, b]);
+        assert!(errors.contains_key(&shared_id));
+        let errs = errors.get(&shared_id).unwrap();
+        assert!(errs.contains(&WidgetError::DuplicateId));
+    }
+
+    #[test]
+    fn invalid_handler_name_detected() {
+        let mut w = make_widget(WidgetKind::Button);
+        w.on_click = "123_bad_name".to_owned(); // starts with digit
+        let errors = compute_widget_errors(&[w.clone()]);
+        let errs = errors.get(&w.id).unwrap();
+        assert!(errs.contains(&WidgetError::InvalidHandler));
+    }
+
+    #[test]
+    fn missing_binding_detected_for_slider() {
+        let slider = make_widget(WidgetKind::Slider); // state_binding is None by default
+        let errors = compute_widget_errors(std::slice::from_ref(&slider));
+        let errs = errors.get(&slider.id).unwrap();
+        assert!(errs.contains(&WidgetError::MissingBinding));
+    }
+
+    #[test]
+    fn no_missing_binding_when_binding_set() {
+        let mut slider = make_widget(WidgetKind::Slider);
+        slider.state_binding = Some("volume".to_owned());
+        let errors = compute_widget_errors(&[slider]);
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn binding_not_required_for_label() {
+        let label = make_widget(WidgetKind::Label);
+        let errors = compute_widget_errors(&[label]);
+        assert!(errors.is_empty());
     }
 }

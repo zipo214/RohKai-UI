@@ -10,15 +10,16 @@ If CWD is not D:\dev\rohkai, cd there before doing anything.
 A native Rust desktop app (built with egui) that lets users visually design
 egui UIs with zero gap between canvas and code. Drag a widget → code appears.
 No separate signal-wiring step. Canvas and code panel are live views of one
-source of truth: the `UiTree`.
+source of truth: the active surface tree inside `ProjectDocument`.
 
 The name RohKai evokes Rocaille — the ornamental scroll-and-shell motif of
 French Rococo. The designer should feel precise and elegant.
 
 ## The Core Principle
-`UiTree` (in `src/project/ui_tree.rs`) is the single source of truth.
-The canvas renders it. The code panel emits Rust from it. They never diverge.
-Never write code that mutates canvas state and code state separately.
+`ProjectDocument` (in `src/project/document.rs`) is the project source of truth.
+Each `UiSurface.tree` is the sole canvas/code source for that surface.
+`ActiveDocument` exposes the active tree without copying it. Never mutate
+canvas/code state separately or duplicate project-global state into surfaces.
 
 ## Architecture Rules
 - NO C FFI. NO system toolkit bindings. Pure Rust crates only.
@@ -28,6 +29,16 @@ Never write code that mutates canvas state and code state separately.
 - `rayon = "1"` is an approved dependency for parallel processing. Planned
   future replacement with `src/platform/thread_pool.rs` when Stage 15 renderer
   needs its own scheduler.
+- `rustybuzz` is an approved dependency for font shaping (P2-A interim shaper).
+  Wire behind a `ShaperEngine` trait in `src/canvas/shaper/` so it can be
+  swapped out for a bespoke HarfBuzz port later. Do NOT embed it in the
+  export-embedded svg_rasterizer.rs (that source must remain std-only).
+- `rusqlite = { version = "0.40", features = ["bundled"] }` is an approved
+  dependency for Stage 13 / P2.6 database integration. Use only behind a
+  `DatabaseEngine` trait (see `docs/DB_INTEGRATION_RESEARCH.md` Section 7).
+  Never add to Cargo.toml until P2.6 implementation actually begins. SQL
+  codegen must never use `format!()` to build SQL — all values via `params![]`
+  (Invariant 10, pending addition to ENGINEERING_INVARIANTS.md).
 - SVG import, SVG image preview, and SVG raster/vector work are zero-new-crate
   zones: no `resvg`, no `usvg`, no `tiny-skia`, and no substitute renderer
   dependency chain. Implement required SVG behavior in RohKai source.
@@ -42,7 +53,8 @@ Never write code that mutates canvas state and code state separately.
   matched in the others or carry an explicit, tested reason for differing.
   Derive classifications from the canonical API (`UiTree`,
   `WidgetKind::supported_events()`); never re-list its members elsewhere.
-- UiTree nodes are serde-serializable. Project files are `.rohkai.json`.
+- ProjectDocument/UiTree nodes are serde-serializable. Project files are
+  `.rohkai.json`.
 
 ## Module Map
 ```
@@ -52,8 +64,8 @@ src/
   canvas/          — drag/drop canvas (renders UiTree), pan/zoom, smart guides
   widgets/         — one file per WidgetKind: default instance + palette defaults
   codegen/         — egui_emitter, state_emitter, export, parser (Lazare), rust utils
-  project/         — schema types, UiTree, io (save/load/serialize)
-  panels/          — palette, properties, code_preview, templates
+  project/         — ProjectDocument, surfaces, schema, UiTree, io
+  panels/          — surfaces, palette, properties, code_preview, templates
   settings.rs      — UserSettings: load/save to APPDATA/RohKai/settings.json
   svg_import.rs    — SVG → WidgetInstance parser (zero new dependencies)
 ```
@@ -63,8 +75,10 @@ Stages 0–8, 8.5, 9 (core), 10, 11, and 14 complete. Stage 9's parallel-process
 sub-cluster (rayon-based parallel rasterization/codegen/export/template-load +
 benchmarks) and Form Layout remain deferred. Open stages: 12 (Platform Targets),
 13 (Data & Integration), 15 (Own Renderer), plus the deferred Stage 9 items.
-Current focused work is the pre-release depth gate and SVG R0-R2 maturity;
-Stage 15 remains a separate deferred architecture decision.
+S19A project surfaces and modal dialogs is implemented at the competitive modal
+subset; S19B-D modeless/native windows, main-window docking, and MDI remain
+planned. Current focused work remains the pre-release depth gate; Stage 15 is a
+separate final architecture decision.
 
 Core features implemented:
 - Canvas: drag, drop, select, multi-select, resize, rubber-band, z-order, snap, smart guides,
@@ -74,16 +88,19 @@ Core features implemented:
 - Properties panel: label, binding, geometry, alignment, group/ungroup, events, custom props
 - Code panel: live egui Rust output — **editable** (Lazare bidirectional sync, Stage 6)
 - AppState panel: auto-generated struct fields
-- Save/load `.rohkai.json` (versioned envelope, legacy bare UiTree supported)
+- Save/load schema-v2 multi-surface `.rohkai.json` (legacy bare/v1 supported)
+- Project surfaces: root form + modal dialogs, tabs/CRUD/templates, typed
+  lifecycle behaviors, transactional preview, native/WASM export
 - Export: complete compilable Rust project (with theming, presets, descriptor cargo deps)
 - Templates: `.rktp` files, SVG import, drag-to-canvas
 - Theming: dark/light, accent color, font size, corner radius, spacing — saved as `.rktheme`
 - Preferences: UI scale, font size, snap step (persisted)
 
 ## What NOT to build yet
-- Multi-window support (no stage assigned)
-- Undo/redo — planned Stage 14; design for it but do not implement until then
-- WASM / non-egui codegen targets — planned Stage 12; do not start before Stage 9–11 complete
+- Modeless/native secondary windows, docking, and MDI - planned S19B-D. In-app
+  modal project surfaces are implemented and are not native child windows.
+- Non-egui codegen targets beyond the existing egui native/WASM exporters —
+  planned Stage 12; do not start before that scoped platform-target work begins
 - Database integration — planned Stage 13; requires user-approved crate at stage start
 - Own renderer — planned Stage 15; do not touch rendering stack before then
 
@@ -97,6 +114,15 @@ Core features implemented:
 
 ## Running
     cargo run
+
+## Rust Version Contract
+- RohKai source edition: Rust 2024.
+- Minimum supported Rust version (MSRV): 1.92.
+- Pinned and CI-tested toolchain: 1.96.0 via `rust-toolchain.toml`.
+- Generated projects intentionally use edition 2021, but share the 1.92 MSRV
+  and the designer's egui/eframe/rfd versions.
+- Run `scripts/check-toolchain-alignment.ps1` after version changes and
+  `scripts/audit-dependency-updates.ps1` when checking for newer releases.
 
 ## Testing
     cargo test

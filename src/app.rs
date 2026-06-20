@@ -1,11 +1,106 @@
 use crate::canvas::interaction::{CanvasSettings, InteractionState};
 use crate::panels::code_preview::{CodePreviewArgs, CodeStatus};
+use crate::project::document::ActiveDocument;
 use crate::project::schema::{WidgetInstance, WidgetKind};
-use crate::project::ui_tree::UiTree;
 use crate::settings::UserSettings;
 use egui::Key;
 use std::path::PathBuf;
 use uuid::Uuid;
+
+// ---------------------------------------------------------------------------
+// Keyboard shortcut helpers
+// ---------------------------------------------------------------------------
+
+/// Map a single-key string (e.g. "N", "F5", "Escape") to an egui Key.
+fn parse_egui_key(s: &str) -> Option<Key> {
+    match s {
+        "A" => Some(Key::A),
+        "B" => Some(Key::B),
+        "C" => Some(Key::C),
+        "D" => Some(Key::D),
+        "E" => Some(Key::E),
+        "F" => Some(Key::F),
+        "G" => Some(Key::G),
+        "H" => Some(Key::H),
+        "I" => Some(Key::I),
+        "J" => Some(Key::J),
+        "K" => Some(Key::K),
+        "L" => Some(Key::L),
+        "M" => Some(Key::M),
+        "N" => Some(Key::N),
+        "O" => Some(Key::O),
+        "P" => Some(Key::P),
+        "Q" => Some(Key::Q),
+        "R" => Some(Key::R),
+        "S" => Some(Key::S),
+        "T" => Some(Key::T),
+        "U" => Some(Key::U),
+        "V" => Some(Key::V),
+        "W" => Some(Key::W),
+        "X" => Some(Key::X),
+        "Y" => Some(Key::Y),
+        "Z" => Some(Key::Z),
+        "0" => Some(Key::Num0),
+        "1" => Some(Key::Num1),
+        "2" => Some(Key::Num2),
+        "3" => Some(Key::Num3),
+        "4" => Some(Key::Num4),
+        "5" => Some(Key::Num5),
+        "6" => Some(Key::Num6),
+        "7" => Some(Key::Num7),
+        "8" => Some(Key::Num8),
+        "9" => Some(Key::Num9),
+        "F1" => Some(Key::F1),
+        "F2" => Some(Key::F2),
+        "F3" => Some(Key::F3),
+        "F4" => Some(Key::F4),
+        "F5" => Some(Key::F5),
+        "F6" => Some(Key::F6),
+        "F7" => Some(Key::F7),
+        "F8" => Some(Key::F8),
+        "F9" => Some(Key::F9),
+        "F10" => Some(Key::F10),
+        "F11" => Some(Key::F11),
+        "F12" => Some(Key::F12),
+        "Escape" => Some(Key::Escape),
+        "Enter" => Some(Key::Enter),
+        "Tab" => Some(Key::Tab),
+        "Delete" => Some(Key::Delete),
+        "Backspace" => Some(Key::Backspace),
+        "Space" => Some(Key::Space),
+        _ => None,
+    }
+}
+
+/// Return true when the egui context sees the key combo defined for `action`
+/// in `settings.user_shortcuts`, falling back to `default_combo` if no
+/// override is set.  Combo syntax: "Ctrl+Shift+S", "F5", "Escape".
+fn effective_shortcut(
+    ctx: &egui::Context,
+    action: &str,
+    settings: &UserSettings,
+    default_combo: &str,
+) -> bool {
+    let combo = settings
+        .user_shortcuts
+        .get(action)
+        .map(|s| s.as_str())
+        .unwrap_or(default_combo);
+    let parts: Vec<&str> = combo.split('+').collect();
+    let want_ctrl = parts.contains(&"Ctrl");
+    let want_shift = parts.contains(&"Shift");
+    let want_alt = parts.contains(&"Alt");
+    let key_part = parts.last().copied().unwrap_or("");
+    let Some(key) = parse_egui_key(key_part) else {
+        return false;
+    };
+    ctx.input(|i| {
+        i.modifiers.ctrl == want_ctrl
+            && i.modifiers.shift == want_shift
+            && i.modifiers.alt == want_alt
+            && i.key_pressed(key)
+    })
+}
 
 #[derive(Clone, Copy)]
 enum PendingCommand {
@@ -20,6 +115,7 @@ struct PendingSvgImport {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LeftPanelTab {
+    Surfaces,
     Palette,
     Properties,
     Layers,
@@ -33,7 +129,7 @@ pub enum LeftPanelTab {
 
 /// The persistent project document: tree, file path, last-saved snapshot.
 pub struct ProjectState {
-    pub ui_tree: UiTree,
+    pub ui_tree: ActiveDocument,
     pub current_file: Option<PathBuf>,
     pub saved_json: Option<String>,
 }
@@ -85,6 +181,8 @@ pub struct SessionState {
     pub rust_wiring_open: bool,
     /// Stage 11 — macro palette window open.
     pub macro_palette_open: bool,
+    /// Surface awaiting guarded deletion confirmation.
+    pub pending_surface_delete: Option<Uuid>,
 }
 
 impl Default for SessionState {
@@ -114,6 +212,7 @@ impl Default for SessionState {
             show_error_flow: false,
             rust_wiring_open: false,
             macro_palette_open: false,
+            pending_surface_delete: None,
         }
     }
 }
@@ -154,6 +253,22 @@ pub struct CodePanelState {
     pub search_match_idx: usize,
 }
 
+impl Clone for CodePanelState {
+    fn clone(&self) -> Self {
+        Self {
+            buffer: self.buffer.clone(),
+            status: self.status.clone(),
+            last_generated: self.last_generated.clone(),
+            split_ratio: self.split_ratio,
+            wrap_code: self.wrap_code,
+            editor_has_focus: false,
+            search_query: self.search_query.clone(),
+            search_open: self.search_open,
+            search_match_idx: self.search_match_idx,
+        }
+    }
+}
+
 impl Default for CodePanelState {
     fn default() -> Self {
         Self {
@@ -166,6 +281,42 @@ impl Default for CodePanelState {
             search_query: String::new(),
             search_open: false,
             search_match_idx: 0,
+        }
+    }
+}
+
+struct SurfaceWorkspaceState {
+    selected: Vec<Uuid>,
+    zoom: f32,
+    pan: egui::Vec2,
+    code: CodePanelState,
+}
+
+impl SurfaceWorkspaceState {
+    fn capture(session: &mut SessionState, code: &mut CodePanelState) -> Self {
+        Self {
+            selected: std::mem::take(&mut session.selected),
+            zoom: session.canvas_settings.zoom,
+            pan: session.canvas_settings.pan,
+            code: std::mem::take(code),
+        }
+    }
+
+    fn restore(self, session: &mut SessionState, code: &mut CodePanelState) {
+        session.selected = self.selected;
+        session.canvas_settings.zoom = self.zoom;
+        session.canvas_settings.pan = self.pan;
+        *code = self.code;
+    }
+}
+
+impl Default for SurfaceWorkspaceState {
+    fn default() -> Self {
+        Self {
+            selected: Vec::new(),
+            zoom: 1.0,
+            pan: egui::Vec2::ZERO,
+            code: CodePanelState::default(),
         }
     }
 }
@@ -201,6 +352,24 @@ pub struct RohKaiApp {
     /// Visual Widget Maker window state.
     pub widget_maker_doc: crate::canvas::widget_maker::WidgetMakerDoc,
     pub widget_maker_open: bool,
+    pub name_counter: std::collections::HashMap<String, u32>,
+    timer_rx: Option<std::sync::mpsc::Receiver<String>>,
+    timers_need_respawn: bool,
+    pub db_engine: Option<Box<dyn crate::project::db_engine::DatabaseEngine>>,
+    pub db_panel: crate::panels::db_panel::DbPanelState,
+    surface_workspaces: std::collections::HashMap<Uuid, SurfaceWorkspaceState>,
+}
+
+fn slugify_widget_hint(text: &str) -> String {
+    let raw: String = text
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .collect();
+    raw.split('_')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("_")
 }
 
 impl RohKaiApp {
@@ -219,7 +388,7 @@ impl RohKaiApp {
             crate::codegen::widget_descriptor::load_from_widgets_dir();
         Self {
             project: ProjectState {
-                ui_tree: UiTree::default(),
+                ui_tree: ActiveDocument::default(),
                 current_file: None,
                 saved_json: None,
             },
@@ -252,14 +421,274 @@ impl RohKaiApp {
             undo_suppress_record: false,
             widget_maker_doc: crate::canvas::widget_maker::WidgetMakerDoc::new_with_defaults(),
             widget_maker_open: false,
+            name_counter: std::collections::HashMap::new(),
+            timer_rx: None,
+            timers_need_respawn: true,
+            db_engine: None,
+            db_panel: crate::panels::db_panel::DbPanelState::default(),
+            surface_workspaces: std::collections::HashMap::new(),
         }
     }
 
+    fn switch_surface(&mut self, target: Uuid) -> bool {
+        let current = self.project.ui_tree.active_surface_id();
+        if current == target {
+            return true;
+        }
+        if self.project.ui_tree.document().surface(target).is_none() {
+            return false;
+        }
+
+        self.surface_workspaces.insert(
+            current,
+            SurfaceWorkspaceState::capture(&mut self.session, &mut self.code),
+        );
+        if !self.project.ui_tree.set_active_surface(target) {
+            return false;
+        }
+        let restored = self.surface_workspaces.remove(&target).unwrap_or_default();
+        restored.restore(&mut self.session, &mut self.code);
+        self.session.interaction = InteractionState::default();
+        self.session.code_navigation_target = None;
+        self.session.scroll_to_handler = None;
+        self.session.hovered_guide = None;
+        self.session.dragging_guide = None;
+        self.session.preview_state = crate::canvas::preview::PreviewState::init_from_document(
+            &self.project.ui_tree.snapshot(),
+        );
+        true
+    }
+
+    fn handle_surface_action(&mut self, action: crate::panels::surfaces::SurfaceAction) {
+        use crate::panels::surfaces::SurfaceAction;
+        match action {
+            SurfaceAction::None => {}
+            SurfaceAction::Activate(id) => {
+                let _ = self.switch_surface(id);
+            }
+            SurfaceAction::Add(template) => {
+                let id = self
+                    .project
+                    .ui_tree
+                    .add_modal_surface(template.label().trim_end_matches(" Dialog"));
+                let tree = crate::panels::surfaces::dialog_template_tree(template);
+                let _ = self.project.ui_tree.replace_surface_tree(id, tree);
+                let _ = self.switch_surface(id);
+            }
+            SurfaceAction::Duplicate(id) => {
+                if let Some(duplicate) = self.project.ui_tree.duplicate_surface(id) {
+                    let _ = self.switch_surface(duplicate);
+                }
+            }
+            SurfaceAction::Delete(id) => {
+                if id != self.project.ui_tree.document().root_surface {
+                    self.session.pending_surface_delete = Some(id);
+                }
+            }
+            SurfaceAction::MoveUp(id) | SurfaceAction::MoveDown(id) => {
+                let document = self.project.ui_tree.document();
+                let Some(index) = document
+                    .surfaces
+                    .iter()
+                    .position(|surface| surface.id == id)
+                else {
+                    return;
+                };
+                let target = if matches!(action, SurfaceAction::MoveUp(_)) {
+                    index.saturating_sub(1).max(1)
+                } else {
+                    (index + 1).min(document.surfaces.len().saturating_sub(1))
+                };
+                let _ = self.project.ui_tree.move_surface(id, target);
+            }
+            SurfaceAction::Preview(surface) => {
+                self.session.preview_state = crate::canvas::preview::PreviewState::init_for_surface(
+                    &self.project.ui_tree.snapshot(),
+                    surface,
+                );
+                self.session.preview_mode = true;
+            }
+            SurfaceAction::WireSelectedToOpen(surface) => {
+                let Some(source_widget) = self.session.selected.last().copied() else {
+                    self.messages.last_error =
+                        Some("Select an event-capable widget before wiring a dialog.".to_owned());
+                    return;
+                };
+                let Some(event) = self
+                    .project
+                    .ui_tree
+                    .widgets
+                    .iter()
+                    .find(|widget| widget.id == source_widget)
+                    .and_then(|widget| widget.kind.supported_events().first().copied())
+                else {
+                    self.messages.last_error =
+                        Some("The selected widget does not expose an event.".to_owned());
+                    return;
+                };
+                let already_wired =
+                    self.project
+                        .ui_tree
+                        .app_props
+                        .behaviors
+                        .iter()
+                        .any(|behavior| {
+                            behavior.source_widget() == Some(source_widget)
+                                && behavior.widget_event() == Some(event)
+                                && matches!(
+                                    behavior.action,
+                                    crate::project::schema::VisualAction::OpenModal {
+                                        surface: target
+                                    } if target == surface
+                                )
+                        });
+                if !already_wired {
+                    self.project.ui_tree.app_props.behaviors.push(
+                        crate::project::schema::Behavior::widget(
+                            Uuid::new_v4(),
+                            source_widget,
+                            event,
+                            None,
+                            crate::project::schema::VisualAction::OpenModal { surface },
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
+    fn show_surface_delete_confirmation(&mut self, ctx: &egui::Context) {
+        let Some(surface_id) = self.session.pending_surface_delete else {
+            return;
+        };
+        let Some(surface) = self.project.ui_tree.document().surface(surface_id) else {
+            self.session.pending_surface_delete = None;
+            return;
+        };
+        let surface_name = surface.name.clone();
+        let widget_count = surface.tree.widgets.len();
+        let incoming_references = self
+            .project
+            .ui_tree
+            .document()
+            .incoming_surface_references(surface_id);
+        let mut confirm = false;
+        let mut cancel = false;
+        let response =
+            egui::Modal::new(egui::Id::new("delete_surface_confirmation")).show(ctx, |ui| {
+                ui.set_min_width(360.0);
+                ui.heading("Delete dialog surface?");
+                ui.label(format!(
+                    "\"{surface_name}\" contains {widget_count} widget{}.",
+                    if widget_count == 1 { "" } else { "s" }
+                ));
+                ui.label(format!(
+                    "{incoming_references} incoming behavior reference{} will be removed.",
+                    if incoming_references == 1 { "" } else { "s" }
+                ));
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                    if ui
+                        .button(egui::RichText::new("Delete").color(egui::Color32::LIGHT_RED))
+                        .clicked()
+                    {
+                        confirm = true;
+                    }
+                });
+            });
+        cancel |= response.should_close();
+
+        if cancel {
+            self.session.pending_surface_delete = None;
+        } else if confirm {
+            let was_active = self.project.ui_tree.active_surface_id() == surface_id;
+            if was_active {
+                let root = self.project.ui_tree.document().root_surface;
+                let _ = self.switch_surface(root);
+            }
+            if self.project.ui_tree.remove_surface(surface_id) {
+                self.surface_workspaces.remove(&surface_id);
+            }
+            self.session.pending_surface_delete = None;
+        }
+    }
+
+    fn next_widget_label(&mut self, kind: &WidgetKind, default_text: &str) -> String {
+        let key = format!("{kind:?}").to_lowercase();
+        let count = self.name_counter.entry(key.clone()).or_insert(0);
+        *count += 1;
+        let slug = slugify_widget_hint(default_text);
+        if slug.is_empty() || slug == key {
+            format!("{key}_{}", *count)
+        } else {
+            format!("{key}_{count}_{slug}")
+        }
+    }
+
+    /// Spawn background threads for every `ComponentKind::Timer` in the
+    /// current project.  Each thread sleeps for `interval_ms` milliseconds and
+    /// then sends the component name on a shared `mpsc` channel.
+    ///
+    /// This replaces any previously spawned timer threads (old `Sender` clones
+    /// are dropped when the old `Receiver` is replaced).  Call this after
+    /// opening or creating a project so timers always match the tree.
+    pub fn spawn_timers(&mut self, ctx: &egui::Context) {
+        use crate::project::schema::ComponentKind;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let timers: Vec<(String, u64)> = self
+            .project
+            .ui_tree
+            .app_props
+            .components
+            .iter()
+            .filter(|c| c.kind == ComponentKind::Timer)
+            .map(|c| {
+                // Clamp to >= 1ms: a 0ms interval would busy-spin the timer
+                // thread (sleep(0)) and flood repaint/message traffic.
+                let ms = c.interval_ms.unwrap_or(1000).max(1) as u64;
+                (c.name.clone(), ms)
+            })
+            .collect();
+
+        if timers.is_empty() {
+            self.timer_rx = None;
+            return;
+        }
+
+        let (tx, rx) = mpsc::channel::<String>();
+        for (name, interval_ms) in timers {
+            let tx2 = tx.clone();
+            let ctx2 = ctx.clone();
+            std::thread::Builder::new()
+                .name(format!("rohkai-timer-{name}"))
+                .spawn(move || {
+                    loop {
+                        std::thread::sleep(Duration::from_millis(interval_ms));
+                        if tx2.send(name.clone()).is_err() {
+                            break; // receiver dropped — stop the thread
+                        }
+                        ctx2.request_repaint_after(Duration::from_millis(interval_ms));
+                    }
+                })
+                .ok();
+        }
+        self.timer_rx = Some(rx);
+    }
+
     fn compute_dirty_exact(&self) -> bool {
-        let current = crate::project::io::serialize(&self.project.ui_tree).unwrap_or_default();
+        let current =
+            crate::project::io::serialize(&self.project.ui_tree.snapshot()).unwrap_or_default();
         match &self.project.saved_json {
             Some(snap) => current != *snap,
-            None => !self.project.ui_tree.widgets.is_empty(),
+            None => {
+                let document = self.project.ui_tree.document();
+                document.surfaces.len() > 1 || !self.project.ui_tree.widgets.is_empty()
+            }
         }
     }
 
@@ -269,8 +698,9 @@ impl RohKaiApp {
         }
         self.session.preview_mode = enabled;
         if enabled {
-            self.session.preview_state =
-                crate::canvas::preview::PreviewState::init_from_tree(&self.project.ui_tree);
+            self.session.preview_state = crate::canvas::preview::PreviewState::init_from_document(
+                &self.project.ui_tree.snapshot(),
+            );
         }
     }
 
@@ -279,8 +709,9 @@ impl RohKaiApp {
     /// open / undo) so live preview bindings never go stale.
     fn refresh_preview_state(&mut self) {
         if self.session.preview_mode {
-            self.session.preview_state =
-                crate::canvas::preview::PreviewState::init_from_tree(&self.project.ui_tree);
+            self.session.preview_state = crate::canvas::preview::PreviewState::init_from_document(
+                &self.project.ui_tree.snapshot(),
+            );
         }
     }
 
@@ -298,7 +729,8 @@ impl RohKaiApp {
     }
 
     fn do_save(&mut self, path: PathBuf) {
-        match crate::project::io::save(&path, &self.project.ui_tree) {
+        let snapshot = self.project.ui_tree.snapshot();
+        match crate::project::io::save(&path, &snapshot) {
             Ok(json) => {
                 self.project.saved_json = Some(json);
                 self.project.current_file = Some(path);
@@ -326,7 +758,7 @@ impl RohKaiApp {
     }
 
     fn cmd_new(&mut self) {
-        self.project.ui_tree = UiTree::default();
+        self.project.ui_tree = ActiveDocument::default();
         self.project.current_file = None;
         self.project.saved_json = None;
         self.session.selected.clear();
@@ -334,13 +766,19 @@ impl RohKaiApp {
         self.session.code_navigation_target = None;
         self.dirty_cache = false;
         self.dirty_cache_checked_at = 0.0;
+        self.name_counter.clear();
+        self.surface_workspaces.clear();
+        self.code = CodePanelState::default();
+        self.session.interaction = InteractionState::default();
         self.reset_undo_baseline();
         self.refresh_preview_state();
+        self.timers_need_respawn = true;
     }
 
     /// Re-seed the undo stack to the current tree, clearing history.
     fn reset_undo_baseline(&mut self) {
-        let json = crate::project::io::serialize(&self.project.ui_tree).unwrap_or_default();
+        let json =
+            crate::project::io::serialize(&self.project.ui_tree.snapshot()).unwrap_or_default();
         self.undo.reset(json);
         self.undo_suppress_record = true;
     }
@@ -348,8 +786,28 @@ impl RohKaiApp {
     /// Apply a restored snapshot (from undo/redo) to the live tree.
     fn apply_undo_snapshot(&mut self, json: String) {
         match crate::project::io::deserialize(&json) {
-            Ok(tree) => {
-                self.project.ui_tree = tree;
+            Ok(document) => {
+                let previous_surface = self.project.ui_tree.active_surface_id();
+                self.project.ui_tree.replace(document);
+                if self
+                    .project
+                    .ui_tree
+                    .document()
+                    .surface(previous_surface)
+                    .is_some()
+                {
+                    let _ = self.project.ui_tree.set_active_surface(previous_surface);
+                }
+                let live_surfaces: std::collections::HashSet<Uuid> = self
+                    .project
+                    .ui_tree
+                    .document()
+                    .surfaces
+                    .iter()
+                    .map(|surface| surface.id)
+                    .collect();
+                self.surface_workspaces
+                    .retain(|surface, _| live_surfaces.contains(surface));
                 // Drop selections that no longer exist.
                 let live: std::collections::HashSet<Uuid> =
                     self.project.ui_tree.widgets.iter().map(|w| w.id).collect();
@@ -380,9 +838,9 @@ impl RohKaiApp {
             .pick_file();
         if let Some(path) = path {
             match crate::project::io::load(&path) {
-                Ok(tree) => {
-                    let snap = crate::project::io::serialize(&tree).unwrap_or_default();
-                    self.project.ui_tree = tree;
+                Ok(document) => {
+                    let snap = crate::project::io::serialize(&document).unwrap_or_default();
+                    self.project.ui_tree = ActiveDocument::new(document);
                     self.project.saved_json = Some(snap);
                     self.project.current_file = Some(path);
                     self.session.selected.clear();
@@ -390,8 +848,19 @@ impl RohKaiApp {
                     self.session.code_navigation_target = None;
                     self.dirty_cache = false;
                     self.dirty_cache_checked_at = 0.0;
+                    // Reseed auto-label counters from the loaded tree so new
+                    // widgets don't collide with labels already in the project.
+                    self.name_counter.clear();
+                    for w in &self.project.ui_tree.widgets {
+                        let key = format!("{:?}", w.kind).to_lowercase();
+                        *self.name_counter.entry(key).or_insert(0) += 1;
+                    }
+                    self.surface_workspaces.clear();
+                    self.code = CodePanelState::default();
+                    self.session.interaction = InteractionState::default();
                     self.reset_undo_baseline();
                     self.refresh_preview_state();
+                    self.timers_need_respawn = true;
                 }
                 Err(e) => self.messages.last_error = Some(e),
             }
@@ -425,7 +894,10 @@ impl RohKaiApp {
         else {
             return;
         };
-        match crate::codegen::export::write_project(&self.project.ui_tree, &folder) {
+        match crate::codegen::export::write_project_document(
+            &self.project.ui_tree.snapshot(),
+            &folder,
+        ) {
             Ok(()) => {
                 self.messages.export_message =
                     Some((true, format!("Exported → {}", folder.display())));
@@ -445,7 +917,11 @@ impl RohKaiApp {
         else {
             return;
         };
-        match crate::codegen::export::write_project_wasm(&self.project.ui_tree, &folder, true) {
+        match crate::codegen::export::write_project_document_wasm(
+            &self.project.ui_tree.snapshot(),
+            &folder,
+            true,
+        ) {
             Ok(()) => {
                 self.messages.export_message =
                     Some((true, format!("WASM project → {}", folder.display())));
@@ -478,9 +954,11 @@ impl RohKaiApp {
         // Export WASM project to a per-process temp directory to avoid
         // collisions between concurrent or repeated preview runs.
         let dest = std::env::temp_dir().join(format!("rohkai_wasm_preview_{}", std::process::id()));
-        if let Err(e) =
-            crate::codegen::export::write_project_wasm(&self.project.ui_tree, &dest, true)
-        {
+        if let Err(e) = crate::codegen::export::write_project_document_wasm(
+            &self.project.ui_tree.snapshot(),
+            &dest,
+            true,
+        ) {
             self.messages.export_message =
                 Some((false, format!("WASM preview export failed: {e}")));
             return;
@@ -929,14 +1407,15 @@ impl RohKaiApp {
         let [r, g, b] = theme.accent_color;
         let accent = egui::Color32::from_rgb(r, g, b);
         visuals.hyperlink_color = accent;
-        visuals.selection.bg_fill = egui::Color32::from_rgba_premultiplied(r, g, b, 90);
+        visuals.selection.bg_fill = crate::ui_colors::accent_fill_for_text(accent);
+        visuals.selection.stroke = egui::Stroke::new(1.0, crate::ui_colors::text_on_accent_fill());
         if let Some(rounding) = theme.global_corner_radius {
-            let r = egui::Rounding::same(rounding);
-            visuals.widgets.noninteractive.rounding = r;
-            visuals.widgets.inactive.rounding = r;
-            visuals.widgets.hovered.rounding = r;
-            visuals.widgets.active.rounding = r;
-            visuals.widgets.open.rounding = r;
+            let corner_radius = egui::CornerRadius::from(rounding);
+            visuals.widgets.noninteractive.corner_radius = corner_radius;
+            visuals.widgets.inactive.corner_radius = corner_radius;
+            visuals.widgets.hovered.corner_radius = corner_radius;
+            visuals.widgets.active.corner_radius = corner_radius;
+            visuals.widgets.open.corner_radius = corner_radius;
         }
         // Rebuild the style from defaults every time (carrying the themed
         // visuals) so clearing overrides — "Reset defaults" or loading a theme
@@ -955,7 +1434,7 @@ impl RohKaiApp {
             style.spacing.item_spacing = egui::vec2(base * 2.0, base);
             style.spacing.button_padding = egui::vec2(base * 1.5, base * 0.5);
         }
-        ctx.set_style(style);
+        ctx.set_global_style(style);
     }
 
     fn save_user_settings(&mut self) {
@@ -1111,7 +1590,7 @@ impl RohKaiApp {
                             .weak(),
                     );
                     if ui.small_button("Copy all").clicked() {
-                        ui.output_mut(|o| o.copied_text = svg.clone());
+                        ui.ctx().copy_text(svg.clone());
                     }
                 });
                 ui.separator();
@@ -1261,7 +1740,8 @@ impl RohKaiApp {
             return;
         }
         // Generate the in-memory project file list (same source as disk export).
-        let files = crate::codegen::export::project_files(&self.project.ui_tree);
+        let files =
+            crate::codegen::export::project_files_document(&self.project.ui_tree.snapshot());
         let mut open = self.session.project_tree_open;
         let action = crate::panels::project_tree::show(
             ctx,
@@ -1513,11 +1993,15 @@ impl RohKaiApp {
     }
 }
 
+// TODO(P2-A): wire ShaperEngine — when RustyBuzzShaper is plumbed into the canvas
+// text pipeline, the NotoSans bytes loaded here should also be passed as
+// font_data to RustyBuzzShaper::shape() so shaping and rendering use the
+// same face.  egui owns pixel rasterization; ShaperEngine owns cluster layout.
 fn setup_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
         "NotoSans".to_owned(),
-        egui::FontData::from_static(include_bytes!("../assets/fonts/NotoSans-Regular.ttf")),
+        egui::FontData::from_static(include_bytes!("../assets/fonts/NotoSans-Regular.ttf")).into(),
     );
     fonts
         .families
@@ -1533,7 +2017,24 @@ fn setup_fonts(ctx: &egui::Context) {
 }
 
 impl eframe::App for RohKaiApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = root_ui.ctx().clone();
+        let ctx = &ctx;
+        // P2.5 — (re-)spawn timer threads when the project changes.
+        if self.timers_need_respawn {
+            self.timers_need_respawn = false;
+            self.spawn_timers(ctx);
+        }
+
+        // Drain timer ticks (non-blocking); each tick is a component name
+        // string.  We discard the value here — callers care only about the
+        // repaint that `spawn_timers` already scheduled via
+        // `ctx.request_repaint_after`.  The drain prevents the channel buffer
+        // from growing unboundedly if a frame is delayed.
+        if let Some(rx) = &self.timer_rx {
+            while rx.try_recv().is_ok() {}
+        }
+
         self.apply_theme(ctx);
         self.apply_ui_scale(ctx);
         let now = ctx.input(|i| i.time);
@@ -1551,30 +2052,29 @@ impl eframe::App for RohKaiApp {
         }
 
         // ---------------------------------------------------------------
-        // Global keyboard shortcuts
+        // Global keyboard shortcuts — user-customizable via user_shortcuts.
+        // Canvas-owned shortcuts (G=snap, Ctrl+0=zoom-reset, Escape=deselect)
+        // remain hardcoded in canvas/interaction.rs for now.
         // ---------------------------------------------------------------
-        let ctrl_n = ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::N));
-        let ctrl_o = ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::O));
-        let ctrl_shift_s =
-            ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::S));
-        let ctrl_s = ctx.input(|i| i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(Key::S));
-        let ctrl_shift_g =
-            ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::G));
-        let ctrl_g = ctx.input(|i| i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(Key::G));
-        let ctrl_r = ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::R));
-        let ctrl_l = ctx.input(|i| i.modifiers.ctrl && i.key_pressed(Key::L));
-        let f5 = ctx.input(|i| i.key_pressed(Key::F5));
-        let f1 = ctx.input(|i| i.key_pressed(Key::F1));
-        // Undo: Ctrl+Z. Redo: Ctrl+Y or Ctrl+Shift+Z.
-        let ctrl_z = ctx.input(|i| i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(Key::Z));
-        let ctrl_redo = ctx.input(|i| {
-            i.modifiers.ctrl
-                && (i.key_pressed(Key::Y) || (i.modifiers.shift && i.key_pressed(Key::Z)))
-        });
+        let us = &self.prefs.user_settings;
+        let ctrl_n = effective_shortcut(ctx, "new_project", us, "Ctrl+N");
+        let ctrl_o = effective_shortcut(ctx, "open_project", us, "Ctrl+O");
+        let ctrl_shift_s = effective_shortcut(ctx, "save_as", us, "Ctrl+Shift+S");
+        let ctrl_s = effective_shortcut(ctx, "save", us, "Ctrl+S");
+        let ctrl_shift_g = effective_shortcut(ctx, "ungroup", us, "Ctrl+Shift+G");
+        let ctrl_g = effective_shortcut(ctx, "group", us, "Ctrl+G");
+        let ctrl_r = effective_shortcut(ctx, "toggle_rulers", us, "Ctrl+R");
+        let ctrl_l = effective_shortcut(ctx, "toggle_outline", us, "Ctrl+L");
+        let f5 = effective_shortcut(ctx, "toggle_preview", us, "F5");
+        let f1 = effective_shortcut(ctx, "shortcuts_help", us, "F1");
+        // Undo: customizable primary + hardcoded Ctrl+Shift+Z alternative.
+        let ctrl_z = effective_shortcut(ctx, "undo", us, "Ctrl+Z");
+        let ctrl_redo = effective_shortcut(ctx, "redo", us, "Ctrl+Y")
+            || ctx.input(|i| i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(Key::Z));
         // Don't hijack Ctrl+Z/Y while a TextEdit (code editor, property fields,
         // etc.) owns the keyboard — that would roll the UiTree instead of the
         // text-edit's own undo.
-        let text_input_focused = ctx.wants_keyboard_input();
+        let text_input_focused = ctx.egui_wants_keyboard_input();
         if ctrl_z && !text_input_focused {
             self.cmd_undo();
         } else if ctrl_redo && !text_input_focused {
@@ -1661,8 +2161,8 @@ impl eframe::App for RohKaiApp {
         // ---------------------------------------------------------------
         // Menu bar ribbon
         // ---------------------------------------------------------------
-        egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
+        egui::Panel::top("menu_bar").show_inside(root_ui, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| {
                 // File menu
                 ui.menu_button("File", |ui| {
                     if ui
@@ -1670,14 +2170,14 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.request_destructive_command(PendingCommand::New);
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .add(egui::Button::new("Open…").shortcut_text("Ctrl+O"))
                         .clicked()
                     {
                         self.request_destructive_command(PendingCommand::Open);
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui
@@ -1685,19 +2185,19 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.cmd_save();
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .add(egui::Button::new("Save As…").shortcut_text("Ctrl+Shift+S"))
                         .clicked()
                     {
                         self.cmd_save_as();
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui.button("Export Project…").clicked() {
                         self.cmd_export();
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .button("Export WASM Project…")
@@ -1707,7 +2207,7 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.cmd_export_wasm();
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .button("Preview in Browser…")
@@ -1717,7 +2217,7 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.cmd_preview_wasm();
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .button("Project Files…")
@@ -1725,7 +2225,7 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.session.project_tree_open = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui
@@ -1737,7 +2237,7 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.cmd_save_template();
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .button("Import SVG as Template…")
@@ -1745,53 +2245,13 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.cmd_import_svg_template();
-                        ui.close_menu();
-                    }
-                    if ui
-                        .button("Import Widget Definition…")
-                        .on_hover_text("Copy a .rkwd file into widgets/ and reload")
-                        .clicked()
-                    {
-                        self.cmd_import_widget_definition();
-                        ui.close_menu();
-                    }
-                    if ui
-                        .button("Reload Widget Descriptors")
-                        .on_hover_text("Rescan widgets/ folder for .rkwd files — no restart needed")
-                        .clicked()
-                    {
-                        self.cmd_reload_descriptors();
-                        ui.close_menu();
-                    }
-                    if ui
-                        .button("Create Custom Widget…")
-                        .on_hover_text("Guided builder for new custom widgets")
-                        .clicked()
-                    {
-                        self.cmd_new_widget_builder();
-                        ui.close_menu();
-                    }
-                    if ui
-                        .button("Visual Widget Maker…")
-                        .on_hover_text("Draw primitives and export as a custom widget descriptor")
-                        .clicked()
-                    {
-                        self.widget_maker_open = true;
-                        ui.close_menu();
-                    }
-                    if ui
-                        .button("New Widget Descriptor…")
-                        .on_hover_text("Open the in-app .rkwd editor to create a new widget type")
-                        .clicked()
-                    {
-                        self.cmd_new_descriptor();
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui.button("Preferences…").clicked() {
                         self.prefs.draft = self.prefs.user_settings.clone();
                         self.prefs.open = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
 
@@ -1805,7 +2265,7 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.cmd_undo();
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .add_enabled(
@@ -1815,36 +2275,44 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.cmd_redo();
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
 
                 // Widgets menu
                 ui.menu_button("Widgets", |ui| {
                     if ui
-                        .button("Create Custom Widget…")
-                        .on_hover_text("Guided builder for new custom widgets")
+                        .button("Create New Widget…")
+                        .on_hover_text("Compose a reusable widget visually from primitives")
+                        .clicked()
+                    {
+                        self.widget_maker_open = true;
+                        ui.close();
+                    }
+                    if ui
+                        .button("Guided Descriptor Builder…")
+                        .on_hover_text("Create a descriptor from simple label/button controls")
                         .clicked()
                     {
                         self.cmd_new_widget_builder();
-                        ui.close_menu();
+                        ui.close();
                     }
-                    ui.separator();
                     if ui
-                        .button("New Descriptor…")
-                        .on_hover_text("Open the in-app .rkwd editor to create a new widget type")
+                        .button("Advanced Descriptor Editor…")
+                        .on_hover_text("Edit every .rkwd schema and code-generation field")
                         .clicked()
                     {
                         self.cmd_new_descriptor();
-                        ui.close_menu();
+                        ui.close();
                     }
+                    ui.separator();
                     if ui
                         .button("Import Definition…")
                         .on_hover_text("Copy a .rkwd file into widgets/ and reload")
                         .clicked()
                     {
                         self.cmd_import_widget_definition();
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .button("Reload Descriptors")
@@ -1852,7 +2320,7 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.cmd_reload_descriptors();
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     if ui
@@ -1861,7 +2329,7 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.cmd_export_widget_bundle();
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .button("Import Bundle…")
@@ -1869,7 +2337,7 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.cmd_import_widget_bundle();
-                        ui.close_menu();
+                        ui.close();
                     }
                     if !self.descriptors.widgets.is_empty() {
                         ui.separator();
@@ -1882,7 +2350,7 @@ impl eframe::App for RohKaiApp {
                         for (id, name) in ids {
                             if ui.button(format!("Edit \"{name}\"")).clicked() {
                                 self.cmd_edit_descriptor(&id);
-                                ui.close_menu();
+                                ui.close();
                             }
                         }
                     }
@@ -1897,7 +2365,7 @@ impl eframe::App for RohKaiApp {
                     };
                     if ui.button(preview_label).clicked() {
                         self.set_preview_mode(!self.session.preview_mode);
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     let ruler_label = if self.session.canvas_settings.show_rulers {
@@ -1908,11 +2376,11 @@ impl eframe::App for RohKaiApp {
                     if ui.button(ruler_label).clicked() {
                         self.session.canvas_settings.show_rulers =
                             !self.session.canvas_settings.show_rulers;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui.button("Clear All Guides").clicked() {
                         self.project.ui_tree.app_props.guides.clear();
-                        ui.close_menu();
+                        ui.close();
                     }
                     let bezel_label = if self.project.ui_tree.app_props.show_bezel {
                         "Hide Canvas Bezel"
@@ -1922,7 +2390,7 @@ impl eframe::App for RohKaiApp {
                     if ui.button(bezel_label).clicked() {
                         self.project.ui_tree.app_props.show_bezel =
                             !self.project.ui_tree.app_props.show_bezel;
-                        ui.close_menu();
+                        ui.close();
                     }
                     ui.separator();
                     // Stage 11 — Rust-centric views
@@ -1933,7 +2401,7 @@ impl eframe::App for RohKaiApp {
                     };
                     if ui.button(own_label).clicked() {
                         self.session.show_ownership = !self.session.show_ownership;
-                        ui.close_menu();
+                        ui.close();
                     }
                     let err_label = if self.session.show_error_flow {
                         "Hide Error-Flow Overlay"
@@ -1942,15 +2410,19 @@ impl eframe::App for RohKaiApp {
                     };
                     if ui.button(err_label).clicked() {
                         self.session.show_error_flow = !self.session.show_error_flow;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
-                        .button("Rust Wiring…")
-                        .on_hover_text("Channels, iterator pipelines, trait impls")
+                        .button(format!("{}…", crate::panels::rust_wiring::PANEL_TITLE))
+                        .on_hover_text(
+                            "Advanced app-wide Rust infrastructure: channels, \
+                             iterator pipelines, trait impls (beginner widget \
+                             wiring lives on the canvas behavior graph)",
+                        )
                         .clicked()
                     {
                         self.session.rust_wiring_open = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                     if ui
                         .button("Macro Palette…")
@@ -1958,12 +2430,20 @@ impl eframe::App for RohKaiApp {
                         .clicked()
                     {
                         self.session.macro_palette_open = true;
-                        ui.close_menu();
+                        ui.close();
+                    }
+                    if ui
+                        .button("Database…")
+                        .on_hover_text("Connect to SQLite, browse schema, preview rows (Stage 13)")
+                        .clicked()
+                    {
+                        self.db_panel.open = true;
+                        ui.close();
                     }
                     ui.separator();
                     if ui.button("Theme…").clicked() {
                         self.session.theme_open = true;
-                        ui.close_menu();
+                        ui.close();
                     }
                 });
 
@@ -2034,7 +2514,7 @@ impl eframe::App for RohKaiApp {
         // Presets set both dimensions explicitly, so they must bypass the
         // aspect-ratio correction below (which assumes a single DragValue edit).
         let mut preset_applied = false;
-        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
+        egui::Panel::bottom("status_bar").show_inside(root_ui, |ui| {
             if self.session.preview_mode {
                 ui.centered_and_justified(|ui| {
                     ui.label(
@@ -2088,7 +2568,7 @@ impl eframe::App for RohKaiApp {
                             self.project.ui_tree.app_props.win_w = *w;
                             self.project.ui_tree.app_props.win_h = *h;
                             preset_applied = true;
-                            ui.close_menu();
+                            ui.close();
                         }
                     }
                 });
@@ -2175,10 +2655,13 @@ impl eframe::App for RohKaiApp {
         // Right panel: generated code (hidden in preview mode)
         // ---------------------------------------------------------------
         if !self.session.preview_mode {
+            let project_state_tree =
+                crate::codegen::export::project_state_tree(&self.project.ui_tree.snapshot());
             crate::panels::code_preview::show(
-                ctx,
+                root_ui,
                 &mut self.project.ui_tree,
                 CodePreviewArgs {
+                    app_state_tree: &project_state_tree,
                     selected_ids: &mut self.session.selected,
                     navigation_target: &mut self.session.code_navigation_target,
                     scroll_to_handler: &mut self.session.scroll_to_handler,
@@ -2199,7 +2682,7 @@ impl eframe::App for RohKaiApp {
         // ---------------------------------------------------------------
         // Left panel — returns (palette_drag, template_action) to process outside
         // ---------------------------------------------------------------
-        let window_w = ctx.screen_rect().width();
+        let window_w = ctx.content_rect().width();
         let left_full = window_w >= 580.0;
 
         let mut outline_action = crate::panels::outline::OutlineAction::None;
@@ -2207,13 +2690,13 @@ impl eframe::App for RohKaiApp {
         let preview_mode = self.session.preview_mode;
         let selected_component = self.session.selected_component;
 
-        let (palette_click, palette_drag, tmpl_action, props_action) =
-            egui::SidePanel::left("left_panel")
+        let (palette_click, palette_drag, tmpl_action, props_action, surface_action) =
+            egui::Panel::left("left_panel")
                 .resizable(left_full)
-                .min_width(if left_full { 160.0 } else { 28.0 })
-                .default_width(if left_full { 280.0 } else { 28.0 })
-                .max_width(if left_full { 520.0 } else { 28.0 })
-                .show(ctx, |ui| {
+                .min_size(if left_full { 160.0 } else { 28.0 })
+                .default_size(if left_full { 280.0 } else { 28.0 })
+                .max_size(if left_full { 520.0 } else { 28.0 })
+                .show_inside(root_ui, |ui| {
                     if !left_full {
                         ui.centered_and_justified(|ui| {
                             ui.label(egui::RichText::new("«").weak());
@@ -2223,6 +2706,7 @@ impl eframe::App for RohKaiApp {
                             None,
                             crate::panels::templates::TemplateAction::None,
                             crate::panels::properties::PropertiesAction::None,
+                            crate::panels::surfaces::SurfaceAction::None,
                         );
                     }
 
@@ -2252,10 +2736,16 @@ impl eframe::App for RohKaiApp {
                             None,
                             crate::panels::templates::TemplateAction::None,
                             crate::panels::properties::PropertiesAction::None,
+                            crate::panels::surfaces::SurfaceAction::None,
                         );
                     }
 
                     ui.horizontal_wrapped(|ui| {
+                        ui.selectable_value(
+                            &mut self.session.left_panel_tab,
+                            LeftPanelTab::Surfaces,
+                            "Surfaces",
+                        );
                         ui.selectable_value(
                             &mut self.session.left_panel_tab,
                             LeftPanelTab::Palette,
@@ -2291,6 +2781,22 @@ impl eframe::App for RohKaiApp {
                     let mut palette_drag = None;
                     let mut props_action = crate::panels::properties::PropertiesAction::None;
                     let mut tmpl_action = crate::panels::templates::TemplateAction::None;
+                    let mut surface_action = crate::panels::surfaces::SurfaceAction::None;
+                    let active_surface_id = self.project.ui_tree.active_surface_id();
+                    let modal_surface_choices: Vec<(Uuid, String)> = self
+                        .project
+                        .ui_tree
+                        .document()
+                        .surfaces
+                        .iter()
+                        .filter(|surface| {
+                            matches!(
+                                surface.kind,
+                                crate::project::document::SurfaceKind::ModalDialog(_)
+                            )
+                        })
+                        .map(|surface| (surface.id, surface.name.clone()))
+                        .collect();
 
                     egui::ScrollArea::vertical()
                         .id_salt("left_panel_tab_scroll")
@@ -2310,6 +2816,15 @@ impl eframe::App for RohKaiApp {
                             };
 
                             if self.session.left_panel_stack {
+                                egui::CollapsingHeader::new("Surfaces")
+                                    .default_open(true)
+                                    .show(ui, |ui| {
+                                        surface_action = crate::panels::surfaces::show_content(
+                                            ui,
+                                            self.project.ui_tree.document(),
+                                            self.project.ui_tree.active_surface_id(),
+                                        );
+                                    });
                                 egui::CollapsingHeader::new("Palette")
                                     .default_open(true)
                                     .show(ui, |ui| {
@@ -2323,13 +2838,44 @@ impl eframe::App for RohKaiApp {
                                     .default_open(!self.session.selected.is_empty())
                                     .show(ui, |ui| {
                                         let shift_held = ui.input(|i| i.modifiers.shift);
-                                        props_action = crate::panels::properties::show_content(
-                                            ui,
-                                            &mut self.project.ui_tree,
-                                            &mut self.session.selected,
-                                            shift_held,
-                                            &self.descriptors.widgets,
-                                        );
+                                        if self.session.selected.is_empty() {
+                                            crate::panels::behaviors::show_selected(
+                                                ui,
+                                                &mut self.project.ui_tree,
+                                                &mut self.session.interaction.selected_behavior,
+                                                &modal_surface_choices,
+                                                active_surface_id,
+                                            );
+                                            crate::panels::surfaces::show_active_surface_properties(
+                                                ui,
+                                                &mut self.project.ui_tree,
+                                                &mut self.session.interaction.selected_behavior,
+                                            );
+                                        } else {
+                                            crate::panels::behaviors::show_selected(
+                                                ui,
+                                                &mut self.project.ui_tree,
+                                                &mut self.session.interaction.selected_behavior,
+                                                &modal_surface_choices,
+                                                active_surface_id,
+                                            );
+                                            props_action =
+                                                crate::panels::properties::show_content(
+                                                    ui,
+                                                    &mut self.project.ui_tree,
+                                                    &mut self.session.selected,
+                                                    shift_held,
+                                                    &self.descriptors.widgets,
+                                                );
+                                        }
+                                        if let Some(wid) = self.session.selected.last().copied() {
+                                            crate::panels::behaviors::show_for_widget(
+                                                ui,
+                                                &self.project.ui_tree,
+                                                wid,
+                                                &mut self.session.interaction.selected_behavior,
+                                            );
+                                        }
                                     });
                                 egui::CollapsingHeader::new("Layers / Outline")
                                     .default_open(true)
@@ -2364,8 +2910,8 @@ impl eframe::App for RohKaiApp {
                                             &self.project.ui_tree.app_props.components,
                                             selected_component,
                                         );
-                                        if let Some(sel) = selected_component {
-                                            if let Some(comp) = self
+                                        if let Some(sel) = selected_component
+                                            && let Some(comp) = self
                                                 .project
                                                 .ui_tree
                                                 .app_props
@@ -2378,7 +2924,6 @@ impl eframe::App for RohKaiApp {
                                                     ui, comp,
                                                 );
                                             }
-                                        }
                                     });
                                 egui::CollapsingHeader::new("Templates")
                                     .default_open(false)
@@ -2390,6 +2935,13 @@ impl eframe::App for RohKaiApp {
                                     });
                             } else {
                                 match self.session.left_panel_tab {
+                                    LeftPanelTab::Surfaces => {
+                                        surface_action = crate::panels::surfaces::show_content(
+                                            ui,
+                                            self.project.ui_tree.document(),
+                                            self.project.ui_tree.active_surface_id(),
+                                        );
+                                    }
                                     LeftPanelTab::Palette => {
                                         show_palette(ui, &mut palette_click, &mut palette_drag);
                                     }
@@ -2410,13 +2962,44 @@ impl eframe::App for RohKaiApp {
                                             );
                                             ui.separator();
                                         }
-                                        props_action = crate::panels::properties::show_content(
-                                            ui,
-                                            &mut self.project.ui_tree,
-                                            &mut self.session.selected,
-                                            shift_held,
-                                            &self.descriptors.widgets,
-                                        );
+                                        if self.session.selected.is_empty() {
+                                            crate::panels::behaviors::show_selected(
+                                                ui,
+                                                &mut self.project.ui_tree,
+                                                &mut self.session.interaction.selected_behavior,
+                                                &modal_surface_choices,
+                                                active_surface_id,
+                                            );
+                                            crate::panels::surfaces::show_active_surface_properties(
+                                                ui,
+                                                &mut self.project.ui_tree,
+                                                &mut self.session.interaction.selected_behavior,
+                                            );
+                                        } else {
+                                            crate::panels::behaviors::show_selected(
+                                                ui,
+                                                &mut self.project.ui_tree,
+                                                &mut self.session.interaction.selected_behavior,
+                                                &modal_surface_choices,
+                                                active_surface_id,
+                                            );
+                                            props_action =
+                                                crate::panels::properties::show_content(
+                                                    ui,
+                                                    &mut self.project.ui_tree,
+                                                    &mut self.session.selected,
+                                                    shift_held,
+                                                    &self.descriptors.widgets,
+                                                );
+                                        }
+                                        if let Some(wid) = self.session.selected.last().copied() {
+                                            crate::panels::behaviors::show_for_widget(
+                                                ui,
+                                                &self.project.ui_tree,
+                                                wid,
+                                                &mut self.session.interaction.selected_behavior,
+                                            );
+                                        }
                                     }
                                     LeftPanelTab::Layers => {
                                         ui.label(egui::RichText::new("Layers / Outline").strong());
@@ -2450,8 +3033,8 @@ impl eframe::App for RohKaiApp {
                                             &self.project.ui_tree.app_props.components,
                                             selected_component,
                                         );
-                                        if let Some(sel) = selected_component {
-                                            if let Some(comp) = self
+                                        if let Some(sel) = selected_component
+                                            && let Some(comp) = self
                                                 .project
                                                 .ui_tree
                                                 .app_props
@@ -2464,7 +3047,6 @@ impl eframe::App for RohKaiApp {
                                                     ui, comp,
                                                 );
                                             }
-                                        }
                                     }
                                     LeftPanelTab::Templates => {
                                         ui.label(egui::RichText::new("Templates").strong());
@@ -2478,9 +3060,32 @@ impl eframe::App for RohKaiApp {
                             }
                         });
 
-                    (palette_click, palette_drag, tmpl_action, props_action)
+                    (
+                        palette_click,
+                        palette_drag,
+                        tmpl_action,
+                        props_action,
+                        surface_action,
+                    )
                 })
                 .inner;
+
+        self.handle_surface_action(surface_action);
+
+        let mut tab_request = None;
+        egui::Panel::top("surface_tabs")
+            .exact_size(32.0)
+            .show_inside(root_ui, |ui| {
+                tab_request = crate::panels::surfaces::show_tabs(
+                    ui,
+                    self.project.ui_tree.document(),
+                    self.project.ui_tree.active_surface_id(),
+                );
+            });
+        if let Some(surface_id) = tab_request {
+            let _ = self.switch_surface(surface_id);
+        }
+        self.show_surface_delete_confirmation(ctx);
 
         // Tracé — properties panel requested scroll-to-handler
         match props_action {
@@ -2556,6 +3161,7 @@ impl eframe::App for RohKaiApp {
                         name: format!("{name}_{count}"),
                         interval_ms,
                         handler: String::new(),
+                        state_machine: crate::project::schema::StateMachineProps::default(),
                     },
                 );
                 self.session.selected_component = Some(new_id);
@@ -2583,6 +3189,8 @@ impl eframe::App for RohKaiApp {
             let cy = (-pan.y / zoom + win_h / 2.0).clamp(0.0, win_h);
             instance.rect.x = (cx - instance.rect.w / 2.0).max(0.0);
             instance.rect.y = (cy - instance.rect.h / 2.0).max(0.0);
+            let default_text = instance.props.label.clone();
+            instance.props.label = self.next_widget_label(&instance.kind.clone(), &default_text);
             let id = instance.id;
             let center = (
                 instance.rect.x + instance.rect.w * 0.5,
@@ -2601,7 +3209,9 @@ impl eframe::App for RohKaiApp {
         }
 
         // Palette drag — set interaction.template_drag for canvas drop next frame
-        if let Some(instance) = palette_drag {
+        if let Some(mut instance) = palette_drag {
+            let default_text = instance.props.label.clone();
+            instance.props.label = self.next_widget_label(&instance.kind.clone(), &default_text);
             self.session.interaction.template_drag = Some(vec![instance]);
         }
 
@@ -2643,19 +3253,18 @@ impl eframe::App for RohKaiApp {
         let canvas_modal_blocked = self.canvas_modal_blocked();
         let canvas_keyboard_owned = !canvas_modal_blocked
             && self.session.interaction.canvas_focused
-            && !ctx.wants_keyboard_input();
+            && !ctx.egui_wants_keyboard_input();
         let delete_pressed =
             canvas_keyboard_owned && ctx.input(|i| i.key_pressed(egui::Key::Delete));
         let has_hovered_guide = self.session.hovered_guide.is_some();
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show_inside(root_ui, |ui| {
             self.session.last_canvas_rect = ui.max_rect();
             let panel_rect = ui.max_rect();
 
             // --- Preview mode ---
             if self.session.preview_mode {
-                let exited = crate::canvas::preview::render(
+                let exited = crate::canvas::preview::render_project(
                     ui,
-                    &self.project.ui_tree,
                     &mut self.session.preview_state,
                     panel_rect,
                     &mut self.svg_texture_cache,
@@ -2698,6 +3307,10 @@ impl eframe::App for RohKaiApp {
 
             self.session.canvas_settings.guide_drag_active = self.session.dragging_guide.is_some();
             self.session.canvas_settings.input_blocked = canvas_modal_blocked;
+
+            // P2.3 — apply layout constraints once per frame before canvas renders.
+            crate::project::constraint_solver::apply_constraints(&mut self.project.ui_tree);
+
             crate::canvas::interaction::handle(
                 ui,
                 &mut self.project.ui_tree,
@@ -2792,7 +3405,21 @@ impl eframe::App for RohKaiApp {
         self.show_widget_maker_window(ctx);
         self.show_theme_window(ctx);
         self.show_project_tree_window(ctx);
-        crate::panels::shortcuts::show(ctx, &mut self.session.shortcuts_open);
+        {
+            let mut shortcuts_dirty = false;
+            crate::panels::shortcuts::show(
+                ctx,
+                &mut self.session.shortcuts_open,
+                &mut self.prefs.user_settings,
+                &mut shortcuts_dirty,
+            );
+            if shortcuts_dirty {
+                let _ = crate::settings::save(&self.prefs.settings_path, &self.prefs.user_settings);
+            }
+        }
+
+        // Stage 13 — Database panel.
+        crate::panels::db_panel::show_window(ctx, &mut self.db_panel, &mut self.db_engine);
 
         // Stage 11 — Rust wiring editor + macro palette.
         crate::panels::rust_wiring::show(
@@ -2821,15 +3448,119 @@ impl eframe::App for RohKaiApp {
         // ---------------------------------------------------------------
         if self.undo_suppress_record {
             // Re-seed `current` to the restored/baseline tree without history churn.
-            let json = crate::project::io::serialize(&self.project.ui_tree).unwrap_or_default();
+            let json =
+                crate::project::io::serialize(&self.project.ui_tree.snapshot()).unwrap_or_default();
             self.undo.sync_current(json);
             self.undo_suppress_record = false;
         } else if !self.session.preview_mode {
             let pointer_down = ctx.input(|i| i.pointer.any_down());
             if !pointer_down {
-                let json = crate::project::io::serialize(&self.project.ui_tree).unwrap_or_default();
+                let json = crate::project::io::serialize(&self.project.ui_tree.snapshot())
+                    .unwrap_or_default();
                 self.undo.record(json);
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod name_counter_tests {
+    use super::{CodePanelState, SessionState, SurfaceWorkspaceState};
+    use crate::panels::code_preview::CodeStatus;
+    use crate::project::schema::WidgetKind;
+    use std::collections::HashMap;
+    use uuid::Uuid;
+
+    fn next_label(counter: &mut HashMap<String, u32>, kind: &WidgetKind, hint: &str) -> String {
+        let key = format!("{kind:?}").to_lowercase();
+        let count = counter.entry(key.clone()).or_insert(0);
+        *count += 1;
+        let slug = super::slugify_widget_hint(hint);
+        if slug.is_empty() || slug == key {
+            format!("{key}_{count}")
+        } else {
+            format!("{key}_{count}_{slug}")
+        }
+    }
+
+    #[test]
+    fn two_buttons_get_sequential_labels() {
+        let mut counter: HashMap<String, u32> = HashMap::new();
+        let l1 = next_label(&mut counter, &WidgetKind::Button, "Submit");
+        let l2 = next_label(&mut counter, &WidgetKind::Button, "Cancel");
+        assert_eq!(l1, "button_1_submit");
+        assert_eq!(l2, "button_2_cancel");
+    }
+
+    #[test]
+    fn different_kinds_have_independent_counters() {
+        let mut counter: HashMap<String, u32> = HashMap::new();
+        let b1 = next_label(&mut counter, &WidgetKind::Button, "OK");
+        let l1 = next_label(&mut counter, &WidgetKind::Label, "Title");
+        let b2 = next_label(&mut counter, &WidgetKind::Button, "Cancel");
+        assert_eq!(b1, "button_1_ok");
+        assert_eq!(l1, "label_1_title");
+        assert_eq!(b2, "button_2_cancel");
+    }
+
+    #[test]
+    fn counter_resets_on_clear() {
+        let mut counter: HashMap<String, u32> = HashMap::new();
+        let _ = next_label(&mut counter, &WidgetKind::Button, "Submit");
+        let _ = next_label(&mut counter, &WidgetKind::Button, "Cancel");
+        counter.clear();
+        let l = next_label(&mut counter, &WidgetKind::Button, "Submit");
+        assert_eq!(l, "button_1_submit");
+    }
+
+    #[test]
+    fn slug_falls_back_when_hint_matches_kind() {
+        let mut counter: HashMap<String, u32> = HashMap::new();
+        // hint "button" matches kind key — falls back to plain counter format
+        let l = next_label(&mut counter, &WidgetKind::Button, "Button");
+        assert_eq!(l, "button_1");
+    }
+
+    #[test]
+    fn slug_falls_back_when_hint_is_empty() {
+        let mut counter: HashMap<String, u32> = HashMap::new();
+        let l = next_label(&mut counter, &WidgetKind::Label, "");
+        assert_eq!(l, "label_1");
+    }
+
+    #[test]
+    fn surface_workspace_preserves_invalid_code_selection_zoom_and_pan() {
+        let selected = Uuid::from_u128(0x5FACE);
+        let mut session = SessionState {
+            selected: vec![selected],
+            ..Default::default()
+        };
+        session.canvas_settings.zoom = 1.75;
+        session.canvas_settings.pan = egui::vec2(42.0, -17.0);
+        let mut code = CodePanelState {
+            buffer: "broken(".to_owned(),
+            status: CodeStatus::InvalidEdit("expected ')'".to_owned()),
+            ..Default::default()
+        };
+
+        let workspace = SurfaceWorkspaceState::capture(&mut session, &mut code);
+        session.canvas_settings.zoom = 0.5;
+        session.canvas_settings.pan = egui::Vec2::ZERO;
+        code.buffer = "other surface".to_owned();
+        code.status = CodeStatus::Generated;
+        workspace.restore(&mut session, &mut code);
+
+        assert_eq!(session.selected, vec![selected]);
+        assert_eq!(session.canvas_settings.zoom, 1.75);
+        assert_eq!(session.canvas_settings.pan, egui::vec2(42.0, -17.0));
+        assert_eq!(code.buffer, "broken(");
+        assert_eq!(
+            code.status,
+            CodeStatus::InvalidEdit("expected ')'".to_owned())
+        );
     }
 }

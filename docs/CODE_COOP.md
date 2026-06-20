@@ -7,6 +7,197 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-15 — CodeRabbit PR #9 batch 2 + gh thread replies
+
+Branch `dev`. Completed the second batch of CodeRabbit fixes (commit 4a14459): name_counter now reseeds on project open; sanitise_ident guards against leading-digit SQL identifiers; db_panel refresh_schema clears all dependent caches on both Ok and Err paths; added effective_field_binding() helper in codegen/rust.rs to unify binding resolution across all surfaces; properties.rs duplicate test renamed to state the actual invariant. Also added the DB_INTEGRATION_RESEARCH.md cross-reference to ENGINEERING_INVARIANTS.md Invariant 10, and the egui API maintenance reminder in feature-evaluation doc. Posted gh api replies on all 5 remaining open threads (workflow SHA, DB cross-ref, feature-eval reminder, sink-type validation deferred, db_panel stale cache). All 14 original CodeRabbit threads now have zipo214 replies; 554 unit + 17 fidelity + doctest green. Sink-type validation (comment 3417193356) is deferred — needs field-type metadata threading through UiTree into the behavior graph; acknowledged in thread. PR #9 is ready for final CI pass and merge decision.
+
+## 2026-06-14 — CodeRabbit review triage on PR #9
+
+Branch `dev`. PR #9 diffs against `main`, so CodeRabbit reviewed the whole
+accumulated `dev` history (88 files), not just the recipe/rename change. Triaged
+~30 findings: fixed 10 genuinely-valid low-risk bugs with a regression test for
+the class (behavior clamp min>max panic guard + test; rusqlite version aligned to
+the documented `0.40`; component_state StateMachine initial-state now escaped via
+`string_literal`; shortcuts whitespace-only override trims to blank;
+component_tray state delete now drops dangling initial_state/transitions; app.rs
+timer interval clamped to >=1ms; formula emitter `unreachable!` → debug_assert +
+benign literal; shaper trait doc reconciled with the fontless fallback;
+check-surface-parity unused `$fidelity` removed; Invariant 10 scope clarified to
+"designer binary"). Verified and SKIPPED the "Critical" CornerRadius claim — it is
+a false positive: `egui::CornerRadius::from(f32)` compiles on egui 0.34.3 (probed
+with a throwaway example). Skipped (with reasons) heavier/out-of-scope items:
+behavior sink-type validation (needs emit-time field types), db_panel cache reset
+(Stage 13), app.rs name_counter/timer-respawn lifecycle, rustybuzz glyph_id
+scaffold, and assorted doc-churn. Full gate green (553 unit + 17 fidelity +
+doctest, all-target clippy, fmt, encoding). Local commit; push to PR branch.
+
+## 2026-06-14 — Behavior recipes UI surfacing + Global Rust Wiring rename
+
+Branch `dev`. The recipe matrix (`codegen::behavior_recipes`) was already
+committed (e79c787) and auto-applies the default suggestion on wire drop; this
+session closed the two open goal gaps. The Behaviors panel
+(`panels::behaviors`) now surfaces the full suggestion set for the wired
+source→sink pair as one-click selectable chips (default pre-selected, params
+still editable below, raw Action picker kept as advanced). User-facing "Rust
+Wiring" is now "Global Rust Wiring" via a single-source `rust_wiring::PANEL_TITLE`
+const (window + menu button), with a guard test; docs (ARCHITECTURE, CODE_INDEX)
+reframed and the previously-unindexed behavior modules added. No new crates,
+serde untouched, codegen still consumes graph actions not recipe IDs. Full gate
+green (552 unit + 17 fidelity + doctest, all-target clippy, fmt, encoding).
+Committed locally only — coop hazard (external agent state) still says don't push.
+
+## 2026-06-13 - Project surfaces and modal dialogs
+
+Branch `codex/project-surfaces-modal`, isolated from `dev`. I am replacing the
+single-window project root with a versioned `ProjectDocument` containing a main
+surface plus modal-dialog surfaces, then wiring authoring, behaviors, preview,
+Lazare, export, and transactional modal state through that model. The main
+hazard is accidental duplicated authority between project-global properties,
+surface properties, and the old `UiTree.app_props`; the completed migration
+must leave one canonical owner and preserve schema-v1 projects losslessly.
+The resumed pass is closing generated and preview focus semantics, warning-clean
+native/WASM fixtures, source isolation, and stress coverage before the docs
+truth pass; modal focus must target semantic default controls and restore the
+opening widget rather than merely keeping a stack of IDs.
+Final review caught and fixed nested-response naming drift, literal-unsafe modal
+state rewriting, draft-move ordering for keyboard actions, and invalid dialog
+policy targets. Full tests and generated-project parity are green; visual
+screenshot QA remains blocked only by the external Computer Use runtime.
+
+## 2026-06-12 - Rust 1.96 and dependency alignment audit
+
+Branch `codex/toolchain-dependency-refresh`, isolated from `dev`. RohKai now
+separates edition (2024), dependency-driven MSRV (1.92), and pinned/tested Rust
+(1.96.0); every direct dependency is at its current crates.io release. Generated
+projects remain edition 2021 for portability but share the 1.92 MSRV and
+egui/eframe/rfd versions; alignment and networked freshness scripts guard drift.
+Full tests, all-target Clippy, SVG validation, export Cargo fixtures, and native
+launch smoke passed before the local commit.
+
+## 2026-06-12 — Migrated to Rust edition 2024 (exports stay 2021)
+
+Branch `dev`, commit `3329961`. `Cargo.toml` edition 2021 → 2024 (rustc 1.95).
+`cargo fix` + `clippy --fix` (nested ifs → let-chains in designer-only sources) +
+`cargo fmt` 2024 style across the tree. **Gotcha for future agents:**
+`src/canvas/svg_rasterizer.rs` is embedded VERBATIM into edition-2021 exported
+projects, so it must NOT use edition-2024 `if let` let-chains — they are a
+compile error under 2021. It is kept as nested `if let` with
+`#[allow(clippy::collapsible_if)]` on the module (`canvas/mod.rs`); the
+`all_builtin_widgets_export_cargo_check` test is the guard (it caught the
+regression when clippy --fix collapsed them). Same applies to any future
+export-embedded source. Exports stay edition 2021 for portability — bumping them
+to 2024 (raising user MSRV to 1.85) is a separate, unmade decision. Gate green:
+clippy 0, 551 + 17 + 1 tests, fmt clean.
+
+## 2026-06-12 — Behavior graph: visual event→state wiring shipped
+
+Branch `dev`. Implemented the beginner-facing Behavior Graph: persisted
+`AppProps.behaviors` (typed `VisualAction`s), canvas socket drag with
+Visio-style wires (open circle = event source, closed = state target), a
+Behaviors editor in the Properties tab, and one shared emitter
+(`codegen::behavior`) used by live code and export — Button Click → Add 0.1
+emits `self.state.progress = (self.state.progress + 0.1).clamp(0.0, 1.0);` in
+nested Frame/V/H/Grid paths too. Also fixed a latent export bug: layout-child
+combos with a Change handler compared `Option<()>` to `Some(true)` (now tracks
+`changed` like frame-child combos). Suite: 544 unit + 17 fidelity + doctest,
+clippy `--all-targets -D warnings` green, launch smoke OK. Known boundary:
+live preview dispatches behaviors exactly where it dispatches handlers
+(TextArea/FontComboBox change stays export-only — pre-existing parity line).
+
+## 2026-06-12 — S1 closed: visual anchors, named Grid slots, recursive layouts
+
+Branch `dev`, based on `1e7fd38`; Claude is out of usage. S1 is now complete:
+canvas constraint handles write parent-relative anchors without moving the
+widget, Grid slots have stable names and drag-to-slot, and nested layouts reflow,
+draw, emit, export, and Lazare-round-trip recursively. The prior one-line Stage
+15 roadmap edit was preserved in intent and rewritten into explicit bespoke-
+foundation review milestones. Full suite: 523 unit + 17 fidelity + doctest,
+zero ignored, warning-denied clippy green. Do not merge or push while external
+agent state remains uncertain.
+
+## 2026-06-12 — v0.2.0 audit remediation: export gates + widget-authoring UX
+
+Branch `dev`. Remediation is complete and ready for a scoped local commit.
+Generated-project checks now run normally with `-D warnings`; embedded SVG is
+std-only; formula/database export state and dependencies are complete. All six
+ignored tests were promoted, which exposed and fixed an infinite loop on
+malformed path numbers after `Z`; the suite is now 515 + 17 + doctest, zero
+ignored. Widget authoring is consolidated under Widgets: Create New Widget opens
+the true Visual Widget Maker, with guided/advanced descriptor paths clearly
+named; all three windows share viewport-safe bounds. Do not merge while Claude
+is active/ambiguous. After this commit, resume S1 anchor-handle drag and nested-
+layout Lazare round-trip, then reorder bespoke secure-code milestones before
+Stage 15.
+
+## 2026-06-12 — S1 finished: constraint-solver bug fix + 3 half-wired fields wired
+
+Branch `dev`. Finished the S1 parity gaps the checker found. **Real latent bug
+fixed:** `apply_constraints` ran every frame with `margin += `, so any margin
+constraint walked the widget off screen and shrank it; it also anchored every
+widget to the canvas, never its parent. Rewrote the solver to be **idempotent**
+(margin folded into absolute alignment — safe per-frame, no save/load drift) and
+**parent-relative** (parents-before-children, frame = parent's solved rect).
+Surfaced `validate_constraints` in the Properties Constraints section (red
+messages). Wired the two half-wired fields end-to-end: `text_align` (was dead
+everywhere) → egui_emitter + export + preview; `child_cross_align` per-child
+override → VLayout/HLayout codegen (dropped UI Stretch — no proven egui path).
+Parity tests added. 499 lib + 17 integration + 1 doctest green, zero warnings,
+export cargo-check fixture green. Margin semantics intentionally changed (insets
+within the alignment anchor; no-op without one) — see `constraint_solver.rs`
+header + the RCA's resolved follow-ups. Next: S1 remainder (anchor visual-handle
+drag, nested-layout Lazare round-trip) or S2.
+
+## 2026-06-12 — Roadmaps de-deferred into ordered master backlog; RCA + parity checker shipped
+
+Branch `dev`, commits `1352975` (lib+bin) → `ca28d9e` (roadmaps) → this one.
+Rewrote `ROADMAP_PHASE2.md` as the single ordered backlog S1–S22 (renderer S22,
+LARGE projects spaced); removed all non-goal/deferral/strikethrough language from
+the SVG/JPEG/text roadmaps and pointed them at the S-stages. The only surviving
+"non-goals" are two CLAUDE.md architecture invariants — no external renderer dep,
+no C FFI — whose capability is delivered by the S22 in-house renderer, not by
+reversing the rule. **Flag for the user:** if they truly want C FFI / external
+renderer crates, that is a separate explicit decision; I did NOT convert those two
+to to-dos. Then RCA'd the recurring class (cross-surface parity drift) in
+`docs/RCA-2026-06-12-surface-parity-drift.md`: root cause = enum variants get
+exhaustive-match forcing but struct fields / roadmap claims / unsurfaced pub APIs
+do not. Built the guard: `scripts/check-surface-parity.ps1` (advisory; flags
+field→codegen gaps, roadmap↔code drift, dead-code pub) + extended
+`fidelity_audit.rs` with a `ALL_KINDS` codegen-completeness test (13 tests now).
+Checker surfaced real S1 follow-ups: `text_align`/`child_cross_align`/
+`constraints` have no `src/codegen/` reference; `validate_constraints` unsurfaced.
+All green: 495 lib + 13 integration + 1 doctest, zero clippy warnings.
+
+## 2026-06-12 — Crate promoted to lib+bin; fidelity_audit harness green; de-defer pass starting
+
+Branch `dev`. Closed the in-flight fidelity thread: the uncommitted P2.4 codegen
+parity (child_flex/grid spans in `egui_emitter`), P2.5 `effective_shortcut()`
+wiring, and the CSS-at-rule diagnostic (`parse_css_stylesheet.atrule_count`)
+were all real but the new `tests/fidelity_audit.rs` cross-surface harness could
+not link — RohKai was a **binary-only crate**. Added `src/lib.rs` as the crate
+root (`pub mod` for all 9 modules) and slimmed `src/main.rs` to a shell over
+`rohkai::app`; `tests/` can now import the public API. Fixed one clippy error the
+untracked harness carried (`.last()`→`.next_back()`). Now **495 lib + 11
+integration + 1 doctest pass, zero clippy warnings**. Next: per user directive,
+de-defer EVERY roadmap (remove all non-goal/deferral/strikethrough language,
+convert to ordered to-dos), re-enumerate one master backlog ending in the
+in-house renderer with large projects spaced — the ONLY surviving non-goal is the
+zero-external-renderer-dependency architecture invariant (CLAUDE.md). Known
+shallow surfaces found: `constraint_solver::apply_constraints` iterates flat
+`tree.widgets` (no recursion into layout children); `validate_constraints` is
+`#[allow(dead_code)]` (no properties-panel surface).
+
+## 2026-06-11 — P2.3/P2.5/P2.6 merged into dev; 489 tests green, zero warnings
+
+Branch `dev`. Merged three of the five background agents: P2.3 (constraint-based layout — LayoutConstraints, HAlign/VAlign, constraint solver, show_constraints panel), P2.5 (formula depth, timer wiring via mpsc, state machine schema + editor, shortcut customization, .rkwb ZIP bundle), and P2.6 (Stage 13 DB integration — DatabaseEngine trait, SqliteEngine, db_panel, DbBinding on WidgetInstance, Invariant 10 in ENGINEERING_INVARIANTS.md, rusqlite added to Cargo.toml). P2.4 was merged in the prior session. P2.7 (SVG R9) had nothing new to merge (R9 was already done in v0.2.0). All conflicts were struct-field additions resolved by keeping both sides; 489 tests pass. Next work: run cargo run smoke, then decide whether to start P2.8 or address open items from the caveman review.
+
+## 2026-06-11 — P2.1-C/D merged + 5 agents launched for P2.3–P2.7
+
+Branch `dev`, pushed `6de4a08`. Completed all P2.1 deferred items via three worktree agents (B=style tokens+hit regions+event zones, C=state variants, D=layout groups+slots). VWM now has: StyleTokens doc-level variables, HitRegion primitive, PrimState/PrimVariants per-primitive hover/pressed/disabled/checked overrides, HGroup/VGroup/Grid/Stack group kinds with two-pass codegen (claimed children skipped at top level), SlotDef slots on WidgetMakerDoc with slot comment emission, state variant UI in the primitive inspector. 457 tests, zero warnings. Also added rusqlite = { version = "0.40", features = ["bundled"] } as approved dependency (written to CLAUDE.md). Five background worktree agents now running for P2.3 (constraint-based layout), P2.4 (layout UX depth), P2.5 (formula/timer/state-machine/shortcuts/.rkwb), P2.6 (DB integration via rusqlite + DatabaseEngine trait), P2.7 (SVG R9 markers + pattern tiling). When agents complete, merge each in order and run full verification before pushing. Watch for merge conflicts in schema.rs (P2.3 and P2.4 both touch WidgetInstance) and in properties.rs (P2.3, P2.4, P2.5, P2.6 all add panels). Invariant 10 (no format!() SQL) must be in ENGINEERING_INVARIANTS.md before P2.6 merges.
+
+## 2026-06-11 — P2.1 + P2.2 merged: VWM codegen preview + canvas UX depth
+
+Branch `dev`, pushed `de4f7e5`. Two parallel worktree agents landed and merged clean. P2.1: codegen preview tab in Widget Maker right panel (live `gen_live_preview`/`gen_export_template` display), primitive z-order ↑↓ buttons in layer list, `PrimAnchor` enum + `min_w`/`min_h` constraints on `MakerPrimitive` (serde-default for backward compat), `doc_from_descriptor()` round-trip for VWM-originated descriptors. P2.2: zoom-to-selection (`F` key, fits selected or all widgets with 10% padding + min zoom clamp), property reset (right-click context menu on label/text fields + geometry DragValues), error highlighting (red 2px outline on canvas for `DuplicateId` / `InvalidHandler` / `MissingBinding`), auto widget naming (`button_1`, `button_2`, … — `name_counter` cleared on New). 440 tests, zero warnings. Deferred from P2.1: hit regions, layout groups, state variants, slots, event zones, style tokens. Deferred from P2.2: canvas Ctrl+F search, clipboard enhancements, minimap, multi-select property editing, context tooltips. Next: CodeQL false-positive dismissal on GitHub Security tab (rust_wiring.rs L89/172/228); add Invariant 10 (SQL injection guard) to ENGINEERING_INVARIANTS.md before any Stage 13 work; rusqlite crate awaits explicit user approval before Cargo.toml addition.
+
 ## 2026-06-11 — v0.2.0 PR #6 review fixes + CI gate repair
 
 Branch `dev`. Fixed 4 Qodo review bugs + 1 arch violation from PR #6 review. (1) Arch: moved `prim_to_egui_lines` / `gen_export_template` / `gen_live_preview` from `canvas/widget_maker.rs` into new `src/codegen/widget_maker_emit.rs` — restores CLAUDE.md invariant (no Rust syntax strings outside `src/codegen/`); also fixes unescaped text bug by using `string_literal()`. (2) Bug: added `create_dir_all` before `.rkwd` write in Widget Maker save — fresh-install won't silently fail. (3) Bug: added `gen_app_rs_wasm` that clones tree + replaces FilePicker→Label so WASM export never contains `rfd::` references; added test. (4) Bug: unique per-process temp dir for WASM preview (appends PID). (5) Previously: fixed CI `cargo fmt --check` failure (16 files formatted), added `permissions: contents: read` to workflow, bumped `Cargo.toml` to v0.2.0. 416 tests, zero warnings. PR #6 CI + Qodo re-review pending. Next agent: wait for CI green + Qodo re-review, then merge PR #6 → main and tag v0.2.0. After merge: RustyBuzz integration (ShaperEngine trait in `src/canvas/shaper/`, `rustybuzz` approved dependency), dismiss 3 CodeQL false positives on GitHub Security tab (`rust_wiring.rs` L89/172/228 are egui widget IDs, not crypto values).

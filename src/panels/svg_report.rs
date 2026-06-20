@@ -6,7 +6,7 @@
 //! display rows; `show_report` renders those rows (no new report computation
 //! beyond the existing `rasterize_with_report`).
 
-use crate::canvas::svg_rasterizer::{rasterize_with_report, SvgRenderFidelity, SvgRenderReport};
+use crate::canvas::svg_rasterizer::{SvgRenderFidelity, SvgRenderReport, rasterize_with_report};
 
 /// Fixed, small raster size for the in-panel report — deterministic and cheap,
 /// independent of canvas zoom.
@@ -256,9 +256,10 @@ mod tests {
         r.recovered_error_count = 2;
         let s = report_summary(&r);
         assert!(s.rows.contains(&("Title".to_owned(), "Chart".to_owned())));
-        assert!(s
-            .rows
-            .contains(&("Description".to_owned(), "Quarterly revenue".to_owned())));
+        assert!(
+            s.rows
+                .contains(&("Description".to_owned(), "Quarterly revenue".to_owned()))
+        );
         assert!(s.rows.contains(&("Recovered".to_owned(), "2".to_owned())));
     }
 

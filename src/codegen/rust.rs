@@ -1,8 +1,13 @@
 pub const RUST_KEYWORDS: &[&str] = &[
+    // Strict keywords.
     "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
     "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub",
     "ref", "return", "self", "Self", "static", "struct", "super", "trait", "true", "type", "union",
     "unsafe", "use", "where", "while",
+    // Reserved keywords — illegal as plain identifiers (some only in later
+    // editions, but always remapped so generated field names stay valid).
+    "abstract", "become", "box", "do", "final", "gen", "macro", "override", "priv", "try", "typeof",
+    "unsized", "virtual", "yield",
 ];
 
 pub fn string_literal(value: &str) -> String {
@@ -39,6 +44,20 @@ pub fn effective_binding(raw: &str) -> String {
     }
 }
 
+/// Resolve a raw state binding to the field identifier codegen actually emits:
+/// apply the keyword remap (`effective_binding`) then validate. Returns `None`
+/// for invalid identifiers (leading digit, empty, …).
+///
+/// Every state-binding → `self.<field>` site (field collector, emitter, export,
+/// canvas overlays, descriptor templates) must route through this so the canvas,
+/// preview, and exported project agree on one field name. Using raw
+/// `field_binding` instead silently drops keyword bindings on one surface while
+/// the field collector keeps them as `<kw>_value`, desyncing the surfaces.
+pub fn effective_field_binding(value: Option<&str>) -> Option<String> {
+    let eff = effective_binding(value?);
+    is_valid_identifier(&eff).then_some(eff)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -54,5 +73,29 @@ mod tests {
         );
         let emoji = string_literal("🦀");
         assert!(emoji.starts_with('"') && emoji.ends_with('"') && emoji.contains("🦀"));
+    }
+
+    #[test]
+    fn reserved_keywords_are_remapped_not_emitted_raw() {
+        // Invariant 5: reserved words (not just strict keywords) must never be
+        // emitted as raw field identifiers, or the exported project fails to
+        // compile (e.g. `self.box`). They route through the `_value` remap.
+        for kw in [
+            "box", "try", "gen", "yield", "macro", "do", "priv", "virtual",
+        ] {
+            assert!(
+                !is_valid_identifier(kw),
+                "reserved keyword {kw:?} must not pass identifier validation"
+            );
+            assert_eq!(
+                effective_binding(kw),
+                format!("{kw}_value"),
+                "reserved keyword {kw:?} must remap to a safe field name"
+            );
+            assert_eq!(
+                effective_field_binding(Some(kw)).as_deref(),
+                Some(format!("{kw}_value").as_str())
+            );
+        }
     }
 }

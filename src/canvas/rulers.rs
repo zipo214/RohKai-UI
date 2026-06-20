@@ -136,12 +136,10 @@ pub fn handle_interaction(
     }
 
     // --- Delete hovered guide ---
-    if delete_pressed {
-        if let Some(h) = *hovered {
-            guides.retain(|g| g.id != h);
-            *hovered = None;
-            return;
-        }
+    if delete_pressed && let Some(h) = *hovered {
+        guides.retain(|g| g.id != h);
+        *hovered = None;
+        return;
     }
 
     // --- Start drag or create guide ---
@@ -207,7 +205,7 @@ pub fn draw_bezel(ui: &mut egui::Ui, ctx: &RulerCtx, title: &str) {
     let painter = ui.painter_at(ctx.panel_rect);
     painter.rect_filled(
         bezel_rect,
-        egui::Rounding::same(4.0),
+        egui::CornerRadius::from(4.0),
         egui::Color32::from_gray(45),
     );
 

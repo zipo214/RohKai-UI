@@ -2,6 +2,540 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-14 - Behavior Recipe UI Surfacing + Global Rust Wiring Rename
+
+### Context Reviewed
+- Preflight, `CLAUDE.md`, `PROMPT_CONTRACT.md`, `ENGINEERING_INVARIANTS.md`,
+  CoOp latest note, branch/status.
+- Existing behavior stack: `project::schema` (Behavior/VisualAction/ValueExpr),
+  `codegen::behavior`, `codegen::behavior_recipes`, `panels::behaviors`,
+  `canvas::interaction` socket/wire/drop path, `panels::rust_wiring`, `app.rs`
+  menu wiring.
+- Git history: recipe matrix already landed (e79c787) with the drop path
+  auto-applying the default suggestion; the goal's remaining gaps were the UI
+  surfacing of the suggestion set and the user-facing rename.
+
+### Changes
+- `panels::behaviors::show_selected`: added a "Suggested" recipe row derived live
+  from the wired target's sink (`behavior_recipes::sink_info_for` +
+  `suggestions_for`), rendered as selectable chips. Default stays pre-selected
+  (applied on drop), alternates are one click, params remain editable, and the
+  raw Action picker is retained as the advanced path.
+- Renamed the advanced escape hatch to "Global Rust Wiring": new
+  `panels::rust_wiring::PANEL_TITLE` const sourced by both the window title and
+  the `app.rs` menu button (hover text clarifies it is advanced app-wide infra vs
+  the canvas behavior graph). Module/`schema` doc comments reframed.
+- Docs: `ARCHITECTURE.md` documents the recipe matrix as a non-source-of-truth
+  smart constructor and the panel surfacing; `CODE_INDEX.md` reframed the wiring
+  entry and added the previously-unindexed `codegen::behavior`,
+  `codegen::behavior_recipes`, and `panels::behaviors`.
+
+### Tests
+- Added `rust_wiring::tests::panel_is_named_global_rust_wiring` (rename guard;
+  one assertion covers window + menu since both source `PANEL_TITLE`).
+- Required recipe/acceptance/export/invariant tests already exist in
+  `codegen::behavior_recipes::tests` (unchanged, not removed).
+
+### Verification
+- `cargo fmt --check`, `cargo check`, `cargo test` (552 unit + 17 fidelity +
+  1 doctest, all green), `cargo clippy --all-targets -- -D warnings` (clean),
+  `scripts/check-text-encoding.ps1` OK.
+
+### Risks / Follow-ups
+- Recipe suggestions are surfaced in the Properties/Behaviors panel rather than a
+  modal popup on drop — faithful to "present suggestions with default + editable
+  params" while staying minimal; a dedicated on-drop popup remains optional.
+- Committed locally only; coop hazard (external agent state) still says do not
+  push/merge.
+
+## 2026-06-13 - Project Surfaces And Modal Dialogs
+
+### Context Reviewed
+- Preflight, agent guidance, project-model/rust/TDD/plan-execution skills,
+  architecture and engineering invariants, roadmap S19, current CoOp note, and
+  the complete dirty diff in isolated branch `codex/project-surfaces-modal`.
+- The implementation was resumed after the generated modal-focus pass stopped
+  midway. Existing commits already contained the schema-v2 project skeleton and
+  surface-authoring workspace.
+
+### Changes
+- Added `ProjectDocument`, project/global properties, protected root surface,
+  ordered `UiSurface` records, modal policy, central CRUD/remap/repair APIs,
+  schema-v2 persistence, and lossless legacy/schema-v1 migration.
+- Added Surfaces panel/tabs, templates, active-surface properties, per-surface
+  selection/pan/zoom/Lazare workspace state, isolated preview, and guarded
+  deletion.
+- Added typed widget/surface behavior triggers and Open/Accept/Reject actions,
+  structured diagnostics, semantic dialog button roles, and lifecycle editing.
+- Implemented transactional F5 modal runtime and generated native/WASM runtime:
+  supported scalar/vector drafts, bounded nested stack, top-only close,
+  Accept/Reject/Apply/Reset, lifecycle order, Escape/default/backdrop policy,
+  default-control focus, and opener-focus restoration.
+- Made state, handlers, dependencies, generated files, and source ownership
+  multi-surface aware. Export emits named `src/surfaces/*.rs` modules.
+- Extended `check-surface-parity.ps1` to materialize and warning-check native and
+  WASM-source multi-surface projects.
+- Added migration, duplication/remap, diagnostics, lifecycle, semantic role,
+  vector draft, workspace isolation, generated fixture, and
+  50-surface/10,000-widget deterministic stress tests.
+- Updated architecture, invariants, code index, roadmap S19A-D, feature-depth
+  evaluation, and both agents' project-model guidance.
+
+### Verification
+- Focused modal, migration, diagnostic, source-isolation, and generated export
+  tests passed during implementation. The final full run passed 564 library
+  tests, 17 fidelity tests, 23 project-surface integration tests, and one
+  doctest with no ignored tests.
+- `cargo fmt --check`, `cargo check --all-targets`, and
+  `cargo clippy --all-targets -- -D warnings` passed.
+- `scripts/check-surface-parity.ps1` passed: native and WASM-source generated
+  projects compile and pass warning-denied Clippy. The actual
+  `wasm32-unknown-unknown` target check was skipped because that target is not
+  installed.
+- `scripts/check-text-encoding.ps1`, `scripts/validate-svg-import.ps1`, and the
+  preflight guidance/toolchain/dependency checks passed. Preflight still warns
+  that an isolated worktree is not the primary repository path.
+- The 50-surface/10,000-widget debug fixture completed in 1.29 seconds under its
+  15-second guard.
+- Native `rohkai.exe` remained healthy for a six-second launch smoke.
+- The final gate exposed and fixed one nested-export regression: modal focus
+  markers had renamed nested `child_response` bindings to the top-level
+  `evt_response` contract. Separate top-level/child markers now preserve both
+  focus behavior and the all-event nested export invariant.
+- Final review also replaced global `self.state.` string substitution with a
+  Rust-aware code-path rewrite that preserves literals/comments/custom labels,
+  moved keyboard policy dispatch before modal draft storage, and centralized
+  valid dialog action controls so malformed Label/missing policy targets are
+  diagnosed and repaired instead of suppressing focus or becoming inert.
+
+### Risks And Follow-Up
+- The Windows visual automation runtime failed to initialize because an
+  `@oai/sky` internal package subpath was not exported. Repeat the
+  narrow/normal/wide screenshot and accessibility matrix when that runtime is
+  repaired.
+- The preflight helper is rooted to `D:\dev\rohkai`; a future procedural pass
+  should make it worktree-aware so branch/status and newest notes come from the
+  active worktree rather than the primary checkout.
+- S19B modeless/native viewports, S19C docking/main-window framework, and S19D
+  MDI/typed parameters remain separate planned work.
+
+## 2026-06-12 - Rust 1.96 And Current Dependency Alignment
+
+### Context Reviewed
+- Preflight, `AGENTS.md`, `CLAUDE.md`, current CoOp note, branch/worktree state,
+  Cargo/lock/toolchain/CI configuration, generated-project dependency emission,
+  and active version-bearing docs.
+- Local and remote branches plus GitHub history were compared. Claude's edition
+  2024 migration existed only on local `dev`; remote branches still reflected
+  edition 2021, and no migration PR had been published.
+- Official/current release data was checked before editing: Rust 1.96.0,
+  egui/eframe 0.34.3, rfd 0.17.2, and the latest releases of every other direct
+  dependency.
+
+### Changes
+- Worked on isolated branch `codex/toolchain-dependency-refresh`; main `dev`
+  remained untouched and no merge was attempted.
+- Declared edition 2024, MSRV 1.92, and pinned/tested Rust 1.96.0. CI now uses
+  the same exact toolchain with Clippy and rustfmt.
+- Updated every direct dependency to its current release and migrated RohKai,
+  examples, live codegen, native export, WASM export, and generated Cargo files
+  to egui/eframe 0.34.3 and rfd 0.17.2.
+- Preserved the existing glow rendering backend explicitly instead of silently
+  accepting eframe's changed default feature set.
+- Kept generated projects on edition 2021 deliberately, with MSRV 1.92 and
+  dependency versions sourced from central export constants.
+- Added offline `check-toolchain-alignment.ps1` and networked
+  `audit-dependency-updates.ps1`; preflight and Windows CI run the offline
+  invariant check.
+- Updated agent guidance, platform/release docs, roadmap dependency references,
+  README setup, and feature-evaluation version claims. Historical reviews and
+  chronological entries remain historical and are labeled where necessary.
+- Installed and verified Rust 1.96.0 GNU/MSVC toolchains. The machine rustup
+  default host is GNU because RohKai's repository-generic toolchain pin would
+  otherwise select the locally unusable MSVC linker; MSVC remains installed and
+  current.
+
+### Verification
+- `cargo fmt --check`: passed.
+- `cargo check --all-targets`: passed.
+- `cargo test`: 551 unit tests, 17 integration tests, and doc test passed.
+- `cargo clippy --all-targets -- -D warnings`: passed.
+- Generated-project Cargo checks: both native export fixtures passed with
+  warnings denied.
+- Toolchain alignment, dependency policy, text encoding, dependency freshness,
+  SVG parser/rasterizer/golden validation: passed.
+- Native `rohkai.exe` launch smoke: remained healthy for six seconds.
+
+### Risks And Follow-Ups
+- This is a broad GUI API migration; the automated and launch checks are green,
+  but a full manual release checklist remains appropriate before tagging.
+- The branch is ready for review/integration after concurrent Claude work is
+  reconciled. Do not merge it blindly over newer source edits.
+- The recurring maintenance automation should run in an isolated worktree and
+  propose major upgrades rather than applying them silently.
+
+## 2026-06-12 — Behavior Graph: first-class visual event→state wiring
+
+### Context Reviewed
+- AGENTS/CLAUDE policy, preflight, PROMPT_CONTRACT, ARCHITECTURE,
+  ENGINEERING_INVARIANTS; schema.rs, ui_tree.rs, canvas/interaction.rs,
+  panels/properties.rs, codegen/{field_collector,state_emitter,egui_emitter,
+  export,rust_wiring,handlers,parser,rust,kind_table}.
+
+### Derivation (before coding)
+- Source of truth: `UiTree`; events from `WidgetKind::supported_events()`;
+  state types from `kind_table::state_info`; fields from `field_collector`.
+- Output paths enumerated: live emitter (top-level + Frame children + layout
+  children), export (`event_dispatch_block`, child dispatch, frame/layout
+  combos, layout child lines), AppState (live + export), handler stubs.
+- Scope: nested paths in scope. Templates regenerate widget UUIDs, so wires do
+  not copy through templates (by design). Live preview dispatches behaviors
+  exactly where it already dispatches handlers; TextArea/FontComboBox change
+  remains export-only (pre-existing parity boundary, unchanged).
+
+### Changes
+- `schema.rs`: `Behavior`, `VisualAction` (Set/Add/Subtract/Toggle/CallHandler),
+  `ValueExpr`, serde on `WidgetEvent`, `WidgetEvent::label()`, and
+  `AppProps.behaviors` (serde-default, skip-empty → backward compatible).
+- `ui_tree.rs`: `prune_stale_behaviors` on remove + validate_and_repair.
+- `codegen/behavior.rs` (new): single emitter for both surfaces via field
+  prefix (`""` live, `"state."` export); exhaustive match so a new action
+  variant cannot compile without emission; invalid fields/handlers emit
+  diagnostic comments, never broken code.
+- `field_collector`: declares behavior-referenced fields no widget binds.
+- `export.rs`: dispatch blocks emit behavior statements before handler calls
+  on every supported event; `CallHandler` names get stubs; compile fixture
+  gained a behavior button + bound ProgressBar. Fixed latent bug: layout-child
+  combo change dispatch compared `Option<()>` with `Some(true)` (non-compiling
+  exported code); now tracks `changed` like the frame-child combo.
+- `egui_emitter.rs`: behavior emission in Button (click/double-click),
+  TextInput (change/lost-focus), Slider (change/drag-stopped), Checkbox,
+  ComboBox, RadioButton, SpinBox, Frame-child Button, layout-child Button.
+- `canvas/interaction.rs`: event/state sockets (open/closed circles on edge
+  centers, derived from `is_event_capable()` / `state_info` + binding),
+  left-drag wire creation with live cubic preview, committed wires drawn as
+  smooth connectors, wire click selection, guide-drag suppression, default
+  action inferred from target state type (f32→Add 0.1 clamped to props
+  min/max, bool→Toggle, String→Set).
+- `panels/behaviors.rs` (new): selected-wire editor (event combo from
+  supported_events, action type, field, amount/clamp, value, delete) + per-
+  widget behavior list; wired into both Properties call sites in `app.rs`.
+- Docs: ARCHITECTURE behavior-graph section + codegen module map row.
+
+### Verification
+- `cargo fmt --check` / `cargo check` / `cargo test` (544 unit + 17 fidelity +
+  doctest, zero ignored — includes real `cargo check` compile fixture with a
+  behavior wired) / `cargo clippy --all-targets -- -D warnings` /
+  `check-text-encoding.ps1` all green; `cargo run` launch smoke OK (8s alive).
+
+### Risks / Follow-ups
+- Wire endpoints draw only when source and a field-bound target widget exist;
+  field-only behaviors (target deleted) stay editable via the Behaviors list.
+- Lazare: behavior mutation lines inside Button blocks parse like handler-call
+  lines (same fallback class); no new round-trip surface added.
+- Canvas socket hit-test takes priority over body clicks within 9px of edge
+  centers; watch for conflicts with very small widgets.
+
+## 2026-06-12 — S1 layout and constraint depth closed
+
+### Context Reviewed
+- Preflight/session guidance, Claude's stopped S1 handoff, the exact S1 backlog,
+  layout/constraint schema and solver, canvas interaction, UiTree reflow,
+  live/export emitters, Lazare parser, RCA, feature evaluations, and the
+  preserved local `ROADMAP_PHASE2.md` edit.
+
+### Findings
+- Claude's handoff named visual anchors and nested Lazare as unfinished, but S1
+  also still contained an unchecked Grid slot-editor item.
+- One-level code emission was not the only nesting gap: layout reflow captured
+  stale parent rectangles, canvas drawing stopped after direct children, export
+  emitted nested containers as comments, and Lazare had no explicit parent
+  identity for deeper marker nesting.
+- The existing Grid slot list supported arrow reorder but had no stable names
+  and canvas drag-reorder handled V/H layouts only.
+
+### Changes
+- Added four draggable constraint handles around the primary selection. They
+  target the real parent frame's leading/center/trailing or top/center/bottom
+  anchors, derive margins that preserve current geometry, and draw persistent
+  connector lines from the widget to its active targets.
+- Added `WidgetProps::grid_slot_names`: stable row-major names editable in
+  Properties, visible on canvas, and represented in live/export code. Grid
+  children now drag directly between cells with a full-cell insertion preview.
+- UiTree reflows layout parents before descendants using current solved rects,
+  independent of storage order. Canvas drawing, live code, and export recurse
+  through nested V/H/Grid ownership with bounded cycle/depth guards.
+- Generated child markers now include explicit parent UUIDs. Lazare restores
+  arbitrary nesting and distinguishes an intentionally empty container so
+  deleting its child code clears stale ownership.
+- Marked S1 complete across the strategic roadmap, RCA, code index, and feature
+  evaluation. Added bespoke secure-foundation milestone reviews before the
+  explicit user/architecture gate for Stage 15.
+
+### Verification
+- `cargo test`: 523 unit tests + 17 fidelity tests + 1 doctest; zero failed,
+  zero ignored.
+- `cargo fmt --check`, `cargo check`, and
+  `cargo clippy --all-targets -- -D warnings`: pass.
+- Encoding guard and diff whitespace checks: pass; no `#[ignore]` remains.
+- Focused tests cover geometry-preserving anchors, Grid pointer-to-slot mapping,
+  parent-before-child nested reflow, named-slot emission, nested export, Lazare
+  multi-level round-trip, and intentional empty-container clearing.
+
+### Risks / Follow-ups
+- Visual authoring still needs ordinary human smoke use for handle discoverability
+  and very small/overlapping widgets; the interaction geometry and persistence
+  are covered by deterministic tests.
+- Do not merge or push while another agent's state is uncertain.
+
+## 2026-06-12 — Export gates, SVG fuzz hardening, and widget-authoring UX
+
+### Context Reviewed
+- Preflight, `AGENTS.md`, latest `CODE_COOP.md`, engineering invariants, project
+  model/SVG skills, exact `v0.2.0` release state, current `dev`, and Claude's S1
+  handoff.
+- Generated-project fixtures, SVG embedded-source contract, formula/state
+  collection, database export, widget-authoring menus/windows.
+
+### Findings
+- Six important tests were ignored. The two export fixtures failed when run:
+  embedded SVG referenced undeclared `rayon`; formula expressions emitted
+  `self.field` in an exported `self.state` context; DB-bound projects omitted
+  `rusqlite`; generated wiring/layout/tab code was not warning-clean.
+- Promoting the SVG fuzz sweep exposed an infinite path-parser loop for malformed
+  numeric operands after `Z`.
+- File and Widgets menus duplicated three authoring commands. “Create Custom
+  Widget” opened the guided descriptor builder rather than the true visual
+  composition tool. All three authoring windows could exceed the viewport.
+
+### Changes
+- Export compile fixtures are normal warning-denied tests, share a Cargo target,
+  and cover every built-in widget plus SVG, formula, DB, FilePicker, events, and
+  Rust wiring. Generated code now treats intentionally latent wiring/state APIs
+  explicitly and emits warning-clean empty layouts/tabs.
+- Embedded SVG batch rasterization uses scoped std threads with deterministic
+  ordering; no embedded `rayon` reference remains.
+- Formula functions/arity are validated; variables are collected as `f32`
+  AppState fields; live/export emission uses caller-provided state paths.
+- DB bindings add bundled `rusqlite`, emit state/default/loader parity, and get a
+  deterministic fallback field when no Binding is supplied.
+- All six ignores removed. Renderer perf/oracle/fuzz gates run normally. Added a
+  parser progress invariant and exact regression for malformed numbers after
+  close-path.
+- Widgets menu now owns Create New Widget (Visual Widget Maker), Guided
+  Descriptor Builder, and Advanced Descriptor Editor. File-menu duplicates were
+  removed. Shared viewport bounds constrain all three windows; Visual Widget
+  Maker content scrolls on small screens.
+- Ran `cargo fmt` to repair pre-existing repository-wide formatting drift.
+
+### Verification
+- `cargo test`: 515 unit tests + 17 fidelity tests + 1 doctest; zero failed,
+  zero ignored.
+- Both generated projects pass `cargo check` with `RUSTFLAGS=-Dwarnings`.
+- `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, encoding,
+  dependency policy, and `scripts/validate-svg-import.ps1`: pass.
+- App launches and responds. Windows GPU capture returned a blank wgpu client
+  surface in this automation desktop, so visual screenshot proof was not
+  claimed; viewport geometry is covered at normal and tiny sizes.
+
+### Risks / Follow-ups
+- S1 is not complete: anchor visual-handle drag and nested-layout Lazare
+  round-trip remain.
+- Do not merge while Claude is active or ambiguous. Next, finish those S1 items,
+  then reorder bespoke secure in-house code milestones before Stage 15.
+
+## 2026-06-12 — S1 parity gaps finished (constraint solver bug + 3 half-wired fields)
+
+### Context Reviewed
+- The RCA/checker S1 follow-ups from earlier this session.
+- `constraint_solver.rs`, `app.rs:2887` (every-frame solve call), Properties
+  `show_constraints`, egui_emitter/export layout + Label emission, preview Label.
+
+### Findings
+- **Latent bug:** `apply_constraints` ran every frame and `apply_margin` used
+  `x += left` / `w -= dw` — a widget with a margin constraint drifted off screen
+  and shrank each frame. Also aligned every widget to the **canvas**, never its
+  parent. (My earlier RCA wording "doesn't recurse" was imprecise — all widgets
+  are in the flat `tree.widgets`; the real gaps were idempotency + parent frame.)
+- `text_align` was set in Properties but applied **nowhere** (not even canvas).
+- `child_cross_align` per-child override was set in Properties but only the
+  container's `layout_cross_align` reached codegen.
+
+### Changes
+- **Constraint solver rewrite** (`constraint_solver.rs`): idempotent (margin
+  folded into absolute alignment; safe to run every frame — no drift, no
+  save/load corruption) + parent-relative (solve parents-before-children, frame =
+  parent's solved rect, canvas for top-level). Added `ConstraintError::message`/
+  `widget_id`. New tests: idempotency, parent-relative, stretch, margin-within-
+  alignment, margin-without-alignment-noop.
+- **Validation surfaced**: `show_constraints` renders this widget's
+  `validate_constraints` messages (red); caller computes over the whole tree
+  before the mutable borrow. `#[allow(dead_code)]` removed.
+- **text_align wired**: egui_emitter + export (top-level Label) + preview, via the
+  proven `with_layout(top_down(Center/RIGHT))` pattern.
+- **child_cross_align wired**: VLayout/HLayout child emission in egui_emitter +
+  export (Center/End); Stretch removed from the per-child UI (no proven egui
+  codegen path → avoids a new half-wired control).
+- Parity tests in `fidelity_audit.rs` for text_align + child_cross_align.
+
+### Verification
+- `cargo test` — **499 lib + 17 fidelity_audit + 1 doctest**, 0 failed, 6 ignored.
+- `cargo clippy --all-targets -- -D warnings` — zero warnings.
+- `export_compile_fixture_cargo_check` (`--ignored`) — generated project
+  `cargo check`s clean after the export changes.
+- `scripts/check-surface-parity.ps1` — text_align/child_cross_align findings
+  cleared; only the genuinely geometry/canvas-only `constraints`/`descriptor_accent`
+  remain (correct).
+
+### Risks / Follow-ups
+- `Rect` left as `Clone` (not `Copy`) to avoid `clone_on_copy` churn on existing
+  `rect.clone()` sites; solver uses explicit clones (16-byte struct, cheap).
+- Margin semantics changed: margin now insets within the alignment anchor and is a
+  no-op without one (the only way to make a per-frame solve idempotent). Documented
+  in the module header and the updated `margin_*` tests.
+
+## 2026-06-12 — Roadmap de-deferral + cross-surface-parity RCA & checker
+
+### Context Reviewed
+- All roadmaps (collated in the lib+bin entry below).
+- Existing anti-drift patterns: `WidgetKind::supported_events` exhaustive match,
+  `EVENT_CAPABLE_KINDS` cfg(test) parity list, exhaustive `emit_indexed` match.
+
+### Changes
+- **Roadmaps de-deferred** (`ca28d9e`): `ROADMAP_PHASE2.md` rewritten as the
+  ordered master backlog S1–S22 (in-house renderer S22, LARGE projects spaced so
+  agents are not driven to defer). Removed all non-goal/deferral/strikethrough
+  language from `SVG_RENDERER_ROADMAP.md`, `jpegdecoder roadmap.md`,
+  `TEXT_IMPORT_PLAN.md`; reframed `ROADMAP.md` header + Stage 13/15. Corrected
+  stale SVG gap-matrix cells (filter tier-3 listed as out-of-scope though done).
+  Kept exactly two architecture invariants (no external renderer dep, no C FFI);
+  their capability is the S22 renderer.
+- **RCA** `docs/RCA-2026-06-12-surface-parity-drift.md`: class = cross-surface
+  parity drift; root cause = asymmetric forcing functions (enums forced by
+  exhaustive match, struct fields / roadmap claims / unsurfaced pub APIs not).
+- **Checker** `scripts/check-surface-parity.ps1`: advisory caveman-review audit —
+  field→codegen coverage, roadmap `[x]`/`[ ]` ↔ code drift, dead-code `pub`.
+  Exit 0 by default; `-Strict` fails on a DONE-overclaim.
+- **Harness** `tests/fidelity_audit.rs`: added `every_widget_kind_emits_non_trivial_code`
+  (walks `widgets::ALL_KINDS`) + `all_kinds_list_is_not_empty`. Removed the now
+  load-bearing `ALL_KINDS`'s `#[allow(dead_code)]`.
+
+### Verification
+- `cargo test` — 495 lib + 13 `fidelity_audit` + 1 doctest, green.
+- `cargo clippy --all-targets -- -D warnings` — zero warnings.
+- `pwsh scripts/check-surface-parity.ps1` — 24 advisory findings, 0 overclaims.
+- `pwsh scripts/check-text-encoding.ps1` — OK.
+
+### Risks / Follow-ups (now ordered S-stage to-dos, not deferred)
+- S1: recurse `apply_constraints` into layout children; surface
+  `validate_constraints`; confirm/wire `text_align`/`child_cross_align`/
+  `constraints` codegen.
+- S4: sweep the ~16 `#[allow(dead_code)]` pub items (several redundant post-lib-split).
+- **User decision pending:** the two architecture invariants (C FFI / external
+  renderer) were intentionally NOT converted to to-dos; reversing them is a
+  separate explicit call.
+
+## 2026-06-12 — Crate → lib+bin; fidelity_audit harness linked & green
+
+### Context Reviewed
+- Session continuation after compaction; user asked to (1) finish the work
+  stalled around `tests/fidelity_audit.rs`, (2) prove tier-3 SVG filters are
+  real in code, (3) collate a functionality index, and (4) de-defer + re-enumerate
+  every roadmap with the in-house renderer last.
+- Read all roadmaps: `ROADMAP.md`, `ROADMAP_PHASE2.md`, `SVG_RENDERER_ROADMAP.md`,
+  `jpegdecoder roadmap.md`, `TEXT_IMPORT_PLAN.md`, `ROADMAP_COMPARATIVE_ANALYSIS.md`.
+
+### Findings (code cross-reference)
+- **Tier-3 SVG filters are real**, not identity passthrough: `filter_tile`
+  (`svg_rasterizer.rs:6760`), `displacement_map` (6783), `feConvolveMatrix`
+  (6816), `feTurbulence` Perlin (6881-7056), lighting (7059+), `feImage` data-URI
+  (7350+), with 7 acceptance tests (14177+). The `[ ]` claims in `ROADMAP_PHASE2.md`
+  P2.7 were stale; the prior session had already reconciled them to `[x]`.
+- **Root cause of the stalled thread:** RohKai was a binary-only crate (no
+  `[lib]`, no `src/lib.rs`), so `tests/fidelity_audit.rs` (`use rohkai::…`) could
+  not link — 6 `unresolved crate rohkai` errors. The harness was untracked,
+  never linked, never linted: a hollow surface.
+
+### Changes
+- Added `src/lib.rs` (crate root, `pub mod` × 9). Slimmed `src/main.rs` to a
+  shell over `rohkai::app::RohKaiApp` (no module declarations; icon raster kept).
+- Fixed `tests/fidelity_audit.rs:212` clippy `double_ended_iterator_last`
+  (`.last()`→`.next_back()`).
+- Updated `docs/CODE_INDEX.md`: added `lib.rs`, `constraint_solver`, `db_engine`,
+  `undo`, `formula`, `component_state`, `widget_bundle`, `widget_maker_emit`,
+  `db_panel`, `shaper/`; corrected stale Timer/StateMachine/Formula/DB depth.
+
+### Verification
+- `cargo test` — **495 passed, 0 failed, 6 ignored** + 11 `fidelity_audit` + 1 doctest
+- `cargo clippy --all-targets -- -D warnings` — zero warnings
+
+### Risks / Follow-ups
+- Promoting to a lib enables doctests (1 ran, passed). Future doc examples now
+  execute under `cargo test`.
+- Shallow surfaces to schedule (NOT defer): `apply_constraints` flat iteration
+  (no recursion into layout children); `validate_constraints` not surfaced in UI.
+- Next: rewrite the roadmaps to remove all deferral/non-goal language and produce
+  one ordered master backlog (renderer last); build the RCA parity-check system.
+
+## 2026-06-11 — P2.3/P2.4/P2.5/P2.6 merged; 489 tests, zero warnings
+
+### Context Reviewed
+- Session continuation after context compaction; prior state recovered from summary
+- P2.3, P2.5, P2.6 background agent worktrees; P2.4 merged in prior session
+
+### Changes
+- **P2.3 merged** (`worktree-agent-acb0c559ef0c7fa34`): constraint-based layout — `LayoutConstraints` + `HAlign`/`VAlign` on `WidgetInstance`, `constraint_solver.rs` (5-pass solver, cycle detection, 14 tests), `show_constraints()` panel in properties
+- **P2.5 merged** (`worktree-agent-aca16573f8781b29b`): formula `deps()`/`validate()` aliases, timer wiring via `mpsc` channel + `spawn_timers()`, `StateDef`/`TransitionDef`/`StateMachineProps` schema + state machine editor in component tray, shortcut customization with Reference/Customize tabs, `.rkwb` ZIP bundle with hand-coded CRC-32
+- **P2.6 merged** (`worktree-agent-adb3b11803f47b733`): Stage 13 DB integration — `DatabaseEngine` trait + `SqliteEngine` impl (params![] only), `DbPanelState` floating window, `DbBinding` on `WidgetInstance`, `rusqlite = { version = "0.40", features = ["bundled"] }` added to Cargo.toml, Invariant 10 (no format!() SQL) in ENGINEERING_INVARIANTS.md
+- **P2.7 skipped** — R9 (markers + pattern tiling + vector-effect) already fully implemented in v0.2.0; no new commit to merge
+- All serial merge conflicts resolved by keeping both sets of struct fields/inits; no functionality dropped
+
+### Verification
+- `cargo check` — clean
+- `cargo clippy --all-targets -- -D warnings` — zero warnings
+- `cargo test` — **489 passed, 0 failed, 6 ignored**
+
+### Risks / Follow-ups
+- `rusqlite` bundled feature adds ~1 MB to binary; acceptable for Stage 13 but worth noting
+- `DatabaseEngine` is `dyn` (object-safe); `SqliteEngine` is the only impl; no other engines planned yet
+- Timer threads are daemon threads (detach on drop); if project is replaced rapidly, old timers finish their sleep before exiting; safe but adds a brief latency tail on project reload
+
+## 2026-06-11 — P2.1 (VWM capabilities) + P2.2 (Canvas UX) merged
+
+### Context Reviewed
+- `docs/ROADMAP_PHASE2.md` P2.1 and P2.2 sections
+- Both parallel worktree agents completed; output verified before merge
+
+### Changes
+
+**P2.1 — Visual Widget Maker later capabilities:**
+- `src/panels/widget_maker_panel.rs`: "Properties | Code Preview" tab bar; Code Preview tab shows live `gen_live_preview` + `gen_export_template` output in read-only monospace scroll areas; primitive layer list with ↑↓ buttons (disabled at boundaries, swaps applied post-loop)
+- `src/canvas/widget_maker.rs`: `PrimAnchor` enum (TopLeft/TopRight/BottomLeft/BottomRight/Center, serde snake_case, default TopLeft); `MakerPrimitive` gains `anchor`, `min_w`, `min_h` (all `#[serde(default)]` for backward compat); `apply_corner_resize` enforces min clamp; `pub fn doc_from_descriptor(desc) -> Option<WidgetMakerDoc>` parses VWM-originated descriptors (returns None for hand-written ones)
+- ROADMAP P2.1: 4 items checked, 6 deferred with explicit notes
+- +5 tests: swap_first_and_last, resize_below_min_w_is_clamped, prim_anchor_serde_default_roundtrip, doc_from_descriptor_round_trips_metadata, doc_from_descriptor_returns_none_for_non_vwm_descriptor
+
+**P2.2 — Canvas UX depth:**
+- `src/canvas/interaction.rs`: `compute_fit_rect(content_rect, viewport_rect, padding_fraction)` helper; `F` key zoom-to-selection (fits selected widgets or all if none, 10% padding, min zoom clamp); `WidgetError` enum + `compute_widget_errors(widgets) -> HashMap<Uuid, Vec<WidgetError>>`; red 2px outline on canvas for duplicate ID / invalid handler name / missing binding (Slider/TextInput/Checkbox/ComboBox/ProgressBar)
+- `src/panels/properties.rs`: `field_text_resettable` wraps text field with right-click "Reset to default"; `show_geometry_resettable` gives each DragValue a reset context menu; applied to Button and Label panels
+- `src/app.rs`: `name_counter: HashMap<String, u32>` on `RohKaiApp`; `next_widget_label(&mut self, kind) -> String` generates `"button_1"`, `"label_2"`, etc.; applied on palette click + drag; cleared in `cmd_new()`
+- ROADMAP P2.2: 4 items checked, 5 deferred with notes
+- +14 tests (zoom/fit, error detection variants, property reset, auto-naming counters)
+
+### Verification
+- `cargo fmt --check`: clean
+- `cargo clippy --all-targets -- -D warnings`: zero warnings
+- `cargo test`: **440 passed, 0 failed, 6 ignored**
+- `git push origin dev` → `de4f7e5`
+
+### Risks / Follow-ups
+- P2.1 deferred: hit regions, layout groups, state variants, slots, event zones, style tokens — all need non-trivial new architecture
+- P2.2 deferred: canvas Ctrl+F, clipboard enhancements, minimap, multi-select property edit, context tooltips
+- Invariant 10 (SQL injection) not yet in ENGINEERING_INVARIANTS.md — add before Stage 13 codegen work
+- `rusqlite` awaits explicit user approval before Cargo.toml addition
+- 3 CodeQL false positives on GitHub Security tab (rust_wiring.rs L89/172/228) need manual dismissal
+
+---
+
 ## 2026-06-11 — v0.2.0 PR review fixes (CI gate + Qodo)
 
 ### Context Reviewed

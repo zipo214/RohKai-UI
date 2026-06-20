@@ -4,10 +4,10 @@
 //! without exposing raw templates. Delegates to the advanced descriptor editor
 //! via the "Advanced Descriptor…" button, which closes this window atomically.
 //!
-//! Entry: File → Create Custom Widget… or Widgets → Create Custom Widget…
+//! Entry: Widgets → Guided Descriptor Builder…
 
 use crate::codegen::widget_descriptor::{
-    validate_descriptor, DescriptorCodegen, DescriptorProp, DescriptorPropType, WidgetDescriptor,
+    DescriptorCodegen, DescriptorProp, DescriptorPropType, WidgetDescriptor, validate_descriptor,
 };
 
 // ---------------------------------------------------------------------------
@@ -178,20 +178,21 @@ pub fn show(
 
     let mut open = true;
 
-    let screen = ctx.screen_rect();
-    let default_pos = egui::pos2(
-        (screen.center().x - 390.0).max(screen.min.x + 20.0),
-        (screen.center().y - 240.0).max(screen.min.y + 20.0),
+    let bounds = crate::panels::window_bounds::authoring_window_bounds(
+        ctx.content_rect(),
+        egui::vec2(780.0, 480.0),
+        egui::vec2(560.0, 360.0),
     );
 
-    egui::Window::new("Create Custom Widget")
+    egui::Window::new("Guided Widget Descriptor Builder")
         .id(egui::Id::new("widget_builder"))
         .open(&mut open)
-        .default_pos(default_pos)
-        .default_size([780.0, 480.0])
-        .min_size([560.0, 360.0])
+        .default_pos(bounds.default_pos)
+        .default_size(bounds.default_size)
+        .min_size(bounds.min_size)
+        .max_size(bounds.max_size)
         .resizable(true)
-        .constrain(false)
+        .constrain(true)
         .show(ctx, |ui| {
             let avail = ui.available_width().min(780.0 - 16.0);
             let inspector_w = (avail * 0.40 - 4.0).max(180.0);
@@ -372,11 +373,10 @@ fn show_inspector(
                     .add_enabled(can_save, egui::Button::new("💾 Save to widgets/"))
                     .on_hover_text("Write .rkwd file and reload palette")
                     .clicked()
+                    && let Some(ref dir) = widgets_dir
                 {
-                    if let Some(ref dir) = widgets_dir {
-                        state.save_msg =
-                            crate::panels::descriptor_editor::save_descriptor(&state.draft, dir);
-                    }
+                    state.save_msg =
+                        crate::panels::descriptor_editor::save_descriptor(&state.draft, dir);
                 }
                 if let Some((ok, ref msg)) = state.save_msg {
                     let color = if ok {
@@ -432,8 +432,12 @@ fn show_preview_pane(ui: &mut egui::Ui, state: &WidgetBuilderState, prev_w: f32)
     ui.label(egui::RichText::new("Canvas").small().weak());
     let (rect, _) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
     ui.painter().rect_filled(rect, 4.0, fill);
-    ui.painter()
-        .rect_stroke(rect, 4.0, egui::Stroke::new(1.5, accent));
+    ui.painter().rect_stroke(
+        rect,
+        4.0,
+        egui::Stroke::new(1.5, accent),
+        egui::StrokeKind::Inside,
+    );
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
