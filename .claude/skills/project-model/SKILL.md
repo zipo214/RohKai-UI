@@ -41,6 +41,13 @@ Use `UiTree::add`, `remove`, `get_mut`, `group`, `ungroup`, and `validate_and_re
 
 Never push to or splice `UiTree.widgets` directly. Direct `Vec` access bypasses validation, dirty tracking, and repair logic.
 
+`WidgetInstance.children` is an ownership tree, not a loose reference list. A
+child may have at most one parent and cycles are invalid. Use UiTree helpers for
+attach/move/remove/repair; if a feature reads or writes `children`, derive and
+test the full topology matrix before coding: top-level, Frame-owned,
+layout-owned, layout-inside-layout, Frame-owned-layout, moved child,
+empty/cleared container parse, duplicate-parent repair, and cycle repair.
+
 ## WidgetInstance (`src/project/schema.rs`)
 
 ```rust
@@ -84,22 +91,10 @@ grid_columns:  usize
 
 ## WidgetKind
 
-Current built-ins:
-
-```text
-Button
-Label
-TextInput
-Slider
-Checkbox
-Frame
-ComboBox
-RadioButton
-ProgressBar
-Image
-```
-
-Adding a new kind requires schema, widget default constructor, palette coverage, canvas rendering, parser/codegen/export/state behavior, and tests or validation notes.
+Use the canonical `WidgetKind`/`ALL_KINDS` APIs in source before relying on any
+handwritten list. Adding a new kind requires schema, widget default constructor,
+palette coverage, canvas rendering, parser/codegen/export/state behavior, and
+tests or validation notes.
 
 `WidgetKind::Image` is backed by `svg_source` and must have a real output form
 everywhere it appears: canvas rendering, properties, live codegen, export,

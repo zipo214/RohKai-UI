@@ -17,3 +17,5 @@ Rules:
 - Codegen output (emitting Rust strings) goes only in `src/codegen/`
 - All emitted code must be valid Rust — apply clippy mentally before output
 - New WidgetKind variants require: schema.rs + widgets/ + egui_emitter.rs + state_emitter.rs + panels/palette.rs
+- Before coding, derive all ownership/topology cases and every live/export/parser path;
+  do not accept top-level-only or representative-test proof for nested/container output.

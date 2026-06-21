@@ -15,6 +15,8 @@ When asked to add a feature, evaluate:
 1. Does it violate the core principle (UiTree as SSoT)?
 2. Does it require C FFI? If yes, reject.
 3. Is it in MVP scope? If not, recommend deferral.
-4. Where should the code live? Name the exact module and file.
+4. What ownership/topology cases exist?
+5. What UI, runtime, codegen/export, parser, persistence, and test paths consume it?
+6. Where should the code live? Name the exact module and file.
 
 Output: a numbered list of decisions with rationale. No code unless asked.

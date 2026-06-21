@@ -7,6 +7,18 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-20 — Directive hardening for topology/output-path proof
+
+Branch `dev`. Added a low-token derivation gate to AGENTS, CLAUDE, preflight
+commands, prompt contract, engineering invariants, project-model/codegen skills,
+and paired helper-agent docs so future work must derive source-of-truth data,
+ownership/topology cases, UI surfaces, codegen/export/parser paths, and invariant
+tests before coding. This directly addresses the S1 failure mode where
+representative top-level tests looked complete while Frame-owned/layout-owned
+topologies still had hollow or divergent output. Keep future prompts small by
+linking `docs/PROMPT_CONTRACT.md`; do not paste the whole invariant file unless
+the task is a reviewer finding or touches tree topology/codegen.
+
 ## 2026-06-20 — S1 review fixes: layout ownership + recursive codegen
 
 Branch `dev`. Closed three S1 review findings: `UiTree::attach_to_layout_at`

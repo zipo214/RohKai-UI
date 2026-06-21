@@ -22,6 +22,16 @@ newest-first entry to `docs/CODE_COOP.md`.
 
 Only plan or edit after the preflight context is current.
 
+Before coding, derive:
+1. source-of-truth data model,
+2. all ownership/topology cases,
+3. all UI surfaces,
+4. all codegen/export/parser paths,
+5. invariant tests for every required path.
+
+Do not mark complete from representative tests. If a required path is unknown or
+excluded, stop and report before editing.
+
 Encoding rule: prefer `pwsh`/PowerShell 7 for repo scripts. Do not use Windows
 PowerShell 5.1 text-writing commands for repo files. Do not use `Set-Content`,
 `Add-Content`, or `Out-File` without explicit `-Encoding utf8`; prefer

@@ -2,6 +2,45 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-20 - Directive Hardening: Derivation Gate And Topology Invariant
+
+### Context Reviewed
+- Current S1 audit summary, preflight/branch status, `AGENTS.md`, `CLAUDE.md`,
+  `docs/PROMPT_CONTRACT.md`, `docs/ENGINEERING_INVARIANTS.md`,
+  `docs/feature-evaluation/depth-model.md`, paired preflight commands, paired
+  project-model/codegen skills, and paired helper-agent docs.
+
+### Changes
+- Added the reusable "Before coding, derive..." gate to `AGENTS.md`,
+  `CLAUDE.md`, `.agents/commands/preflight.md`, and
+  `.claude/commands/preflight.md`.
+- Extended `docs/PROMPT_CONTRACT.md` with a mandatory derivation gate and an
+  ownership/topology parity example, so future agent prompts can stay concise
+  while still requiring source-of-truth/output-path proof.
+- Added Engineering Invariant 13 for ownership/topology parity drift:
+  top-level, Frame-owned, layout-owned, layout-inside-layout,
+  Frame-owned-layout, moved child, empty/cleared container parse,
+  duplicate-parent repair, and cycle repair.
+- Updated the feature depth model to state that representative tests do not
+  close gaps with hidden topology/output-path state spaces.
+- Mirrored the rule into project-model and codegen skills plus architect,
+  egui-codegen, and rust-reviewer helper-agent directives for both `.agents`
+  and `.claude`.
+
+### Verification
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1`
+  — OK.
+- `git diff --check` — clean, with Git's normal CRLF normalization warnings for
+  edited Windows-side markdown files.
+- `cargo fmt --check` — clean.
+- `cargo check` — clean.
+
+### Risks / Follow-ups
+- Per-line document change history is not implemented; this pass records
+  rationale in CoOp/Devlog and centralizes policy in prompt/invariant docs.
+  A future ADR/change-decision log would be better than adding noisy line-level
+  comments to every document.
+
 ## 2026-06-20 - S1 Review Fixes: Layout Ownership And Recursive Codegen
 
 ### Context Reviewed

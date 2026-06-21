@@ -36,6 +36,13 @@ Use `snake_case` of `widget.state_binding`. If `None`, skip AppState entry.
 - `Image` / SVG work must not depend on `resvg`, `usvg`, `tiny-skia`, or any
   substitute renderer crate unless the user explicitly reverses the policy.
 
+## Output path derivation
+Before changing codegen, derive the source tree shape and every output path:
+top-level widget, Frame child, layout child, nested layout, custom/template,
+parser/Lazare, live codegen, export, and generated-project compile behavior.
+Representative string tests are not enough; add invariant tests over the
+derived set or explicitly hide/diagnose unsupported paths before editing.
+
 ## Module boundary
 `src/codegen/` is the only place allowed to build Rust syntax strings.
 Panels may call `egui_emitter::emit(&tree)` but must not build strings themselves.

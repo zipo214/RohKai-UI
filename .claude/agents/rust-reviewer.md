@@ -13,5 +13,7 @@ Review generated code for:
 4. clippy compliance — no warnings that would fail `clippy -- -D warnings`
 5. serde derives on all types in `src/project/`
 6. No `unwrap()` in production paths — use `?` or `match`
+7. Topology/output-path proof: nested, child, parser, export, and generated-project paths
+   are covered when the feature depends on tree structure.
 
 Output format: `file.rs:line — problem — fix` per issue, or `LGTM` if clean.

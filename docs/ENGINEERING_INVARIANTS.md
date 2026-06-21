@@ -18,13 +18,16 @@ Before editing code:
 2. Identify the **root cause**, not the visible symptom.
 3. Identify all **sibling surfaces** that may need parity (see Invariant 1):
    canvas/editor · preview · export/codegen · persistence (save/load) · docs · tests.
-4. Identify the project **invariant** this change touches (the table below). If
+4. Derive all ownership/topology cases, UI surfaces, codegen/export/parser paths,
+   and invariant tests required by the source-of-truth data model. Representative
+   tests are not enough if a feature has hidden topologies or output paths.
+5. Identify the project **invariant** this change touches (the table below). If
    none exists yet, add a row here.
-5. Add or update a regression test for the **bug class**, not only the exact bug.
-6. Prefer single-source-of-truth APIs over duplicated logic (Invariant 2).
-7. Do not add logic to the wrong architectural layer (e.g. Rust-syntax strings
+6. Add or update a regression test for the **bug class**, not only the exact bug.
+7. Prefer single-source-of-truth APIs over duplicated logic (Invariant 2).
+8. Do not add logic to the wrong architectural layer (e.g. Rust-syntax strings
    only in `src/codegen/`).
-8. Keep the patch minimal, but make the fix systemic enough that the class is
+9. Keep the patch minimal, but make the fix systemic enough that the class is
    less likely to recur.
 
 Completion report should state: root cause fixed · files changed · tests added/
@@ -47,6 +50,7 @@ skipped reviewer finding with reason · any remaining risk.
 | 10 | **SQL injection via `format!()`** — concatenating a run-time value into a SQL string (e.g. `format!("SELECT * FROM {table} WHERE id = {id}")`) exposes the exported app to SQL injection and crashes on names with special characters. | All SQL *values* (column filter values, limit integers, any user-supplied input) must be passed through `rusqlite::params![]` as bound parameters. Table and column *names* cannot be parameterised by SQLite; instead validate them as plain ASCII identifiers (`[A-Za-z0-9_]+`) before interpolation. Direct `rusqlite` imports outside `src/project/db_engine.rs` are forbidden in the designer binary (generated/exported projects legitimately import `rusqlite` in their own `main.rs`). See `DB_INTEGRATION_RESEARCH.md` §"Invariant 10" for the full codegen rules (named parameters, prepared-statements-only, identifier quoting) — this row is the authoritative summary; that section is the detail. | Unit test with a table name containing `;` — must return `DbError::Query`, not execute SQL. |
 | 11 | **Multi-surface authority drift** - project-global state is copied into a surface tree, active-surface edits replace neighboring trees, or tab switches lose selections/code buffers. | `ProjectDocument` is the project authority; each `UiSurface.tree` is authoritative only for that surface. Cross-surface mutations go through `ProjectDocument`/`ActiveDocument`. Switching surfaces flushes the active adapter and preserves per-surface selection, zoom, pan, and Lazare edit state. | Schema migration/round-trip tests, duplication-ID remap test, and a workspace capture/restore test containing an invalid code buffer. |
 | 12 | **Modal lifecycle parity drift** - preview and export disagree about drafts, button roles, event order, nesting, Escape/default behavior, or focus. | Preview and export derive targets from `resolve_dialog_button_target` / `resolve_dialog_initial_focus_target`, enforce a bounded top-only stack, copy supported fields into drafts, commit only on Accept/Apply, fire result before `Closed`, and restore opener focus. Unsupported fields must diagnose rather than silently bind live state. | Preview lifecycle/focus/vector tests plus warning-denied native/WASM generated-project fixtures from `check-surface-parity.ps1`. |
+| 13 | **Ownership/topology parity drift** - a child/container behavior works in one tree shape but not siblings (e.g. top-level layout works, Frame-owned layout emits placeholders, or moving a child leaves duplicate parents). | If behavior depends on `WidgetInstance.children`, derive and cover every ownership topology before coding: top-level, Frame-owned, layout-owned, layout-inside-layout, Frame-owned-layout, moved child, empty/cleared container parse, duplicate-parent repair, and cycle repair. Claims about recursive canvas/live/export/Lazare behavior are incomplete until every topology has real output or an explicit, tested unsupported diagnostic. | Topology matrix tests across `UiTree`, canvas/preview, emitter/export, and parser/Lazare as applicable. |
 
 ## The verification gate
 
