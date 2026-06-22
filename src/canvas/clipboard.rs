@@ -63,10 +63,8 @@ pub fn copy_selection(selected: &[uuid::Uuid], tree: &UiTree) -> ClipboardConten
     }
 
     let source_had_behaviors = tree.app_props.behaviors.iter().any(|b| {
-        b.source_widget()
-            .map(|s| closure.contains(&s))
-            .unwrap_or(false)
-            || b.target_widget.map(|t| closure.contains(&t)).unwrap_or(false)
+        b.source_widget().is_some_and(|s| closure.contains(&s))
+            || b.target_widget.is_some_and(|t| closure.contains(&t))
     });
 
     ClipboardContents {
@@ -78,7 +76,6 @@ pub fn copy_selection(selected: &[uuid::Uuid], tree: &UiTree) -> ClipboardConten
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::schema::Rect;
 
     fn w(children: Vec<uuid::Uuid>) -> WidgetInstance {
         WidgetInstance {
@@ -150,6 +147,5 @@ mod tests {
         let t = tree(vec![widget]);
         let c = copy_selection(&[id], &t);
         assert!(!c.source_had_behaviors);
-        let _ = Rect::default();
     }
 }
