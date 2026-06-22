@@ -73,9 +73,116 @@ pub fn copy_selection(selected: &[uuid::Uuid], tree: &UiTree) -> ClipboardConten
     }
 }
 
+pub use crate::project::ui_tree::PasteError;
+
+/// Cascade step between repeated pastes, in canvas units (zoom-stable, CB-19).
+pub const PASTE_CASCADE_STEP: f32 = 16.0;
+
+/// Result of a successful paste/duplicate.
+pub struct PasteOutcome {
+    pub new_root_ids: Vec<uuid::Uuid>,
+    pub count: usize,
+    pub had_behaviors: bool,
+}
+
+/// Convert a screen-space cursor position to canvas space using the canonical
+/// `canvas_origin` helper (CB-06). Never re-derive this formula elsewhere.
+pub fn cursor_to_canvas(
+    cursor_screen: egui::Pos2,
+    canvas_size: [f32; 2],
+    zoom: f32,
+    pan: egui::Vec2,
+    panel_rect: egui::Rect,
+) -> egui::Pos2 {
+    let origin = crate::canvas::rulers::canvas_origin(canvas_size, zoom, pan, panel_rect);
+    ((cursor_screen - origin) / zoom).to_pos2()
+}
+
+/// Canvas-space center of the currently visible viewport — the deterministic
+/// fallback anchor when the cursor is off-canvas or absent (CB-07).
+pub fn visible_viewport_center_canvas(
+    canvas_size: [f32; 2],
+    zoom: f32,
+    pan: egui::Vec2,
+    panel_rect: egui::Rect,
+) -> egui::Pos2 {
+    cursor_to_canvas(panel_rect.center(), canvas_size, zoom, pan, panel_rect)
+}
+
+/// Paste `clipboard` so its bounding-box center lands on `target_canvas`
+/// (CB-08), plus a cumulative `cascade * PASTE_CASCADE_STEP` offset (CB-19).
+pub fn paste_payload(
+    clipboard: &ClipboardContents,
+    target_canvas: egui::Pos2,
+    cascade: usize,
+    tree: &mut UiTree,
+    target_container: Option<uuid::Uuid>,
+) -> Result<PasteOutcome, PasteError> {
+    if clipboard.is_empty() {
+        return Ok(PasteOutcome {
+            new_root_ids: Vec::new(),
+            count: 0,
+            had_behaviors: false,
+        });
+    }
+    let anchor = bbox_center(&clipboard.widgets);
+    let cascade_off = cascade as f32 * PASTE_CASCADE_STEP;
+    let delta = egui::vec2(
+        target_canvas.x - anchor.x + cascade_off,
+        target_canvas.y - anchor.y + cascade_off,
+    );
+    let new_root_ids = tree.paste_batch(clipboard.widgets.clone(), delta, target_container)?;
+    let count = clipboard.widgets.len();
+    Ok(PasteOutcome {
+        new_root_ids,
+        count,
+        had_behaviors: clipboard.source_had_behaviors,
+    })
+}
+
+/// Duplicate `selected` in place with a fixed cascade-step offset (CB-25).
+/// Independent of the clipboard buffer.
+pub fn duplicate_in_place(
+    selected: &[uuid::Uuid],
+    tree: &mut UiTree,
+) -> Result<PasteOutcome, PasteError> {
+    let contents = copy_selection(selected, tree);
+    if contents.is_empty() {
+        return Ok(PasteOutcome {
+            new_root_ids: Vec::new(),
+            count: 0,
+            had_behaviors: false,
+        });
+    }
+    let count = contents.widgets.len();
+    let delta = egui::vec2(PASTE_CASCADE_STEP, PASTE_CASCADE_STEP);
+    let new_root_ids = tree.paste_batch(contents.widgets.clone(), delta, None)?;
+    Ok(PasteOutcome {
+        new_root_ids,
+        count,
+        had_behaviors: contents.source_had_behaviors,
+    })
+}
+
+/// Bounding-box center (canvas space) of a set of widgets.
+fn bbox_center(widgets: &[WidgetInstance]) -> egui::Pos2 {
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for w in widgets {
+        min_x = min_x.min(w.rect.x);
+        min_y = min_y.min(w.rect.y);
+        max_x = max_x.max(w.rect.x + w.rect.w);
+        max_y = max_y.max(w.rect.y + w.rect.h);
+    }
+    egui::pos2((min_x + max_x) / 2.0, (min_y + max_y) / 2.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::project::schema::Rect;
 
     fn w(children: Vec<uuid::Uuid>) -> WidgetInstance {
         WidgetInstance {
@@ -147,5 +254,76 @@ mod tests {
         let t = tree(vec![widget]);
         let c = copy_selection(&[id], &t);
         assert!(!c.source_had_behaviors);
+    }
+
+    #[test]
+    fn cursor_to_canvas_round_trips() {
+        let panel = egui::Rect::from_min_size(egui::pos2(200.0, 40.0), egui::vec2(800.0, 600.0));
+        let size = [640.0_f32, 480.0_f32];
+        for &zoom in &[0.25_f32, 1.0, 4.0] {
+            for &pan in &[egui::vec2(0.0, 0.0), egui::vec2(-120.0, 75.0)] {
+                for &screen in &[egui::pos2(300.0, 120.0), egui::pos2(950.0, 600.0)] {
+                    let canvas = cursor_to_canvas(screen, size, zoom, pan, panel);
+                    let origin = crate::canvas::rulers::canvas_origin(size, zoom, pan, panel);
+                    let back = origin + (canvas.to_vec2() * zoom);
+                    assert!((back.x - screen.x).abs() < 0.01, "x at zoom {zoom}");
+                    assert!((back.y - screen.y).abs() < 0.01, "y at zoom {zoom}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn multi_widget_paste_translates_as_group_preserving_distances() {
+        let mk = |x: f32, y: f32, wd: f32, h: f32| {
+            let mut w = WidgetInstance {
+                id: uuid::Uuid::new_v4(),
+                kind: WidgetKind::Button,
+                ..Default::default()
+            };
+            w.rect = Rect { x, y, w: wd, h };
+            w
+        };
+        let clip = ClipboardContents {
+            widgets: vec![mk(100.0, 100.0, 20.0, 20.0), mk(200.0, 100.0, 20.0, 20.0), mk(300.0, 200.0, 40.0, 40.0)],
+            source_had_behaviors: false,
+        };
+        let mut tree = UiTree::default();
+        let target = egui::pos2(520.0, 470.0);
+        let out = paste_payload(&clip, target, 0, &mut tree, None).unwrap();
+        assert_eq!(out.count, 3);
+
+        let rects: Vec<Rect> = tree.widgets.iter().map(|w| w.rect.clone()).collect();
+        assert!(rects.iter().any(|r| (r.x - 400.0).abs() < 0.01 && (r.y - 400.0).abs() < 0.01));
+        assert!(rects.iter().any(|r| (r.w - 40.0).abs() < 0.01 && (r.h - 40.0).abs() < 0.01));
+    }
+
+    #[test]
+    fn cascade_offsets_repeated_pastes() {
+        let mut wdg = WidgetInstance { id: uuid::Uuid::new_v4(), kind: WidgetKind::Button, ..Default::default() };
+        wdg.rect = Rect { x: 0.0, y: 0.0, w: 10.0, h: 10.0 };
+        let clip = ClipboardContents { widgets: vec![wdg], source_had_behaviors: false };
+
+        let mut tree = UiTree::default();
+        let target = egui::pos2(0.0, 0.0);
+        paste_payload(&clip, target, 0, &mut tree, None).unwrap();
+        paste_payload(&clip, target, 1, &mut tree, None).unwrap();
+        let mut xs: Vec<f32> = tree.widgets.iter().map(|w| w.rect.x).collect();
+        xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert!((xs[1] - xs[0] - PASTE_CASCADE_STEP).abs() < 0.01);
+    }
+
+    #[test]
+    fn duplicate_in_place_offsets_by_step_and_preserves_size() {
+        let mut src = WidgetInstance { id: uuid::Uuid::new_v4(), kind: WidgetKind::Button, ..Default::default() };
+        src.rect = Rect { x: 50.0, y: 60.0, w: 30.0, h: 30.0 };
+        let src_id = src.id;
+        let mut tree = UiTree { widgets: vec![src], ..Default::default() };
+
+        let out = duplicate_in_place(&[src_id], &mut tree).unwrap();
+        assert_eq!(out.count, 1);
+        let dup = tree.widgets.iter().find(|w| w.id == out.new_root_ids[0]).unwrap();
+        assert!((dup.rect.x - (50.0 + PASTE_CASCADE_STEP)).abs() < 0.01);
+        assert!((dup.rect.w - 30.0).abs() < 0.01);
     }
 }
