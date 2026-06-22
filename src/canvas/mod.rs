@@ -6,11 +6,11 @@
 //! `widget_maker` holds the `WidgetMakerDoc` primitive composition model.
 //! `shaper` provides the `ShaperEngine` trait + `RustyBuzzShaper` / `HersheyShaper` impls.
 
+pub mod clipboard;
 pub mod interaction;
 pub mod overlays;
 pub mod preview;
 pub mod rulers;
-pub mod clipboard;
 pub mod search;
 pub mod shaper;
 #[cfg(test)]

@@ -32,7 +32,11 @@ pub const BUILTIN_SHORTCUTS: &[(&str, &str, &str)] = &[
     ("canvas_search", "Ctrl+F", "Open canvas widget search"),
     ("canvas_copy", "Ctrl+C", "Copy selected widgets"),
     ("canvas_paste", "Ctrl+V", "Paste widgets at cursor"),
-    ("canvas_duplicate", "Ctrl+D", "Duplicate selected widgets in place"),
+    (
+        "canvas_duplicate",
+        "Ctrl+D",
+        "Duplicate selected widgets in place",
+    ),
 ];
 
 // ---------------------------------------------------------------------------

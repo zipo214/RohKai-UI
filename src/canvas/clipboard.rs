@@ -323,7 +323,11 @@ mod tests {
             w
         };
         let clip = ClipboardContents {
-            widgets: vec![mk(100.0, 100.0, 20.0, 20.0), mk(200.0, 100.0, 20.0, 20.0), mk(300.0, 200.0, 40.0, 40.0)],
+            widgets: vec![
+                mk(100.0, 100.0, 20.0, 20.0),
+                mk(200.0, 100.0, 20.0, 20.0),
+                mk(300.0, 200.0, 40.0, 40.0),
+            ],
             source_had_behaviors: false,
         };
         let mut tree = UiTree::default();
@@ -332,15 +336,35 @@ mod tests {
         assert_eq!(out.count, 3);
 
         let rects: Vec<Rect> = tree.widgets.iter().map(|w| w.rect.clone()).collect();
-        assert!(rects.iter().any(|r| (r.x - 400.0).abs() < 0.01 && (r.y - 400.0).abs() < 0.01));
-        assert!(rects.iter().any(|r| (r.w - 40.0).abs() < 0.01 && (r.h - 40.0).abs() < 0.01));
+        assert!(
+            rects
+                .iter()
+                .any(|r| (r.x - 400.0).abs() < 0.01 && (r.y - 400.0).abs() < 0.01)
+        );
+        assert!(
+            rects
+                .iter()
+                .any(|r| (r.w - 40.0).abs() < 0.01 && (r.h - 40.0).abs() < 0.01)
+        );
     }
 
     #[test]
     fn cascade_offsets_repeated_pastes() {
-        let mut wdg = WidgetInstance { id: uuid::Uuid::new_v4(), kind: WidgetKind::Button, ..Default::default() };
-        wdg.rect = Rect { x: 0.0, y: 0.0, w: 10.0, h: 10.0 };
-        let clip = ClipboardContents { widgets: vec![wdg], source_had_behaviors: false };
+        let mut wdg = WidgetInstance {
+            id: uuid::Uuid::new_v4(),
+            kind: WidgetKind::Button,
+            ..Default::default()
+        };
+        wdg.rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 10.0,
+            h: 10.0,
+        };
+        let clip = ClipboardContents {
+            widgets: vec![wdg],
+            source_had_behaviors: false,
+        };
 
         let mut tree = UiTree::default();
         let target = egui::pos2(0.0, 0.0);
@@ -353,15 +377,115 @@ mod tests {
 
     #[test]
     fn duplicate_in_place_offsets_by_step_and_preserves_size() {
-        let mut src = WidgetInstance { id: uuid::Uuid::new_v4(), kind: WidgetKind::Button, ..Default::default() };
-        src.rect = Rect { x: 50.0, y: 60.0, w: 30.0, h: 30.0 };
+        let mut src = WidgetInstance {
+            id: uuid::Uuid::new_v4(),
+            kind: WidgetKind::Button,
+            ..Default::default()
+        };
+        src.rect = Rect {
+            x: 50.0,
+            y: 60.0,
+            w: 30.0,
+            h: 30.0,
+        };
         let src_id = src.id;
-        let mut tree = UiTree { widgets: vec![src], ..Default::default() };
+        let mut tree = UiTree {
+            widgets: vec![src],
+            ..Default::default()
+        };
 
         let out = duplicate_in_place(&[src_id], &mut tree).unwrap();
         assert_eq!(out.count, 1);
-        let dup = tree.widgets.iter().find(|w| w.id == out.new_root_ids[0]).unwrap();
+        let dup = tree
+            .widgets
+            .iter()
+            .find(|w| w.id == out.new_root_ids[0])
+            .unwrap();
         assert!((dup.rect.x - (50.0 + PASTE_CASCADE_STEP)).abs() < 0.01);
         assert!((dup.rect.w - 30.0).abs() < 0.01);
     }
+
+    // CB-PARITY: prove a pasted widget survives the REAL live egui emitter.
+    // Entry point: `crate::codegen::egui_emitter::emit_document(&UiTree)`, which
+    // returns a `GeneratedCodeDocument` whose `.text` is the emitted Rust source.
+    // A Button's label is emitted via `string_literal(&props.label)`, so the
+    // verbatim text appears in the output.
+    #[test]
+    fn pasted_widgets_appear_in_live_codegen() {
+        let mut src = WidgetInstance {
+            id: uuid::Uuid::new_v4(),
+            kind: WidgetKind::Button,
+            ..Default::default()
+        };
+        src.props.label = "Zorp".to_string();
+        let clip = ClipboardContents {
+            widgets: vec![src],
+            source_had_behaviors: false,
+        };
+        let mut tree = UiTree::default();
+        paste_payload(&clip, egui::pos2(10.0, 10.0), 0, &mut tree, None).unwrap();
+
+        let code = crate::codegen::egui_emitter::emit_document(&tree).text;
+        assert!(code.contains("Zorp"), "pasted widget missing from codegen");
+    }
+
+    // CB-PARITY: prove a pasted Frame+child subtree survives the REAL save/load
+    // pipeline. Serialize/deserialize entry points:
+    //   `crate::project::io::serialize_tree(&UiTree) -> Result<String, String>`
+    //   `crate::project::io::deserialize_tree(&str) -> Result<UiTree, String>`
+    // After reload, every `children[]` reference must resolve to a live widget id
+    // (no dangling refs across the round-trip).
+    #[test]
+    fn pasted_tree_survives_save_load_round_trip() {
+        let child = {
+            let mut c = WidgetInstance {
+                id: uuid::Uuid::new_v4(),
+                kind: WidgetKind::Button,
+                ..Default::default()
+            };
+            c.props.label = "Kid".into();
+            c
+        };
+        let child_id = child.id;
+        let frame = WidgetInstance {
+            id: uuid::Uuid::new_v4(),
+            kind: WidgetKind::Frame,
+            children: vec![child_id],
+            ..Default::default()
+        };
+        let clip = ClipboardContents {
+            widgets: vec![frame, child],
+            source_had_behaviors: false,
+        };
+        let mut tree = UiTree::default();
+        paste_payload(&clip, egui::pos2(0.0, 0.0), 0, &mut tree, None).unwrap();
+
+        let json = crate::project::io::serialize_tree(&tree).expect("serialize");
+        let restored = crate::project::io::deserialize_tree(&json).expect("deserialize");
+        let restored_widgets: &[WidgetInstance] = &restored.widgets;
+
+        let ids: std::collections::HashSet<uuid::Uuid> =
+            restored_widgets.iter().map(|w| w.id).collect();
+        // The pasted Frame + child must still be present after reload.
+        assert_eq!(restored_widgets.len(), tree.widgets.len());
+        for w in restored_widgets {
+            for c in &w.children {
+                assert!(ids.contains(c), "dangling child after reload");
+            }
+        }
+        // And the Frame's child link must survive (not just be empty).
+        assert!(
+            restored_widgets
+                .iter()
+                .any(|w| w.kind == WidgetKind::Frame && !w.children.is_empty()),
+            "Frame lost its child reference across save/load"
+        );
+    }
+
+    // A3 (paste + one undo restores prior ProjectDocument) is intentionally
+    // NOT unit-tested here: undo is JSON-snapshot based on the full
+    // ProjectDocument and is driven entirely by RohKaiApp's record/apply loop
+    // (see `src/project/undo.rs` + app.rs wiring). It cannot be exercised
+    // through `paste_payload` in isolation without reconstructing that app
+    // scaffolding, so it is covered at the app layer rather than here.
 }

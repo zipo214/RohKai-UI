@@ -7,6 +7,22 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-21 — S2 Item 2: Canvas clipboard (Copy/Paste/Duplicate) shipped
+
+Branch `dev`. Shipped the in-app canvas clipboard: Ctrl+C copy (deep,
+descendant-closed snapshot), Ctrl+V paste-at-cursor (bbox-center anchored with
+cascade offset + post-paste flash ring), and Ctrl+D duplicate-in-place. Source
+of truth is `src/canvas/clipboard.rs` (new) over `UiTree::paste_batch` (new in
+`src/project/ui_tree.rs`), with `src/status.rs` notices and `src/app.rs` wiring;
+shortcuts registered in `src/panels/shortcuts.rs`, input gating in
+`src/canvas/interaction.rs`. Verified: 12 clipboard tests incl. live-codegen
+parity (`emit_document`) and save/load round-trip parity (`serialize_tree`/
+`deserialize_tree`, no dangling child refs after reload); full suite 665 passed,
+all-target clippy clean, build clean. Deferred follow-ups: Cut/Ctrl+X,
+behavior-wire copy, CB-18 surface-kind validation, CB-23 context menu; undo
+exactness is covered at the RohKaiApp snapshot layer (not unit-testable through
+`paste_payload`).
+
 ## 2026-06-21 — Canvas placement flow + wiring affordance cleanup
 
 Branch `dev`. Tightening the normal canvas placement flow: palette/template

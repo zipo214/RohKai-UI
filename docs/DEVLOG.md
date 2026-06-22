@@ -2,6 +2,44 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-21 - Clipboard Parity Tests And Verification Gate (S2 Item 2 Close)
+
+### Context Reviewed
+- Preflight intent, latest CoOp note, git status, and the real codegen/io
+  entry points: `src/codegen/egui_emitter.rs` (`emit_document`),
+  `src/project/io.rs` (`serialize_tree`/`deserialize_tree`), `src/project/undo.rs`
+  (snapshot/record undo model), and the existing `src/canvas/clipboard.rs`
+  test module.
+
+### Changes
+- Added two parity tests to `src/canvas/clipboard.rs`:
+  - `pasted_widgets_appear_in_live_codegen` pastes a Button labelled "Zorp",
+    runs the REAL live emitter `emit_document(&tree).text`, and asserts the
+    pasted widget appears in the generated Rust.
+  - `pasted_tree_survives_save_load_round_trip` pastes a Frame + child, runs the
+    REAL `serialize_tree` then `deserialize_tree`, and asserts no `children[]`
+    reference dangles after reload and the Frame keeps its child link.
+- Skipped the A3 paste+undo-exactness test deliberately: undo is a
+  ProjectDocument-JSON snapshot model driven by RohKaiApp's record/apply loop
+  (`src/project/undo.rs`), not reachable through `paste_payload` in isolation.
+- Ran `cargo fmt`, which normalized pre-existing formatting drift in the
+  clipboard-feature-owned files only: `src/canvas/clipboard.rs`,
+  `src/canvas/mod.rs`, `src/panels/shortcuts.rs`, `src/project/ui_tree.rs`. No
+  unrelated files were reformatted.
+
+### Verification
+- `cargo test --lib clipboard::tests` - 12 passed.
+- `cargo test` - 665 tests passed across all binaries, 0 failed.
+- `cargo clippy --all-targets -- -D warnings` - clean, zero warnings.
+- `cargo build` - clean.
+- `cargo fmt --check` (pre-fix) flagged the four feature files above; resolved.
+
+### Risks / Follow-ups
+- Undo exactness for paste/duplicate remains covered only at the app-snapshot
+  layer; a future app-level harness could assert it end-to-end.
+- Deferred clipboard scope still open: Cut/Ctrl+X, behavior-wire copy, CB-18
+  surface-kind validation, CB-23 context menu.
+
 ## 2026-06-21 - Canvas Placement Flow And Wiring Affordance Cleanup
 
 ### Context Reviewed

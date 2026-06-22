@@ -729,13 +729,17 @@ impl UiTree {
         anchor_delta: egui::Vec2,
         target_container: Option<Uuid>,
     ) -> Result<Vec<Uuid>, PasteError> {
-        let id_map: HashMap<Uuid, Uuid> =
-            staged.iter().map(|w| (w.id, Uuid::new_v4())).collect();
+        let id_map: HashMap<Uuid, Uuid> = staged.iter().map(|w| (w.id, Uuid::new_v4())).collect();
 
-        let child_ids: HashSet<Uuid> =
-            staged.iter().flat_map(|w| w.children.iter().copied()).collect();
-        let old_roots: Vec<Uuid> =
-            staged.iter().map(|w| w.id).filter(|id| !child_ids.contains(id)).collect();
+        let child_ids: HashSet<Uuid> = staged
+            .iter()
+            .flat_map(|w| w.children.iter().copied())
+            .collect();
+        let old_roots: Vec<Uuid> = staged
+            .iter()
+            .map(|w| w.id)
+            .filter(|id| !child_ids.contains(id))
+            .collect();
 
         let staged_set: HashSet<Uuid> = staged.iter().map(|w| w.id).collect();
         let mut remapped: Vec<WidgetInstance> = Vec::with_capacity(staged.len());
@@ -849,8 +853,11 @@ impl UiTree {
         let child_map: HashMap<Uuid, &Vec<Uuid>> =
             staged.iter().map(|w| (w.id, &w.children)).collect();
         let mut indeg2 = indeg.clone();
-        let mut stack: Vec<Uuid> =
-            indeg2.iter().filter(|(_, n)| **n == 0).map(|(k, _)| *k).collect();
+        let mut stack: Vec<Uuid> = indeg2
+            .iter()
+            .filter(|(_, n)| **n == 0)
+            .map(|(k, _)| *k)
+            .collect();
         let mut visited = 0usize;
         while let Some(id) = stack.pop() {
             visited += 1;
@@ -1950,11 +1957,12 @@ mod paste_batch_tests {
         let new_child_id = new_frame.children[0];
         assert_ne!(new_child_id, child_id);
         assert!(tree.widgets.iter().any(|x| x.id == new_child_id));
-        assert!(tree
-            .widgets
-            .iter()
-            .flat_map(|x| x.children.iter())
-            .all(|c| *c != child_id && *c != frame_id));
+        assert!(
+            tree.widgets
+                .iter()
+                .flat_map(|x| x.children.iter())
+                .all(|c| *c != child_id && *c != frame_id)
+        );
     }
 
     #[test]
@@ -1963,13 +1971,24 @@ mod paste_batch_tests {
         let child_id = child.id;
         let mut frame = w(vec![child_id]);
         frame.kind = WidgetKind::Frame;
-        frame.rect = crate::project::schema::Rect { x: 100.0, y: 100.0, w: 50.0, h: 50.0 };
+        frame.rect = crate::project::schema::Rect {
+            x: 100.0,
+            y: 100.0,
+            w: 50.0,
+            h: 50.0,
+        };
         let mut child2 = child.clone();
-        child2.rect = crate::project::schema::Rect { x: 110.0, y: 110.0, w: 10.0, h: 10.0 };
+        child2.rect = crate::project::schema::Rect {
+            x: 110.0,
+            y: 110.0,
+            w: 10.0,
+            h: 10.0,
+        };
 
         let staged = vec![frame, child2];
         let mut tree = UiTree::default();
-        tree.paste_batch(staged, egui::vec2(25.0, 5.0), None).unwrap();
+        tree.paste_batch(staged, egui::vec2(25.0, 5.0), None)
+            .unwrap();
 
         let xs: Vec<(f32, f32)> = tree.widgets.iter().map(|x| (x.rect.x, x.rect.y)).collect();
         assert!(xs.contains(&(125.0, 105.0)));
@@ -2012,7 +2031,9 @@ mod paste_batch_tests {
         let staged = vec![a, b];
 
         let mut tree = UiTree::default();
-        let _roots = tree.paste_batch(staged, egui::vec2(0.0, 0.0), None).unwrap();
+        let _roots = tree
+            .paste_batch(staged, egui::vec2(0.0, 0.0), None)
+            .unwrap();
         let pasted_a = tree
             .widgets
             .iter()
@@ -2031,7 +2052,8 @@ mod paste_batch_tests {
         let staged = vec![a];
 
         let mut tree = UiTree::default();
-        tree.paste_batch(staged, egui::vec2(0.0, 0.0), None).unwrap();
+        tree.paste_batch(staged, egui::vec2(0.0, 0.0), None)
+            .unwrap();
         let pasted = &tree.widgets[0];
         assert_eq!(pasted.constraints.equal_height_to, None);
     }
@@ -2040,13 +2062,17 @@ mod paste_batch_tests {
     fn shared_binding_renamed_once_and_stays_shared() {
         let mut existing = w(vec![]);
         existing.state_binding = Some("count".to_string());
-        let mut tree = UiTree { widgets: vec![existing], ..Default::default() };
+        let mut tree = UiTree {
+            widgets: vec![existing],
+            ..Default::default()
+        };
 
         let mut s1 = w(vec![]);
         let mut s2 = w(vec![]);
         s1.state_binding = Some("count".to_string());
         s2.state_binding = Some("count".to_string());
-        tree.paste_batch(vec![s1, s2], egui::vec2(0.0, 0.0), None).unwrap();
+        tree.paste_batch(vec![s1, s2], egui::vec2(0.0, 0.0), None)
+            .unwrap();
 
         let bindings: Vec<String> = tree
             .widgets
