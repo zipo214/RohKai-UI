@@ -740,6 +740,61 @@ impl UiTree {
             remapped.push(c);
         }
 
+        // 6a. Remap constraint references (CB-13): id-string → new id-string when
+        //     the target is in the set; clear when it points outside.
+        let id_str_map: HashMap<String, String> = id_map
+            .iter()
+            .map(|(old, new)| (old.to_string(), new.to_string()))
+            .collect();
+        for w in &mut remapped {
+            for slot in [
+                &mut w.constraints.equal_width_to,
+                &mut w.constraints.equal_height_to,
+            ] {
+                if let Some(target) = slot.clone() {
+                    *slot = id_str_map.get(&target).cloned();
+                }
+            }
+        }
+
+        // 6b. Remap shared state_bindings once per unique string (CB-12).
+        {
+            let existing: HashSet<String> = self
+                .widgets
+                .iter()
+                .filter_map(|w| w.state_binding.clone())
+                .collect();
+            let mut rename: HashMap<String, String> = HashMap::new();
+            let mut taken = existing.clone();
+            let mut staged_bindings: Vec<String> = remapped
+                .iter()
+                .filter_map(|w| w.state_binding.clone())
+                .collect();
+            staged_bindings.sort();
+            staged_bindings.dedup();
+            for base in staged_bindings {
+                if taken.contains(&base) {
+                    let mut n = 2;
+                    let mut candidate = format!("{base}_{n}");
+                    while taken.contains(&candidate) {
+                        n += 1;
+                        candidate = format!("{base}_{n}");
+                    }
+                    taken.insert(candidate.clone());
+                    rename.insert(base, candidate);
+                } else {
+                    taken.insert(base);
+                }
+            }
+            for w in &mut remapped {
+                if let Some(b) = w.state_binding.clone()
+                    && let Some(new) = rename.get(&b)
+                {
+                    w.state_binding = Some(new.clone());
+                }
+            }
+        }
+
         Self::validate_staged(&remapped)?;
 
         let new_roots: Vec<Uuid> = old_roots.iter().map(|old| id_map[old]).collect();
@@ -1933,5 +1988,61 @@ mod paste_batch_tests {
         let mut tree = UiTree::default();
         let result = tree.paste_batch(staged, egui::vec2(0.0, 0.0), None);
         assert!(matches!(result, Err(PasteError::InvalidGraph)));
+    }
+
+    #[test]
+    fn constraint_ref_inside_set_is_remapped() {
+        let mut a = w(vec![]);
+        let b = w(vec![]);
+        a.constraints.equal_width_to = Some(b.id.to_string());
+        let b_id = b.id;
+        let staged = vec![a, b];
+
+        let mut tree = UiTree::default();
+        let _roots = tree.paste_batch(staged, egui::vec2(0.0, 0.0), None).unwrap();
+        let pasted_a = tree
+            .widgets
+            .iter()
+            .find(|x| x.constraints.equal_width_to.is_some())
+            .unwrap();
+        let referenced = pasted_a.constraints.equal_width_to.clone().unwrap();
+        assert_ne!(referenced, b_id.to_string());
+        assert!(tree.widgets.iter().any(|x| x.id.to_string() == referenced));
+    }
+
+    #[test]
+    fn constraint_ref_outside_set_is_cleared() {
+        let outside_id = uuid::Uuid::new_v4().to_string();
+        let mut a = w(vec![]);
+        a.constraints.equal_height_to = Some(outside_id);
+        let staged = vec![a];
+
+        let mut tree = UiTree::default();
+        tree.paste_batch(staged, egui::vec2(0.0, 0.0), None).unwrap();
+        let pasted = &tree.widgets[0];
+        assert_eq!(pasted.constraints.equal_height_to, None);
+    }
+
+    #[test]
+    fn shared_binding_renamed_once_and_stays_shared() {
+        let mut existing = w(vec![]);
+        existing.state_binding = Some("count".to_string());
+        let mut tree = UiTree { widgets: vec![existing], ..Default::default() };
+
+        let mut s1 = w(vec![]);
+        let mut s2 = w(vec![]);
+        s1.state_binding = Some("count".to_string());
+        s2.state_binding = Some("count".to_string());
+        tree.paste_batch(vec![s1, s2], egui::vec2(0.0, 0.0), None).unwrap();
+
+        let bindings: Vec<String> = tree
+            .widgets
+            .iter()
+            .skip(1)
+            .filter_map(|x| x.state_binding.clone())
+            .collect();
+        assert_eq!(bindings.len(), 2);
+        assert_eq!(bindings[0], bindings[1]);
+        assert_ne!(bindings[0], "count");
     }
 }
