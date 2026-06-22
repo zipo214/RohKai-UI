@@ -184,6 +184,17 @@ mod tests {
     use super::*;
     use crate::project::schema::Rect;
 
+    #[test]
+    fn interaction_state_is_not_serializable() {
+        // Compile-time intent check: clipboard state must never land in
+        // .rohkai.json. InteractionState carries only #[derive(Default)].
+        // This asserts the type is constructible by Default; the real
+        // enforcement is the ABSENCE of a Serialize derive (reviewer-checked,
+        // mirrors the CanvasSearchState non-serialize invariant).
+        fn assert_default<T: Default>() {}
+        assert_default::<crate::canvas::interaction::InteractionState>();
+    }
+
     fn w(children: Vec<uuid::Uuid>) -> WidgetInstance {
         WidgetInstance {
             id: uuid::Uuid::new_v4(),

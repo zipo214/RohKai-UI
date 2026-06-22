@@ -424,6 +424,13 @@ pub struct InteractionState {
     pub selected_behavior: Option<Uuid>,
     /// Session-only canvas search state. Never serialized.
     pub canvas_search: Option<crate::canvas::search::CanvasSearchState>,
+    /// In-app clipboard buffer (CB-17). Session-only; never serialized.
+    pub clipboard: crate::canvas::clipboard::ClipboardContents,
+    /// Cumulative repeat-paste cascade counter; resets on each new copy (CB-19).
+    pub paste_cascade: usize,
+    /// Newly pasted root ids + remaining flash seconds, for the paste ring
+    /// overlay (separate from search state, CB-21).
+    pub paste_flash: Option<(Vec<Uuid>, f32)>,
 }
 
 // ---------------------------------------------------------------------------
