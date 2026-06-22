@@ -1471,6 +1471,13 @@ git commit -m "test(clipboard): codegen/export/save-load parity + verification g
 
 ---
 
+## Follow-ups (explicitly OUT of scope this pass)
+
+Do not implement either below in this pass unless a failing invariant test requires it. No further scope expansion.
+
+- **CB-18 — Surface kind validation before cross-surface paste.** Validate each pasted `WidgetKind` against the active target surface's allowed-kind set (derived from the canonical `WidgetKind`/`SurfaceKind` rules), dropping/blocking disallowed kinds with a single status notice. Needed only when copy-on-surface-A / paste-on-surface-B is a supported workflow.
+- **CB-23 — Right-click context-menu clipboard entries.** Add Copy / Cut / Paste / Duplicate to the canvas context menu, enable-state mirroring the keyboard gate (Copy/Cut/Duplicate require non-empty selection; Paste requires non-empty clipboard and an active surface); menu-driven paste uses the menu-open location.
+
 ## Self-Review
 
 **Spec coverage:**
