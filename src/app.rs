@@ -2874,6 +2874,7 @@ impl eframe::App for RohKaiApp {
                                                 &self.project.ui_tree,
                                                 wid,
                                                 &mut self.session.interaction.selected_behavior,
+                                                &mut self.session.interaction.behavior_wire_armed,
                                             );
                                         }
                                     });
@@ -2998,6 +2999,7 @@ impl eframe::App for RohKaiApp {
                                                 &self.project.ui_tree,
                                                 wid,
                                                 &mut self.session.interaction.selected_behavior,
+                                                &mut self.session.interaction.behavior_wire_armed,
                                             );
                                         }
                                     }
@@ -3206,6 +3208,9 @@ impl eframe::App for RohKaiApp {
             if !is_layout_container {
                 self.project.ui_tree.attach_to_layout_at(id, center);
             }
+            self.session.selected.clear();
+            self.session.selected.push(id);
+            self.session.left_panel_tab = LeftPanelTab::Properties;
         }
 
         // Palette drag — set interaction.template_drag for canvas drop next frame
@@ -3323,6 +3328,14 @@ impl eframe::App for RohKaiApp {
                 },
                 &mut self.svg_texture_cache,
             );
+            if !self
+                .session
+                .interaction
+                .placed_widgets_this_frame
+                .is_empty()
+            {
+                self.session.left_panel_tab = LeftPanelTab::Properties;
+            }
 
             // Rulers and guide lines drawn on top of canvas content.
             crate::canvas::rulers::draw(

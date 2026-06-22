@@ -2,6 +2,43 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-21 - Canvas Placement Flow And Wiring Affordance Cleanup
+
+### Context Reviewed
+- Preflight, latest CoOp note, git status, `rust-skills`, `project-model`, and
+  the canvas/palette/behaviors slices in `src/app.rs`,
+  `src/canvas/interaction.rs`, and `src/panels/behaviors.rs`.
+
+### Changes
+- Palette click placement now selects the newly created widget and switches the
+  left panel to Props, matching the designer workflow of placing then editing.
+- Palette/template drag-drop placement now reports placed widget IDs from the
+  canvas handler, selects the placed widgets, and switches the left panel to
+  Props after a successful drop.
+- Behavior wiring sockets are no longer permanent selection chrome. The
+  Behaviors section exposes an explicit "Wire behavior" tool; when armed, the
+  canvas shows a red hover marker on the nearest widget outline and starts wire
+  drag only from that deliberate mode.
+- Behavior wire mode is single-use for now: after a wire drag completes or
+  cancels, normal selection resumes.
+- Added small geometry regression tests for nearest outline marker behavior.
+
+### Verification
+- `cargo fmt --check` - clean.
+- `cargo check` - clean.
+- `cargo test behavior_affordance_tests -- --nocapture` - 2 passed.
+- `cargo test input_ownership_tests -- --nocapture` - 2 passed.
+- `cargo test` - 600 unit tests, 17 fidelity tests, 23 project-surface tests,
+  and 1 doctest passed.
+- `cargo clippy --all-targets -- -D warnings` - clean.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1`
+  - OK.
+
+### Risks / Follow-ups
+- This is a focused UX pass, not a full behavior graph tool redesign. Future
+  work can add a richer wire palette/shortcut and target previews, but should
+  keep normal widget selection free of always-visible connector nodes.
+
 ## 2026-06-20 - Directive Hardening: Derivation Gate And Topology Invariant
 
 ### Context Reviewed

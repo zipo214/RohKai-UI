@@ -7,6 +7,16 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-21 — Canvas placement flow + wiring affordance cleanup
+
+Branch `dev`. Tightening the normal canvas placement flow: palette/template
+placement should select the new widget and move the left panel to Props, while
+behavior wiring affordances should stay hidden during ordinary selection. The
+touch points are `src/app.rs`, `src/canvas/interaction.rs`, and
+`src/panels/behaviors.rs`; avoid making behavior sockets permanent canvas chrome
+again. If this grows later, keep it as an explicit wire tool/mode with
+hover-only source/target markers rather than always-visible connector nodes.
+
 ## 2026-06-20 — Directive hardening for topology/output-path proof
 
 Branch `dev`. Added a low-token derivation gate to AGENTS, CLAUDE, preflight

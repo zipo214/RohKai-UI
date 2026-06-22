@@ -239,7 +239,13 @@ pub fn show_for_widget(
     tree: &UiTree,
     widget_id: Uuid,
     selected_behavior: &mut Option<Uuid>,
+    behavior_wire_armed: &mut bool,
 ) {
+    let event_capable = tree
+        .widgets
+        .iter()
+        .find(|w| w.id == widget_id)
+        .is_some_and(|w| !w.kind.supported_events().is_empty());
     let wired: Vec<(Uuid, String)> = tree
         .app_props
         .behaviors
@@ -266,16 +272,29 @@ pub fn show_for_widget(
             )
         })
         .collect();
-    if wired.is_empty() {
+    if wired.is_empty() && !event_capable {
         return;
     }
     ui.separator();
     ui.label(egui::RichText::new("Behaviors").strong().color(TEAL));
-    ui.label(
-        egui::RichText::new("Drag from a widget's right socket to a bound widget to add one.")
+    if event_capable {
+        ui.horizontal(|ui| {
+            ui.toggle_value(behavior_wire_armed, "Wire behavior")
+                .on_hover_text(
+                    "Show canvas wire markers, then drag from this widget to a bound widget.",
+                );
+            if *behavior_wire_armed {
+                ui.label(egui::RichText::new("armed").small().color(TEAL));
+            }
+        });
+        ui.label(
+            egui::RichText::new(
+                "Hover near a widget edge, then drag the red marker to a bound widget.",
+            )
             .small()
             .weak(),
-    );
+        );
+    }
     for (bid, label) in wired {
         if ui
             .selectable_label(*selected_behavior == Some(bid), label)
