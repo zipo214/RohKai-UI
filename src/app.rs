@@ -349,6 +349,8 @@ pub struct RohKaiApp {
     undo: crate::project::undo::UndoStack,
     /// Suppresses undo recording for the frame after an undo/redo restore.
     undo_suppress_record: bool,
+    /// Transient status message (clipboard feedback, etc.). Session-only.
+    status: crate::status::StatusMessage,
     /// Visual Widget Maker window state.
     pub widget_maker_doc: crate::canvas::widget_maker::WidgetMakerDoc,
     pub widget_maker_open: bool,
@@ -419,6 +421,7 @@ impl RohKaiApp {
             dirty_cache_checked_at: 0.0,
             undo: crate::project::undo::UndoStack::new(),
             undo_suppress_record: false,
+            status: crate::status::StatusMessage::default(),
             widget_maker_doc: crate::canvas::widget_maker::WidgetMakerDoc::new_with_defaults(),
             widget_maker_open: false,
             name_counter: std::collections::HashMap::new(),
@@ -3471,6 +3474,128 @@ impl eframe::App for RohKaiApp {
             let ids: Vec<Uuid> = self.session.selected.drain(..).collect();
             for id in ids {
                 self.project.ui_tree.remove(id);
+            }
+        }
+
+        // ── Clipboard: Copy / Paste / Duplicate (CB-09,10,11,14,15,17) ──────────
+        // Undo is captured automatically at the end-of-frame commit boundary
+        // (pointer-up snapshot below), exactly like the Delete handler above —
+        // no explicit dirty flag is needed for these keyboard mutations (CB-15).
+        // `panel_rect` is not in scope here (the CentralPanel closure has closed),
+        // so we use `self.session.last_canvas_rect`, which was set to that same
+        // `ui.max_rect()` while the canvas was drawn.
+        {
+            let now = ctx.input(|i| i.time);
+            let copy_pressed = canvas_keyboard_owned
+                && ctx.input(|i| i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(egui::Key::C));
+            let paste_pressed = canvas_keyboard_owned
+                && ctx.input(|i| i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(egui::Key::V));
+            let dup_pressed = canvas_keyboard_owned
+                && ctx.input(|i| i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(egui::Key::D));
+
+            let gesture_active = self.session.interaction.drag.is_some()
+                || self.session.interaction.resize.is_some();
+
+            if copy_pressed {
+                if gesture_active {
+                    self.status.set("Can't copy while dragging", now);
+                } else if self.session.selected.is_empty() {
+                    // CB-09(b): no-op, preserve prior clipboard.
+                } else {
+                    let contents = crate::canvas::clipboard::copy_selection(
+                        &self.session.selected,
+                        &self.project.ui_tree,
+                    );
+                    let msg = if contents.widgets.len() == 1 {
+                        format!(
+                            "Copied {}",
+                            crate::canvas::clipboard::widget_kind_label(&contents.widgets[0].kind)
+                        )
+                    } else {
+                        format!("Copied {} widgets", contents.widgets.len())
+                    };
+                    self.session.interaction.clipboard = contents;
+                    self.session.interaction.paste_cascade = 0;
+                    self.status.set(msg, now);
+                }
+            }
+
+            if dup_pressed {
+                if gesture_active {
+                    self.status.set("Can't duplicate while dragging", now);
+                } else if !self.session.selected.is_empty() {
+                    match crate::canvas::clipboard::duplicate_in_place(
+                        &self.session.selected,
+                        &mut self.project.ui_tree,
+                    ) {
+                        Ok(out) if out.count > 0 => {
+                            self.session.selected = out.new_root_ids.clone();
+                            let msg = if out.had_behaviors {
+                                format!(
+                                    "Duplicated {} widgets — behavior wires not copied",
+                                    out.count
+                                )
+                            } else {
+                                format!("Duplicated {} widget(s)", out.count)
+                            };
+                            self.status.set(msg, now);
+                            self.session.interaction.paste_flash = Some((out.new_root_ids, 0.6));
+                        }
+                        Ok(_) => {}
+                        Err(_) => self
+                            .status
+                            .set("Duplicate failed: invalid widget graph", now),
+                    }
+                }
+            }
+
+            if paste_pressed {
+                if gesture_active {
+                    self.status.set("Can't paste while dragging", now);
+                } else if self.session.interaction.clipboard.is_empty() {
+                    // CB-09(a): empty clipboard → total no-op.
+                } else {
+                    let panel_rect = self.session.last_canvas_rect;
+                    let zoom = self.session.canvas_settings.zoom;
+                    let pan = self.session.canvas_settings.pan;
+                    let size = [
+                        self.project.ui_tree.app_props.win_w,
+                        self.project.ui_tree.app_props.win_h,
+                    ];
+                    let cursor_screen = ctx.input(|i| i.pointer.interact_pos());
+                    let target = match cursor_screen {
+                        Some(p) if panel_rect.contains(p) => {
+                            crate::canvas::clipboard::cursor_to_canvas(p, size, zoom, pan, panel_rect)
+                        }
+                        _ => crate::canvas::clipboard::visible_viewport_center_canvas(
+                            size, zoom, pan, panel_rect,
+                        ),
+                    };
+                    let container = self.project.ui_tree.attach_target_at((target.x, target.y));
+                    let cascade = self.session.interaction.paste_cascade;
+                    let clip = self.session.interaction.clipboard.clone();
+                    match crate::canvas::clipboard::paste_payload(
+                        &clip,
+                        target,
+                        cascade,
+                        &mut self.project.ui_tree,
+                        container,
+                    ) {
+                        Ok(out) if out.count > 0 => {
+                            self.session.interaction.paste_cascade = cascade + 1;
+                            self.session.selected = out.new_root_ids.clone();
+                            let msg = if out.had_behaviors {
+                                format!("Pasted {} widgets — behavior wires not copied", out.count)
+                            } else {
+                                format!("Pasted {} widget(s)", out.count)
+                            };
+                            self.status.set(msg, now);
+                            self.session.interaction.paste_flash = Some((out.new_root_ids, 0.6));
+                        }
+                        Ok(_) => {}
+                        Err(_) => self.status.set("Paste failed: invalid widget graph", now),
+                    }
+                }
             }
         }
 
