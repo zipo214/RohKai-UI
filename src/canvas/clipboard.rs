@@ -164,6 +164,30 @@ pub fn duplicate_in_place(
     })
 }
 
+/// Draw a teal selection ring around freshly pasted widgets (CB-21).
+/// Visual language matches search's ring but is driven by paste_flash state.
+pub fn draw_paste_flash(
+    painter: &egui::Painter,
+    flash_ids: &[uuid::Uuid],
+    widget_screen_rects: &[(uuid::Uuid, egui::Rect)],
+    alpha: f32,
+    dark_mode: bool,
+) {
+    let base = egui::Color32::from_rgb(52, 211, 153);
+    let a = (alpha.clamp(0.0, 1.0) * if dark_mode { 192.0 } else { 220.0 }) as u8;
+    let ring = egui::Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), a);
+    for id in flash_ids {
+        if let Some(&(_, rect)) = widget_screen_rects.iter().find(|(rid, _)| rid == id) {
+            painter.rect_stroke(
+                rect.expand(3.0),
+                4.0,
+                egui::Stroke::new(2.0, ring),
+                egui::StrokeKind::Outside,
+            );
+        }
+    }
+}
+
 /// Bounding-box center (canvas space) of a set of widgets.
 fn bbox_center(widgets: &[WidgetInstance]) -> egui::Pos2 {
     let mut min_x = f32::INFINITY;

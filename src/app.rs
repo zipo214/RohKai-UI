@@ -3445,6 +3445,41 @@ impl eframe::App for RohKaiApp {
                 let dark_mode = ui.visuals().dark_mode;
                 crate::canvas::search::draw_search_overlay(&painter, cs, &screen_rects, dark_mode);
             }
+
+            // Paste flash overlay (CB-21), ticked down each frame.
+            if let Some((ids, mut remaining)) = self.session.interaction.paste_flash.take() {
+                let dt = ctx.input(|i| i.stable_dt);
+                remaining -= dt;
+                if remaining > 0.0 {
+                    let origin =
+                        crate::canvas::rulers::canvas_origin(canvas_size, zoom, pan, panel_rect);
+                    let screen_rects: Vec<(uuid::Uuid, egui::Rect)> = self
+                        .project
+                        .ui_tree
+                        .widgets
+                        .iter()
+                        .map(|w| {
+                            let r = egui::Rect::from_min_size(
+                                origin + egui::vec2(w.rect.x, w.rect.y) * zoom,
+                                egui::vec2(w.rect.w, w.rect.h) * zoom,
+                            );
+                            (w.id, r)
+                        })
+                        .collect();
+                    let painter = ui.painter_at(panel_rect);
+                    let dark_mode = ui.visuals().dark_mode;
+                    let alpha = (remaining / 0.6).clamp(0.0, 1.0);
+                    crate::canvas::clipboard::draw_paste_flash(
+                        &painter,
+                        &ids,
+                        &screen_rects,
+                        alpha,
+                        dark_mode,
+                    );
+                    self.session.interaction.paste_flash = Some((ids, remaining));
+                    ctx.request_repaint();
+                }
+            }
         });
 
         // Prune SVG texture cache for widgets removed from canvas.
@@ -3549,6 +3584,14 @@ impl eframe::App for RohKaiApp {
                                 format!("Duplicated {} widgets", out.count)
                             };
                             self.status.set(msg, now);
+                            if let Some(first) = out.new_root_ids.first() {
+                                crate::canvas::search::scroll_to_widget(
+                                    *first,
+                                    &self.project.ui_tree,
+                                    &mut self.session.canvas_settings,
+                                    self.session.last_canvas_rect,
+                                );
+                            }
                             self.session.interaction.paste_flash = Some((out.new_root_ids, 0.6));
                         }
                         Ok(_) => {}
@@ -3610,12 +3653,38 @@ impl eframe::App for RohKaiApp {
                                 format!("Pasted {} widgets", out.count)
                             };
                             self.status.set(msg, now);
+                            if let Some(first) = out.new_root_ids.first() {
+                                crate::canvas::search::scroll_to_widget(
+                                    *first,
+                                    &self.project.ui_tree,
+                                    &mut self.session.canvas_settings,
+                                    self.session.last_canvas_rect,
+                                );
+                            }
                             self.session.interaction.paste_flash = Some((out.new_root_ids, 0.6));
                         }
                         Ok(_) => {}
                         Err(_) => self.status.set("Paste failed: invalid widget graph", now),
                     }
                 }
+            }
+        }
+
+        // Transient status message (CB-21).
+        {
+            let now = ctx.input(|i| i.time);
+            if let Some(text) = self.status.current(now) {
+                let text = text.to_string();
+                egui::Area::new(egui::Id::new("rohkai_status_message"))
+                    .order(egui::Order::Tooltip)
+                    .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(12.0, -12.0))
+                    .interactable(false)
+                    .show(ctx, |ui| {
+                        egui::Frame::popup(ui.style()).show(ui, |ui| {
+                            ui.label(egui::RichText::new(text).strong());
+                        });
+                    });
+                ctx.request_repaint();
             }
         }
 
