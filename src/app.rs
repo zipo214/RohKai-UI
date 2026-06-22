@@ -3428,19 +3428,11 @@ impl eframe::App for RohKaiApp {
             {
                 let origin =
                     crate::canvas::rulers::canvas_origin(canvas_size, zoom, pan, panel_rect);
-                let screen_rects: Vec<(uuid::Uuid, egui::Rect)> = self
-                    .project
-                    .ui_tree
-                    .widgets
-                    .iter()
-                    .map(|w| {
-                        let r = egui::Rect::from_min_size(
-                            origin + egui::vec2(w.rect.x, w.rect.y) * zoom,
-                            egui::vec2(w.rect.w, w.rect.h) * zoom,
-                        );
-                        (w.id, r)
-                    })
-                    .collect();
+                let screen_rects = crate::canvas::rulers::project_widget_screen_rects(
+                    &self.project.ui_tree,
+                    origin,
+                    zoom,
+                );
                 let painter = ui.painter_at(panel_rect);
                 let dark_mode = ui.visuals().dark_mode;
                 crate::canvas::search::draw_search_overlay(&painter, cs, &screen_rects, dark_mode);
@@ -3453,22 +3445,15 @@ impl eframe::App for RohKaiApp {
                 if remaining > 0.0 {
                     let origin =
                         crate::canvas::rulers::canvas_origin(canvas_size, zoom, pan, panel_rect);
-                    let screen_rects: Vec<(uuid::Uuid, egui::Rect)> = self
-                        .project
-                        .ui_tree
-                        .widgets
-                        .iter()
-                        .map(|w| {
-                            let r = egui::Rect::from_min_size(
-                                origin + egui::vec2(w.rect.x, w.rect.y) * zoom,
-                                egui::vec2(w.rect.w, w.rect.h) * zoom,
-                            );
-                            (w.id, r)
-                        })
-                        .collect();
+                    let screen_rects = crate::canvas::rulers::project_widget_screen_rects(
+                        &self.project.ui_tree,
+                        origin,
+                        zoom,
+                    );
                     let painter = ui.painter_at(panel_rect);
                     let dark_mode = ui.visuals().dark_mode;
-                    let alpha = (remaining / 0.6).clamp(0.0, 1.0);
+                    let alpha =
+                        (remaining / crate::canvas::clipboard::PASTE_FLASH_SECS).clamp(0.0, 1.0);
                     crate::canvas::clipboard::draw_paste_flash(
                         &painter,
                         &ids,
@@ -3522,11 +3507,17 @@ impl eframe::App for RohKaiApp {
         {
             let now = ctx.input(|i| i.time);
             let copy_pressed = canvas_keyboard_owned
-                && ctx.input(|i| i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(egui::Key::C));
+                && ctx.input(|i| {
+                    i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(egui::Key::C)
+                });
             let paste_pressed = canvas_keyboard_owned
-                && ctx.input(|i| i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(egui::Key::V));
+                && ctx.input(|i| {
+                    i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(egui::Key::V)
+                });
             let dup_pressed = canvas_keyboard_owned
-                && ctx.input(|i| i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(egui::Key::D));
+                && ctx.input(|i| {
+                    i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(egui::Key::D)
+                });
 
             let gesture_active = self.session.interaction.drag.is_some()
                 || self.session.interaction.resize.is_some();
@@ -3592,7 +3583,10 @@ impl eframe::App for RohKaiApp {
                                     self.session.last_canvas_rect,
                                 );
                             }
-                            self.session.interaction.paste_flash = Some((out.new_root_ids, 0.6));
+                            self.session.interaction.paste_flash = Some((
+                                out.new_root_ids,
+                                crate::canvas::clipboard::PASTE_FLASH_SECS,
+                            ));
                         }
                         Ok(_) => {}
                         Err(_) => self
@@ -3618,7 +3612,9 @@ impl eframe::App for RohKaiApp {
                     let cursor_screen = ctx.input(|i| i.pointer.interact_pos());
                     let target = match cursor_screen {
                         Some(p) if panel_rect.contains(p) => {
-                            crate::canvas::clipboard::cursor_to_canvas(p, size, zoom, pan, panel_rect)
+                            crate::canvas::clipboard::cursor_to_canvas(
+                                p, size, zoom, pan, panel_rect,
+                            )
                         }
                         _ => crate::canvas::clipboard::visible_viewport_center_canvas(
                             size, zoom, pan, panel_rect,
@@ -3661,7 +3657,10 @@ impl eframe::App for RohKaiApp {
                                     self.session.last_canvas_rect,
                                 );
                             }
-                            self.session.interaction.paste_flash = Some((out.new_root_ids, 0.6));
+                            self.session.interaction.paste_flash = Some((
+                                out.new_root_ids,
+                                crate::canvas::clipboard::PASTE_FLASH_SECS,
+                            ));
                         }
                         Ok(_) => {}
                         Err(_) => self.status.set("Paste failed: invalid widget graph", now),

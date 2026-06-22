@@ -78,6 +78,9 @@ pub use crate::project::ui_tree::PasteError;
 /// Cascade step between repeated pastes, in canvas units (zoom-stable, CB-19).
 pub const PASTE_CASCADE_STEP: f32 = 16.0;
 
+/// Duration of the post-paste flash ring fade, in seconds (CB-21).
+pub const PASTE_FLASH_SECS: f32 = 0.6;
+
 /// Result of a successful paste/duplicate.
 pub struct PasteOutcome {
     pub new_root_ids: Vec<uuid::Uuid>,
