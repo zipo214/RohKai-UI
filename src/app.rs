@@ -3535,8 +3535,18 @@ impl eframe::App for RohKaiApp {
                                     "Duplicated {} widgets — behavior wires not copied",
                                     out.count
                                 )
+                            } else if out.count == 1 {
+                                let label = self
+                                    .project
+                                    .ui_tree
+                                    .widgets
+                                    .iter()
+                                    .find(|w| w.id == out.new_root_ids[0])
+                                    .map(|w| crate::canvas::clipboard::widget_kind_label(&w.kind))
+                                    .unwrap_or_else(|| "1 widget".to_string());
+                                format!("Duplicated {label}")
                             } else {
-                                format!("Duplicated {} widget(s)", out.count)
+                                format!("Duplicated {} widgets", out.count)
                             };
                             self.status.set(msg, now);
                             self.session.interaction.paste_flash = Some((out.new_root_ids, 0.6));
@@ -3586,8 +3596,18 @@ impl eframe::App for RohKaiApp {
                             self.session.selected = out.new_root_ids.clone();
                             let msg = if out.had_behaviors {
                                 format!("Pasted {} widgets — behavior wires not copied", out.count)
+                            } else if out.count == 1 {
+                                let label = self
+                                    .project
+                                    .ui_tree
+                                    .widgets
+                                    .iter()
+                                    .find(|w| w.id == out.new_root_ids[0])
+                                    .map(|w| crate::canvas::clipboard::widget_kind_label(&w.kind))
+                                    .unwrap_or_else(|| "1 widget".to_string());
+                                format!("Pasted {label}")
                             } else {
-                                format!("Pasted {} widget(s)", out.count)
+                                format!("Pasted {} widgets", out.count)
                             };
                             self.status.set(msg, now);
                             self.session.interaction.paste_flash = Some((out.new_root_ids, 0.6));

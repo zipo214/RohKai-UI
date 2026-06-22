@@ -292,18 +292,13 @@ impl UiTree {
 
     /// The id of the layout/container whose bounds contain `canvas_point`, if any.
     /// Read-only sibling of `attach_to_layout_at` used to pick a paste target.
-    /// Reuses the same `is_layout_container` predicate so the two never diverge.
+    /// Reuses the same `is_layout_container` and `rect_contains_point` predicates
+    /// so the two never diverge.
     pub fn attach_target_at(&self, canvas_point: (f32, f32)) -> Option<Uuid> {
-        let (px, py) = canvas_point;
         self.widgets
             .iter()
             .filter(|w| is_layout_container(&w.kind))
-            .filter(|w| {
-                px >= w.rect.x
-                    && px <= w.rect.x + w.rect.w
-                    && py >= w.rect.y
-                    && py <= w.rect.y + w.rect.h
-            })
+            .filter(|w| rect_contains_point(&w.rect, canvas_point))
             .map(|w| w.id)
             .next_back()
     }
