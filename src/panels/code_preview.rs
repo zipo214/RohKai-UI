@@ -438,8 +438,9 @@ pub fn show(root_ui: &mut egui::Ui, tree: &mut UiTree, args: CodePreviewArgs<'_>
                 }
             });
 
-            // Ctrl+F shortcut to open/close search
-            if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::F)) {
+            // Ctrl+F shortcut to open/close search — only when this panel has focus,
+            // so the canvas Ctrl+F binding can fire when the canvas is active.
+            if *editor_has_focus && ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::F)) {
                 *search_open = !*search_open;
                 if !*search_open {
                     search_query.clear();

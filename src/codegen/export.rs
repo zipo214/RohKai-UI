@@ -1,7 +1,7 @@
 use crate::codegen::formula::{emit_formula_rust_with, parse_formula};
 use crate::codegen::{
     field_collector,
-    rust::{effective_field_binding, field_binding, string_literal},
+    rust::{effective_field_binding, field_binding, line_comment_text, string_literal},
 };
 use crate::project::{
     document::{ProjectDocument, SurfaceKind, UiSurface},
@@ -1966,7 +1966,7 @@ fn gen_app_rs(tree: &UiTree) -> String {
                         {
                             code.push_str(&format!(
                                 "                    // grid slot: {}\n",
-                                slot_name.trim()
+                                line_comment_text(slot_name)
                             ));
                         }
                         code.push_str(&export_layout_child_line(
@@ -2518,6 +2518,75 @@ fn export_child_combo(
     code
 }
 
+fn export_frame_layout_child(
+    child: &WidgetInstance,
+    rect_expr: &str,
+    registry: &HashMap<String, (crate::project::schema::HandlerResult, bool)>,
+    tree: &UiTree,
+) -> String {
+    let mut code = format!(
+        "                        ui.scope_builder(egui::UiBuilder::new().max_rect({rect_expr}), |ui| {{\n"
+    );
+    match child.kind {
+        WidgetKind::VLayout => code.push_str("                            ui.vertical(|ui| {\n"),
+        WidgetKind::HLayout => code.push_str("                            ui.horizontal(|ui| {\n"),
+        WidgetKind::GridLayout => code.push_str(&format!(
+            "                            egui::Grid::new(\"{}\").show(ui, |ui| {{\n",
+            child.id.as_simple()
+        )),
+        _ => unreachable!(),
+    }
+
+    let columns = child.props.grid_columns.clamp(1, MAX_GRID_COLUMNS);
+    let mut col_pos = 0usize;
+    for (idx, grandchild_id) in child.children.iter().enumerate() {
+        let Some(grandchild) = tree
+            .widgets
+            .iter()
+            .find(|widget| widget.id == *grandchild_id)
+        else {
+            continue;
+        };
+        if child.kind == WidgetKind::GridLayout
+            && let Some(slot_name) = child
+                .props
+                .grid_slot_names
+                .get(idx)
+                .filter(|name| !name.trim().is_empty())
+        {
+            code.push_str(&format!(
+                "                            // grid slot: {}\n",
+                line_comment_text(slot_name)
+            ));
+        }
+        let child_vertical = matches!(child.kind, WidgetKind::VLayout);
+        code.push_str(&export_layout_child_line(
+            grandchild,
+            tree,
+            registry,
+            child_vertical,
+            1,
+        ));
+        if child.kind == WidgetKind::GridLayout {
+            let span = (grandchild.grid_col_span as usize).clamp(1, columns);
+            for _ in 1..span {
+                code.push_str("                            ui.label(\"\"); // span filler\n");
+            }
+            col_pos += span;
+            if col_pos >= columns {
+                code.push_str("                            ui.end_row();\n");
+                col_pos = 0;
+            }
+        }
+    }
+    if child.kind == WidgetKind::GridLayout && col_pos > 0 {
+        code.push_str("                            ui.end_row();\n");
+    }
+    code.push_str("                            });\n");
+    code.push_str("                        });\n");
+    code
+}
+
 fn export_child_line(
     child: &crate::project::schema::WidgetInstance,
     rect_expr: &str,
@@ -2616,12 +2685,12 @@ fn export_child_line(
                 "                        // ProgressBar {child_label}: set a valid Binding\n"
             ),
         },
+        WidgetKind::VLayout | WidgetKind::HLayout | WidgetKind::GridLayout => {
+            export_frame_layout_child(child, rect_expr, registry, tree)
+        }
         WidgetKind::Frame
         | WidgetKind::GroupBox
-        | WidgetKind::VLayout
-        | WidgetKind::HLayout
         | WidgetKind::ScrollArea
-        | WidgetKind::GridLayout
         | WidgetKind::TabWidget
         | WidgetKind::StackedWidget
         | WidgetKind::ToolBox
@@ -2951,7 +3020,7 @@ fn export_layout_child_line(
                 {
                     code.push_str(&format!(
                         "                    // grid slot: {}\n",
-                        slot_name.trim()
+                        line_comment_text(slot_name)
                     ));
                 }
                 code.push_str(&export_layout_child_line(
@@ -3427,6 +3496,85 @@ mod tests {
         assert!(generated.contains("// grid slot: Main"));
         assert!(generated.contains(&format!("// widget_{leaf_id}")));
         assert!(generated.contains("self.nested_clicked();"));
+    }
+
+    #[test]
+    fn frame_child_layout_export_emits_recursively() {
+        let frame_id = Uuid::from_u128(0x971);
+        let layout_id = Uuid::from_u128(0x972);
+        let child_id = Uuid::from_u128(0x973);
+        let tree = UiTree {
+            widgets: vec![
+                WidgetInstance {
+                    id: frame_id,
+                    kind: WidgetKind::Frame,
+                    children: vec![layout_id],
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: layout_id,
+                    kind: WidgetKind::VLayout,
+                    children: vec![child_id],
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: child_id,
+                    kind: WidgetKind::Button,
+                    props: crate::project::schema::WidgetProps {
+                        label: "Nested".to_owned(),
+                        ..Default::default()
+                    },
+                    on_click: "nested_clicked".to_owned(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let generated = gen_app_rs(&tree);
+
+        assert!(generated.contains("ui.scope_builder"));
+        assert!(generated.contains("ui.vertical(|ui| {"));
+        assert!(generated.contains("egui::Button::new(\"Nested\")"));
+        assert!(generated.contains("self.nested_clicked();"));
+        assert!(!generated.contains("not recursive in export"));
+        assert!(!generated.contains("sequential export not implemented yet"));
+    }
+
+    #[test]
+    fn grid_slot_comment_export_sanitizes_multiline_names() {
+        let parent_id = Uuid::from_u128(0x981);
+        let child_id = Uuid::from_u128(0x982);
+        let tree = UiTree {
+            widgets: vec![
+                WidgetInstance {
+                    id: parent_id,
+                    kind: WidgetKind::GridLayout,
+                    children: vec![child_id],
+                    props: crate::project::schema::WidgetProps {
+                        grid_slot_names: vec!["Main\nui.label(\"oops\");".to_owned()],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: child_id,
+                    kind: WidgetKind::Button,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let generated = gen_app_rs(&tree);
+
+        assert!(generated.contains("// grid slot: Main ui.label(\"oops\");"));
+        for line in generated.lines().filter(|line| line.contains("oops")) {
+            assert!(
+                line.trim_start().starts_with("// grid slot:"),
+                "slot label must stay inside the generated comment: {line}"
+            );
+        }
     }
 
     #[test]

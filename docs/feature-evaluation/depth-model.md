@@ -139,6 +139,14 @@ The agent may treat the gap as closed only when the **Desired Closure Contract**
 and **Closure Criteria** are satisfied. If those are absent, the agent should
 write them first, then implement against them.
 
+Representative tests do not close gaps with hidden state spaces. If a feature
+depends on ownership trees, generated code, parsing, export, runtime preview, or
+surface/session state, closure criteria must include a matrix of those paths.
+For child/container features, use the Engineering Invariant 13 topology matrix:
+top-level, Frame-owned, layout-owned, layout-inside-layout, Frame-owned-layout,
+moved child, empty/cleared container parse, duplicate-parent repair, and cycle
+repair.
+
 ### Example: Chart
 
 Current Implementation Contract:
@@ -167,4 +175,3 @@ Closure Criteria:
 - Axis labels and legend visibility are editable from Properties.
 - Empty data renders an explicit empty state.
 - Generated project containing the chart compiles without manual edits.
-

@@ -2,7 +2,7 @@ use crate::project::schema::{
     AppProps, Rect, WidgetInstance, WidgetKind, WidgetProps, default_combo_options,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 pub const MIN_WIDGET_SIZE: f32 = 20.0;
@@ -262,23 +262,45 @@ impl UiTree {
                 w.id != child_id
                     && is_layout_container(&w.kind)
                     && rect_contains_point(&w.rect, canvas_point)
+                    && !self.is_descendant_of(w.id, child_id)
             })
             .map(|w| w.id);
 
         for w in &mut self.widgets {
-            if is_layout_container(&w.kind) {
-                w.children.retain(|&id| id != child_id);
-            }
+            w.children.retain(|&id| id != child_id);
         }
 
         if let Some(pid) = parent_id
             && let Some(parent) = self.get_mut(pid)
+            && !parent.children.contains(&child_id)
         {
             parent.children.push(child_id);
         }
 
         self.reflow_layouts();
         parent_id
+    }
+
+    fn is_descendant_of(&self, possible_descendant: Uuid, ancestor: Uuid) -> bool {
+        let mut stack = self
+            .widgets
+            .iter()
+            .find(|w| w.id == ancestor)
+            .map(|w| w.children.clone())
+            .unwrap_or_default();
+        let mut seen = HashSet::new();
+        while let Some(id) = stack.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            if id == possible_descendant {
+                return true;
+            }
+            if let Some(widget) = self.widgets.iter().find(|w| w.id == id) {
+                stack.extend(widget.children.iter().copied());
+            }
+        }
+        false
     }
 
     /// Reflow direct children inside each layout container using absolute canvas rects.
@@ -514,10 +536,29 @@ impl UiTree {
             Self::repair_binding(widget, &mut seen_bindings);
         }
 
-        // Remove stale child references (child UUIDs that no longer exist)
+        // Child ownership is tree-shaped: no stale references, no duplicates,
+        // no self-edges/cycles, and no child owned by more than one parent.
         let all_ids: HashSet<Uuid> = self.widgets.iter().map(|w| w.id).collect();
+        let mut claimed_children = HashSet::new();
+        let mut retained_children: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
         for widget in &mut self.widgets {
-            widget.children.retain(|id| all_ids.contains(id));
+            let parent_id = widget.id;
+            let mut clean = Vec::with_capacity(widget.children.len());
+            for child_id in widget.children.iter().copied() {
+                if !all_ids.contains(&child_id) || child_id == parent_id {
+                    continue;
+                }
+                if claimed_children.contains(&child_id) {
+                    continue;
+                }
+                if would_create_child_cycle(parent_id, child_id, &retained_children) {
+                    continue;
+                }
+                claimed_children.insert(child_id);
+                clean.push(child_id);
+            }
+            widget.children = clean.clone();
+            retained_children.insert(parent_id, clean);
         }
 
         self.prune_stale_behaviors();
@@ -649,6 +690,27 @@ impl UiTree {
     }
 }
 
+fn would_create_child_cycle(
+    parent_id: Uuid,
+    child_id: Uuid,
+    retained_children: &HashMap<Uuid, Vec<Uuid>>,
+) -> bool {
+    let mut stack = vec![child_id];
+    let mut seen = HashSet::new();
+    while let Some(id) = stack.pop() {
+        if id == parent_id {
+            return true;
+        }
+        if !seen.insert(id) {
+            continue;
+        }
+        if let Some(children) = retained_children.get(&id) {
+            stack.extend(children.iter().copied());
+        }
+    }
+    false
+}
+
 fn rect_contains_point(rect: &Rect, (x, y): (f32, f32)) -> bool {
     x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h
 }
@@ -770,6 +832,66 @@ mod tests {
         assert_eq!(child.rect.x, 108.0);
         assert_eq!(child.rect.y, 58.0);
         assert_eq!(child.rect.w, 204.0);
+    }
+
+    #[test]
+    fn attach_to_layout_transfers_existing_frame_child_ownership() {
+        let frame_id = Uuid::from_u128(0x710);
+        let layout_id = Uuid::from_u128(0x711);
+        let child_id = Uuid::from_u128(0x712);
+        let mut tree = UiTree {
+            widgets: vec![
+                WidgetInstance {
+                    id: frame_id,
+                    kind: WidgetKind::Frame,
+                    rect: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        w: 200.0,
+                        h: 160.0,
+                    },
+                    children: vec![child_id],
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: layout_id,
+                    kind: WidgetKind::VLayout,
+                    rect: Rect {
+                        x: 30.0,
+                        y: 30.0,
+                        w: 120.0,
+                        h: 100.0,
+                    },
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: child_id,
+                    kind: WidgetKind::Button,
+                    rect: Rect {
+                        x: 40.0,
+                        y: 45.0,
+                        w: 80.0,
+                        h: 30.0,
+                    },
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            tree.attach_to_layout_at(child_id, (60.0, 50.0)),
+            Some(layout_id)
+        );
+
+        let frame = tree.widgets.iter().find(|w| w.id == frame_id).unwrap();
+        assert!(
+            frame.children.is_empty(),
+            "old Frame owner must detach child"
+        );
+        let layout = tree.widgets.iter().find(|w| w.id == layout_id).unwrap();
+        assert_eq!(layout.children, vec![child_id]);
+        assert_eq!(tree.parent_of(child_id), Some(layout_id));
     }
 
     #[test]
@@ -1564,6 +1686,48 @@ mod tests {
         assert!(
             parent_w.children.is_empty(),
             "stale child ref must be removed"
+        );
+    }
+
+    #[test]
+    fn validate_and_repair_removes_duplicate_parents_and_cycles() {
+        let a = Uuid::from_u128(0x801);
+        let b = Uuid::from_u128(0x802);
+        let c = Uuid::from_u128(0x803);
+        let mut tree = UiTree {
+            widgets: vec![
+                WidgetInstance {
+                    id: a,
+                    children: vec![b, b, c],
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: b,
+                    children: vec![a],
+                    ..Default::default()
+                },
+                WidgetInstance {
+                    id: c,
+                    children: vec![b],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        tree.validate_and_repair();
+
+        let a_children = &tree.widgets.iter().find(|w| w.id == a).unwrap().children;
+        assert_eq!(a_children, &vec![b, c], "same parent dedupes children");
+        let b_children = &tree.widgets.iter().find(|w| w.id == b).unwrap().children;
+        assert!(
+            b_children.is_empty(),
+            "cycle edge back to parent is removed"
+        );
+        let c_children = &tree.widgets.iter().find(|w| w.id == c).unwrap().children;
+        assert!(
+            c_children.is_empty(),
+            "second parent claim for an already-owned child is removed"
         );
     }
 }

@@ -17,6 +17,26 @@ The rule is simple:
 > control has a real output form in every required path, or that path is explicitly
 > removed from the UI before implementation begins.
 
+## Mandatory Derivation Gate
+
+Every implementation prompt for a feature, bug fix, or reviewer finding must
+include this block, either verbatim or with a stricter task-specific expansion:
+
+```text
+Before coding, derive:
+1. source-of-truth data model,
+2. all ownership/topology cases,
+3. all UI surfaces,
+4. all codegen/export/parser paths,
+5. invariant tests for every required path.
+
+Do not mark complete from representative tests.
+```
+
+If any required path is unknown, excluded, or only planned, the agent must stop
+and report that before editing. "One representative widget/test passed" is proof
+of an example, not proof of the feature boundary.
+
 ## Prompt Skeleton
 
 ```text
@@ -37,12 +57,13 @@ Goal:
 <Feature X> must work globally, not only in the common/top-level path.
 
 Before coding, derive and report this checklist from code:
-1. Source of truth:
-2. UI surfaces that expose this feature:
-3. Runtime/canvas paths:
-4. Export/codegen paths:
-5. Nested/child/template/custom paths:
-6. Tests needed for each path:
+1. Source-of-truth data model:
+2. Ownership/topology cases:
+3. UI surfaces that expose this feature:
+4. Runtime/canvas paths:
+5. Export/codegen/parser paths:
+6. Nested/child/template/custom paths:
+7. Invariant tests needed for each required path:
 
 If any discovered path will not be fixed now, stop and report before editing.
 Do not proceed by documenting a required path as a "remaining gap".
@@ -81,6 +102,25 @@ Final report:
 Success:
 No user-visible control for <Feature X> is ignored by any required runtime or
 export path.
+```
+
+## Example: Ownership / Topology Parity
+
+```text
+Goal:
+Container/layout behavior must work globally, not only for top-level widgets.
+
+Before coding:
+1. Derive every consumer of WidgetInstance.children.
+2. Cover top-level, Frame-owned, layout-owned, layout-inside-layout,
+   Frame-owned-layout, moved child, empty container parse, duplicate-parent
+   repair, and cycle repair.
+3. Enumerate every output path: canvas, live codegen, export, parser/Lazare,
+   save/load repair, docs, and tests.
+
+Failure:
+A top-level layout test passing is not enough. A Frame-owned layout placeholder
+or duplicate-parent child means topology parity is still open.
 ```
 
 ## Example: Event Export Parity

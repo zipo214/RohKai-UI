@@ -10,6 +10,7 @@ pub mod interaction;
 pub mod overlays;
 pub mod preview;
 pub mod rulers;
+pub mod search;
 pub mod shaper;
 #[cfg(test)]
 pub mod svg_golden;

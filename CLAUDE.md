@@ -149,6 +149,12 @@ where real lints have hidden.
   the systemic-fix workflow in `docs/ENGINEERING_INVARIANTS.md` (root cause →
   sibling-surface parity → name/add the invariant → class-level regression test →
   minimal patch).
+- Before coding feature or bug-fix work, derive the source-of-truth data model,
+  all ownership/topology cases, all UI surfaces, all codegen/export/parser paths,
+  and invariant tests for every required path. Do not mark complete from
+  representative tests; if any required path is unknown or excluded, stop and
+  report before editing. For `WidgetInstance.children`, use Engineering
+  Invariant 13's topology matrix.
 - At the start of a meaningful planning or coding session, append a 3-4 sentence
   newest-first `docs/CODE_COOP.md` note for the next agent.
 - When writing a goal/prompt for another agent, use `docs/PROMPT_CONTRACT.md`

@@ -69,9 +69,6 @@ pub fn show_content(
     ui: &mut egui::Ui,
     descriptors: &[WidgetDescriptor],
 ) -> (Option<WidgetInstance>, Option<WidgetInstance>) {
-    ui.heading("Palette");
-    ui.separator();
-
     let mut click_add: Option<WidgetInstance> = None;
     let mut drag_add: Option<WidgetInstance> = None;
 

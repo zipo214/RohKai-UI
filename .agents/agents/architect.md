@@ -16,6 +16,8 @@ When evaluating a feature, answer:
 1. Does it violate `UiTree` as the single source of truth?
 2. Does it require C FFI? If yes, reject it.
 3. Is it in MVP scope? If not, recommend deferral.
-4. Where should the code live? Name exact modules and files.
+4. What ownership/topology cases exist?
+5. What UI, runtime, codegen/export, parser, persistence, and test paths consume it?
+6. Where should the code live? Name exact modules and files.
 
 Output a numbered list of decisions with rationale. Do not write code unless asked.

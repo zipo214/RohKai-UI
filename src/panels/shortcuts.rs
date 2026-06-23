@@ -29,6 +29,7 @@ pub const BUILTIN_SHORTCUTS: &[(&str, &str, &str)] = &[
     ("group", "Ctrl+G", "Group 2+ selected widgets into a Frame"),
     ("ungroup", "Ctrl+Shift+G", "Ungroup selected Frame"),
     ("shortcuts_help", "F1", "Show / hide this reference"),
+    ("canvas_search", "Ctrl+F", "Open canvas widget search"),
 ];
 
 // ---------------------------------------------------------------------------
@@ -118,6 +119,7 @@ fn show_reference(ui: &mut egui::Ui, user_shortcuts: &HashMap<String, String>) {
         ref_row(ui, "toggle_outline", user_shortcuts);
         ref_row(ui, "toggle_preview", user_shortcuts);
         ref_row(ui, "deselect", user_shortcuts);
+        ref_row(ui, "canvas_search", user_shortcuts);
 
         section(ui, "Selection");
         row(ui, "Click", "Select widget");

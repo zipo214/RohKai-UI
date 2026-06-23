@@ -415,6 +415,8 @@ pub struct InteractionState {
     /// Behavior wire selected on the canvas; edited in the Behaviors panel.
     /// Session-only selection — the behavior itself lives in the UiTree.
     pub selected_behavior: Option<Uuid>,
+    /// Session-only canvas search state. Never serialized.
+    pub canvas_search: Option<crate::canvas::search::CanvasSearchState>,
 }
 
 // ---------------------------------------------------------------------------
@@ -2474,7 +2476,18 @@ pub fn handle(
     };
     let key_g = keyboard_owned && ui.input(|i| i.key_pressed(egui::Key::G));
     let key_0 = keyboard_owned && ui.input(|i| ctrl_held && i.key_pressed(egui::Key::Num0));
-    let key_f = keyboard_owned && ui.input(|i| i.key_pressed(egui::Key::F));
+    // Bare F = zoom-to-fit. Guard against Ctrl held so Ctrl+F goes to canvas_search.
+    let key_f = keyboard_owned && ui.input(|i| !i.modifiers.ctrl && i.key_pressed(egui::Key::F));
+    // Ctrl+F = open canvas search (gated: keyboard must be owned and not modal-blocked).
+    // Wired to open the search panel in Task 6.
+    let key_ctrl_f = keyboard_owned
+        && !settings.input_blocked
+        && ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::F));
+    // Ctrl+F — open canvas search panel (or leave open if already open;
+    // the panel's own Ctrl+F handler refocuses the TextEdit when already open).
+    if key_ctrl_f && state.canvas_search.is_none() {
+        state.canvas_search = Some(crate::canvas::search::CanvasSearchState::default());
+    }
     let double_clicked = pointer_owned && resp.double_clicked();
 
     // -------------------------------------------------------------------

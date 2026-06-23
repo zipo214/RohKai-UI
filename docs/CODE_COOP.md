@@ -7,6 +7,44 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-20 — Directive hardening for topology/output-path proof
+
+Branch `dev`. Added a low-token derivation gate to AGENTS, CLAUDE, preflight
+commands, prompt contract, engineering invariants, project-model/codegen skills,
+and paired helper-agent docs so future work must derive source-of-truth data,
+ownership/topology cases, UI surfaces, codegen/export/parser paths, and invariant
+tests before coding. This directly addresses the S1 failure mode where
+representative top-level tests looked complete while Frame-owned/layout-owned
+topologies still had hollow or divergent output. Keep future prompts small by
+linking `docs/PROMPT_CONTRACT.md`; do not paste the whole invariant file unless
+the task is a reviewer finding or touches tree topology/codegen.
+
+## 2026-06-20 — S1 review fixes: layout ownership + recursive codegen
+
+Branch `dev`. Closed three S1 review findings: `UiTree::attach_to_layout_at`
+now transfers child ownership out of any previous parent and repair enforces
+single-parent/no-cycle child trees; Frame-owned V/H/Grid layouts now emit
+recursive live/export code instead of placeholder comments; grid slot labels are
+sanitized through a shared one-line comment helper before entering generated
+Rust. Added focused regression tests in `ui_tree`, `egui_emitter`, `export`, and
+`codegen::rust`; full `cargo test` passed with 598 unit tests plus integration
+and doctests, and all-target clippy is clean. Mechanical `cargo fmt` also
+normalized pre-existing formatting drift in `app.rs`, `canvas/mod.rs`, and
+`canvas/search.rs`.
+
+## 2026-06-20 — Left panel palette header de-duplication
+
+Branch `dev`. Removed the internal `ui.heading("Palette")`/separator from
+`src/panels/palette.rs` so the Palette tab and Stack-mode collapsing header are
+the location signal instead of showing Palette twice. This is a small UI polish
+pass only; palette categories and drag/click behavior are unchanged. Verify with
+`cargo fmt --check` and `cargo check`; a visual smoke should show Basic directly
+under the selected Palette section header.
+
+## 2026-06-20 — S2 Item 1: Canvas widget search (Ctrl+F) — PR #11
+
+Branch `dev`. Implemented full canvas widget search: `src/canvas/search.rs` (new, ~500 lines) owns `CanvasSearchState`, `SearchPanelResponse`, `run_search`, `scroll_to_widget`, `draw_search_panel`, `draw_search_overlay`, `SEARCH_PANEL_W/H` constants. Wired in `interaction.rs` (`key_ctrl_f`, `canvas_search` field on `InteractionState`), `app.rs` (panel draw + response handling + ring/glow overlay after rulers/bezel), `code_preview.rs` (`editor_has_focus` gate), `shortcuts.rs` (registration + reference panel). Critical fixes applied during 10-agent adversarial review: correct coordinate transform in `scroll_to_widget` (uses canonical `canvas_origin` formula), correct usable-rect top-right footprint for visibility check, `just_wrapped` cleared on non-wrapping navigation. 20 canvas::search tests, 23 lib tests total, zero warnings. PR #11 open on dev→main. Next: remaining 7 S2 items (undo history, zoom-to-selection refinements, multi-select drag, etc.).
+
 ## 2026-06-15 — CodeRabbit PR #9 batch 2 + gh thread replies
 
 Branch `dev`. Completed the second batch of CodeRabbit fixes (commit 4a14459): name_counter now reseeds on project open; sanitise_ident guards against leading-digit SQL identifiers; db_panel refresh_schema clears all dependent caches on both Ok and Err paths; added effective_field_binding() helper in codegen/rust.rs to unify binding resolution across all surfaces; properties.rs duplicate test renamed to state the actual invariant. Also added the DB_INTEGRATION_RESEARCH.md cross-reference to ENGINEERING_INVARIANTS.md Invariant 10, and the egui API maintenance reminder in feature-evaluation doc. Posted gh api replies on all 5 remaining open threads (workflow SHA, DB cross-ref, feature-eval reminder, sink-type validation deferred, db_panel stale cache). All 14 original CodeRabbit threads now have zipo214 replies; 554 unit + 17 fidelity + doctest green. Sink-type validation (comment 3417193356) is deferred — needs field-type metadata threading through UiTree into the behavior graph; acknowledged in thread. PR #9 is ready for final CI pass and merge decision.

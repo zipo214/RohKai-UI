@@ -20,3 +20,5 @@ Rules:
 - Validate string escaping and binding identifiers before emitting them into Rust source.
 - New `WidgetKind` variants require schema, widget defaults, canvas drawing, live emitter,
   state emitter, and export emitter support.
+- Before coding, derive all ownership/topology cases and every live/export/parser path;
+  do not accept top-level-only or representative-test proof for nested/container output.
