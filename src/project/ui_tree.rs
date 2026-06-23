@@ -6,6 +6,15 @@ use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 pub const MIN_WIDGET_SIZE: f32 = 20.0;
+
+/// Error from an attempted atomic paste (CB-04). No tree mutation occurs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PasteError {
+    /// The staged graph would create a cycle, a self-child, or a
+    /// widget owned by two parents.
+    InvalidGraph,
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct UiTree {
     pub widgets: Vec<WidgetInstance>,
@@ -279,6 +288,19 @@ impl UiTree {
 
         self.reflow_layouts();
         parent_id
+    }
+
+    /// The id of the layout/container whose bounds contain `canvas_point`, if any.
+    /// Read-only sibling of `attach_to_layout_at` used to pick a paste target.
+    /// Reuses the same `is_layout_container` and `rect_contains_point` predicates
+    /// so the two never diverge.
+    pub fn attach_target_at(&self, canvas_point: (f32, f32)) -> Option<Uuid> {
+        self.widgets
+            .iter()
+            .filter(|w| is_layout_container(&w.kind))
+            .filter(|w| rect_contains_point(&w.rect, canvas_point))
+            .map(|w| w.id)
+            .next_back()
     }
 
     fn is_descendant_of(&self, possible_descendant: Uuid, ancestor: Uuid) -> bool {
@@ -687,6 +709,173 @@ impl UiTree {
             self.widgets.swap(idx, idx - 1);
             debug_assert_eq!(self.widgets[idx - 1].id, id, "send_back: swap failed");
         }
+    }
+
+    /// Atomically paste a self-contained set of widgets (CB-01).
+    ///
+    /// Builds one old→new UUID map over the entire `staged` set, rewrites
+    /// `id` and every `children[]` entry through it, applies `anchor_delta`
+    /// to every widget rect (CB-08), validates the staged graph, and only
+    /// then commits all widgets in one step. On validation failure returns
+    /// `Err(PasteError::InvalidGraph)` with NO mutation (CB-04).
+    ///
+    /// Returns the new root widget ids (widgets not referenced as a child of
+    /// any other staged widget). If `target_container` is `Some`, the new
+    /// roots are attached to that layout via the normal attach/reflow path,
+    /// which may adjust their rects.
+    pub fn paste_batch(
+        &mut self,
+        staged: Vec<WidgetInstance>,
+        anchor_delta: egui::Vec2,
+        target_container: Option<Uuid>,
+    ) -> Result<Vec<Uuid>, PasteError> {
+        let id_map: HashMap<Uuid, Uuid> = staged.iter().map(|w| (w.id, Uuid::new_v4())).collect();
+
+        let child_ids: HashSet<Uuid> = staged
+            .iter()
+            .flat_map(|w| w.children.iter().copied())
+            .collect();
+        let old_roots: Vec<Uuid> = staged
+            .iter()
+            .map(|w| w.id)
+            .filter(|id| !child_ids.contains(id))
+            .collect();
+
+        let staged_set: HashSet<Uuid> = staged.iter().map(|w| w.id).collect();
+        let mut remapped: Vec<WidgetInstance> = Vec::with_capacity(staged.len());
+        for w in &staged {
+            let mut c = w.clone();
+            c.id = id_map[&w.id];
+            c.children = w
+                .children
+                .iter()
+                .filter(|cid| staged_set.contains(cid))
+                .map(|cid| id_map[cid])
+                .collect();
+            c.rect.x += anchor_delta.x;
+            c.rect.y += anchor_delta.y;
+            remapped.push(c);
+        }
+
+        // 6a. Remap constraint references (CB-13): id-string → new id-string when
+        //     the target is in the set; clear when it points outside.
+        let id_str_map: HashMap<String, String> = id_map
+            .iter()
+            .map(|(old, new)| (old.to_string(), new.to_string()))
+            .collect();
+        for w in &mut remapped {
+            for slot in [
+                &mut w.constraints.equal_width_to,
+                &mut w.constraints.equal_height_to,
+            ] {
+                if let Some(target) = slot.clone() {
+                    *slot = id_str_map.get(&target).cloned();
+                }
+            }
+        }
+
+        // 6b. Remap shared state_bindings once per unique string (CB-12).
+        {
+            let existing: HashSet<String> = self
+                .widgets
+                .iter()
+                .filter_map(|w| w.state_binding.clone())
+                .collect();
+            let mut rename: HashMap<String, String> = HashMap::new();
+            let mut taken = existing.clone();
+            let mut staged_bindings: Vec<String> = remapped
+                .iter()
+                .filter_map(|w| w.state_binding.clone())
+                .collect();
+            staged_bindings.sort();
+            staged_bindings.dedup();
+            for base in staged_bindings {
+                if taken.contains(&base) {
+                    let mut n = 2;
+                    let mut candidate = format!("{base}_{n}");
+                    while taken.contains(&candidate) {
+                        n += 1;
+                        candidate = format!("{base}_{n}");
+                    }
+                    taken.insert(candidate.clone());
+                    rename.insert(base, candidate);
+                } else {
+                    taken.insert(base);
+                }
+            }
+            for w in &mut remapped {
+                if let Some(b) = w.state_binding.clone()
+                    && let Some(new) = rename.get(&b)
+                {
+                    w.state_binding = Some(new.clone());
+                }
+            }
+        }
+
+        Self::validate_staged(&remapped)?;
+
+        let new_roots: Vec<Uuid> = old_roots.iter().map(|old| id_map[old]).collect();
+        for w in remapped {
+            self.widgets.push(w);
+        }
+
+        if let Some(container) = target_container {
+            for root in &new_roots {
+                if let Some(cw) = self.widgets.iter().find(|x| x.id == container) {
+                    let pt = (cw.rect.x, cw.rect.y);
+                    self.attach_to_layout_at(*root, pt);
+                }
+            }
+            self.reflow_layouts();
+        }
+
+        Ok(new_roots)
+    }
+
+    /// Validate a staged, already-remapped widget set (CB-04):
+    /// no duplicate parents, no self-child, no cycle.
+    fn validate_staged(staged: &[WidgetInstance]) -> Result<(), PasteError> {
+        let mut indeg: HashMap<Uuid, usize> = staged.iter().map(|w| (w.id, 0)).collect();
+        for w in staged {
+            for c in &w.children {
+                if *c == w.id {
+                    return Err(PasteError::InvalidGraph);
+                }
+                if let Some(n) = indeg.get_mut(c) {
+                    *n += 1;
+                }
+            }
+        }
+        if indeg.values().any(|n| *n > 1) {
+            return Err(PasteError::InvalidGraph);
+        }
+
+        let child_map: HashMap<Uuid, &Vec<Uuid>> =
+            staged.iter().map(|w| (w.id, &w.children)).collect();
+        let mut indeg2 = indeg.clone();
+        let mut stack: Vec<Uuid> = indeg2
+            .iter()
+            .filter(|(_, n)| **n == 0)
+            .map(|(k, _)| *k)
+            .collect();
+        let mut visited = 0usize;
+        while let Some(id) = stack.pop() {
+            visited += 1;
+            if let Some(children) = child_map.get(&id) {
+                for c in children.iter() {
+                    if let Some(n) = indeg2.get_mut(c) {
+                        *n -= 1;
+                        if *n == 0 {
+                            stack.push(*c);
+                        }
+                    }
+                }
+            }
+        }
+        if visited != staged.len() {
+            return Err(PasteError::InvalidGraph);
+        }
+        Ok(())
     }
 }
 
@@ -1729,5 +1918,170 @@ mod tests {
             c_children.is_empty(),
             "second parent claim for an already-owned child is removed"
         );
+    }
+}
+
+#[cfg(test)]
+mod paste_batch_tests {
+    use super::*;
+    use crate::project::schema::{WidgetInstance, WidgetKind};
+
+    fn w(children: Vec<uuid::Uuid>) -> WidgetInstance {
+        WidgetInstance {
+            id: uuid::Uuid::new_v4(),
+            kind: WidgetKind::Button,
+            children,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn paste_frame_with_child_remaps_all_links() {
+        let child = w(vec![]);
+        let child_id = child.id;
+        let mut frame = w(vec![child_id]);
+        frame.kind = WidgetKind::Frame;
+        let frame_id = frame.id;
+
+        let staged = vec![frame.clone(), child.clone()];
+        let mut tree = UiTree::default();
+        let new_roots = tree
+            .paste_batch(staged, egui::vec2(0.0, 0.0), None)
+            .expect("valid graph");
+
+        assert_eq!(new_roots.len(), 1);
+        let new_frame_id = new_roots[0];
+        assert_ne!(new_frame_id, frame_id);
+        let new_frame = tree.widgets.iter().find(|x| x.id == new_frame_id).unwrap();
+        assert_eq!(new_frame.children.len(), 1);
+        let new_child_id = new_frame.children[0];
+        assert_ne!(new_child_id, child_id);
+        assert!(tree.widgets.iter().any(|x| x.id == new_child_id));
+        assert!(
+            tree.widgets
+                .iter()
+                .flat_map(|x| x.children.iter())
+                .all(|c| *c != child_id && *c != frame_id)
+        );
+    }
+
+    #[test]
+    fn delta_applied_to_every_widget() {
+        let child = w(vec![]);
+        let child_id = child.id;
+        let mut frame = w(vec![child_id]);
+        frame.kind = WidgetKind::Frame;
+        frame.rect = crate::project::schema::Rect {
+            x: 100.0,
+            y: 100.0,
+            w: 50.0,
+            h: 50.0,
+        };
+        let mut child2 = child.clone();
+        child2.rect = crate::project::schema::Rect {
+            x: 110.0,
+            y: 110.0,
+            w: 10.0,
+            h: 10.0,
+        };
+
+        let staged = vec![frame, child2];
+        let mut tree = UiTree::default();
+        tree.paste_batch(staged, egui::vec2(25.0, 5.0), None)
+            .unwrap();
+
+        let xs: Vec<(f32, f32)> = tree.widgets.iter().map(|x| (x.rect.x, x.rect.y)).collect();
+        assert!(xs.contains(&(125.0, 105.0)));
+        assert!(xs.contains(&(135.0, 115.0)));
+    }
+
+    #[test]
+    fn cycle_in_staged_graph_aborts_with_no_mutation() {
+        let mut a = w(vec![]);
+        let mut b = w(vec![]);
+        a.children = vec![b.id];
+        b.children = vec![a.id];
+        let staged = vec![a, b];
+
+        let mut tree = UiTree::default();
+        let before = tree.widgets.len();
+        let result = tree.paste_batch(staged, egui::vec2(0.0, 0.0), None);
+        assert!(matches!(result, Err(PasteError::InvalidGraph)));
+        assert_eq!(tree.widgets.len(), before);
+    }
+
+    #[test]
+    fn duplicate_parent_in_staged_graph_aborts() {
+        let child = w(vec![]);
+        let p1 = w(vec![child.id]);
+        let p2 = w(vec![child.id]);
+        let staged = vec![p1, p2, child];
+
+        let mut tree = UiTree::default();
+        let result = tree.paste_batch(staged, egui::vec2(0.0, 0.0), None);
+        assert!(matches!(result, Err(PasteError::InvalidGraph)));
+    }
+
+    #[test]
+    fn constraint_ref_inside_set_is_remapped() {
+        let mut a = w(vec![]);
+        let b = w(vec![]);
+        a.constraints.equal_width_to = Some(b.id.to_string());
+        let b_id = b.id;
+        let staged = vec![a, b];
+
+        let mut tree = UiTree::default();
+        let _roots = tree
+            .paste_batch(staged, egui::vec2(0.0, 0.0), None)
+            .unwrap();
+        let pasted_a = tree
+            .widgets
+            .iter()
+            .find(|x| x.constraints.equal_width_to.is_some())
+            .unwrap();
+        let referenced = pasted_a.constraints.equal_width_to.clone().unwrap();
+        assert_ne!(referenced, b_id.to_string());
+        assert!(tree.widgets.iter().any(|x| x.id.to_string() == referenced));
+    }
+
+    #[test]
+    fn constraint_ref_outside_set_is_cleared() {
+        let outside_id = uuid::Uuid::new_v4().to_string();
+        let mut a = w(vec![]);
+        a.constraints.equal_height_to = Some(outside_id);
+        let staged = vec![a];
+
+        let mut tree = UiTree::default();
+        tree.paste_batch(staged, egui::vec2(0.0, 0.0), None)
+            .unwrap();
+        let pasted = &tree.widgets[0];
+        assert_eq!(pasted.constraints.equal_height_to, None);
+    }
+
+    #[test]
+    fn shared_binding_renamed_once_and_stays_shared() {
+        let mut existing = w(vec![]);
+        existing.state_binding = Some("count".to_string());
+        let mut tree = UiTree {
+            widgets: vec![existing],
+            ..Default::default()
+        };
+
+        let mut s1 = w(vec![]);
+        let mut s2 = w(vec![]);
+        s1.state_binding = Some("count".to_string());
+        s2.state_binding = Some("count".to_string());
+        tree.paste_batch(vec![s1, s2], egui::vec2(0.0, 0.0), None)
+            .unwrap();
+
+        let bindings: Vec<String> = tree
+            .widgets
+            .iter()
+            .skip(1)
+            .filter_map(|x| x.state_binding.clone())
+            .collect();
+        assert_eq!(bindings.len(), 2);
+        assert_eq!(bindings[0], bindings[1]);
+        assert_ne!(bindings[0], "count");
     }
 }

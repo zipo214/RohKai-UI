@@ -16,6 +16,7 @@ pub mod codegen;
 pub mod panels;
 pub mod project;
 pub mod settings;
+pub mod status;
 pub mod svg_core;
 pub mod svg_import;
 pub mod ui_colors;

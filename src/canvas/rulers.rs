@@ -25,6 +25,26 @@ pub fn canvas_origin(
     )
 }
 
+/// Project every widget in `tree` to its on-screen rect using the canonical
+/// canvas origin/zoom transform. Shared by canvas overlays (search highlight,
+/// paste flash) so their rings stay pixel-aligned with the rendered widgets.
+pub fn project_widget_screen_rects(
+    tree: &crate::project::ui_tree::UiTree,
+    origin: egui::Pos2,
+    zoom: f32,
+) -> Vec<(uuid::Uuid, egui::Rect)> {
+    tree.widgets
+        .iter()
+        .map(|w| {
+            let r = egui::Rect::from_min_size(
+                origin + egui::vec2(w.rect.x, w.rect.y) * zoom,
+                egui::vec2(w.rect.w, w.rect.h) * zoom,
+            );
+            (w.id, r)
+        })
+        .collect()
+}
+
 fn major_tick_step(zoom: f32) -> f32 {
     const STEPS: &[f32] = &[1.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0];
     let min_canvas_step = 50.0 / zoom;

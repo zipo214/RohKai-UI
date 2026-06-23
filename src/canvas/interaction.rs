@@ -400,6 +400,10 @@ pub struct InteractionState {
     pub double_clicked_widget: Option<Uuid>,
     /// Set when a template drag is in flight (instances to place on drop).
     pub template_drag: Option<Vec<WidgetInstance>>,
+    /// Widgets placed by template/palette drag this frame. The app reacts by
+    /// selecting them and opening the Properties tab without duplicating
+    /// placement ownership outside the canvas handler.
+    pub placed_widgets_this_frame: Vec<Uuid>,
     /// Inline label editing: (widget_id, current text buffer).
     /// Double-clicking a label-bearing widget on canvas starts this.
     pub inline_edit: Option<(Uuid, String)>,
@@ -412,11 +416,21 @@ pub struct InteractionState {
     pub constraint_anchor_drag: Option<ConstraintAnchorDrag>,
     /// Active behavior-wire drag (event socket → state socket).
     pub behavior_drag: Option<BehaviorWireDrag>,
+    /// Explicit behavior-wiring tool mode. Normal selection keeps connector
+    /// affordances hidden until this is armed or a wire drag is active.
+    pub behavior_wire_armed: bool,
     /// Behavior wire selected on the canvas; edited in the Behaviors panel.
     /// Session-only selection — the behavior itself lives in the UiTree.
     pub selected_behavior: Option<Uuid>,
     /// Session-only canvas search state. Never serialized.
     pub canvas_search: Option<crate::canvas::search::CanvasSearchState>,
+    /// In-app clipboard buffer (CB-17). Session-only; never serialized.
+    pub clipboard: crate::canvas::clipboard::ClipboardContents,
+    /// Cumulative repeat-paste cascade counter; resets on each new copy (CB-19).
+    pub paste_cascade: usize,
+    /// Newly pasted root ids + remaining flash seconds, for the paste ring
+    /// overlay (separate from search state, CB-21).
+    pub paste_flash: Option<(Vec<Uuid>, f32)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -2302,8 +2316,10 @@ fn canvas_owns_keyboard(
 
 const BEHAVIOR_SOCKET_RADIUS: f32 = 4.5;
 const BEHAVIOR_SOCKET_HIT_RADIUS: f32 = 9.0;
+const BEHAVIOR_MARKER_HOVER_DISTANCE: f32 = 14.0;
 const BEHAVIOR_WIRE_HIT_DISTANCE: f32 = 7.0;
 const BEHAVIOR_WIRE_COLOR: egui::Color32 = egui::Color32::from_rgb(244, 196, 96);
+const BEHAVIOR_MARKER_COLOR: egui::Color32 = egui::Color32::from_rgb(248, 113, 113);
 
 /// Screen position of a widget's event (source) socket — right edge center.
 fn event_socket_pos(rect: egui::Rect) -> egui::Pos2 {
@@ -2313,6 +2329,33 @@ fn event_socket_pos(rect: egui::Rect) -> egui::Pos2 {
 /// Screen position of a widget's state (target) socket — left edge center.
 fn state_socket_pos(rect: egui::Rect) -> egui::Pos2 {
     rect.left_center()
+}
+
+fn nearest_rect_outline_point(rect: egui::Rect, pos: egui::Pos2) -> egui::Pos2 {
+    let clamped = egui::pos2(
+        pos.x.clamp(rect.left(), rect.right()),
+        pos.y.clamp(rect.top(), rect.bottom()),
+    );
+    if !rect.contains(pos) {
+        return clamped;
+    }
+
+    let distances = [
+        (pos.x - rect.left(), egui::pos2(rect.left(), pos.y)),
+        (rect.right() - pos.x, egui::pos2(rect.right(), pos.y)),
+        (pos.y - rect.top(), egui::pos2(pos.x, rect.top())),
+        (rect.bottom() - pos.y, egui::pos2(pos.x, rect.bottom())),
+    ];
+    distances
+        .into_iter()
+        .min_by(|(a, _), (b, _)| a.total_cmp(b))
+        .map(|(_, p)| p)
+        .unwrap_or(clamped)
+}
+
+fn behavior_outline_marker(rect: egui::Rect, pos: egui::Pos2) -> Option<egui::Pos2> {
+    let marker = nearest_rect_outline_point(rect, pos);
+    (marker.distance(pos) <= BEHAVIOR_MARKER_HOVER_DISTANCE).then_some(marker)
 }
 
 /// The default event a fresh wire from this widget fires on: the first entry
@@ -2430,6 +2473,7 @@ pub fn handle(
 ) {
     // Clear per-frame signals
     state.double_clicked_widget = None;
+    state.placed_widgets_this_frame.clear();
     settings.snap_step = settings.snap_step.max(MIN_SNAP_STEP);
     let modal_blocked = settings.input_blocked;
 
@@ -2720,38 +2764,45 @@ pub fn handle(
             }
         }
 
-        // Sockets: open circle on every event-capable widget (source side),
-        // closed circle on every state-bound widget (target side).  Capability
-        // derives from the canonical APIs, never re-listed per kind.
+        // Wire affordances are a deliberate tool mode, not permanent canvas
+        // chrome. Normal selection stays visually clean; arming behavior wire
+        // mode shows only the nearest source/target marker under the pointer.
         let drag_active = state.behavior_drag.is_some();
-        for widget in &tree.widgets {
-            let rect = crect(widget, origin, zoom);
-            if behavior_source_event(widget).is_some() {
-                let p = event_socket_pos(rect);
-                let hovered = pointer.is_some_and(|pos| {
-                    p.distance(pos) <= BEHAVIOR_SOCKET_HIT_RADIUS && !drag_active
-                });
-                let color = if hovered {
-                    egui::Color32::from_rgb(52, 211, 153)
-                } else {
-                    egui::Color32::from_gray(120)
-                };
-                painter.circle_filled(p, BEHAVIOR_SOCKET_RADIUS, egui::Color32::from_gray(28));
-                painter.circle_stroke(p, BEHAVIOR_SOCKET_RADIUS, egui::Stroke::new(1.5, color));
+        if let Some(pos) = pointer {
+            if state.behavior_wire_armed
+                && !drag_active
+                && let Some((marker, _)) = tree.widgets.iter().rev().find_map(|widget| {
+                    let rect = crect(widget, origin, zoom);
+                    behavior_source_event(widget)
+                        .and_then(|_| behavior_outline_marker(rect, pos).map(|p| (p, widget.id)))
+                })
+            {
+                painter.circle_filled(marker, BEHAVIOR_SOCKET_RADIUS, BEHAVIOR_MARKER_COLOR);
+                painter.circle_stroke(
+                    marker,
+                    BEHAVIOR_SOCKET_RADIUS + 2.0,
+                    egui::Stroke::new(1.0, BEHAVIOR_MARKER_COLOR),
+                );
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
             }
-            if behavior_target_field(widget).is_some() {
-                let p = state_socket_pos(rect);
-                let highlighted = drag_active
-                    && state
-                        .behavior_drag
-                        .as_ref()
-                        .is_some_and(|d| d.source_widget != widget.id);
-                let color = if highlighted {
-                    egui::Color32::from_rgb(52, 211, 153)
-                } else {
-                    egui::Color32::from_gray(120)
-                };
-                painter.circle_filled(p, BEHAVIOR_SOCKET_RADIUS, color);
+
+            if let Some(drag) = &state.behavior_drag
+                && let Some(marker) = tree.widgets.iter().rev().find_map(|widget| {
+                    if widget.id == drag.source_widget || behavior_target_field(widget).is_none() {
+                        return None;
+                    }
+                    let rect = crect(widget, origin, zoom);
+                    behavior_outline_marker(rect, pos)
+                        .or_else(|| rect.contains(pos).then(|| state_socket_pos(rect)))
+                })
+            {
+                painter.circle_filled(marker, BEHAVIOR_SOCKET_RADIUS, BEHAVIOR_MARKER_COLOR);
+                painter.circle_stroke(
+                    marker,
+                    BEHAVIOR_SOCKET_RADIUS + 2.0,
+                    egui::Stroke::new(1.0, BEHAVIOR_MARKER_COLOR),
+                );
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
             }
         }
 
@@ -3045,11 +3096,13 @@ pub fn handle(
         // Find bounding box of the template to offset correctly
         let min_x = instances.iter().map(|w| w.rect.x).fold(f32::MAX, f32::min);
         let min_y = instances.iter().map(|w| w.rect.y).fold(f32::MAX, f32::min);
+        let mut placed_ids = Vec::new();
         for mut w in instances {
             w.id = Uuid::new_v4();
             w.rect.x = (w.rect.x - min_x + offset_x).max(0.0);
             w.rect.y = (w.rect.y - min_y + offset_y).max(0.0);
             let id = w.id;
+            placed_ids.push(id);
             let center = (w.rect.x + w.rect.w * 0.5, w.rect.y + w.rect.h * 0.5);
             tree.add(w);
             if !matches!(
@@ -3059,6 +3112,9 @@ pub fn handle(
                 tree.attach_to_layout_at(id, center);
             }
         }
+        selected.clear();
+        selected.extend(placed_ids.iter().copied());
+        state.placed_widgets_this_frame = placed_ids;
     }
 
     // -------------------------------------------------------------------
@@ -3081,23 +3137,26 @@ pub fn handle(
             let mut started_resize = false;
             let mut started_behavior_wire = false;
 
-            // 0) Behavior event socket on any event-capable widget — wires
-            // are drawn topmost, so socket hits win over body hits.
-            for widget in tree.widgets.iter().rev() {
-                let Some(event) = behavior_source_event(widget) else {
-                    continue;
-                };
-                let socket = event_socket_pos(crect(widget, origin, zoom));
-                if socket.distance(pos) <= BEHAVIOR_SOCKET_HIT_RADIUS {
-                    state.behavior_drag = Some(BehaviorWireDrag {
-                        source_widget: widget.id,
-                        event,
-                    });
-                    state.resize = None;
-                    state.drag = None;
-                    state.rubber_band = None;
-                    started_behavior_wire = true;
-                    break;
+            // 0) Behavior source marker. This is only active when the user
+            // explicitly arms behavior wiring; hidden sockets must not steal
+            // normal selection clicks.
+            if state.behavior_wire_armed {
+                for widget in tree.widgets.iter().rev() {
+                    let Some(event) = behavior_source_event(widget) else {
+                        continue;
+                    };
+                    let rect = crect(widget, origin, zoom);
+                    if behavior_outline_marker(rect, pos).is_some() {
+                        state.behavior_drag = Some(BehaviorWireDrag {
+                            source_widget: widget.id,
+                            event,
+                        });
+                        state.resize = None;
+                        state.drag = None;
+                        state.rubber_band = None;
+                        started_behavior_wire = true;
+                        break;
+                    }
                 }
             }
 
@@ -3686,6 +3745,7 @@ pub fn handle(
         // Commit behavior-wire drag: dropping on a state socket (or anywhere on
         // a state-bound widget) creates a typed behavior in the UiTree.
         if let Some(wire) = state.behavior_drag.take() {
+            state.behavior_wire_armed = false;
             let drop = pointer.and_then(|pos| {
                 tree.widgets
                     .iter()
@@ -3982,6 +4042,30 @@ mod input_ownership_tests {
         assert!(!canvas_owns_keyboard(false, true, true));
         assert!(!canvas_owns_keyboard(false, false, false));
         assert!(!canvas_owns_keyboard(true, true, false));
+    }
+}
+
+#[cfg(test)]
+mod behavior_affordance_tests {
+    use super::{behavior_outline_marker, nearest_rect_outline_point};
+
+    #[test]
+    fn nearest_outline_point_snaps_inside_pointer_to_nearest_edge() {
+        let rect = egui::Rect::from_min_max(egui::pos2(10.0, 20.0), egui::pos2(110.0, 70.0));
+        let marker = nearest_rect_outline_point(rect, egui::pos2(55.0, 24.0));
+
+        assert_eq!(marker, egui::pos2(55.0, 20.0));
+    }
+
+    #[test]
+    fn behavior_marker_only_appears_near_widget_outline() {
+        let rect = egui::Rect::from_min_max(egui::pos2(10.0, 20.0), egui::pos2(110.0, 70.0));
+
+        assert_eq!(
+            behavior_outline_marker(rect, egui::pos2(111.0, 45.0)),
+            Some(egui::pos2(110.0, 45.0))
+        );
+        assert!(behavior_outline_marker(rect, egui::pos2(60.0, 45.0)).is_none());
     }
 }
 

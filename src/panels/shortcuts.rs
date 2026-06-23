@@ -30,6 +30,13 @@ pub const BUILTIN_SHORTCUTS: &[(&str, &str, &str)] = &[
     ("ungroup", "Ctrl+Shift+G", "Ungroup selected Frame"),
     ("shortcuts_help", "F1", "Show / hide this reference"),
     ("canvas_search", "Ctrl+F", "Open canvas widget search"),
+    ("canvas_copy", "Ctrl+C", "Copy selected widgets"),
+    ("canvas_paste", "Ctrl+V", "Paste widgets at cursor"),
+    (
+        "canvas_duplicate",
+        "Ctrl+D",
+        "Duplicate selected widgets in place",
+    ),
 ];
 
 // ---------------------------------------------------------------------------
@@ -120,6 +127,9 @@ fn show_reference(ui: &mut egui::Ui, user_shortcuts: &HashMap<String, String>) {
         ref_row(ui, "toggle_preview", user_shortcuts);
         ref_row(ui, "deselect", user_shortcuts);
         ref_row(ui, "canvas_search", user_shortcuts);
+        ref_row(ui, "canvas_copy", user_shortcuts);
+        ref_row(ui, "canvas_paste", user_shortcuts);
+        ref_row(ui, "canvas_duplicate", user_shortcuts);
 
         section(ui, "Selection");
         row(ui, "Click", "Select widget");
@@ -297,4 +307,17 @@ fn row(ui: &mut egui::Ui, key: &str, description: &str) {
         );
         ui.label(egui::RichText::new(description).small());
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clipboard_shortcuts_registered() {
+        let ids: Vec<&str> = BUILTIN_SHORTCUTS.iter().map(|(k, _, _)| *k).collect();
+        assert!(ids.contains(&"canvas_copy"));
+        assert!(ids.contains(&"canvas_paste"));
+        assert!(ids.contains(&"canvas_duplicate"));
+    }
 }

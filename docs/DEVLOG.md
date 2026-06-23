@@ -2,6 +2,81 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-21 - Clipboard Parity Tests And Verification Gate (S2 Item 2 Close)
+
+### Context Reviewed
+- Preflight intent, latest CoOp note, git status, and the real codegen/io
+  entry points: `src/codegen/egui_emitter.rs` (`emit_document`),
+  `src/project/io.rs` (`serialize_tree`/`deserialize_tree`), `src/project/undo.rs`
+  (snapshot/record undo model), and the existing `src/canvas/clipboard.rs`
+  test module.
+
+### Changes
+- Added two parity tests to `src/canvas/clipboard.rs`:
+  - `pasted_widgets_appear_in_live_codegen` pastes a Button labelled "Zorp",
+    runs the REAL live emitter `emit_document(&tree).text`, and asserts the
+    pasted widget appears in the generated Rust.
+  - `pasted_tree_survives_save_load_round_trip` pastes a Frame + child, runs the
+    REAL `serialize_tree` then `deserialize_tree`, and asserts no `children[]`
+    reference dangles after reload and the Frame keeps its child link.
+- Skipped the A3 paste+undo-exactness test deliberately: undo is a
+  ProjectDocument-JSON snapshot model driven by RohKaiApp's record/apply loop
+  (`src/project/undo.rs`), not reachable through `paste_payload` in isolation.
+- Ran `cargo fmt`, which normalized pre-existing formatting drift in the
+  clipboard-feature-owned files only: `src/canvas/clipboard.rs`,
+  `src/canvas/mod.rs`, `src/panels/shortcuts.rs`, `src/project/ui_tree.rs`. No
+  unrelated files were reformatted.
+
+### Verification
+- `cargo test --lib clipboard::tests` - 12 passed.
+- `cargo test` - 665 tests passed across all binaries, 0 failed.
+- `cargo clippy --all-targets -- -D warnings` - clean, zero warnings.
+- `cargo build` - clean.
+- `cargo fmt --check` (pre-fix) flagged the four feature files above; resolved.
+
+### Risks / Follow-ups
+- Undo exactness for paste/duplicate remains covered only at the app-snapshot
+  layer; a future app-level harness could assert it end-to-end.
+- Deferred clipboard scope still open: Cut/Ctrl+X, behavior-wire copy, CB-18
+  surface-kind validation, CB-23 context menu.
+
+## 2026-06-21 - Canvas Placement Flow And Wiring Affordance Cleanup
+
+### Context Reviewed
+- Preflight, latest CoOp note, git status, `rust-skills`, `project-model`, and
+  the canvas/palette/behaviors slices in `src/app.rs`,
+  `src/canvas/interaction.rs`, and `src/panels/behaviors.rs`.
+
+### Changes
+- Palette click placement now selects the newly created widget and switches the
+  left panel to Props, matching the designer workflow of placing then editing.
+- Palette/template drag-drop placement now reports placed widget IDs from the
+  canvas handler, selects the placed widgets, and switches the left panel to
+  Props after a successful drop.
+- Behavior wiring sockets are no longer permanent selection chrome. The
+  Behaviors section exposes an explicit "Wire behavior" tool; when armed, the
+  canvas shows a red hover marker on the nearest widget outline and starts wire
+  drag only from that deliberate mode.
+- Behavior wire mode is single-use for now: after a wire drag completes or
+  cancels, normal selection resumes.
+- Added small geometry regression tests for nearest outline marker behavior.
+
+### Verification
+- `cargo fmt --check` - clean.
+- `cargo check` - clean.
+- `cargo test behavior_affordance_tests -- --nocapture` - 2 passed.
+- `cargo test input_ownership_tests -- --nocapture` - 2 passed.
+- `cargo test` - 600 unit tests, 17 fidelity tests, 23 project-surface tests,
+  and 1 doctest passed.
+- `cargo clippy --all-targets -- -D warnings` - clean.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1`
+  - OK.
+
+### Risks / Follow-ups
+- This is a focused UX pass, not a full behavior graph tool redesign. Future
+  work can add a richer wire palette/shortcut and target previews, but should
+  keep normal widget selection free of always-visible connector nodes.
+
 ## 2026-06-20 - Directive Hardening: Derivation Gate And Topology Invariant
 
 ### Context Reviewed
