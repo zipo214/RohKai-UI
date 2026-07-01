@@ -7,6 +7,27 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-30 — S2 multi-select properties inspector
+
+Branch `dev`. Implementing the conservative V1 multi-select Properties inspector
+while housekeeping files are already dirty: shared size, tooltip, enabled,
+foreground color, corner radius, and label for label-bearing selections only.
+The work should avoid schema/codegen/export changes because `UiTree` remains
+the source of truth and existing emitters naturally reflect the updated widget
+instances. Watch for doc conflicts in `CODE_COOP.md` / housekeeping files if
+Claude is also editing them.
+
+## 2026-06-30 — Housekeeping snapshot/version automation
+
+Branch `dev`. Added `scripts/project-housekeeping.ps1` as the repo-level
+snapshot/version hygiene command: it summarizes branch/worktree/doc-drift state,
+runs core policy checks, previews `git-cliff --unreleased`, and writes ignored
+local snapshots under `.housekeeping/` unless a committed docs snapshot is
+explicitly requested. Also updated the S2 roadmap truth so canvas search and
+clipboard are no longer listed as TODO after being shipped. Next agent should
+use this script for "where are we?" / pre-release snapshots rather than
+manually re-deriving branch state from scattered docs.
+
 ## 2026-06-21 — S2 Item 2: Canvas clipboard (Copy/Paste/Duplicate) shipped
 
 Branch `dev`. Shipped the in-app canvas clipboard: Ctrl+C copy (deep,

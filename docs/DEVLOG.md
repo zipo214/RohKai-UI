@@ -2,6 +2,69 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-30 - Housekeeping Snapshot And Version Automation
+
+### Context Reviewed
+- Preflight output, git status/log/worktree state, `docs/CODE_COOP.md`,
+  `docs/DEVLOG.md`, `docs/ROADMAP_PHASE2.md`, `docs/CODE_INDEX.md`, existing
+  scripts under `scripts/`, `.gitignore`, current tags, and `git-cliff`
+  availability.
+
+### Changes
+- Added ignored `.housekeeping/` local snapshot storage.
+- Added `scripts/project-housekeeping.ps1`, a non-destructive project-state
+  snapshot command that reports branch/HEAD/version/tag state, dirty files,
+  unpushed commits, worktrees, known doc drift, core policy checks, and
+  `git-cliff --unreleased` output.
+- Added explicit opt-in flags for `-Full` cargo gates, `-DocsSnapshot`,
+  `-UpdateChangelog`, `-VersionTag`, `-FailOnDirty`, and `-FailOnDrift`.
+- Added `docs/HOUSEKEEPING.md` and linked the workflow from `docs/CODE_INDEX.md`,
+  `AGENTS.md`, and `CLAUDE.md`.
+- Updated `docs/ROADMAP_PHASE2.md` so S2 canvas search and clipboard reflect
+  shipped status, while remaining clipboard follow-ups stay TODO.
+- Recorded the handoff in `docs/CODE_COOP.md`.
+
+### Verification
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\project-housekeeping.ps1 -Snapshot -FailOnDrift`
+  - succeeded; wrote an ignored local snapshot under `.housekeeping/snapshots/`
+  and reported 0 known doc-drift findings.
+- `project-housekeeping.ps1` core checks passed: text encoding, toolchain
+  alignment, and SVG dependency policy.
+- `git-cliff --unreleased` preview ran through the script using the global
+  `%APPDATA%\git-cliff\cliff.toml` config (via the `GIT_CLIFF_CONFIG` env var);
+  no missing-config warning occurred (see follow-up review below).
+
+### Risks / Follow-ups
+- The doc-drift detector intentionally starts with known recurring patterns.
+  Extend it as new drift classes appear rather than turning it into an
+  over-broad markdown parser.
+
+## 2026-06-30 - Housekeeping Automation Review And Commit
+
+### Context Reviewed
+- `scripts/project-housekeeping.ps1`, `docs/HOUSEKEEPING.md`, the S2 roadmap
+  edit, and the prior session's DEVLOG/CODE_COOP entries above.
+
+### Changes
+- Corrected the prior session's Verification note: re-ran `git-cliff
+  --unreleased` directly and through the script and found no missing-config
+  warning — the global `%APPDATA%\git-cliff\cliff.toml` resolves via
+  `GIT_CLIFF_CONFIG` as intended. The earlier note describing a missing-config
+  warning was stale/inaccurate and has been fixed above.
+- No script or doc behavior changes; this session was review-and-commit only.
+
+### Verification
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\project-housekeeping.ps1 -Snapshot -FailOnDrift` - passed, 0 drift findings.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1` - OK.
+- `cargo fmt --check` - clean.
+- `cargo check` - clean.
+- `git diff --check` - no whitespace errors (only expected LF/CRLF autocrlf notices).
+
+### Risks / Follow-ups
+- None new. Clipboard completion follow-ups (Cut/Ctrl+X, behavior-wire copy,
+  cross-surface paste validation, context menu) remain tracked as TODO in
+  `docs/ROADMAP_PHASE2.md`.
+
 ## 2026-06-21 - Clipboard Parity Tests And Verification Gate (S2 Item 2 Close)
 
 ### Context Reviewed

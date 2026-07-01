@@ -153,10 +153,17 @@ Lazare hierarchy round-trip.
 
 From the Stage 8.5 comparative analysis. All small, all independent.
 
-- [ ] TODO — Search in canvas: Ctrl+F to find widgets by name, kind, or property
-      value (distinct from the code-panel search).
-- [ ] TODO — Clipboard enhancements: paste-at-cursor and paste-multiple with full
-      property preservation.
+- [x] DONE — Search in canvas: Ctrl+F finds widgets by name, kind, binding, and
+      property value, with canvas navigation and ring/glow overlay.
+- [x] DONE — Clipboard enhancements: Ctrl+C copy, Ctrl+V paste-at-cursor,
+      Ctrl+D duplicate-in-place, deep selection closure, ID/reference remap,
+      status feedback, paste flash, viewport reveal, live codegen parity, and
+      save/load parity.
+- [ ] TODO — Clipboard completion follow-ups: Cut/Ctrl+X, behavior-wire copy,
+      surface-kind validation for cross-surface paste, and right-click context
+      menu entries.
+- [ ] TODO — Housekeeping automation: local status snapshots, version/changelog
+      preparation, worktree/branch overview, and doc-drift detection.
 - [ ] TODO — Multi-select property editing: edit one property across all selected
       widgets at once.
 - [ ] TODO — Context tooltips: hover any designer UI element to see its purpose.
