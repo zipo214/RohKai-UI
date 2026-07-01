@@ -2,6 +2,46 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-30 - S2 Multi-Select Properties Inspector
+
+### Context Reviewed
+- `AGENTS.md` session rules via the active instructions, `git status`,
+  `src/panels/properties.rs`, `src/project/schema.rs`,
+  `src/project/ui_tree.rs`, and the `project-model`, `rust-skills`, and
+  `test-driven-development` skills.
+- Preflight was attempted first with
+  `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\preflight-context.ps1`
+  but timed out past 30 seconds, so this session continued with narrow local
+  context checks.
+
+### Changes
+- Added `src/panels/multi_properties.rs`, a tested shared-property helper and UI
+  surface for multi-selection editing.
+- Multi-select Properties now shows a shared inspector instead of falling
+  through to the last-selected widget's single-widget inspector.
+- V1 shared edits support width, height, tooltip, enabled, foreground color,
+  corner radius, and label for label-capable selections only.
+- Mixed values are shown as mixed/placeholder states and are not overwritten
+  until the user edits a control.
+
+### Verification
+- Wrote failing helper tests first, then implemented the helper/UI layer.
+- `cargo test multi_properties -- --nocapture` - passed.
+- `cargo fmt --check` - passed.
+- `cargo check` - passed.
+- `cargo test` - passed, 628 tests.
+- `cargo clippy --all-targets -- -D warnings` - passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1`
+  - passed.
+- `cargo run` smoke - launched and was stopped after an 8-second GUI smoke
+  window.
+
+### Risks / Follow-ups
+- V1 intentionally excludes event handlers, state bindings, options lists,
+  custom props, and layout child constraints from bulk editing.
+- A later pass can add relative move controls, same-size-as-primary commands,
+  and layout-aware bulk controls after those invariants are defined.
+
 ## 2026-06-30 - Housekeeping Snapshot And Version Automation
 
 ### Context Reviewed

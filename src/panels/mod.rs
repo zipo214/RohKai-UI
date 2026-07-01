@@ -12,6 +12,7 @@ pub mod component_tray;
 pub mod db_panel;
 pub mod descriptor_editor;
 pub mod macro_palette;
+pub mod multi_properties;
 pub mod outline;
 pub mod palette;
 pub mod project_tree;

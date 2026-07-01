@@ -65,6 +65,9 @@ fn show_content_inner(
     if selected.len() >= 2 {
         ui.separator();
         show_alignment(ui, tree, selected, shift_held);
+        show_group_controls(ui, tree, selected);
+        crate::panels::multi_properties::show(ui, tree, selected);
+        return PropertiesAction::None;
     }
     show_group_controls(ui, tree, selected);
 
