@@ -187,6 +187,9 @@ being comfortable.
 - `docs/PROMPT_CONTRACT.md` - reusable Codex/Claude goal skeleton for tasks that
   must derive source-of-truth sets, enumerate every output path, and add
   invariant tests before claiming parity.
+- `docs/HOUSEKEEPING.md` - snapshot/versioning workflow: local status
+  snapshots, `git-cliff` changelog usage, explicit release tags, and when to run
+  full gates.
 - `docs/DEVLOG.md` - chronological session record; read for history,
   regression investigation, or when preflight is run with `-IncludeDevlog`.
 - `docs/ARCHITECTURE.md` - structural truth.
@@ -202,6 +205,9 @@ being comfortable.
 ## Scripts
 
 - `scripts/preflight-context.ps1` - agent preflight summary.
+- `scripts/project-housekeeping.ps1` - non-destructive branch/worktree/doc-drift
+  snapshot and optional release/changelog helper. Local snapshots go under the
+  ignored `.housekeeping/` folder unless `-DocsSnapshot` is passed.
 - `scripts/check-dependency-policy.ps1` - blocks forbidden SVG dependency crates.
 - `scripts/check-surface-parity.ps1` - caveman-review cross-surface drift auditor:
   flags schema fields with no codegen, roadmap `[x]`/`[ ]` claims that disagree

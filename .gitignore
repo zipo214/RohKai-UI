@@ -4,6 +4,9 @@
 # Superpowers visual companion server artifacts
 .superpowers/
 
+# Local housekeeping snapshots/reports
+.housekeeping/
+
 # Local RohKai project scratch files
 *.rohkai.json
 *.forge.json

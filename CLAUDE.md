@@ -123,6 +123,10 @@ Core features implemented:
   and the designer's egui/eframe/rfd versions.
 - Run `scripts/check-toolchain-alignment.ps1` after version changes and
   `scripts/audit-dependency-updates.ps1` when checking for newer releases.
+- Use `scripts/project-housekeeping.ps1 -Snapshot` for branch/worktree/doc-drift
+  snapshots before release prep, cross-agent handoff, or "where are we?"
+  project-state questions. Use `-Full` before PR/release gates and
+  `-UpdateChangelog` only when intentionally regenerating `CHANGELOG.md`.
 
 ## Testing
     cargo test

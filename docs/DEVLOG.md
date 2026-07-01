@@ -2,6 +2,274 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-30 - S2 Clipboard Follow-Ups: Cut, Context Menu, Paste Validation
+
+### Context Reviewed
+- `docs/PROMPT_CONTRACT.md`, `docs/ENGINEERING_INVARIANTS.md`,
+  `docs/ROADMAP_PHASE2.md`, `docs/CODE_COOP.md`, `src/canvas/clipboard.rs`,
+  `src/canvas/interaction.rs`, `src/project/ui_tree.rs`, `src/app.rs`,
+  `src/status.rs`, `src/panels/shortcuts.rs`, `src/project/document.rs`
+  (`SurfaceKind`, `ActiveDocument`), `src/project/undo.rs`.
+
+### Derived Feature Set
+- Cut: descendant-closed copy (`copy_selection`) + removal through the
+  existing `UiTree::remove` cascade (same path Delete uses, already prunes
+  stale behaviors and dangling `children[]`), one undo boundary via the
+  existing end-of-frame commit (no per-widget boundary — verified with a
+  direct `UndoStack` round-trip test, not just app-layer trust).
+- Context menu: `session.interaction` (holding the clipboard buffer) is a
+  single instance not swapped per surface — confirmed cross-surface paste is
+  real, not hypothetical, which motivated the validation hook (item 3).
+  Right-click now opens on any canvas position (previously widget-hit only)
+  so Paste has somewhere to attach; z-order/group entries stay hit-widget-
+  gated. Both keyboard and menu route through new `do_clipboard_copy/cut/
+  duplicate/paste` methods on `RohKaiApp` — one implementation, two entry
+  points, so "mirror keyboard exactly" holds by construction.
+- Paste validation: `crate::widgets::ALL_KINDS` is the canonical widget-kind
+  source (already used by the `all_builtin_widgets_*` export tests).
+  `SurfaceKind` (`MainWindow` / `ModalDialog`) currently places no
+  restriction on widget kind, so `widget_kind_valid_for_surface` is
+  intentionally allow-all; `validate_paste_target` runs before any tree
+  mutation so a future restriction aborts atomically with no partial paste.
+
+### Changes
+- `src/canvas/clipboard.rs`: `cut_selection`, `ClipboardMenuAction`,
+  `widget_kind_valid_for_surface`, `first_invalid_kind`,
+  `validate_paste_target`.
+- `src/canvas/interaction.rs`: `InteractionState.context_menu` widened to
+  `Option<(Option<Uuid>, egui::Pos2)>` (empty-canvas right-click support) and
+  a new `context_menu_clipboard_action` field; context menu extended with
+  Copy/Cut/Paste/Duplicate entries gated by new pure helpers
+  `clipboard_menu_actions_enabled` / `clipboard_action_enabled`; paste anchor
+  resolved to canvas space at menu-open time via the existing
+  `cursor_to_canvas`.
+- `src/app.rs`: new `do_clipboard_copy/cut/duplicate/paste` +
+  `clipboard_gesture_active` methods (refactored from the prior inline
+  Ctrl+C/V/D block, now also handling Ctrl+X and the context-menu signal);
+  paste validates against `active_surface().kind` before mutating.
+- `src/panels/shortcuts.rs`: registered `canvas_cut` (Ctrl+X) + reference row
+  + right-click menu reference row.
+- Docs: `docs/ROADMAP_PHASE2.md` S2 clipboard items split into DONE (Cut,
+  context menu, paste-validation hook) vs the one remaining TODO
+  (behavior-wire copy); `docs/CODE_COOP.md` handoff note.
+
+### Tests Added
+- `cut_empty_selection_is_noop_and_does_not_panic`,
+  `cut_removes_selected_roots_and_descendants_leaving_no_stale_children`,
+  `cut_payload_pastes_with_fresh_uuids`,
+  `cut_then_undo_restores_exact_pre_cut_document` (direct `UndoStack`
+  round-trip on a `ProjectDocument`, not app-layer trust).
+- `paste_validation_allows_every_known_kind_on_every_surface_kind`,
+  `validate_paste_target_ok_for_every_known_kind`,
+  `validate_paste_target_empty_widgets_is_ok`,
+  `first_invalid_kind_reports_the_rejecting_widget_before_any_mutation`.
+- `clipboard_menu_matches_keyboard_gate_across_every_blocking_state`,
+  `clipboard_action_requires_both_menu_gate_and_content` (drag/resize/inline-
+  edit/modal/unfocused/text-focus truth table for the context-menu gate).
+- `panels::shortcuts::tests::clipboard_shortcuts_registered` extended for
+  `canvas_cut`.
+- All prior copy/paste/duplicate tests remain green.
+
+### Verification
+- `cargo fmt --check` - clean (after one `cargo fmt` pass).
+- `cargo check` - clean.
+- `cargo test` - 638 passed, 0 failed.
+- `cargo clippy --all-targets -- -D warnings` - clean (one
+  `needless_lifetimes` fix on `first_invalid_kind`).
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1` - OK.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\project-housekeeping.ps1 -Snapshot -FailOnDrift` - run after this entry; see report.
+
+### Risks / Follow-Ups
+- Behavior-wire copy remains the one open S2 clipboard TODO — tracked and
+  surfaced via status text ("behavior wires not copied"), not silently
+  dropped.
+- The context-menu paste-anchor-at-menu-open-position and enable/disable-
+  parity requirements are proven at the pure-logic layer (coordinate math via
+  `cursor_to_canvas`, gating via `clipboard_menu_actions_enabled`/
+  `clipboard_action_enabled`) because driving the real `egui::Ui` click path
+  needs a UI test harness this repo doesn't have; the wiring that consumes
+  those primitives (menu-open position captured once in `state.context_menu`,
+  never re-read from a live cursor) is verified by code construction/review,
+  not an automated UI test.
+
+## 2026-06-30 - S2 Multi-Select Properties Inspector
+
+### Context Reviewed
+- `AGENTS.md` session rules via the active instructions, `git status`,
+  `src/panels/properties.rs`, `src/project/schema.rs`,
+  `src/project/ui_tree.rs`, and the `project-model`, `rust-skills`, and
+  `test-driven-development` skills.
+- Preflight was attempted first with
+  `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\preflight-context.ps1`
+  but timed out past 30 seconds, so this session continued with narrow local
+  context checks.
+
+### Changes
+- Added `src/panels/multi_properties.rs`, a tested shared-property helper and UI
+  surface for multi-selection editing.
+- Multi-select Properties now shows a shared inspector instead of falling
+  through to the last-selected widget's single-widget inspector.
+- V1 shared edits support width, height, tooltip, enabled, foreground color,
+  corner radius, and label for label-capable selections only.
+- Mixed values are shown as mixed/placeholder states and are not overwritten
+  until the user edits a control.
+
+### Verification
+- Wrote failing helper tests first, then implemented the helper/UI layer.
+- `cargo test multi_properties -- --nocapture` - passed.
+- `cargo fmt --check` - passed.
+- `cargo check` - passed.
+- `cargo test` - passed, 628 tests.
+- `cargo clippy --all-targets -- -D warnings` - passed.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1`
+  - passed.
+- `cargo run` smoke - launched and was stopped after an 8-second GUI smoke
+  window.
+
+### Risks / Follow-ups
+- V1 intentionally excludes event handlers, state bindings, options lists,
+  custom props, and layout child constraints from bulk editing.
+- A later pass can add relative move controls, same-size-as-primary commands,
+  and layout-aware bulk controls after those invariants are defined.
+
+## 2026-06-30 - Housekeeping Snapshot And Version Automation
+
+### Context Reviewed
+- Preflight output, git status/log/worktree state, `docs/CODE_COOP.md`,
+  `docs/DEVLOG.md`, `docs/ROADMAP_PHASE2.md`, `docs/CODE_INDEX.md`, existing
+  scripts under `scripts/`, `.gitignore`, current tags, and `git-cliff`
+  availability.
+
+### Changes
+- Added ignored `.housekeeping/` local snapshot storage.
+- Added `scripts/project-housekeeping.ps1`, a non-destructive project-state
+  snapshot command that reports branch/HEAD/version/tag state, dirty files,
+  unpushed commits, worktrees, known doc drift, core policy checks, and
+  `git-cliff --unreleased` output.
+- Added explicit opt-in flags for `-Full` cargo gates, `-DocsSnapshot`,
+  `-UpdateChangelog`, `-VersionTag`, `-FailOnDirty`, and `-FailOnDrift`.
+- Added `docs/HOUSEKEEPING.md` and linked the workflow from `docs/CODE_INDEX.md`,
+  `AGENTS.md`, and `CLAUDE.md`.
+- Updated `docs/ROADMAP_PHASE2.md` so S2 canvas search and clipboard reflect
+  shipped status, while remaining clipboard follow-ups stay TODO.
+- Recorded the handoff in `docs/CODE_COOP.md`.
+
+### Verification
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\project-housekeeping.ps1 -Snapshot -FailOnDrift`
+  - succeeded; wrote an ignored local snapshot under `.housekeeping/snapshots/`
+  and reported 0 known doc-drift findings.
+- `project-housekeeping.ps1` core checks passed: text encoding, toolchain
+  alignment, and SVG dependency policy.
+- `git-cliff --unreleased` preview ran through the script using the global
+  `%APPDATA%\git-cliff\cliff.toml` config (via the `GIT_CLIFF_CONFIG` env var);
+  no missing-config warning occurred (see follow-up review below).
+
+### Risks / Follow-ups
+- The doc-drift detector intentionally starts with known recurring patterns.
+  Extend it as new drift classes appear rather than turning it into an
+  over-broad markdown parser.
+
+## 2026-06-30 - Housekeeping Automation Review And Commit
+
+### Context Reviewed
+- `scripts/project-housekeeping.ps1`, `docs/HOUSEKEEPING.md`, the S2 roadmap
+  edit, and the prior session's DEVLOG/CODE_COOP entries above.
+
+### Changes
+- Corrected the prior session's Verification note: re-ran `git-cliff
+  --unreleased` directly and through the script and found no missing-config
+  warning — the global `%APPDATA%\git-cliff\cliff.toml` resolves via
+  `GIT_CLIFF_CONFIG` as intended. The earlier note describing a missing-config
+  warning was stale/inaccurate and has been fixed above.
+- No script or doc behavior changes; this session was review-and-commit only.
+
+### Verification
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\project-housekeeping.ps1 -Snapshot -FailOnDrift` - passed, 0 drift findings.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1` - OK.
+- `cargo fmt --check` - clean.
+- `cargo check` - clean.
+- `git diff --check` - no whitespace errors (only expected LF/CRLF autocrlf notices).
+
+### Risks / Follow-ups
+- None new. Clipboard completion follow-ups (Cut/Ctrl+X, behavior-wire copy,
+  cross-surface paste validation, context menu) remain tracked as TODO in
+  `docs/ROADMAP_PHASE2.md`.
+
+## 2026-06-21 - Clipboard Parity Tests And Verification Gate (S2 Item 2 Close)
+
+### Context Reviewed
+- Preflight intent, latest CoOp note, git status, and the real codegen/io
+  entry points: `src/codegen/egui_emitter.rs` (`emit_document`),
+  `src/project/io.rs` (`serialize_tree`/`deserialize_tree`), `src/project/undo.rs`
+  (snapshot/record undo model), and the existing `src/canvas/clipboard.rs`
+  test module.
+
+### Changes
+- Added two parity tests to `src/canvas/clipboard.rs`:
+  - `pasted_widgets_appear_in_live_codegen` pastes a Button labelled "Zorp",
+    runs the REAL live emitter `emit_document(&tree).text`, and asserts the
+    pasted widget appears in the generated Rust.
+  - `pasted_tree_survives_save_load_round_trip` pastes a Frame + child, runs the
+    REAL `serialize_tree` then `deserialize_tree`, and asserts no `children[]`
+    reference dangles after reload and the Frame keeps its child link.
+- Skipped the A3 paste+undo-exactness test deliberately: undo is a
+  ProjectDocument-JSON snapshot model driven by RohKaiApp's record/apply loop
+  (`src/project/undo.rs`), not reachable through `paste_payload` in isolation.
+- Ran `cargo fmt`, which normalized pre-existing formatting drift in the
+  clipboard-feature-owned files only: `src/canvas/clipboard.rs`,
+  `src/canvas/mod.rs`, `src/panels/shortcuts.rs`, `src/project/ui_tree.rs`. No
+  unrelated files were reformatted.
+
+### Verification
+- `cargo test --lib clipboard::tests` - 12 passed.
+- `cargo test` - 665 tests passed across all binaries, 0 failed.
+- `cargo clippy --all-targets -- -D warnings` - clean, zero warnings.
+- `cargo build` - clean.
+- `cargo fmt --check` (pre-fix) flagged the four feature files above; resolved.
+
+### Risks / Follow-ups
+- Undo exactness for paste/duplicate remains covered only at the app-snapshot
+  layer; a future app-level harness could assert it end-to-end.
+- Deferred clipboard scope still open: Cut/Ctrl+X, behavior-wire copy, CB-18
+  surface-kind validation, CB-23 context menu.
+
+## 2026-06-21 - Canvas Placement Flow And Wiring Affordance Cleanup
+
+### Context Reviewed
+- Preflight, latest CoOp note, git status, `rust-skills`, `project-model`, and
+  the canvas/palette/behaviors slices in `src/app.rs`,
+  `src/canvas/interaction.rs`, and `src/panels/behaviors.rs`.
+
+### Changes
+- Palette click placement now selects the newly created widget and switches the
+  left panel to Props, matching the designer workflow of placing then editing.
+- Palette/template drag-drop placement now reports placed widget IDs from the
+  canvas handler, selects the placed widgets, and switches the left panel to
+  Props after a successful drop.
+- Behavior wiring sockets are no longer permanent selection chrome. The
+  Behaviors section exposes an explicit "Wire behavior" tool; when armed, the
+  canvas shows a red hover marker on the nearest widget outline and starts wire
+  drag only from that deliberate mode.
+- Behavior wire mode is single-use for now: after a wire drag completes or
+  cancels, normal selection resumes.
+- Added small geometry regression tests for nearest outline marker behavior.
+
+### Verification
+- `cargo fmt --check` - clean.
+- `cargo check` - clean.
+- `cargo test behavior_affordance_tests -- --nocapture` - 2 passed.
+- `cargo test input_ownership_tests -- --nocapture` - 2 passed.
+- `cargo test` - 600 unit tests, 17 fidelity tests, 23 project-surface tests,
+  and 1 doctest passed.
+- `cargo clippy --all-targets -- -D warnings` - clean.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1`
+  - OK.
+
+### Risks / Follow-ups
+- This is a focused UX pass, not a full behavior graph tool redesign. Future
+  work can add a richer wire palette/shortcut and target previews, but should
+  keep normal widget selection free of always-visible connector nodes.
+
 ## 2026-06-20 - Directive Hardening: Derivation Gate And Topology Invariant
 
 ### Context Reviewed

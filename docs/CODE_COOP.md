@@ -7,6 +7,71 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-30 — S2 clipboard follow-ups: Cut, context menu, paste validation
+
+Branch `dev`. Closed the S2 clipboard completion follow-ups: Cut/Ctrl+X
+(`cut_selection` in `src/canvas/clipboard.rs`, reuses `UiTree::remove`'s
+existing cascade + behavior-pruning, one undo boundary via the normal
+end-of-frame commit), a right-click canvas context menu with Copy/Cut/
+Paste/Duplicate entries wired through new `do_clipboard_*` methods on
+`RohKaiApp` (`src/app.rs`) so keyboard and menu are guaranteed identical, and
+a surface-kind paste-validation hook (`widget_kind_valid_for_surface` /
+`validate_paste_target`) that is intentionally allow-all today (no
+`WidgetKind` is restricted per `SurfaceKind` yet) with tests proving both the
+allow-all state and the abort-before-mutation detection path. `InteractionState.context_menu`
+changed shape to `Option<(Option<Uuid>, egui::Pos2)>` so the menu can open on
+empty canvas (needed for Paste) — only `src/canvas/interaction.rs` touches
+that field. Remaining S2 clipboard gap: behavior-wire copy (tracked, not
+silent — see `ClipboardContents::source_had_behaviors`). 638 lib tests green,
+all-targets clippy clean.
+
+## 2026-06-30 — S2 multi-select properties inspector
+
+Branch `dev`. Implementing the conservative V1 multi-select Properties inspector
+while housekeeping files are already dirty: shared size, tooltip, enabled,
+foreground color, corner radius, and label for label-bearing selections only.
+The work should avoid schema/codegen/export changes because `UiTree` remains
+the source of truth and existing emitters naturally reflect the updated widget
+instances. Watch for doc conflicts in `CODE_COOP.md` / housekeeping files if
+Claude is also editing them.
+
+## 2026-06-30 — Housekeeping snapshot/version automation
+
+Branch `dev`. Added `scripts/project-housekeeping.ps1` as the repo-level
+snapshot/version hygiene command: it summarizes branch/worktree/doc-drift state,
+runs core policy checks, previews `git-cliff --unreleased`, and writes ignored
+local snapshots under `.housekeeping/` unless a committed docs snapshot is
+explicitly requested. Also updated the S2 roadmap truth so canvas search and
+clipboard are no longer listed as TODO after being shipped. Next agent should
+use this script for "where are we?" / pre-release snapshots rather than
+manually re-deriving branch state from scattered docs.
+
+## 2026-06-21 — S2 Item 2: Canvas clipboard (Copy/Paste/Duplicate) shipped
+
+Branch `dev`. Shipped the in-app canvas clipboard: Ctrl+C copy (deep,
+descendant-closed snapshot), Ctrl+V paste-at-cursor (bbox-center anchored with
+cascade offset + post-paste flash ring), and Ctrl+D duplicate-in-place. Source
+of truth is `src/canvas/clipboard.rs` (new) over `UiTree::paste_batch` (new in
+`src/project/ui_tree.rs`), with `src/status.rs` notices and `src/app.rs` wiring;
+shortcuts registered in `src/panels/shortcuts.rs`, input gating in
+`src/canvas/interaction.rs`. Verified: 12 clipboard tests incl. live-codegen
+parity (`emit_document`) and save/load round-trip parity (`serialize_tree`/
+`deserialize_tree`, no dangling child refs after reload); full suite 665 passed,
+all-target clippy clean, build clean. Deferred follow-ups: Cut/Ctrl+X,
+behavior-wire copy, CB-18 surface-kind validation, CB-23 context menu; undo
+exactness is covered at the RohKaiApp snapshot layer (not unit-testable through
+`paste_payload`).
+
+## 2026-06-21 — Canvas placement flow + wiring affordance cleanup
+
+Branch `dev`. Tightening the normal canvas placement flow: palette/template
+placement should select the new widget and move the left panel to Props, while
+behavior wiring affordances should stay hidden during ordinary selection. The
+touch points are `src/app.rs`, `src/canvas/interaction.rs`, and
+`src/panels/behaviors.rs`; avoid making behavior sockets permanent canvas chrome
+again. If this grows later, keep it as an explicit wire tool/mode with
+hover-only source/target markers rather than always-visible connector nodes.
+
 ## 2026-06-20 — Directive hardening for topology/output-path proof
 
 Branch `dev`. Added a low-token derivation gate to AGENTS, CLAUDE, preflight

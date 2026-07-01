@@ -349,6 +349,8 @@ pub struct RohKaiApp {
     undo: crate::project::undo::UndoStack,
     /// Suppresses undo recording for the frame after an undo/redo restore.
     undo_suppress_record: bool,
+    /// Transient status message (clipboard feedback, etc.). Session-only.
+    status: crate::status::StatusMessage,
     /// Visual Widget Maker window state.
     pub widget_maker_doc: crate::canvas::widget_maker::WidgetMakerDoc,
     pub widget_maker_open: bool,
@@ -419,6 +421,7 @@ impl RohKaiApp {
             dirty_cache_checked_at: 0.0,
             undo: crate::project::undo::UndoStack::new(),
             undo_suppress_record: false,
+            status: crate::status::StatusMessage::default(),
             widget_maker_doc: crate::canvas::widget_maker::WidgetMakerDoc::new_with_defaults(),
             widget_maker_open: false,
             name_counter: std::collections::HashMap::new(),
@@ -1991,6 +1994,176 @@ impl RohKaiApp {
                 });
             });
     }
+
+    // ── Clipboard action handlers (CB-09,10,11,14,15,17,22,23) ──────────────
+    // Shared by the keyboard shortcuts and the canvas right-click context
+    // menu so both entry points behave identically by construction.
+
+    fn clipboard_gesture_active(&self) -> bool {
+        self.session.interaction.drag.is_some() || self.session.interaction.resize.is_some()
+    }
+
+    fn do_clipboard_copy(&mut self, now: f64) {
+        if self.clipboard_gesture_active() {
+            self.status.set("Can't copy while dragging", now);
+            return;
+        }
+        if self.session.selected.is_empty() {
+            return; // CB-09(b): no-op, preserve prior clipboard.
+        }
+        let contents =
+            crate::canvas::clipboard::copy_selection(&self.session.selected, &self.project.ui_tree);
+        let msg = if contents.widgets.len() == 1 {
+            format!(
+                "Copied {}",
+                crate::canvas::clipboard::widget_kind_label(&contents.widgets[0].kind)
+            )
+        } else {
+            format!("Copied {} widgets", contents.widgets.len())
+        };
+        self.session.interaction.clipboard = contents;
+        self.session.interaction.paste_cascade = 0;
+        self.status.set(msg, now);
+    }
+
+    fn do_clipboard_cut(&mut self, now: f64) {
+        if self.clipboard_gesture_active() {
+            self.status.set("Can't cut while dragging", now);
+            return;
+        }
+        if self.session.selected.is_empty() {
+            return; // CB-22: empty selection is a no-op, matching copy/delete.
+        }
+        let Some(contents) = crate::canvas::clipboard::cut_selection(
+            &self.session.selected,
+            &mut self.project.ui_tree,
+        ) else {
+            return;
+        };
+        let msg = if contents.widgets.len() == 1 {
+            format!(
+                "Cut {}",
+                crate::canvas::clipboard::widget_kind_label(&contents.widgets[0].kind)
+            )
+        } else {
+            format!("Cut {} widgets", contents.widgets.len())
+        };
+        self.session.interaction.clipboard = contents;
+        self.session.interaction.paste_cascade = 0;
+        self.session.selected.clear();
+        self.status.set(msg, now);
+    }
+
+    fn do_clipboard_duplicate(&mut self, now: f64) {
+        if self.clipboard_gesture_active() {
+            self.status.set("Can't duplicate while dragging", now);
+            return;
+        }
+        if self.session.selected.is_empty() {
+            return;
+        }
+        match crate::canvas::clipboard::duplicate_in_place(
+            &self.session.selected,
+            &mut self.project.ui_tree,
+        ) {
+            Ok(out) if out.count > 0 => {
+                self.session.selected = out.new_root_ids.clone();
+                let msg = if out.had_behaviors {
+                    format!(
+                        "Duplicated {} widgets — behavior wires not copied",
+                        out.count
+                    )
+                } else if out.count == 1 {
+                    let label = self
+                        .project
+                        .ui_tree
+                        .widgets
+                        .iter()
+                        .find(|w| w.id == out.new_root_ids[0])
+                        .map(|w| crate::canvas::clipboard::widget_kind_label(&w.kind))
+                        .unwrap_or_else(|| "1 widget".to_string());
+                    format!("Duplicated {label}")
+                } else {
+                    format!("Duplicated {} widgets", out.count)
+                };
+                self.status.set(msg, now);
+                if let Some(first) = out.new_root_ids.first() {
+                    crate::canvas::search::scroll_to_widget(
+                        *first,
+                        &self.project.ui_tree,
+                        &mut self.session.canvas_settings,
+                        self.session.last_canvas_rect,
+                    );
+                }
+                self.session.interaction.paste_flash =
+                    Some((out.new_root_ids, crate::canvas::clipboard::PASTE_FLASH_SECS));
+            }
+            Ok(_) => {}
+            Err(_) => self
+                .status
+                .set("Duplicate failed: invalid widget graph", now),
+        }
+    }
+
+    fn do_clipboard_paste(&mut self, now: f64, target: egui::Pos2) {
+        if self.clipboard_gesture_active() {
+            self.status.set("Can't paste while dragging", now);
+            return;
+        }
+        if self.session.interaction.clipboard.is_empty() {
+            return; // CB-09(a): empty clipboard → total no-op.
+        }
+        let clip = self.session.interaction.clipboard.clone();
+        let surface_kind = self.project.ui_tree.active_surface().kind.clone();
+        if let Err(reason) =
+            crate::canvas::clipboard::validate_paste_target(&clip.widgets, &surface_kind)
+        {
+            self.status.set(format!("Paste blocked: {reason}"), now);
+            return;
+        }
+        let container = self.project.ui_tree.attach_target_at((target.x, target.y));
+        let cascade = self.session.interaction.paste_cascade;
+        match crate::canvas::clipboard::paste_payload(
+            &clip,
+            target,
+            cascade,
+            &mut self.project.ui_tree,
+            container,
+        ) {
+            Ok(out) if out.count > 0 => {
+                self.session.interaction.paste_cascade = cascade + 1;
+                self.session.selected = out.new_root_ids.clone();
+                let msg = if out.had_behaviors {
+                    format!("Pasted {} widgets — behavior wires not copied", out.count)
+                } else if out.count == 1 {
+                    let label = self
+                        .project
+                        .ui_tree
+                        .widgets
+                        .iter()
+                        .find(|w| w.id == out.new_root_ids[0])
+                        .map(|w| crate::canvas::clipboard::widget_kind_label(&w.kind))
+                        .unwrap_or_else(|| "1 widget".to_string());
+                    format!("Pasted {label}")
+                } else {
+                    format!("Pasted {} widgets", out.count)
+                };
+                self.status.set(msg, now);
+                if let Some(first) = out.new_root_ids.first() {
+                    crate::canvas::search::scroll_to_widget(
+                        *first,
+                        &self.project.ui_tree,
+                        &mut self.session.canvas_settings,
+                        self.session.last_canvas_rect,
+                    );
+                }
+                self.session.interaction.paste_flash =
+                    Some((out.new_root_ids, crate::canvas::clipboard::PASTE_FLASH_SECS));
+            }
+            Ok(_) => {}
+            Err(_) => self.status.set("Paste failed: invalid widget graph", now),
+        }
+    }
 }
 
 // TODO(P2-A): wire ShaperEngine — when RustyBuzzShaper is plumbed into the canvas
@@ -2874,6 +3047,7 @@ impl eframe::App for RohKaiApp {
                                                 &self.project.ui_tree,
                                                 wid,
                                                 &mut self.session.interaction.selected_behavior,
+                                                &mut self.session.interaction.behavior_wire_armed,
                                             );
                                         }
                                     });
@@ -2998,6 +3172,7 @@ impl eframe::App for RohKaiApp {
                                                 &self.project.ui_tree,
                                                 wid,
                                                 &mut self.session.interaction.selected_behavior,
+                                                &mut self.session.interaction.behavior_wire_armed,
                                             );
                                         }
                                     }
@@ -3206,6 +3381,9 @@ impl eframe::App for RohKaiApp {
             if !is_layout_container {
                 self.project.ui_tree.attach_to_layout_at(id, center);
             }
+            self.session.selected.clear();
+            self.session.selected.push(id);
+            self.session.left_panel_tab = LeftPanelTab::Properties;
         }
 
         // Palette drag — set interaction.template_drag for canvas drop next frame
@@ -3323,6 +3501,14 @@ impl eframe::App for RohKaiApp {
                 },
                 &mut self.svg_texture_cache,
             );
+            if !self
+                .session
+                .interaction
+                .placed_widgets_this_frame
+                .is_empty()
+            {
+                self.session.left_panel_tab = LeftPanelTab::Properties;
+            }
 
             // Rulers and guide lines drawn on top of canvas content.
             crate::canvas::rulers::draw(
@@ -3412,22 +3598,42 @@ impl eframe::App for RohKaiApp {
             {
                 let origin =
                     crate::canvas::rulers::canvas_origin(canvas_size, zoom, pan, panel_rect);
-                let screen_rects: Vec<(uuid::Uuid, egui::Rect)> = self
-                    .project
-                    .ui_tree
-                    .widgets
-                    .iter()
-                    .map(|w| {
-                        let r = egui::Rect::from_min_size(
-                            origin + egui::vec2(w.rect.x, w.rect.y) * zoom,
-                            egui::vec2(w.rect.w, w.rect.h) * zoom,
-                        );
-                        (w.id, r)
-                    })
-                    .collect();
+                let screen_rects = crate::canvas::rulers::project_widget_screen_rects(
+                    &self.project.ui_tree,
+                    origin,
+                    zoom,
+                );
                 let painter = ui.painter_at(panel_rect);
                 let dark_mode = ui.visuals().dark_mode;
                 crate::canvas::search::draw_search_overlay(&painter, cs, &screen_rects, dark_mode);
+            }
+
+            // Paste flash overlay (CB-21), ticked down each frame.
+            if let Some((ids, mut remaining)) = self.session.interaction.paste_flash.take() {
+                let dt = ctx.input(|i| i.stable_dt);
+                remaining -= dt;
+                if remaining > 0.0 {
+                    let origin =
+                        crate::canvas::rulers::canvas_origin(canvas_size, zoom, pan, panel_rect);
+                    let screen_rects = crate::canvas::rulers::project_widget_screen_rects(
+                        &self.project.ui_tree,
+                        origin,
+                        zoom,
+                    );
+                    let painter = ui.painter_at(panel_rect);
+                    let dark_mode = ui.visuals().dark_mode;
+                    let alpha =
+                        (remaining / crate::canvas::clipboard::PASTE_FLASH_SECS).clamp(0.0, 1.0);
+                    crate::canvas::clipboard::draw_paste_flash(
+                        &painter,
+                        &ids,
+                        &screen_rects,
+                        alpha,
+                        dark_mode,
+                    );
+                    self.session.interaction.paste_flash = Some((ids, remaining));
+                    ctx.request_repaint();
+                }
             }
         });
 
@@ -3458,6 +3664,106 @@ impl eframe::App for RohKaiApp {
             let ids: Vec<Uuid> = self.session.selected.drain(..).collect();
             for id in ids {
                 self.project.ui_tree.remove(id);
+            }
+        }
+
+        // ── Clipboard: Copy / Cut / Paste / Duplicate (CB-09,10,11,14,15,17,22,23) ──
+        // Undo is captured automatically at the end-of-frame commit boundary
+        // (pointer-up snapshot below), exactly like the Delete handler above —
+        // no explicit dirty flag is needed for these keyboard mutations (CB-15).
+        // `panel_rect` is not in scope here (the CentralPanel closure has closed),
+        // so we use `self.session.last_canvas_rect`, which was set to that same
+        // `ui.max_rect()` while the canvas was drawn.
+        //
+        // Keyboard shortcuts and the canvas right-click context menu both route
+        // through do_copy/do_cut/do_duplicate/do_paste below, so the two entry
+        // points are guaranteed to behave identically (CB-23).
+        {
+            let now = ctx.input(|i| i.time);
+            let copy_pressed = canvas_keyboard_owned
+                && ctx.input(|i| {
+                    i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(egui::Key::C)
+                });
+            let cut_pressed = canvas_keyboard_owned
+                && ctx.input(|i| {
+                    i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(egui::Key::X)
+                });
+            let paste_pressed = canvas_keyboard_owned
+                && ctx.input(|i| {
+                    i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(egui::Key::V)
+                });
+            let dup_pressed = canvas_keyboard_owned
+                && ctx.input(|i| {
+                    i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(egui::Key::D)
+                });
+
+            if copy_pressed {
+                self.do_clipboard_copy(now);
+            }
+            if cut_pressed {
+                self.do_clipboard_cut(now);
+            }
+            if dup_pressed {
+                self.do_clipboard_duplicate(now);
+            }
+            if paste_pressed {
+                let panel_rect = self.session.last_canvas_rect;
+                let zoom = self.session.canvas_settings.zoom;
+                let pan = self.session.canvas_settings.pan;
+                let size = [
+                    self.project.ui_tree.app_props.win_w,
+                    self.project.ui_tree.app_props.win_h,
+                ];
+                let cursor_screen = ctx.input(|i| i.pointer.interact_pos());
+                let target = match cursor_screen {
+                    Some(p) if panel_rect.contains(p) => {
+                        crate::canvas::clipboard::cursor_to_canvas(p, size, zoom, pan, panel_rect)
+                    }
+                    _ => crate::canvas::clipboard::visible_viewport_center_canvas(
+                        size, zoom, pan, panel_rect,
+                    ),
+                };
+                self.do_clipboard_paste(now, target);
+            }
+
+            if let Some((action, canvas_pos)) = self
+                .session
+                .interaction
+                .context_menu_clipboard_action
+                .take()
+            {
+                match action {
+                    crate::canvas::clipboard::ClipboardMenuAction::Copy => {
+                        self.do_clipboard_copy(now);
+                    }
+                    crate::canvas::clipboard::ClipboardMenuAction::Cut => {
+                        self.do_clipboard_cut(now);
+                    }
+                    crate::canvas::clipboard::ClipboardMenuAction::Duplicate => {
+                        self.do_clipboard_duplicate(now);
+                    }
+                    crate::canvas::clipboard::ClipboardMenuAction::Paste => {
+                        self.do_clipboard_paste(now, canvas_pos);
+                    }
+                }
+            }
+        }
+
+        // Transient status message (CB-21).
+        {
+            let now = ctx.input(|i| i.time);
+            if let Some(text) = self.status.current(now) {
+                let text = text.to_string();
+                egui::Area::new(egui::Id::new("rohkai_status_message"))
+                    .order(egui::Order::Tooltip)
+                    .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(12.0, -12.0))
+                    .interactable(false)
+                    .show(ctx, |ui| {
+                        egui::Frame::popup(ui.style()).show(ui, |ui| {
+                            ui.label(egui::RichText::new(text).strong());
+                        });
+                    });
+                ctx.request_repaint();
             }
         }
 
