@@ -3,6 +3,7 @@
 
 use std::collections::HashSet;
 
+use crate::project::document::SurfaceKind;
 use crate::project::schema::{WidgetInstance, WidgetKind};
 use crate::project::ui_tree::UiTree;
 
@@ -70,6 +71,73 @@ pub fn copy_selection(selected: &[uuid::Uuid], tree: &UiTree) -> ClipboardConten
     ClipboardContents {
         widgets,
         source_had_behaviors,
+    }
+}
+
+/// Cut the descendant-closed closure of `selected` from `tree` (CB-22):
+/// builds the same copy-closed snapshot as `copy_selection`, then removes
+/// every id in `selected` (the roots the user picked) via `UiTree::remove`,
+/// which already cascades to descendants and prunes stale behavior wires —
+/// the same removal path the Delete key uses. Returns `None` (tree
+/// untouched) when `selected` is empty, matching `copy_selection`'s no-op.
+pub fn cut_selection(selected: &[uuid::Uuid], tree: &mut UiTree) -> Option<ClipboardContents> {
+    if selected.is_empty() {
+        return None;
+    }
+    let contents = copy_selection(selected, tree);
+    if contents.is_empty() {
+        return None;
+    }
+    for id in selected {
+        tree.remove(*id);
+    }
+    Some(contents)
+}
+
+/// A clipboard action requested from the canvas right-click context menu
+/// (CB-23). Dispatched through the same app-level handler as the matching
+/// keyboard shortcut so behavior is identical by construction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardMenuAction {
+    Copy,
+    Cut,
+    Paste,
+    Duplicate,
+}
+
+/// Whether `kind` may exist on `surface` (CB-24 hook). Every builtin and
+/// custom widget kind is currently valid on every `SurfaceKind` — dialogs
+/// place no kind restriction today. This is the single enforcement point so
+/// a future surface-specific restriction has one place to land instead of
+/// being re-derived at each paste call site.
+pub fn widget_kind_valid_for_surface(_kind: &WidgetKind, _surface: &SurfaceKind) -> bool {
+    true
+}
+
+/// First widget in `widgets` for which `is_valid` returns `false`, if any.
+/// Pure/non-mutating: callers must check this BEFORE any tree mutation so a
+/// rejected paste never partially applies (CB-24, no-partial-paste).
+fn first_invalid_kind(
+    widgets: &[WidgetInstance],
+    mut is_valid: impl FnMut(&WidgetKind) -> bool,
+) -> Option<&WidgetKind> {
+    widgets.iter().map(|w| &w.kind).find(|k| !is_valid(k))
+}
+
+/// Validate the full staged paste set against `surface_kind` before any
+/// mutation (CB-24). Callers must run this ahead of `paste_batch`/
+/// `paste_payload`, not widget-by-widget during it, so an invalid target
+/// aborts atomically with no partial paste.
+pub fn validate_paste_target(
+    widgets: &[WidgetInstance],
+    surface_kind: &SurfaceKind,
+) -> Result<(), String> {
+    match first_invalid_kind(widgets, |k| widget_kind_valid_for_surface(k, surface_kind)) {
+        Some(kind) => Err(format!(
+            "{} is not valid on this surface",
+            widget_kind_label(kind)
+        )),
+        None => Ok(()),
     }
 }
 
@@ -488,4 +556,159 @@ mod tests {
     // (see `src/project/undo.rs` + app.rs wiring). It cannot be exercised
     // through `paste_payload` in isolation without reconstructing that app
     // scaffolding, so it is covered at the app layer rather than here.
+
+    // -----------------------------------------------------------------
+    // Cut (CB-22)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn cut_empty_selection_is_noop_and_does_not_panic() {
+        let mut t = tree(vec![w(vec![])]);
+        let before = t.widgets.len();
+        let out = cut_selection(&[], &mut t);
+        assert!(out.is_none());
+        assert_eq!(t.widgets.len(), before);
+    }
+
+    #[test]
+    fn cut_removes_selected_roots_and_descendants_leaving_no_stale_children() {
+        let child = w(vec![]);
+        let child_id = child.id;
+        let mut frame = w(vec![child_id]);
+        frame.kind = WidgetKind::Frame;
+        let frame_id = frame.id;
+        let sibling = w(vec![]);
+        let sibling_id = sibling.id;
+        let mut t = tree(vec![frame, child, sibling]);
+
+        let out = cut_selection(&[frame_id], &mut t).expect("cut should produce contents");
+        assert_eq!(out.widgets.len(), 2, "cut payload must include the child");
+
+        // Frame + child are gone from the tree; sibling remains untouched.
+        assert!(t.widgets.iter().all(|w| w.id != frame_id));
+        assert!(t.widgets.iter().all(|w| w.id != child_id));
+        assert!(t.widgets.iter().any(|w| w.id == sibling_id));
+
+        // No remaining widget references the removed ids as a child.
+        for w in &t.widgets {
+            assert!(!w.children.contains(&frame_id));
+            assert!(!w.children.contains(&child_id));
+        }
+    }
+
+    #[test]
+    fn cut_payload_pastes_with_fresh_uuids() {
+        let mut src = w(vec![]);
+        src.props.label = "Cutter".into();
+        let src_id = src.id;
+        let mut t = tree(vec![src]);
+
+        let cut = cut_selection(&[src_id], &mut t).expect("cut should produce contents");
+        assert!(t.widgets.is_empty(), "cut must remove the original");
+
+        let out = paste_payload(&cut, egui::pos2(0.0, 0.0), 0, &mut t, None).unwrap();
+        assert_eq!(out.count, 1);
+        let pasted = &t.widgets[0];
+        assert_ne!(pasted.id, src_id, "paste must mint a fresh UUID");
+        assert_eq!(pasted.props.label, "Cutter");
+    }
+
+    #[test]
+    fn cut_then_undo_restores_exact_pre_cut_document() {
+        // Mirrors the real end-of-frame commit boundary (src/app.rs): one
+        // ProjectDocument snapshot is recorded before the cut (baseline) and
+        // one after — a multi-widget cut must still land as a single
+        // restorable step, not one per removed widget.
+        let mut doc = crate::project::document::ProjectDocument::default();
+        let a = w(vec![]);
+        let a_id = a.id;
+        let b = w(vec![]);
+        let b_id = b.id;
+        doc.root_surface_mut().tree.widgets = vec![a, b];
+
+        let mut undo = crate::project::undo::UndoStack::new();
+        let json_before = crate::project::io::serialize(&doc).unwrap();
+        undo.reset(json_before.clone());
+
+        let cut = cut_selection(&[a_id, b_id], &mut doc.root_surface_mut().tree)
+            .expect("cut should produce contents");
+        assert_eq!(cut.widgets.len(), 2);
+        assert!(doc.root_surface().tree.widgets.is_empty());
+
+        let json_after_cut = crate::project::io::serialize(&doc).unwrap();
+        undo.record(json_after_cut);
+        assert!(undo.can_undo());
+
+        let restored_json = undo.undo().expect("one undo step must be available");
+        assert_eq!(
+            restored_json, json_before,
+            "undo after cut must restore the exact pre-cut ProjectDocument"
+        );
+        let restored = crate::project::io::deserialize(&restored_json).unwrap();
+        let ids: std::collections::HashSet<uuid::Uuid> = restored
+            .root_surface()
+            .tree
+            .widgets
+            .iter()
+            .map(|w| w.id)
+            .collect();
+        assert!(ids.contains(&a_id));
+        assert!(ids.contains(&b_id));
+    }
+
+    // -----------------------------------------------------------------
+    // Surface-kind paste validation (CB-24)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn paste_validation_allows_every_known_kind_on_every_surface_kind() {
+        let surfaces = [
+            SurfaceKind::MainWindow,
+            SurfaceKind::ModalDialog(crate::project::document::ModalDialogProps::default()),
+        ];
+        for surface in &surfaces {
+            for kind in crate::widgets::ALL_KINDS {
+                assert!(
+                    widget_kind_valid_for_surface(kind, surface),
+                    "{kind:?} should be allow-listed on {surface:?} today"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn validate_paste_target_ok_for_every_known_kind() {
+        let widgets: Vec<WidgetInstance> = crate::widgets::ALL_KINDS
+            .iter()
+            .map(|k| WidgetInstance {
+                id: uuid::Uuid::new_v4(),
+                kind: k.clone(),
+                ..Default::default()
+            })
+            .collect();
+        assert!(validate_paste_target(&widgets, &SurfaceKind::MainWindow).is_ok());
+        assert!(
+            validate_paste_target(
+                &widgets,
+                &SurfaceKind::ModalDialog(crate::project::document::ModalDialogProps::default())
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn validate_paste_target_empty_widgets_is_ok() {
+        assert!(validate_paste_target(&[], &SurfaceKind::MainWindow).is_ok());
+    }
+
+    #[test]
+    fn first_invalid_kind_reports_the_rejecting_widget_before_any_mutation() {
+        // No real WidgetKind is invalid on any surface yet (allow-all, see
+        // above), so this exercises the detection primitive directly with a
+        // synthetic always-reject predicate to prove the abort path fires
+        // and identifies an offender without touching any tree.
+        let widgets = vec![w(vec![])];
+        assert!(first_invalid_kind(&widgets, |_| false).is_some());
+        assert!(first_invalid_kind(&widgets, |_| true).is_none());
+    }
 }

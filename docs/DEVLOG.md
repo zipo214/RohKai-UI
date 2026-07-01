@@ -2,6 +2,96 @@
 
 Chronological session record. The roadmap stays strategic; this file records what happened, what was reviewed first, what changed, and what still needs attention.
 
+## 2026-06-30 - S2 Clipboard Follow-Ups: Cut, Context Menu, Paste Validation
+
+### Context Reviewed
+- `docs/PROMPT_CONTRACT.md`, `docs/ENGINEERING_INVARIANTS.md`,
+  `docs/ROADMAP_PHASE2.md`, `docs/CODE_COOP.md`, `src/canvas/clipboard.rs`,
+  `src/canvas/interaction.rs`, `src/project/ui_tree.rs`, `src/app.rs`,
+  `src/status.rs`, `src/panels/shortcuts.rs`, `src/project/document.rs`
+  (`SurfaceKind`, `ActiveDocument`), `src/project/undo.rs`.
+
+### Derived Feature Set
+- Cut: descendant-closed copy (`copy_selection`) + removal through the
+  existing `UiTree::remove` cascade (same path Delete uses, already prunes
+  stale behaviors and dangling `children[]`), one undo boundary via the
+  existing end-of-frame commit (no per-widget boundary — verified with a
+  direct `UndoStack` round-trip test, not just app-layer trust).
+- Context menu: `session.interaction` (holding the clipboard buffer) is a
+  single instance not swapped per surface — confirmed cross-surface paste is
+  real, not hypothetical, which motivated the validation hook (item 3).
+  Right-click now opens on any canvas position (previously widget-hit only)
+  so Paste has somewhere to attach; z-order/group entries stay hit-widget-
+  gated. Both keyboard and menu route through new `do_clipboard_copy/cut/
+  duplicate/paste` methods on `RohKaiApp` — one implementation, two entry
+  points, so "mirror keyboard exactly" holds by construction.
+- Paste validation: `crate::widgets::ALL_KINDS` is the canonical widget-kind
+  source (already used by the `all_builtin_widgets_*` export tests).
+  `SurfaceKind` (`MainWindow` / `ModalDialog`) currently places no
+  restriction on widget kind, so `widget_kind_valid_for_surface` is
+  intentionally allow-all; `validate_paste_target` runs before any tree
+  mutation so a future restriction aborts atomically with no partial paste.
+
+### Changes
+- `src/canvas/clipboard.rs`: `cut_selection`, `ClipboardMenuAction`,
+  `widget_kind_valid_for_surface`, `first_invalid_kind`,
+  `validate_paste_target`.
+- `src/canvas/interaction.rs`: `InteractionState.context_menu` widened to
+  `Option<(Option<Uuid>, egui::Pos2)>` (empty-canvas right-click support) and
+  a new `context_menu_clipboard_action` field; context menu extended with
+  Copy/Cut/Paste/Duplicate entries gated by new pure helpers
+  `clipboard_menu_actions_enabled` / `clipboard_action_enabled`; paste anchor
+  resolved to canvas space at menu-open time via the existing
+  `cursor_to_canvas`.
+- `src/app.rs`: new `do_clipboard_copy/cut/duplicate/paste` +
+  `clipboard_gesture_active` methods (refactored from the prior inline
+  Ctrl+C/V/D block, now also handling Ctrl+X and the context-menu signal);
+  paste validates against `active_surface().kind` before mutating.
+- `src/panels/shortcuts.rs`: registered `canvas_cut` (Ctrl+X) + reference row
+  + right-click menu reference row.
+- Docs: `docs/ROADMAP_PHASE2.md` S2 clipboard items split into DONE (Cut,
+  context menu, paste-validation hook) vs the one remaining TODO
+  (behavior-wire copy); `docs/CODE_COOP.md` handoff note.
+
+### Tests Added
+- `cut_empty_selection_is_noop_and_does_not_panic`,
+  `cut_removes_selected_roots_and_descendants_leaving_no_stale_children`,
+  `cut_payload_pastes_with_fresh_uuids`,
+  `cut_then_undo_restores_exact_pre_cut_document` (direct `UndoStack`
+  round-trip on a `ProjectDocument`, not app-layer trust).
+- `paste_validation_allows_every_known_kind_on_every_surface_kind`,
+  `validate_paste_target_ok_for_every_known_kind`,
+  `validate_paste_target_empty_widgets_is_ok`,
+  `first_invalid_kind_reports_the_rejecting_widget_before_any_mutation`.
+- `clipboard_menu_matches_keyboard_gate_across_every_blocking_state`,
+  `clipboard_action_requires_both_menu_gate_and_content` (drag/resize/inline-
+  edit/modal/unfocused/text-focus truth table for the context-menu gate).
+- `panels::shortcuts::tests::clipboard_shortcuts_registered` extended for
+  `canvas_cut`.
+- All prior copy/paste/duplicate tests remain green.
+
+### Verification
+- `cargo fmt --check` - clean (after one `cargo fmt` pass).
+- `cargo check` - clean.
+- `cargo test` - 638 passed, 0 failed.
+- `cargo clippy --all-targets -- -D warnings` - clean (one
+  `needless_lifetimes` fix on `first_invalid_kind`).
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\check-text-encoding.ps1` - OK.
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\project-housekeeping.ps1 -Snapshot -FailOnDrift` - run after this entry; see report.
+
+### Risks / Follow-Ups
+- Behavior-wire copy remains the one open S2 clipboard TODO — tracked and
+  surfaced via status text ("behavior wires not copied"), not silently
+  dropped.
+- The context-menu paste-anchor-at-menu-open-position and enable/disable-
+  parity requirements are proven at the pure-logic layer (coordinate math via
+  `cursor_to_canvas`, gating via `clipboard_menu_actions_enabled`/
+  `clipboard_action_enabled`) because driving the real `egui::Ui` click path
+  needs a UI test harness this repo doesn't have; the wiring that consumes
+  those primitives (menu-open position captured once in `state.context_menu`,
+  never re-read from a live cursor) is verified by code construction/review,
+  not an automated UI test.
+
 ## 2026-06-30 - S2 Multi-Select Properties Inspector
 
 ### Context Reviewed

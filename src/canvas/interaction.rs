@@ -395,7 +395,10 @@ pub struct InteractionState {
     pub drag: Option<DragState>,
     pub resize: Option<ResizeState>,
     pub rubber_band: Option<egui::Pos2>,
-    pub context_menu: Option<(Uuid, egui::Pos2)>,
+    /// Right-click context menu: (widget hit at open time, screen pos). The
+    /// hit is `None` when the menu opened over empty canvas (CB-23) — z-order/
+    /// group items need a hit widget, clipboard items operate on `selected`.
+    pub context_menu: Option<(Option<Uuid>, egui::Pos2)>,
     /// Set each frame: Some(id) when a widget was double-clicked this frame.
     pub double_clicked_widget: Option<Uuid>,
     /// Set when a template drag is in flight (instances to place on drop).
@@ -431,6 +434,12 @@ pub struct InteractionState {
     /// Newly pasted root ids + remaining flash seconds, for the paste ring
     /// overlay (separate from search state, CB-21).
     pub paste_flash: Option<(Vec<Uuid>, f32)>,
+    /// Clipboard action + canvas-space anchor requested from the right-click
+    /// context menu this frame (CB-23). Consumed once by the app-level
+    /// dispatcher, which calls the same do_copy/do_cut/do_duplicate/do_paste
+    /// path as the matching keyboard shortcut so behavior is identical.
+    pub context_menu_clipboard_action:
+        Option<(crate::canvas::clipboard::ClipboardMenuAction, egui::Pos2)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -2310,6 +2319,26 @@ fn canvas_owns_keyboard(
     !modal_blocked && canvas_focused && !wants_keyboard_input
 }
 
+/// Whether the canvas right-click context menu's Copy/Cut/Paste/Duplicate
+/// entries may act this frame (CB-23). `keyboard_owned` is the same
+/// `canvas_owns_keyboard(...)` result the keyboard shortcuts gate on, so
+/// this is guaranteed to match `canvas_keyboard_owned` in `src/app.rs` for
+/// every input combination — it is not a re-derivation.
+fn clipboard_menu_actions_enabled(
+    keyboard_owned: bool,
+    gesture_active: bool,
+    inline_editing: bool,
+) -> bool {
+    keyboard_owned && !gesture_active && !inline_editing
+}
+
+/// One clipboard menu entry's final enabled state: the shared gate above,
+/// further narrowed by whether the entry has anything to act on (a
+/// non-empty selection for Copy/Cut/Duplicate, a non-empty buffer for Paste).
+fn clipboard_action_enabled(menu_enabled: bool, has_required_content: bool) -> bool {
+    menu_enabled && has_required_content
+}
+
 // ---------------------------------------------------------------------------
 // Behavior wires — sockets, Visio-style connectors, hit-testing
 // ---------------------------------------------------------------------------
@@ -2965,71 +2994,119 @@ pub fn handle(
     }
 
     // -------------------------------------------------------------------
-    // Context menu (z-order)
+    // Context menu (z-order + clipboard, CB-23)
     // -------------------------------------------------------------------
+    // Same gates as keyboard shortcuts: dragging/resizing/inline-editing must
+    // block the whole menu, not just the clipboard entries in it.
+    let ctx_gesture_active = state.drag.is_some() || state.resize.is_some();
     if right_clicked
         && let Some(pos) = pointer
-        && let Some(id) = hit_widget_id(&tree.widgets, &child_ids, pos, origin, zoom)
+        && !ctx_gesture_active
+        && state.inline_edit.is_none()
     {
-        state.context_menu = Some((id, pos));
+        let hit = hit_widget_id(&tree.widgets, &child_ids, pos, origin, zoom);
+        state.context_menu = Some((hit, pos));
     }
 
+    let ctx_pos_opt: Option<egui::Pos2> = state.context_menu.map(|(_, pos)| pos);
+    let ctx_hit_widget: Option<Uuid> = state.context_menu.and_then(|(id, _)| id);
     let ctx_group_available = selected.len() >= 2;
-    let ctx_is_ungroupable = state
-        .context_menu
-        .and_then(|(ctx_id, _)| tree.widgets.iter().find(|w| w.id == ctx_id))
+    let ctx_is_ungroupable = ctx_hit_widget
+        .and_then(|ctx_id| tree.widgets.iter().find(|w| w.id == ctx_id))
         .map(|w| w.kind == WidgetKind::Frame)
         .unwrap_or(false);
+    let clipboard_menu_enabled = clipboard_menu_actions_enabled(
+        keyboard_owned,
+        ctx_gesture_active,
+        state.inline_edit.is_some(),
+    );
+    let ctx_copy_cut_dup_enabled =
+        clipboard_action_enabled(clipboard_menu_enabled, !selected.is_empty());
+    let ctx_paste_enabled =
+        clipboard_action_enabled(clipboard_menu_enabled, !state.clipboard.is_empty());
 
     let mut ctx_action: Option<u8> = None;
     let mut close_ctx = false;
-    let ctx_id_for_action: Option<Uuid>;
     let mut do_group = false;
     let mut do_ungroup: Option<Uuid> = None;
+    let mut clipboard_action: Option<crate::canvas::clipboard::ClipboardMenuAction> = None;
 
-    if let Some((ctx_id, ctx_pos)) = state.context_menu {
-        ctx_id_for_action = Some(ctx_id);
+    if state.context_menu.is_some() {
+        let ctx_pos = ctx_pos_opt.expect("context_menu carries a screen pos");
         egui::Area::new(egui::Id::new("canvas_ctx_menu"))
             .fixed_pos(ctx_pos)
             .order(egui::Order::Foreground)
             .show(ui.ctx(), |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
                     ui.set_min_width(150.0);
+                    if ui
+                        .add_enabled(ctx_copy_cut_dup_enabled, egui::Button::new("Copy (Ctrl+C)"))
+                        .clicked()
+                    {
+                        clipboard_action =
+                            Some(crate::canvas::clipboard::ClipboardMenuAction::Copy);
+                        close_ctx = true;
+                    }
+                    if ui
+                        .add_enabled(ctx_copy_cut_dup_enabled, egui::Button::new("Cut (Ctrl+X)"))
+                        .clicked()
+                    {
+                        clipboard_action = Some(crate::canvas::clipboard::ClipboardMenuAction::Cut);
+                        close_ctx = true;
+                    }
+                    if ui
+                        .add_enabled(ctx_paste_enabled, egui::Button::new("Paste (Ctrl+V)"))
+                        .clicked()
+                    {
+                        clipboard_action =
+                            Some(crate::canvas::clipboard::ClipboardMenuAction::Paste);
+                        close_ctx = true;
+                    }
+                    if ui
+                        .add_enabled(
+                            ctx_copy_cut_dup_enabled,
+                            egui::Button::new("Duplicate (Ctrl+D)"),
+                        )
+                        .clicked()
+                    {
+                        clipboard_action =
+                            Some(crate::canvas::clipboard::ClipboardMenuAction::Duplicate);
+                        close_ctx = true;
+                    }
+                    ui.separator();
                     if ctx_group_available && ui.button("Group (Ctrl+G)").clicked() {
                         do_group = true;
                         close_ctx = true;
                     }
                     if ctx_is_ungroupable && ui.button("Ungroup (Ctrl+Shift+G)").clicked() {
-                        do_ungroup = Some(ctx_id);
+                        do_ungroup = ctx_hit_widget;
                         close_ctx = true;
                     }
                     if ctx_group_available || ctx_is_ungroupable {
                         ui.separator();
                     }
-                    if ui.button("Bring to Front").clicked() {
+                    if ctx_hit_widget.is_some() && ui.button("Bring to Front").clicked() {
                         ctx_action = Some(0);
                         close_ctx = true;
                     }
-                    if ui.button("Bring Forward").clicked() {
+                    if ctx_hit_widget.is_some() && ui.button("Bring Forward").clicked() {
                         ctx_action = Some(1);
                         close_ctx = true;
                     }
-                    if ui.button("Send Back").clicked() {
+                    if ctx_hit_widget.is_some() && ui.button("Send Back").clicked() {
                         ctx_action = Some(2);
                         close_ctx = true;
                     }
-                    if ui.button("Send to Back").clicked() {
+                    if ctx_hit_widget.is_some() && ui.button("Send to Back").clicked() {
                         ctx_action = Some(3);
                         close_ctx = true;
                     }
                 });
             });
         close_ctx |= primary_released;
-    } else {
-        ctx_id_for_action = None;
     }
 
-    if let (Some(id), Some(action)) = (ctx_id_for_action, ctx_action) {
+    if let (Some(id), Some(action)) = (ctx_hit_widget, ctx_action) {
         match action {
             0 => tree.bring_to_front(id),
             1 => tree.bring_forward(id),
@@ -3045,6 +3122,22 @@ pub fn handle(
         let children = tree.ungroup(frame_id);
         selected.clear();
         selected.extend(children);
+    }
+    if let Some(action) = clipboard_action
+        && let Some(ctx_pos) = ctx_pos_opt
+    {
+        // Resolve the menu-open screen position to canvas space now, while
+        // zoom/pan are still the values the user right-clicked under (CB-23:
+        // paste anchor must be the menu-open canvas position, never (0,0)).
+        let canvas_size = [tree.app_props.win_w, tree.app_props.win_h];
+        let canvas_pos = crate::canvas::clipboard::cursor_to_canvas(
+            ctx_pos,
+            canvas_size,
+            zoom,
+            settings.pan,
+            resp.rect,
+        );
+        state.context_menu_clipboard_action = Some((action, canvas_pos));
     }
     if close_ctx {
         state.context_menu = None;
@@ -4026,7 +4119,10 @@ mod resize_snap_tests {
 
 #[cfg(test)]
 mod input_ownership_tests {
-    use super::{canvas_owns_keyboard, canvas_owns_pointer};
+    use super::{
+        canvas_owns_keyboard, canvas_owns_pointer, clipboard_action_enabled,
+        clipboard_menu_actions_enabled,
+    };
 
     #[test]
     fn floating_window_layer_blocks_canvas_pointer() {
@@ -4042,6 +4138,52 @@ mod input_ownership_tests {
         assert!(!canvas_owns_keyboard(false, true, true));
         assert!(!canvas_owns_keyboard(false, false, false));
         assert!(!canvas_owns_keyboard(true, true, false));
+    }
+
+    // CB-23: context menu action enable/disable state matches keyboard gates.
+    // `clipboard_menu_actions_enabled` takes `canvas_owns_keyboard`'s own
+    // output as its `keyboard_owned` argument in production code (see
+    // `handle()`), so this table is exercised over the same truth values
+    // `canvas_keyboard_owned` produces in src/app.rs, not a re-derivation.
+    #[test]
+    fn clipboard_menu_matches_keyboard_gate_across_every_blocking_state() {
+        // Baseline: modal-blocked=false, canvas_focused=true, wants_kb=false
+        // (i.e. canvas_keyboard_owned == true), no gesture, no inline edit.
+        let owned = canvas_owns_keyboard(false, true, false);
+        assert!(owned);
+        assert!(clipboard_menu_actions_enabled(owned, false, false));
+
+        // Modal command/SVG-import dialog open — keyboard not owned.
+        let modal_blocked = canvas_owns_keyboard(true, true, false);
+        assert!(!clipboard_menu_actions_enabled(modal_blocked, false, false));
+
+        // Canvas not focused (user clicked another panel/utility window).
+        let unfocused = canvas_owns_keyboard(false, false, false);
+        assert!(!clipboard_menu_actions_enabled(unfocused, false, false));
+
+        // A TextEdit (code panel / inline label buffer) wants keyboard input.
+        let text_focused = canvas_owns_keyboard(false, true, true);
+        assert!(!clipboard_menu_actions_enabled(text_focused, false, false));
+
+        // Keyboard owned, but a drag/resize gesture is in flight.
+        assert!(!clipboard_menu_actions_enabled(owned, true, false));
+
+        // Keyboard owned, but inline label editing is active.
+        assert!(!clipboard_menu_actions_enabled(owned, false, true));
+    }
+
+    #[test]
+    fn clipboard_action_requires_both_menu_gate_and_content() {
+        assert!(clipboard_action_enabled(true, true));
+        assert!(
+            !clipboard_action_enabled(true, false),
+            "empty selection/clipboard must disable"
+        );
+        assert!(
+            !clipboard_action_enabled(false, true),
+            "menu gate must override content presence"
+        );
+        assert!(!clipboard_action_enabled(false, false));
     }
 }
 

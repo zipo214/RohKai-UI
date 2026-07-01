@@ -7,6 +7,24 @@ know" note at the start of a meaningful planning or coding session.
 Keep entries newest-first. Be plain, specific, and honest about uncertainty.
 Mention the branch, the immediate goal, touched areas, and any known hazards.
 
+## 2026-06-30 — S2 clipboard follow-ups: Cut, context menu, paste validation
+
+Branch `dev`. Closed the S2 clipboard completion follow-ups: Cut/Ctrl+X
+(`cut_selection` in `src/canvas/clipboard.rs`, reuses `UiTree::remove`'s
+existing cascade + behavior-pruning, one undo boundary via the normal
+end-of-frame commit), a right-click canvas context menu with Copy/Cut/
+Paste/Duplicate entries wired through new `do_clipboard_*` methods on
+`RohKaiApp` (`src/app.rs`) so keyboard and menu are guaranteed identical, and
+a surface-kind paste-validation hook (`widget_kind_valid_for_surface` /
+`validate_paste_target`) that is intentionally allow-all today (no
+`WidgetKind` is restricted per `SurfaceKind` yet) with tests proving both the
+allow-all state and the abort-before-mutation detection path. `InteractionState.context_menu`
+changed shape to `Option<(Option<Uuid>, egui::Pos2)>` so the menu can open on
+empty canvas (needed for Paste) — only `src/canvas/interaction.rs` touches
+that field. Remaining S2 clipboard gap: behavior-wire copy (tracked, not
+silent — see `ClipboardContents::source_had_behaviors`). 638 lib tests green,
+all-targets clippy clean.
+
 ## 2026-06-30 — S2 multi-select properties inspector
 
 Branch `dev`. Implementing the conservative V1 multi-select Properties inspector

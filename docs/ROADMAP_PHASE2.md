@@ -159,9 +159,27 @@ From the Stage 8.5 comparative analysis. All small, all independent.
       Ctrl+D duplicate-in-place, deep selection closure, ID/reference remap,
       status feedback, paste flash, viewport reveal, live codegen parity, and
       save/load parity.
-- [ ] TODO — Clipboard completion follow-ups: Cut/Ctrl+X, behavior-wire copy,
-      surface-kind validation for cross-surface paste, and right-click context
-      menu entries.
+- [x] DONE — Cut (Ctrl+X): copies the same descendant-closed closure as Copy,
+      removes the originals atomically through `UiTree::remove` (one undo
+      boundary, same path Delete uses), clears selection, and shows
+      `Cut <kind>` / `Cut N widgets` status.
+- [x] DONE — Right-click canvas context menu: Copy / Cut / Paste / Duplicate
+      entries route through the same do_copy/do_cut/do_duplicate/do_paste
+      handlers as the keyboard shortcuts (identical gating + behavior), with
+      correct enable/disable state and a paste anchor at the menu-open canvas
+      position (viewport-center fallback only if that position is
+      unavailable).
+- [x] DONE — Surface-kind paste validation hook: every staged widget is
+      checked against the active surface kind before any mutation
+      (no-partial-paste, blocked-status-with-reason on rejection). No
+      `WidgetKind` is restricted per `SurfaceKind` yet, so the hook is
+      intentionally allow-all today; tests prove that explicitly and prove
+      the abort/no-partial-paste path fires on rejection.
+- [ ] TODO — Clipboard completion follow-up: behavior-wire copy. Copy/Cut/
+      Duplicate/Paste still do not carry a widget's behavior wires; the
+      clipboard already detects and surfaces this
+      (`ClipboardContents::source_had_behaviors` → "behavior wires not
+      copied" status) rather than silently dropping it.
 - [ ] TODO — Housekeeping automation: local status snapshots, version/changelog
       preparation, worktree/branch overview, and doc-drift detection.
 - [ ] TODO — Multi-select property editing: edit one property across all selected
